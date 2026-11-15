@@ -2253,36 +2253,46 @@ components:
       additionalProperties: false
       properties:
         action:
+          description: The name of the Sensor's action that failed.
           type: string
         attempts:
+          description: "The delivery attempts made before funcd parked the action: 0 when it parked the action before any attempt, such as when the Sensor's queue was full, and after a replay that failed."
           format: int64
           type: integer
         event:
+          description: The name of the event, as the Sensor's dependency names it.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         failedAt:
+          description: When funcd parked the action, or when its last replay failed.
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         id:
+          description: The dead letter's ID, a ULID that funcd mints when it parks the action.
           type: string
         namespace:
+          description: The namespace of the Sensor.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
-        payload: {}
+        payload:
+          description: The CloudEvent that the action was to deliver, as JSON. A replay delivers it again.
         reason:
+          description: Why the last attempt failed, or why funcd parked the action before its attempts ran out.
           type: string
         sensor:
+          description: The Sensor whose action failed.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         source:
+          description: The EventSource of the event, as the Sensor's dependency names it.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -2303,6 +2313,7 @@ components:
       additionalProperties: false
       properties:
         items:
+          description: The namespace's dead letters, newest first.
           items:
             $ref: "#/components/schemas/DeadLetter"
           type:
@@ -7723,10 +7734,12 @@ paths:
     get:
       operationId: listDeadLetters
       parameters:
-        - in: path
+        - description: The namespace of the dead letters.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace of the dead letters.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7738,57 +7751,126 @@ paths:
               schema:
                 $ref: "#/components/schemas/DeadLetterListOutputBody"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read Sensors in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read Sensors in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the dead letters of a namespace
       tags:
         - DeadLetter
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/deadletters/{id}:
     delete:
       operationId: discardDeadLetter
       parameters:
-        - in: path
+        - description: The dead letter's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The dead letter's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The dead letter's ID.
+          in: path
           name: id
           required: true
           schema:
+            description: The dead letter's ID.
             type: string
       responses:
         "204":
           description: No Content
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete Sensors in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete Sensors in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Discard a dead letter
       tags:
         - DeadLetter
     get:
       operationId: getDeadLetter
       parameters:
-        - in: path
+        - description: The dead letter's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The dead letter's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The dead letter's ID.
+          in: path
           name: id
           required: true
           schema:
+            description: The dead letter's ID.
             type: string
       responses:
         "200":
@@ -7797,40 +7879,174 @@ paths:
               schema:
                 $ref: "#/components/schemas/DeadLetter"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read Sensors in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read Sensors in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No dead letter of that ID exists in the namespace. Check the ID: funcdctl eventing dlq list lists the namespace's dead letters."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No dead letter of that ID exists in the namespace.
+              fix: "Check the ID: funcdctl eventing dlq list lists the namespace's dead letters."
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a dead letter
       tags:
         - DeadLetter
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/deadletters/{id}/replay:
     post:
       operationId: replayDeadLetter
       parameters:
-        - in: path
+        - description: The dead letter's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The dead letter's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The dead letter's ID.
+          in: path
           name: id
           required: true
           schema:
+            description: The dead letter's ID.
             type: string
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The action's input in the Sensor is not a JSON object, or holds an expression that does not evaluate; the dead letter stays. Correct the action's input in the Sensor, then retry."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The action's input in the Sensor is not a JSON object, or holds an expression that does not evaluate; the dead letter stays.
+              fix: Correct the action's input in the Sensor, then retry.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete Sensors in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete Sensors in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:not-found`: No dead letter of that ID exists in the namespace. Check the ID: funcdctl eventing dlq list lists the namespace's dead letters.
+            - `urn:funcd:problem:not-found`: The Sensor that the dead letter names no longer exists. Apply the Sensor again, then retry, or discard the dead letter.
+            - `urn:funcd:problem:not-found`: The Sensor no longer has the dead letter's action. Add the action back to the Sensor, then retry, or discard the dead letter.
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No dead letter of that ID exists in the namespace.
+              fix: "Check the ID: funcdctl eventing dlq list lists the namespace's dead letters."
+            - type: urn:funcd:problem:not-found
+              when: The Sensor that the dead letter names no longer exists.
+              fix: Apply the Sensor again, then retry, or discard the dead letter.
+            - type: urn:funcd:problem:not-found
+              when: The Sensor no longer has the dead letter's action.
+              fix: Add the action back to the Sensor, then retry, or discard the dead letter.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:conflict`: Another replay of the dead letter is running. Retry once that replay has ended.
+            - `urn:funcd:problem:conflict`: The action's Function serves HTTP, so only the edge calls it; the dead letter stays. Point the action at a Function that does not serve HTTP, then retry.
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: Another replay of the dead letter is running.
+              fix: Retry once that replay has ended.
+            - type: urn:funcd:problem:conflict
+              when: The action's Function serves HTTP, so only the edge calls it; the dead letter stays.
+              fix: Point the action at a Function that does not serve HTTP, then retry.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:unavailable`: The platform or the namespace is held, so funcd delivers no event. Retry once the hold is released, which funcdctl hold release does.
+            - `urn:funcd:problem:unavailable`: The delivery failed again, such as on a Function that is missing, has no ready worker or answers an error; the dead letter stays, with its attempts reset and the new reason. Correct what the dead letter's reason names, then retry.
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The platform or the namespace is held, so funcd delivers no event.
+              fix: Retry once the hold is released, which funcdctl hold release does.
+            - type: urn:funcd:problem:unavailable
+              when: The delivery failed again, such as on a Function that is missing, has no ready worker or answers an error; the dead letter stays, with its attempts reset and the new reason.
+              fix: Correct what the dead letter's reason names, then retry.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replay a dead letter
       tags:
         - DeadLetter
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/egresspolicies:
@@ -8068,12 +8284,40 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list EventSources in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list EventSources in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the EventSources of a namespace
       tags:
         - EventSource
     post:
@@ -8109,12 +8353,102 @@ paths:
               schema:
                 $ref: "#/components/schemas/EventSource"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create an EventSource in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create an EventSource in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: An EventSource of that name already exists in the namespace. Choose another name, or replace the existing EventSource."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: An EventSource of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing EventSource.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create an EventSource
       tags:
         - EventSource
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources/{name}:
@@ -8150,12 +8484,75 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete an EventSource in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete an EventSource in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No EventSource of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No EventSource of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The EventSource has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the EventSource again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The EventSource has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the EventSource again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete an EventSource
       tags:
         - EventSource
     get:
@@ -8188,12 +8585,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/EventSource"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read an EventSource in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read an EventSource in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No EventSource of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No EventSource of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read an EventSource
       tags:
         - EventSource
     put:
@@ -8245,12 +8680,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/EventSource"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace an EventSource in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace an EventSource in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No EventSource of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No EventSource of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The EventSource has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the EventSource again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The EventSource has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the EventSource again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace an EventSource
       tags:
         - EventSource
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/functions:
@@ -12441,12 +12980,40 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list Sensors in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list Sensors in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the Sensors of a namespace
       tags:
         - Sensor
     post:
@@ -12482,12 +13049,102 @@ paths:
               schema:
                 $ref: "#/components/schemas/Sensor"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create a Sensor in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create a Sensor in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: A Sensor of that name already exists in the namespace. Choose another name, or replace the existing Sensor."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: A Sensor of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing Sensor.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create a Sensor
       tags:
         - Sensor
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors/{name}:
@@ -12523,12 +13180,75 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete a Sensor in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete a Sensor in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Sensor of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Sensor of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Sensor has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Sensor again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Sensor has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Sensor again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete a Sensor
       tags:
         - Sensor
     get:
@@ -12561,12 +13281,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/Sensor"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read a Sensor in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read a Sensor in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Sensor of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Sensor of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a Sensor
       tags:
         - Sensor
     put:
@@ -12618,12 +13376,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/Sensor"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace a Sensor in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace a Sensor in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Sensor of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Sensor of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Sensor has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Sensor again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Sensor has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Sensor again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace a Sensor
       tags:
         - Sensor
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/services:
@@ -13379,12 +14241,40 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list WorkflowRuns in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list WorkflowRuns in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the WorkflowRuns of a namespace
       tags:
         - WorkflowRun
     post:
@@ -13420,12 +14310,111 @@ paths:
               schema:
                 $ref: "#/components/schemas/WorkflowRun"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: The run input in spec.input does not match the input schema in the Workflow's status.contract. Correct the fields that the detail names.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: The run input in spec.input does not match the input schema in the Workflow's status.contract.
+              fix: Correct the fields that the detail names.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create a WorkflowRun in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create a WorkflowRun in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: A WorkflowRun of that name already exists in the namespace. Choose another name, or replace the existing WorkflowRun."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: A WorkflowRun of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing WorkflowRun.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body.
+            - `urn:funcd:problem:payload-too-large`: The run input in spec.input is larger than workflow.payloadLimit, 256 KiB by default. Send a smaller input, and pass large data by reference, such as the key of an object in a Bucket.
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+            - type: urn:funcd:problem:payload-too-large
+              when: The run input in spec.input is larger than workflow.payloadLimit, 256 KiB by default.
+              fix: Send a smaller input, and pass large data by reference, such as the key of an object in a Bucket.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create a WorkflowRun
       tags:
         - WorkflowRun
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns/{name}:
@@ -13461,12 +14450,75 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete a WorkflowRun in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete a WorkflowRun in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No WorkflowRun of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No WorkflowRun of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The WorkflowRun has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the WorkflowRun again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The WorkflowRun has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the WorkflowRun again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete a WorkflowRun
       tags:
         - WorkflowRun
     get:
@@ -13499,12 +14551,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/WorkflowRun"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read a WorkflowRun in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read a WorkflowRun in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No WorkflowRun of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No WorkflowRun of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a WorkflowRun
       tags:
         - WorkflowRun
     put:
@@ -13556,62 +14646,184 @@ paths:
               schema:
                 $ref: "#/components/schemas/WorkflowRun"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: The run input in spec.input does not match the input schema in the Workflow's status.contract. Correct the fields that the detail names.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: The run input in spec.input does not match the input schema in the Workflow's status.contract.
+              fix: Correct the fields that the detail names.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace a WorkflowRun in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace a WorkflowRun in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No WorkflowRun of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No WorkflowRun of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:conflict`: The WorkflowRun has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the WorkflowRun again, apply the change to it, and send it with its new resourceVersion.
+            - `urn:funcd:problem:conflict`: The body changes the run's spec.workflow, spec.input or spec.replay, which are fixed once the run is created. Start a new run under another name.
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The WorkflowRun has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the WorkflowRun again, apply the change to it, and send it with its new resourceVersion.
+            - type: urn:funcd:problem:conflict
+              when: The body changes the run's spec.workflow, spec.input or spec.replay, which are fixed once the run is created.
+              fix: Start a new run under another name.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body.
+            - `urn:funcd:problem:payload-too-large`: The run input in spec.input is larger than workflow.payloadLimit, 256 KiB by default. Send a smaller input, and pass large data by reference, such as the key of an object in a Bucket.
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+            - type: urn:funcd:problem:payload-too-large
+              when: The run input in spec.input is larger than workflow.payloadLimit, 256 KiB by default.
+              fix: Send a smaller input, and pass large data by reference, such as the key of an object in a Bucket.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace a WorkflowRun
       tags:
         - WorkflowRun
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns/{name}/logs:
     get:
       operationId: getWorkflowRunLogs
       parameters:
-        - in: path
+        - description: The run's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The run's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The run's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The run's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - description: a duration (15m, 1h30m, 500ms) or a UTC timestamp with exactly 3 fractional digits (2026-10-07T22:00:00.000Z); empty ⇒ no lower bound
+        - description: "Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."
           explode: false
           in: query
           name: since
           schema:
-            description: a duration (15m, 1h30m, 500ms) or a UTC timestamp with exactly 3 fractional digits (2026-10-07T22:00:00.000Z); empty ⇒ no lower bound
+            description: "Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."
             type: string
-        - description: "minimum level: trace|debug|info|warn|error|fatal"
+        - description: "Only the lines at this level or above: trace, debug, info, warn, error or fatal."
           explode: false
           in: query
           name: severity
           schema:
-            description: "minimum level: trace|debug|info|warn|error|fatal"
+            description: "Only the lines at this level or above: trace, debug, info, warn, error or fatal."
             type: string
-        - description: max records returned, most-recent first-bounded; default 1000, capped 10000
+        - description: "The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."
           explode: false
           in: query
           name: limit
           schema:
-            description: max records returned, most-recent first-bounded; default 1000, capped 10000
+            description: "The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."
             format: int64
             type: integer
-        - description: narrow to one step's function (the --step drill-down)
+        - description: Only the lines of one step's Function, named by the step's name in the run's Workflow. Left out, the lines of every Function that the run called, those of its child workflows included.
           explode: false
           in: query
           name: step
           schema:
-            description: narrow to one step's function (the --step drill-down)
+            description: Only the lines of one step's Function, named by the step's name in the run's Workflow. Left out, the lines of every Function that the run called, those of its child workflows included.
             type: string
       responses:
         "200":
@@ -13620,12 +14832,78 @@ paths:
               schema:
                 $ref: "#/components/schemas/LogsOutputBody"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The since parameter is neither a duration, such as 15m, nor a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Send since in one of those two forms.
+            - `urn:funcd:problem:invalid`: The severity parameter is none of trace, debug, info, warn, error and fatal. Send one of those levels, or leave severity out.
+            - `urn:funcd:problem:invalid`: The run has started, and the step parameter names no step of its Workflow. Send the name of one of its steps, or leave step out.
+            - `urn:funcd:problem:invalid`: The run has started, and the step parameter names a builtin or workflow step, which calls no Function of its own. Name a function step, or leave step out.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The since parameter is neither a duration, such as 15m, nor a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z.
+              fix: Send since in one of those two forms.
+            - type: urn:funcd:problem:invalid
+              when: The severity parameter is none of trace, debug, info, warn, error and fatal.
+              fix: Send one of those levels, or leave severity out.
+            - type: urn:funcd:problem:invalid
+              when: The run has started, and the step parameter names no step of its Workflow.
+              fix: Send the name of one of its steps, or leave step out.
+            - type: urn:funcd:problem:invalid
+              when: The run has started, and the step parameter names a builtin or workflow step, which calls no Function of its own.
+              fix: Name a function step, or leave step out.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read WorkflowRuns in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read WorkflowRuns in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No WorkflowRun of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No WorkflowRun of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The limit parameter is not an integer. Send limit as a whole number.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The limit parameter is not an integer.
+              fix: Send limit as a whole number.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read the logs of a WorkflowRun
       tags:
         - WorkflowRun
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows:
@@ -13653,12 +14931,40 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list Workflows in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list Workflows in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the Workflows of a namespace
       tags:
         - Workflow
     post:
@@ -13694,12 +15000,106 @@ paths:
               schema:
                 $ref: "#/components/schemas/Workflow"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: A binding of an image step names a store, a Lake, a ConfigMap or a Secret that neither the Workflow's spec nor its App declares, such as a KVStore missing from spec.kv. Declare it at the root of the spec, or bind one that it declares.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: A binding of an image step names a store, a Lake, a ConfigMap or a Secret that neither the Workflow's spec nor its App declares, such as a KVStore missing from spec.kv.
+              fix: Declare it at the root of the spec, or bind one that it declares.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create a Workflow in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create a Workflow in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: A Workflow of that name already exists in the namespace. Choose another name, or replace the existing Workflow."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: A Workflow of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing Workflow.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create a Workflow
       tags:
         - Workflow
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows/{name}:
@@ -13735,12 +15135,75 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete a Workflow in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete a Workflow in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Workflow of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Workflow of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Workflow has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Workflow again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Workflow has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Workflow again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete a Workflow
       tags:
         - Workflow
     get:
@@ -13773,12 +15236,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/Workflow"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read a Workflow in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read a Workflow in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Workflow of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Workflow of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a Workflow
       tags:
         - Workflow
     put:
@@ -13830,12 +15331,120 @@ paths:
               schema:
                 $ref: "#/components/schemas/Workflow"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: A binding of an image step names a store, a Lake, a ConfigMap or a Secret that neither the Workflow's spec nor its App declares, such as a KVStore missing from spec.kv. Declare it at the root of the spec, or bind one that it declares.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: A binding of an image step names a store, a Lake, a ConfigMap or a Secret that neither the Workflow's spec nor its App declares, such as a KVStore missing from spec.kv.
+              fix: Declare it at the root of the spec, or bind one that it declares.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace a Workflow in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace a Workflow in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Workflow of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Workflow of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Workflow has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Workflow again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Workflow has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Workflow again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace a Workflow
       tags:
         - Workflow
   /apis/funcd.io/v1alpha1/namespaces/{name}:

@@ -72,7 +72,7 @@ func registerEventSource(api huma.API, h Handlers) {
 	registerNamespacedCRUD(api, crudRoutes[v1.EventSource]{
 		kind: "EventSource", kinds: "EventSources", path: "eventsources",
 		list: h.ListEventSources, create: h.CreateEventSource, get: h.GetEventSource,
-		replace: h.ReplaceEventSource, remove: h.DeleteEventSource,
+		replace: h.ReplaceEventSource, remove: h.DeleteEventSource, cases: &kindCases{},
 	})
 }
 
@@ -277,20 +277,36 @@ func registerGateway(api huma.API, h Handlers) {
 // ===== Workflow (namespaced) — ADR-0094 =====
 
 func registerWorkflow(api huma.API, h Handlers) {
+	// The binding-declared admission (ADR-0248, ADR-0250) checks an image step's bindings.
+	undeclared := []ErrorCase{problem(fault.Invalid, "A binding of an image step names a store, a Lake, a ConfigMap "+
+		"or a Secret that neither the Workflow's spec nor its App declares, such as a KVStore missing from spec.kv.",
+		"Declare it at the root of the spec, or bind one that it declares.")}
 	registerNamespacedCRUD(api, crudRoutes[v1.Workflow]{
 		kind: "Workflow", kinds: "Workflows", path: "workflows",
 		list: h.ListWorkflows, create: h.CreateWorkflow, get: h.GetWorkflow,
 		replace: h.ReplaceWorkflow, remove: h.DeleteWorkflow,
+		cases: &kindCases{create: undeclared, replace: undeclared},
 	})
 }
 
 // ===== WorkflowRun (namespaced) — ADR-0094 =====
 
 func registerWorkflowRun(api huma.API, h Handlers) {
+	// The workflowrun-payload and workflowrun-contract admissions check the input of a create and a replace (ADR-0094,
+	// ADR-0098); workflowrun-spec-immutable refuses a replace that changes what the run runs.
+	input := []ErrorCase{
+		problem(fault.PayloadTooLarge, "The run input in spec.input is larger than workflow.payloadLimit, 256 KiB by "+
+			"default.", "Send a smaller input, and pass large data by reference, such as the key of an object in a Bucket."),
+		problem(fault.Invalid, "The run input in spec.input does not match the input schema in the Workflow's "+
+			"status.contract.", "Correct the fields that the detail names."),
+	}
+	fixed := problem(fault.Conflict, "The body changes the run's spec.workflow, spec.input or spec.replay, which are "+
+		"fixed once the run is created.", "Start a new run under another name.")
 	registerNamespacedCRUD(api, crudRoutes[v1.WorkflowRun]{
 		kind: "WorkflowRun", kinds: "WorkflowRuns", path: "workflowruns",
 		list: h.ListWorkflowRuns, create: h.CreateWorkflowRun, get: h.GetWorkflowRun,
 		replace: h.ReplaceWorkflowRun, remove: h.DeleteWorkflowRun,
+		cases: &kindCases{create: input, replace: slices.Concat(input, []ErrorCase{fixed})},
 	})
 }
 
@@ -298,6 +314,7 @@ func registerSensor(api huma.API, h Handlers) {
 	registerNamespacedCRUD(api, crudRoutes[v1.Sensor]{
 		kind: "Sensor", kinds: "Sensors", path: "sensors",
 		list: h.ListSensors, create: h.CreateSensor, get: h.GetSensor, replace: h.ReplaceSensor, remove: h.DeleteSensor,
+		cases: &kindCases{},
 	})
 }
 

@@ -115,3 +115,377 @@ This page lists the spec and status fields of EventSource and Sensor, each with 
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
+
+## HTTP API
+
+Each described operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
+
+| Authentication | How a call sends it |
+| --- | --- |
+| `bearer` | A credential of funcd's config, sent as Authorization: Bearer followed by its token. |
+| `apiKey` | A credential of funcd's config, sent in the X-Api-Key header. |
+
+### List the EventSources of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources` | `listEventSources` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
+
+Answer: array of [`EventSource`](#eventsource).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list EventSources in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Create an EventSource
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources` | `createEventSource` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`EventSource`](#eventsource), required. Answer: [`EventSource`](#eventsource).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create an EventSource in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 409 | `urn:funcd:problem:conflict` | An EventSource of that name already exists in the namespace. | Choose another name, or replace the existing EventSource. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Read an EventSource
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources/{name}` | `getEventSource` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`EventSource`](#eventsource).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read an EventSource in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No EventSource of that name exists in the namespace. | Check the name and the namespace. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Replace an EventSource
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources/{name}` | `replaceEventSource` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`EventSource`](#eventsource), required. Answer: [`EventSource`](#eventsource).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace an EventSource in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No EventSource of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The EventSource has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the EventSource again, apply the change to it, and send it with its new resourceVersion. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Delete an EventSource
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources/{name}` | `deleteEventSource` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete an EventSource in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No EventSource of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The EventSource has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the EventSource again, apply the change to it, and send it with its new resourceVersion. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+
+### List the Sensors of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors` | `listSensors` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
+
+Answer: array of [`Sensor`](#sensor).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list Sensors in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Create a Sensor
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors` | `createSensor` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Sensor`](#sensor), required. Answer: [`Sensor`](#sensor).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create a Sensor in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 409 | `urn:funcd:problem:conflict` | A Sensor of that name already exists in the namespace. | Choose another name, or replace the existing Sensor. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Read a Sensor
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors/{name}` | `getSensor` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`Sensor`](#sensor).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read a Sensor in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Sensor of that name exists in the namespace. | Check the name and the namespace. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Replace a Sensor
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors/{name}` | `replaceSensor` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Sensor`](#sensor), required. Answer: [`Sensor`](#sensor).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace a Sensor in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Sensor of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Sensor has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Sensor again, apply the change to it, and send it with its new resourceVersion. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Delete a Sensor
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors/{name}` | `deleteSensor` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete a Sensor in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Sensor of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Sensor has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Sensor again, apply the change to it, and send it with its new resourceVersion. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+
+### List the dead letters of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/deadletters` | `listDeadLetters` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace of the dead letters. |
+
+Answer: [`DeadLetterListOutputBody`](#deadletterlistoutputbody).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read Sensors in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+#### `DeadLetterListOutputBody`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `items` | array of [`DeadLetterListOutputBody.items[]`](#deadletterlistoutputbodyitems), required | The namespace's dead letters, newest first. |
+
+#### `DeadLetterListOutputBody.items[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `action` | string, required | The name of the Sensor's action that failed. |
+| `attempts` | integer, required | The delivery attempts made before funcd parked the action: 0 when it parked the action before any attempt, such as when the Sensor's queue was full, and after a replay that failed. |
+| `event` | string, required, a DNS-1123 label | The name of the event, as the Sensor's dependency names it. |
+| `failedAt` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When funcd parked the action, or when its last replay failed. |
+| `id` | string, required | The dead letter's ID, a ULID that funcd mints when it parks the action. |
+| `namespace` | string, required, a DNS-1123 label | The namespace of the Sensor. |
+| `payload` | any JSON value, required | The CloudEvent that the action was to deliver, as JSON. A replay delivers it again. |
+| `reason` | string, required | Why the last attempt failed, or why funcd parked the action before its attempts ran out. |
+| `sensor` | string, required, a DNS-1123 label | The Sensor whose action failed. |
+| `source` | string, required, a DNS-1123 label | The EventSource of the event, as the Sensor's dependency names it. |
+
+### Read a dead letter
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/deadletters/{id}` | `getDeadLetter` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The dead letter's namespace. |
+| `id` | path | string, required | The dead letter's ID. |
+
+Answer: [`DeadLetterListOutputBody.items[]`](#deadletterlistoutputbodyitems).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read Sensors in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No dead letter of that ID exists in the namespace. | Check the ID: funcdctl eventing dlq list lists the namespace's dead letters. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Discard a dead letter
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/deadletters/{id}` | `discardDeadLetter` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The dead letter's namespace. |
+| `id` | path | string, required | The dead letter's ID. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete Sensors in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+
+### Replay a dead letter
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/deadletters/{id}/replay` | `replayDeadLetter` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The dead letter's namespace. |
+| `id` | path | string, required | The dead letter's ID. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The action's input in the Sensor is not a JSON object, or holds an expression that does not evaluate; the dead letter stays. | Correct the action's input in the Sensor, then retry. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete Sensors in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No dead letter of that ID exists in the namespace. | Check the ID: funcdctl eventing dlq list lists the namespace's dead letters. |
+| 404 | `urn:funcd:problem:not-found` | The Sensor that the dead letter names no longer exists. | Apply the Sensor again, then retry, or discard the dead letter. |
+| 404 | `urn:funcd:problem:not-found` | The Sensor no longer has the dead letter's action. | Add the action back to the Sensor, then retry, or discard the dead letter. |
+| 409 | `urn:funcd:problem:conflict` | Another replay of the dead letter is running. | Retry once that replay has ended. |
+| 409 | `urn:funcd:problem:conflict` | The action's Function serves HTTP, so only the edge calls it; the dead letter stays. | Point the action at a Function that does not serve HTTP, then retry. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 503 | `urn:funcd:problem:unavailable` | The platform or the namespace is held, so funcd delivers no event. | Retry once the hold is released, which funcdctl hold release does. |
+| 503 | `urn:funcd:problem:unavailable` | The delivery failed again, such as on a Function that is missing, has no ready worker or answers an error; the dead letter stays, with its attempts reset and the new reason. | Correct what the dead letter's reason names, then retry. |
