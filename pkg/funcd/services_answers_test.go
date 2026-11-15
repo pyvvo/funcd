@@ -198,26 +198,10 @@ func (s *sqlFixtures) keepData(name v1.ObjectName) {
 	s.withData = append(s.withData, provider.ProviderRef{Namespace: "default", Name: name})
 }
 
-// tablesEngine starts an engine that answers each query as an engine that holds one table counts its tables, and
-// returns its address.
-func tablesEngine(t *testing.T) string {
+// engineAt starts an engine that answers each request with h, and returns its address.
+func engineAt(t *testing.T, h http.HandlerFunc) string {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"results":[{"columns":["count(*)"],"types":["integer"],"values":[[1]]}]}`)
-	}))
-	t.Cleanup(srv.Close)
-	return strings.TrimPrefix(srv.URL, "http://")
-}
-
-// silentEngine starts an engine that closes each connection with no answer, and returns its address.
-func silentEngine(t *testing.T) string {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
-			_ = conn.Close()
-		}
-	}))
+	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return strings.TrimPrefix(srv.URL, "http://")
 }
@@ -225,10 +209,23 @@ func silentEngine(t *testing.T) string {
 // The answers of the SQL feature's operations, one row per case of each.
 func TestSQLAnswersMatrix(t *testing.T) {
 	t.Parallel()
-	engines := &sqlFixtures{ready: map[v1.ObjectName]string{"tables": tablesEngine(t), "silent": silentEngine(t)}}
+	// The Ready engines: tables's counts one table, silent's closes each connection with no answer, and failing's
+	// answers 503.
+	engines := &sqlFixtures{ready: map[v1.ObjectName]string{
+		"tables": engineAt(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"results":[{"columns":["count(*)"],"types":["integer"],"values":[[1]]}]}`)
+		}),
+		"silent": engineAt(t, func(w http.ResponseWriter, _ *http.Request) {
+			if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+				_ = conn.Close()
+			}
+		}),
+		"failing": engineAt(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }),
+	}}
 	e := newAnswerEnv(t, funcd.WithSQLProviderRuntime(engines))
 	for _, d := range []*v1.SQLDatabase{sqlFixture("db"), sqlFixture("bound"), sqlFixture("tables"), sqlFixture("silent"),
-		sqlFixture("pending")} {
+		sqlFixture("failing"), sqlFixture("pending")} {
 		create(t, e.c, e.api, d)
 	}
 	engines.keepData("pending")
@@ -243,7 +240,7 @@ func TestSQLAnswersMatrix(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return statusOf(e.c, http.MethodGet, e.api+dbs+"/owned", answersDev) == http.StatusOK
 	}, 10*time.Second, 20*time.Millisecond, "the Function maker makes the SQLDatabase owned")
-	for _, name := range []string{"tables", "silent"} {
+	for _, name := range []string{"tables", "silent", "failing"} {
 		require.Eventually(t, func() bool { return phaseAt(e.c, e.api, dbs+"/"+name) == v1.PhaseReady },
 			10*time.Second, 20*time.Millisecond, "the engine of %s is Ready", name)
 	}
@@ -276,6 +273,9 @@ func TestSQLAnswersMatrix(t *testing.T) {
 			{op: "deleteSQLDatabase", when: "does not answer", on: e, ask: ask{what: "a database whose engine does not answer",
 				method: http.MethodDelete, path: dbs + "/silent", token: answersDev,
 				detail: "the database's engine does not answer"}},
+			{op: "deleteSQLDatabase", when: "answers with an error", on: e, ask: ask{
+				what: "a database whose engine answers with an error", method: http.MethodDelete, path: dbs + "/failing",
+				token: answersDev, detail: "the engine answered 503"}},
 		},
 	)
 	runMatrix(t, rows)

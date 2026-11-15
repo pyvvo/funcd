@@ -237,7 +237,7 @@ func registerLake(api huma.API, h Handlers) {
 // ===== SQLDatabase (namespaced) — ADR-0232 =====
 
 func registerSQLDatabase(api huma.API, h Handlers) {
-	const engineFix = "Retry once the SQLDatabase is Ready and its engine answers."
+	const engineFix = "Retry once the SQLDatabase is Ready and its engine answers without an error."
 	registerNamespacedCRUD(api, crudRoutes[v1.SQLDatabase]{
 		kind: "SQLDatabase", kinds: "SQLDatabases", path: "sqldatabases",
 		list: h.ListSQLDatabases, create: h.CreateSQLDatabase, get: h.GetSQLDatabase,
@@ -255,7 +255,9 @@ func registerSQLDatabase(api huma.API, h Handlers) {
 				problem(fault.Conflict, "The database's engine is not Ready and the database has data, so funcd "+
 					"cannot check whether it holds a table.", engineFix),
 				problem(fault.Conflict, "The database's engine does not answer, so funcd cannot check whether it "+
-					"holds a table.", engineFix)},
+					"holds a table.", engineFix),
+				problem(fault.Conflict, "The database's engine answers with an error, so funcd cannot check whether "+
+					"it holds a table.", engineFix)},
 		},
 	})
 }
