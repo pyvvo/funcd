@@ -91,18 +91,19 @@ var (
 		"A Policy forbids the Function to read the database.",
 		"Change or remove the Policy that forbids sql::read on the database.")
 	ErrSQLWriteDenied = fault.NewKnownCause(fault.Forbidden, "local.sql-write-denied",
-		"The Function does not own the database, no RolesAssignment makes it a writer, or a Policy forbids the write.",
-		"Execute from the database's owner, or grant the Function sql::write with a RolesAssignment, such as the SQL Data Writer role.")
+		"The Function does not own the database, no RolesAssignment makes it a writer, a Policy forbids the write, or the database that the binding names does not exist.",
+		"Execute from the database's owner, or grant the Function sql::write with a RolesAssignment, such as the SQL Data Writer role; create the database if it does not exist.")
 	// ErrEngineNotReady also marks the dependency check of a binding whose database has no Ready engine (ADR-0233
-	// Decision 8).
+	// Decision 8). An execute on a database that does not exist is denied first, since such a database has no writers.
 	ErrEngineNotReady = fault.NewKnownCause(fault.Unavailable, "local.sql-engine-not-ready",
-		"The database that the binding names does not exist, or its engine is not Ready yet.",
-		"Create the SQLDatabase, or wait until it is Ready, then retry.")
+		"The database's engine is not Ready yet; a query also gets this answer when the database that its binding names does not exist.",
+		"Wait until the SQLDatabase is Ready, then retry; create it if it does not exist.")
 	ErrSQLEngineUnavailable = fault.NewKnownCause(fault.Unavailable, "local.sql-engine-unavailable",
 		"The database's engine does not answer, its answer broke off, or it answered with an error.",
 		"Retry the call; if it keeps failing, read the SQLDatabase's status and funcd's log.")
+	// ErrSQLTimeout's when holds for each deadline that the engine client meets, the internal probes' included.
 	ErrSQLTimeout = fault.NewKnownCause(fault.Unavailable, "local.sql-timeout",
-		"The call ran past sql.callTimeout.",
+		"The database's engine did not answer in time, as when a statement runs past sql.callTimeout.",
 		"Make the statements faster, or raise sql.callTimeout.")
 	ErrSQLAnswerTooLarge = fault.NewKnownCause(fault.PayloadTooLarge, "local.sql-answer-too-large",
 		"The engine's answer to the call is larger than funcd reads for one call.",
