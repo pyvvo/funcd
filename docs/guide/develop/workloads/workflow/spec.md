@@ -573,7 +573,7 @@ Body: [`WorkflowRun`](#workflowrun), required. Answer: [`WorkflowRun`](#workflow
 | 400 | `urn:funcd:problem:invalid` | The run input in spec.input does not match the input schema in the Workflow's status.contract. | Correct the fields that the detail names. |
 | 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
 | 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create a WorkflowRun in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
-| 409 | `urn:funcd:problem:conflict` | A WorkflowRun of that name already exists in the namespace. | Choose another name, or replace the existing WorkflowRun. |
+| 409 | `urn:funcd:problem:conflict` | A WorkflowRun of that name already exists in the namespace. | Start a new run under another name: a run's spec.workflow, spec.input and spec.replay are fixed once it is created, so replacing the existing run cannot change them. |
 | 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
 | 413 | `urn:funcd:problem:payload-too-large` | The run input in spec.input is larger than workflow.payloadLimit, 256 KiB by default. | Send a smaller input, and pass large data by reference, such as the key of an object in a Bucket. |
 | 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |

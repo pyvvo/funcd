@@ -18480,11 +18480,11 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:conflict`: A WorkflowRun of that name already exists in the namespace. Choose another name, or replace the existing WorkflowRun."
+          description: "`urn:funcd:problem:conflict`: A WorkflowRun of that name already exists in the namespace. Start a new run under another name: a run's spec.workflow, spec.input and spec.replay are fixed once it is created, so replacing the existing run cannot change them."
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
               when: A WorkflowRun of that name already exists in the namespace.
-              fix: Choose another name, or replace the existing WorkflowRun.
+              fix: "Start a new run under another name: a run's spec.workflow, spec.input and spec.replay are fixed once it is created, so replacing the existing run cannot change them."
         "413":
           content:
             application/problem+json:

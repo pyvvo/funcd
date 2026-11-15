@@ -411,7 +411,8 @@ func registerWorkflow(api huma.API, h Handlers) {
 
 func registerWorkflowRun(api huma.API, h Handlers) {
 	// The workflowrun-payload and workflowrun-contract admissions check the input of a create and a replace (ADR-0094,
-	// ADR-0098); workflowrun-spec-immutable refuses a replace that changes what the run runs.
+	// ADR-0098); workflowrun-spec-immutable refuses a replace that changes what the run runs, so the shared 409 of a
+	// taken name must not offer a replace.
 	input := []ErrorCase{
 		problem(fault.PayloadTooLarge, "The run input in spec.input is larger than workflow.payloadLimit, 256 KiB by "+
 			"default.", "Send a smaller input, and pass large data by reference, such as the key of an object in a Bucket."),
@@ -424,7 +425,9 @@ func registerWorkflowRun(api huma.API, h Handlers) {
 		kind: "WorkflowRun", kinds: "WorkflowRuns", path: "workflowruns",
 		list: h.ListWorkflowRuns, create: h.CreateWorkflowRun, get: h.GetWorkflowRun,
 		replace: h.ReplaceWorkflowRun, remove: h.DeleteWorkflowRun,
-		cases: &kindCases{create: input, replace: slices.Concat(input, []ErrorCase{fixed})},
+		cases: &kindCases{create: input, replace: slices.Concat(input, []ErrorCase{fixed}),
+			words: map[sharedCase]wording{nameTaken: {fix: "Start a new run under another name: a run's spec.workflow, " +
+				"spec.input and spec.replay are fixed once it is created, so replacing the existing run cannot change them."}}},
 	})
 }
 
