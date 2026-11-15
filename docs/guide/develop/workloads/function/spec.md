@@ -366,6 +366,28 @@ The per-invocation context the shim passes to the handler.
 
 Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
 
+When funcd refuses a call, the method fails with an error that holds funcd's status and problem type. This table gives them for each method, with when each happens and what to do.
+
+| Method | Status | Problem type | When | What to do |
+| --- | --- | --- | --- | --- |
+| `invoke` | 400 | `urn:funcd:problem:invalid` | funcd could not read the request's body, as when its chunked encoding is broken. | Send a well-formed body. |
+| `invoke` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.links has no entry for the alias. | Add the link to spec.bindings.links, or call an alias that the Function links. |
+| `invoke` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to call the link's target. | Change or remove the Policy that forbids link::invoke on the target. |
+| `invoke` | 409 | `urn:funcd:problem:conflict` | The link's target serves HTTP, which ctx.invoke does not call. | Call it with ctx.fetch, which only the TypeScript shim has, or link a Function whose protocol is cloudevent. |
+| `invoke` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `invoke` | 413 | `urn:funcd:problem:payload-too-large` | The target's reply is larger than 1 MiB, the most that a call carries back. | Return a smaller reply, or pass the data through a Bucket. |
+| `invoke` | 429 | `urn:funcd:problem:resource-exhausted` | The target already has as many calls from Functions in flight as invoke.maxNestedInFlight allows. | Retry once a call to the target returns, or raise invoke.maxNestedInFlight. |
+| `invoke` | 503 | `urn:funcd:problem:unavailable` | The target's reply broke off before its end: its worker failed during the call, or the link's timeout ended it. | Retry the call, and raise the link's timeout if the target needs longer. |
+| `fetch` | 400 | `urn:funcd:problem:invalid` | funcd could not read the request's body, as when its chunked encoding is broken. | Send a well-formed body. |
+| `fetch` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.links has no entry for the alias. | Add the link to spec.bindings.links, or call an alias that the Function links. |
+| `fetch` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to call the link's target. | Change or remove the Policy that forbids link::invoke on the target. |
+| `fetch` | 404 | `urn:funcd:problem:not-found` | The path names no alias: it is not /fetch/&lt;alias&gt;/&lt;path&gt;. | Pass the alias of a link, and a path that starts with /. |
+| `fetch` | 409 | `urn:funcd:problem:conflict` | The link's target does not serve HTTP, which ctx.fetch needs. | Call it with ctx.invoke, or link a Function whose protocol is http. |
+| `fetch` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `fetch` | 413 | `urn:funcd:problem:payload-too-large` | The target's reply is larger than 1 MiB, the most that a call carries back. | Return a smaller reply, or pass the data through a Bucket. |
+| `fetch` | 429 | `urn:funcd:problem:resource-exhausted` | The target already has as many calls from Functions in flight as invoke.maxNestedInFlight allows. | Retry once a call to the target returns, or raise invoke.maxNestedInFlight. |
+| `fetch` | 503 | `urn:funcd:problem:unavailable` | The target's reply broke off before its end: its worker failed during the call, or the link's timeout ended it. | Retry the call, and raise the link's timeout if the target needs longer. |
+
 #### Python
 
 The per-invocation context the shim passes to the handler.
@@ -377,6 +399,19 @@ The per-invocation context the shim passes to the handler.
 | `remaining_ms() -> int \| None` | The whole milliseconds left before the call's deadline, 0 once it has passed, or ``None`` when the call has none. |
 
 Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
+
+When funcd refuses a call, the method fails with an error that holds funcd's status and problem type. This table gives them for each method, with when each happens and what to do.
+
+| Method | Status | Problem type | When | What to do |
+| --- | --- | --- | --- | --- |
+| `invoke` | 400 | `urn:funcd:problem:invalid` | funcd could not read the request's body, as when its chunked encoding is broken. | Send a well-formed body. |
+| `invoke` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.links has no entry for the alias. | Add the link to spec.bindings.links, or call an alias that the Function links. |
+| `invoke` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to call the link's target. | Change or remove the Policy that forbids link::invoke on the target. |
+| `invoke` | 409 | `urn:funcd:problem:conflict` | The link's target serves HTTP, which ctx.invoke does not call. | Call it with ctx.fetch, which only the TypeScript shim has, or link a Function whose protocol is cloudevent. |
+| `invoke` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `invoke` | 413 | `urn:funcd:problem:payload-too-large` | The target's reply is larger than 1 MiB, the most that a call carries back. | Return a smaller reply, or pass the data through a Bucket. |
+| `invoke` | 429 | `urn:funcd:problem:resource-exhausted` | The target already has as many calls from Functions in flight as invoke.maxNestedInFlight allows. | Retry once a call to the target returns, or raise invoke.maxNestedInFlight. |
+| `invoke` | 503 | `urn:funcd:problem:unavailable` | The target's reply broke off before its end: its worker failed during the call, or the link's timeout ended it. | Retry the call, and raise the link's timeout if the target needs longer. |
 
 ## HTTP API
 
