@@ -1,8 +1,10 @@
 # ADR-0331: The control plane API's reference is a section of its own on the docs site (amends ADR-0329)
 
-- **Status**: Reviewing (2026-11-15, implemented: funcd's side here, the site's in funcd-frontend); Accepted
-  (2026-11-15), on the decider's go, after two rounds of an independent judge (a subagent):
-  round 1 found four Majors, all folded; round 2 found no Blocker or Major, and its Minors are folded
+- **Status**: Implemented (2026-11-15), review passed with three Minors, all on the checks' strictness
+  ([report](../reviews/adr-0331-implementation-claude-opus-5-5.md)); Reviewing (2026-11-15, implemented: funcd's side
+  here, the site's in funcd-frontend); Accepted (2026-11-15), on the decider's go, after two rounds of an independent
+  judge (a subagent): round 1 found four Majors, all folded; round 2 found no Blocker or Major, and its Minors are
+  folded
 - **Date**: 2026-11-15
 - **Deciders**: green-0-rabbit
 - **Tags**: api, docs, site
