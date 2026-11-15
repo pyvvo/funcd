@@ -107,8 +107,8 @@ func seedFnIngress(t *testing.T, st store.Store, ns, name string, ing *v1.Ingres
 	require.NoError(t, err)
 }
 
-// ADR-0241 Decisions 2 and 4: enabled replaces the explicit gate; off and a custom address close the by-name form
-// without a wake, while an internal call still reaches an off Function by name.
+// ADR-0241 Decisions 2 and 4: enabled replaces the explicit gate; off, and a host or a path of its own, close the
+// by-name form without a wake, while an internal call still reaches an off Function by name.
 func TestExposure_ByNameFollowsEnabled(t *testing.T) {
 	h, st, scaler, _ := frontDoor(t, nil, nil)
 	seedNS(t, st, "ex", v1.ExposureExplicit)
@@ -116,11 +116,13 @@ func TestExposure_ByNameFollowsEnabled(t *testing.T) {
 	seedFnIngress(t, st, "ex", "closed", nil)
 	seedFnIngress(t, st, "default", "off", &v1.Ingress{Enabled: new(false)})
 	seedFnIngress(t, st, "default", "custom", &v1.Ingress{Host: "api.example.com"})
+	seedFnIngress(t, st, "default", "routed", &v1.Ingress{Path: "/routed"})
 
 	for _, c := range []struct{ host, path string }{
 		{"ex.localhost", "/function/closed"},
 		{"localhost", "/function/off"},
 		{"localhost", "/function/custom"},
+		{"localhost", "/function/routed"},
 	} {
 		require.Equal(t, http.StatusNotFound, do(t, h, http.MethodPost, c.host, c.path, "").StatusCode, c.path)
 	}
