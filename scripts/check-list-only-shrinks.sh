@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # check-list-only-shrinks.sh <base> <file>: fails when the list <file> gained a line since the commit <base>, and
 # names the lines it gained, as a list of what is not done yet only shrinks (ADR-0329 Decision 5, for the operations
-# not yet described). A list that <base> does not hold yet passes, and a <base> it cannot read fails.
+# not yet described; ADR-0330 Decision 9, for the local API's endpoints). A list that <base> does not hold yet passes,
+# and a <base> it cannot read fails.
 set -euo pipefail
 export LC_ALL=C
 base=${1:?usage: check-list-only-shrinks.sh <base commit> <file>}

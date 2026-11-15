@@ -120,6 +120,8 @@ func plural(k v1.Kind) string {
 		return "functions"
 	case v1.KindWorkflow:
 		return "workflows"
+	case v1.KindPolicy:
+		return "policies"
 	}
 	return strings.ToLower(string(k)) + "s"
 }

@@ -2,9 +2,11 @@ package funcd
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,6 +35,54 @@ func TestFacets_TheProvidersServeKVBlobSQLAndSecret(t *testing.T) {
 		require.Contains(t, rec.Header().Get("Content-Type"), "json", "%s %s reaches its facet: %d %s", route[0], route[1],
 			rec.Code, rec.Body.String())
 	}
+}
+
+// scenario: facets-match
+// A built platform's facets serve the segments of the endpoints that local.Endpoints lists, so the causes guard and the
+// table of methods see every route a worker calls; a facet that Endpoints lacks, or one it lists that the platform
+// does not serve, fails the check, named.
+func TestScenarioFacetsMatch(t *testing.T) {
+	t.Parallel()
+	p, err := New(InMemory())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	var served []string
+	for _, f := range p.facets() {
+		if f.Segment() != "" {
+			served = append(served, f.Segment())
+		}
+	}
+	endpoints := local.Endpoints()
+	require.NoError(t, facetsMatch(served, endpoints))
+	require.EqualError(t, facetsMatch(append(served, "lake"), endpoints),
+		"the platform serves the facets [lake], which local.Endpoints does not list")
+	require.EqualError(t, facetsMatch(served[1:], endpoints),
+		"local.Endpoints lists the facets ["+served[0]+"], which the platform does not serve")
+}
+
+// facetsMatch fails when served, a platform's facet segments, differs from the first path segments of the endpoints
+// that are not the local API's own (invoke, health and fetch).
+func facetsMatch(served []string, endpoints []local.Endpoint) error {
+	var listed []string
+	for _, e := range endpoints {
+		_, path, found := strings.Cut(e.Pattern, " ")
+		if !found {
+			path = e.Pattern
+		}
+		segment, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+		if !slices.Contains([]string{"invoke", "health", "fetch"}, segment) && !slices.Contains(listed, segment) {
+			listed = append(listed, segment)
+		}
+	}
+	extra := slices.DeleteFunc(slices.Clone(served), func(s string) bool { return slices.Contains(listed, s) })
+	missing := slices.DeleteFunc(listed, func(s string) bool { return slices.Contains(served, s) })
+	switch {
+	case len(extra) > 0:
+		return fmt.Errorf("the platform serves the facets %v, which local.Endpoints does not list", extra)
+	case len(missing) > 0:
+		return fmt.Errorf("local.Endpoints lists the facets %v, which the platform does not serve", missing)
+	}
+	return nil
 }
 
 // scenario: a-misplaced-facet-fails-the-start
