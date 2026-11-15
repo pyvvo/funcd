@@ -414,7 +414,7 @@ Answer: [`DeadLetterListOutputBody`](#deadletterlistoutputbody).
 | `failedAt` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When funcd parked the action, or when its last replay failed. |
 | `id` | string, required | The dead letter's ID, a ULID that funcd mints when it parks the action. |
 | `namespace` | string, required, a DNS-1123 label | The namespace of the Sensor. |
-| `payload` | any JSON value, required | The CloudEvent that the action was to deliver, as JSON. A replay delivers it again. |
+| `payload` | any JSON value, required | The CloudEvent that fired the action, as JSON, not the input that the action builds from it. A replay runs the Sensor's current action on it again. |
 | `reason` | string, required | Why the last attempt failed, or why funcd parked the action before its attempts ran out. |
 | `sensor` | string, required, a DNS-1123 label | The Sensor whose action failed. |
 | `source` | string, required, a DNS-1123 label | The EventSource of the event, as the Sensor's dependency names it. |
@@ -487,5 +487,5 @@ Answer: none.
 | 409 | `urn:funcd:problem:conflict` | The action's Function serves HTTP, so only the edge calls it; the dead letter stays. | Point the action at a Function that does not serve HTTP, then retry. |
 | 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
 | 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
-| 503 | `urn:funcd:problem:unavailable` | The platform or the namespace is held, so funcd delivers no event. | Retry once the hold is released, which funcdctl hold release does. |
+| 503 | `urn:funcd:problem:unavailable` | The platform is held, or the namespace is held for its data or while a Restore loads it, so funcd delivers no event. | Retry once the hold is released: funcdctl hold release releases the platform's hold, and funcdctl hold release --namespace the namespace's, once any Restore that loads it has ended. |
 | 503 | `urn:funcd:problem:unavailable` | The delivery failed again, such as on a Function that is missing, has no ready worker or answers an error; the dead letter stays, with its attempts reset and the new reason. | Correct what the dead letter's reason names, then retry. |
