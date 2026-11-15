@@ -103,11 +103,11 @@ var (
 	ErrNoLink = fault.NewKnownCause(fault.Forbidden, "local.no-link",
 		"The Function's spec.bindings.links has no entry for the alias.",
 		"Add the link to spec.bindings.links, or call an alias that the Function links.")
-	// ErrLinkTargetMissing is declared by no endpoint: admission refuses a link to a missing Function and the delete of
-	// a linked one (ADR-0064), so no request reaches it.
+	// Admission keeps a linked Function, but the collector and an App's prune delete through the store (ADR-0170 Risks
+	// accepted), so a link's target can go before the Function that links it.
 	ErrLinkTargetMissing = fault.NewKnownCause(fault.NotFound, "local.link-target-missing",
-		"The Function that the link targets does not exist.",
-		"Create the Function, or link one that exists.")
+		"The Function that the link targets no longer exists, as when its App deleted it before the Function that links it.",
+		"Create the Function again, or link one that exists.")
 	ErrTargetServesHTTP = fault.NewKnownCause(fault.Conflict, "local.target-serves-http",
 		"The link's target serves HTTP, which ctx.invoke does not call.",
 		"Call it with ctx.fetch, which only the TypeScript shim has, or link a Function whose protocol is cloudevent.")
