@@ -89,7 +89,7 @@ The key-value tables that the function binds, by alias: read, write and list the
 
 ## HTTP API
 
-Each operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
+Each described operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
 
 | Authentication | How a call sends it |
 | --- | --- |

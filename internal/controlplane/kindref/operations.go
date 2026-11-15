@@ -134,9 +134,9 @@ func (r *renderer) httpSection(d document, f Feature) error {
 	if len(ops) == 0 {
 		return nil
 	}
-	r.lines = append(r.lines, "", "## HTTP API", "", "Each operation of these kinds, with its parameters, its body "+
-		"and its answer, and every status that it answers. A refusal's body is a problem+json document whose type "+
-		"the status table gives, unless the table names another body.")
+	r.lines = append(r.lines, "", "## HTTP API", "", "Each described operation of these kinds, with its parameters, "+
+		"its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose "+
+		"type the status table gives, unless the table names another body.")
 	var schemes []string
 	for _, o := range ops {
 		for _, req := range o.op.Security {

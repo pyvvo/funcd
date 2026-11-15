@@ -63,6 +63,7 @@ func TestScenarioOperationShowsItsAnswers(t *testing.T) {
 	require.NoError(t, err)
 	kv := string(pages["develop/services/kv/spec.md"])
 	require.Less(t, strings.Index(kv, "## Handler API"), strings.Index(kv, "## HTTP API"), "after the Handler API")
+	require.Contains(t, kv, "## HTTP API\n\nEach described operation of these kinds,")
 	replace := section(t, kv, "### Replace a KVStore")
 	require.Contains(t, replace, "| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}` | "+
 		"`replaceKVStore` | `bearer` or `apiKey` |")
@@ -105,7 +106,8 @@ func TestScenarioFunctionCallDocumented(t *testing.T) {
 	}{
 		{200, "", "ADR-0329 Decision 2", "The handler's result."},
 		{400, "`urn:funcd:problem:invalid`", "#90", "did not arrive within the gateway's read timeout"},
-		{401, "`urn:funcd:problem:unauthorized`", "ADR-0113", "The namespace's stance asks for a credential"},
+		{401, "`urn:funcd:problem:unauthorized`", "ADR-0113", "the call carries none, or one that funcd does not know"},
+		{401, "`urn:funcd:problem:unauthorized`", "ADR-0113", "while server.auth.edge is off"},
 		{403, "`urn:funcd:problem:forbidden`", "ADR-0113", "do not allow it to call Functions"},
 		{404, "`urn:funcd:problem:not-found`", "ADR-0241", "answers at its own address"},
 		{413, "`urn:funcd:problem:payload-too-large`", "ADR-0134", "larger than 1 MiB"},

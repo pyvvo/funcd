@@ -376,7 +376,7 @@ The per-invocation context the shim passes to the handler.
 
 ## HTTP API
 
-Each operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
+Each described operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
 
 | Authentication | How a call sends it |
 | --- | --- |
@@ -404,7 +404,8 @@ Body: any JSON value. Answer: any JSON value.
 | --- | --- | --- | --- |
 | 200 |  | The handler's result. |  |
 | 400 | `urn:funcd:problem:invalid` | The body did not arrive within the gateway's read timeout. | Send the whole request at once, without pausing. |
-| 401 | `urn:funcd:problem:unauthorized` | The namespace's stance asks for a credential, and the call carries none, or one that funcd does not know; or server.auth.edge is off, so funcd cannot check one. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 401 | `urn:funcd:problem:unauthorized` | The namespace's stance asks for a credential, and the call carries none, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 401 | `urn:funcd:problem:unauthorized` | The namespace's stance asks for a credential while server.auth.edge is off, so funcd checks none and refuses the call, whatever credential it carries. | Ask funcd's operator to set server.auth.edge to true. |
 | 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to call Functions in the namespace. | Use a credential of the namespace, such as its developer's. |
 | 404 | `urn:funcd:problem:not-found` | The namespace holds no Function of that name that answers at its own address: it does not exist, its ingress is off, or its ingress names a host or a path of its own. | Check the name and the namespace, or call the Function at the address that its ingress names. |
 | 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB, the most that funcd reads to build the call's event. | Send a smaller body, or pass large data by reference, such as a Bucket key. |

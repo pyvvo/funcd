@@ -5,11 +5,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"sync/atomic"
-
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/go-chi/chi/v5"
 
 	"github.com/pyvvo/funcd/internal/controlplane"
 )
@@ -25,7 +21,7 @@ func recordControlPlane(h http.Handler) http.Handler {
 	if record == nil {
 		return h
 	}
-	return recordAnswers(h, controlPlaneOperation(h), *record)
+	return recordAnswers(h, func(r *http.Request) string { return controlplane.OperationOf(h, r) }, *record)
 }
 
 // recordGateway returns the gateway's handler wrapped outermost by the recorder, or h itself when none is set.
@@ -35,43 +31,6 @@ func recordGateway(h http.Handler) http.Handler {
 		return h
 	}
 	return recordAnswers(h, gatewayOperation, *record)
-}
-
-// operationIDs names each operation of the API document by its method and path. It is built once in a process, for
-// the first answer that a platform records, so a test binary pays for one document, and a server for none.
-//
-//nolint:gochecknoglobals // the cache of the test hook above; only a set answerRecorder reads it
-var operationIDs = sync.OnceValue(func() map[string]string {
-	ids := map[string]string{}
-	for path, item := range controlplane.SpecAPI().OpenAPI().Paths {
-		for method, op := range map[string]*huma.Operation{http.MethodGet: item.Get, http.MethodPost: item.Post,
-			http.MethodPut: item.Put, http.MethodPatch: item.Patch, http.MethodDelete: item.Delete} {
-			if op != nil {
-				ids[method+" "+path] = op.OperationID
-			}
-		}
-	}
-	return ids
-})
-
-// controlPlaneOperation resolves a request against the control plane's own registrations: the route that its router
-// matches, named by the operation that the API document holds at that method and path.
-func controlPlaneOperation(h http.Handler) func(*http.Request) string {
-	routes, ok := h.(chi.Routes)
-	if !ok {
-		return func(*http.Request) string { return "" }
-	}
-	return func(r *http.Request) string {
-		path := r.URL.RawPath
-		if path == "" {
-			path = r.URL.Path
-		}
-		pattern := routes.Find(chi.NewRouteContext(), r.Method, path)
-		if pattern == "" {
-			return ""
-		}
-		return operationIDs()[r.Method+" "+pattern]
-	}
 }
 
 // gatewayOperation resolves a request against the gateway's one documented operation, invokeFunction: POST

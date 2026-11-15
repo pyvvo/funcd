@@ -340,41 +340,33 @@ func respond[T crudKind](v T, err error) (*bodyOutput[T], error) {
 }
 
 func registerNamespacedCRUD[T crudKind, PT objectPtr[T]](api huma.API, r crudRoutes[T]) {
-	base, item, tags := registerNamespacedRead(api, r)
-	v, own := verbCases{kind: r.kind, kinds: r.kinds, namespaced: true}, r.cases.own()
-	huma.Register(api, r.cases.describe(huma.Operation{OperationID: "create" + r.kind, Method: http.MethodPost, Path: base,
-		Tags: tags}, "Create "+an(r.kind), v.create(own.create)...),
+	ops := registerNamespacedRead(api, r)
+	huma.Register(api, ops.create,
 		func(ctx context.Context, in *namespacedBodyInput[T]) (*bodyOutput[T], error) {
 			if err := matchPathNamespace(in.Namespace, PT(&in.Body).GetObjectMeta()); err != nil {
 				return nil, wrapFaultError(err)
 			}
 			return respond(r.create(withDryRun(ctx, in.DryRun), in.Body))
 		})
-	huma.Register(api, r.cases.describe(huma.Operation{OperationID: "replace" + r.kind, Method: http.MethodPut, Path: item,
-		Tags: tags}, "Replace "+an(r.kind), v.replace(own.replace)...),
+	huma.Register(api, ops.replace,
 		func(ctx context.Context, in *namespacedNameBodyInput[T]) (*bodyOutput[T], error) {
 			if err := withReplaceVersion(in.IfMatchParams, PT(&in.Body).GetObjectMeta()); err != nil {
 				return nil, wrapFaultError(err)
 			}
 			return respond(r.replace(withDryRun(ctx, in.DryRun), in.Namespace, in.Name, in.Body))
 		})
-	huma.Register(api, r.cases.describe(huma.Operation{OperationID: "delete" + r.kind, Method: http.MethodDelete, Path: item,
-		Tags: tags}, "Delete "+an(r.kind), v.remove(own.remove)...),
+	huma.Register(api, ops.remove,
 		func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
 			return nil, wrapFaultError(r.remove(ctx, in.Namespace, in.Name, in.rv))
 		})
 }
 
-// registerNamespacedRead registers r's list and get only, and returns the collection path, the item path and the
-// tags. A read-only kind (ADR-0172 Decision 2, ADR-0200 Decision 2) stops here: its POST, PUT and DELETE answer 405
-// with Allow: GET.
-func registerNamespacedRead[T crudKind](api huma.API, r crudRoutes[T]) (base, item string, tags []string) {
-	base = "/apis/funcd.io/v1alpha1/namespaces/{namespace}/" + r.path
-	item = base + "/{name}"
-	tags = []string{r.kind}
-	v := verbCases{kind: r.kind, kinds: r.kinds, namespaced: true}
-	huma.Register(api, r.cases.describe(huma.Operation{OperationID: "list" + r.kinds, Method: http.MethodGet, Path: base,
-		Tags: tags}, "List the "+r.kinds+" of a namespace", v.list()...),
+// registerNamespacedRead registers r's list and get only, and returns all five of its operations. A read-only kind
+// (ADR-0172 Decision 2, ADR-0200 Decision 2) stops here: its POST, PUT and DELETE answer 405 with Allow: GET.
+func registerNamespacedRead[T crudKind](api huma.API, r crudRoutes[T]) restOperations {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/" + r.path
+	ops := restOperationsOf(r.kind, r.kinds, base, base+"/{name}", true, r.cases)
+	huma.Register(api, ops.list,
 		func(ctx context.Context, in *namespacedList) (*listOutput[T], error) {
 			items, err := r.list(ctx, in.Namespace)
 			if err != nil {
@@ -382,12 +374,11 @@ func registerNamespacedRead[T crudKind](api huma.API, r crudRoutes[T]) (base, it
 			}
 			return &listOutput[T]{Body: items}, nil
 		})
-	huma.Register(api, r.cases.describe(huma.Operation{OperationID: "get" + r.kind, Method: http.MethodGet, Path: item,
-		Tags: tags}, "Read "+an(r.kind), v.get()...),
+	huma.Register(api, ops.get,
 		func(ctx context.Context, in *namespacedGet) (*bodyOutput[T], error) {
 			return respond(r.get(ctx, in.Namespace, in.Name))
 		})
-	return base, item, tags
+	return ops
 }
 
 // clusterRoutes is the REST surface of one cluster-scoped kind under /apis/funcd.io/v1alpha1/<path>, registered by
@@ -416,10 +407,8 @@ type clusterNameBodyInput[T crudKind] struct {
 
 func registerClusterCRUD[T crudKind, PT objectPtr[T]](api huma.API, r clusterRoutes[T]) {
 	base := "/apis/funcd.io/v1alpha1/" + r.path
-	item, tags := base+"/{name}", []string{r.kind}
-	v, own := verbCases{kind: r.kind, kinds: r.kinds}, r.cases.own()
-	huma.Register(api, r.cases.describe(huma.Operation{OperationID: "list" + r.kinds, Method: http.MethodGet, Path: base,
-		Tags: tags}, "List the "+r.kinds, v.list()...),
+	ops := restOperationsOf(r.kind, r.kinds, base, base+"/{name}", false, r.cases)
+	huma.Register(api, ops.list,
 		func(ctx context.Context, _ *struct{}) (*listOutput[T], error) {
 			items, err := r.list(ctx)
 			if err != nil {
@@ -427,26 +416,22 @@ func registerClusterCRUD[T crudKind, PT objectPtr[T]](api huma.API, r clusterRou
 			}
 			return &listOutput[T]{Body: items}, nil
 		})
-	huma.Register(api, r.cases.describe(huma.Operation{OperationID: "create" + r.kind, Method: http.MethodPost, Path: base,
-		Tags: tags}, "Create "+an(r.kind), v.create(own.create)...),
+	huma.Register(api, ops.create,
 		func(ctx context.Context, in *clusterBodyInput[T]) (*bodyOutput[T], error) {
 			return respond(r.create(withDryRun(ctx, in.DryRun), in.Body))
 		})
-	huma.Register(api, r.cases.describe(huma.Operation{OperationID: "get" + r.kind, Method: http.MethodGet, Path: item,
-		Tags: tags}, "Read "+an(r.kind), v.get()...),
+	huma.Register(api, ops.get,
 		func(ctx context.Context, in *clusterScopedGet) (*bodyOutput[T], error) {
 			return respond(r.get(ctx, in.Name))
 		})
-	huma.Register(api, r.cases.describe(huma.Operation{OperationID: "replace" + r.kind, Method: http.MethodPut, Path: item,
-		Tags: tags}, "Replace "+an(r.kind), v.replace(own.replace)...),
+	huma.Register(api, ops.replace,
 		func(ctx context.Context, in *clusterNameBodyInput[T]) (*bodyOutput[T], error) {
 			if err := withReplaceVersion(in.IfMatchParams, PT(&in.Body).GetObjectMeta()); err != nil {
 				return nil, wrapFaultError(err)
 			}
 			return respond(r.replace(withDryRun(ctx, in.DryRun), in.Name, in.Body))
 		})
-	huma.Register(api, r.cases.describe(huma.Operation{OperationID: "delete" + r.kind, Method: http.MethodDelete, Path: item,
-		Tags: tags}, "Delete "+an(r.kind), v.remove(own.remove)...),
+	huma.Register(api, ops.remove,
 		func(ctx context.Context, in *clusterScopedDelete) (*struct{}, error) {
 			return nil, wrapFaultError(r.remove(ctx, in.Name, in.rv))
 		})

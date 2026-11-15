@@ -4,13 +4,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth/rbac"
 	"github.com/pyvvo/funcd/internal/controlplane"
+	"github.com/pyvvo/funcd/internal/controlplane/middleware"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 // Describe sets the summary, the two schemes and one response per status, written from its cases, keeps the success
@@ -72,4 +78,26 @@ func TestDocsShowTheCasesOfReplaceKVStore(t *testing.T) {
 	require.Equal(t, "replaceKVStore", replace.OperationID)
 	require.Contains(t, replace.Responses["409"].Description, "The KVStore has changed since the resourceVersion")
 	require.NotContains(t, doc.Paths, "/function/{name}", "the control plane serves no call of a Function")
+}
+
+// OperationOf names a request by the operations the server registered, so a route that Deps leaves out names none,
+// and the call of a Function, which only the gateway serves, names none either (ADR-0329 Decision 4).
+func TestOperationOfNamesTheServersOwnOperations(t *testing.T) {
+	h, err := controlplane.NewServer(controlplane.Deps{Store: store.New(memory.New()), Authorizer: rbac.New(),
+		Credentials: middleware.NewStaticCredentials(map[string]auth.Identity{})})
+	require.NoError(t, err)
+	for target, want := range map[string]string{
+		"PUT /apis/funcd.io/v1alpha1/namespaces/default/kvstores/s":           "replaceKVStore",
+		"POST /apis/funcd.io/v1alpha1/namespaces/default/kvstores/s/handover": "handoverKVStore",
+		"GET /apis/funcd.io/v1alpha1/namespaces":                              "listNamespaces",
+		"GET /apis/funcd.io/v1alpha1/namespaces/default/functions/f/logs":     "",
+		"PATCH /apis/funcd.io/v1alpha1/namespaces/default/kvstores/s":         "",
+		"POST /function/echo": "",
+		"GET /docs":           "",
+	} {
+		method, path, _ := strings.Cut(target, " ")
+		require.Equal(t, want, controlplane.OperationOf(h, httptest.NewRequest(method, path, nil)), target)
+	}
+	require.Empty(t, controlplane.OperationOf(http.NotFoundHandler(),
+		httptest.NewRequest(http.MethodGet, "/apis/funcd.io/v1alpha1/namespaces", nil)), "a handler NewServer did not build")
 }

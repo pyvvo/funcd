@@ -116,20 +116,37 @@ type kindCases struct {
 	create, replace, remove []ErrorCase
 }
 
-// describe returns op described with summary and cases, or op itself when k is nil.
-func (k *kindCases) describe(op huma.Operation, summary string, cases ...ErrorCase) huma.Operation {
-	if k == nil {
-		return op
-	}
-	return Describe(op, summary, cases...)
-}
+// restOperations are the operations of one kind's REST surface: list and create on its collection, get, replace and
+// delete on an item.
+type restOperations struct{ list, create, get, replace, remove huma.Operation }
 
-// own is k's cases, none when k is nil.
-func (k *kindCases) own() kindCases {
-	if k == nil {
-		return kindCases{}
+// restOperationsOf returns a kind's operations at base and item, each described with its verb's shared cases and the
+// kind's own when cases is set (ADR-0329 Decision 1). The generic route helpers call it, so each kind's instance of
+// them carries none of this code.
+func restOperationsOf(kind, kinds, base, item string, namespaced bool, cases *kindCases) restOperations {
+	tags := []string{kind}
+	op := func(id, method, path string) huma.Operation {
+		return huma.Operation{OperationID: id, Method: method, Path: path, Tags: tags}
 	}
-	return *k
+	ops := restOperations{
+		list: op("list"+kinds, http.MethodGet, base), create: op("create"+kind, http.MethodPost, base),
+		get: op("get"+kind, http.MethodGet, item), replace: op("replace"+kind, http.MethodPut, item),
+		remove: op("delete"+kind, http.MethodDelete, item),
+	}
+	if cases == nil {
+		return ops
+	}
+	v := verbCases{kind: kind, kinds: kinds, namespaced: namespaced}
+	list := "List the " + kinds
+	if namespaced {
+		list += " of a namespace"
+	}
+	ops.list = Describe(ops.list, list, v.list()...)
+	ops.create = Describe(ops.create, "Create "+an(kind), v.create(cases.create)...)
+	ops.get = Describe(ops.get, "Read "+an(kind), v.get()...)
+	ops.replace = Describe(ops.replace, "Replace "+an(kind), v.replace(cases.replace)...)
+	ops.remove = Describe(ops.remove, "Delete "+an(kind), v.remove(cases.remove)...)
+	return ops
 }
 
 // unauthorized is every described control-plane operation's 401, which the authentication middleware writes.

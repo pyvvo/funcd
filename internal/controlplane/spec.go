@@ -65,8 +65,11 @@ func invokeCases() []ErrorCase {
 		problem(fault.Invalid, "The body did not arrive within the gateway's read timeout.",
 			"Send the whole request at once, without pausing."),
 		problem(fault.Unauthorized, "The namespace's stance asks for a credential, and the call carries none, or one "+
-			"that funcd does not know; or server.auth.edge is off, so funcd cannot check one.",
+			"that funcd does not know.",
 			"Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."),
+		problem(fault.Unauthorized, "The namespace's stance asks for a credential while server.auth.edge is off, so "+
+			"funcd checks none and refuses the call, whatever credential it carries.",
+			"Ask funcd's operator to set server.auth.edge to true."),
 		problem(fault.Forbidden, "The credential's role or namespaces do not allow it to call Functions in the namespace.",
 			"Use a credential of the namespace, such as its developer's."),
 		problem(fault.NotFound, "The namespace holds no Function of that name that answers at its own address: it "+
