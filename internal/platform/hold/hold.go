@@ -27,9 +27,9 @@ const ReportFile = "restore.json"
 // Marker is the content of MarkerFile; Reason is "restore" or "safe-mode" (ADR-0207). A namespace's restore marker
 // also names the in-place Restore that wrote it (ADR-0222 Decision 8).
 type Marker struct {
-	Reason  string        `json:"reason"`
-	Since   v1.Timestamp  `json:"since"`
-	Restore v1.ObjectName `json:"restore,omitempty"`
+	Reason  string        `json:"reason" doc:"Why it is held: restore or safe-mode for the platform; for a namespace, data, which funcd restore run sets on a namespace with a BackupSchedule, or restore, which an in-place Restore sets while it loads."`
+	Since   v1.Timestamp  `json:"since" doc:"When the hold began."`
+	Restore v1.ObjectName `json:"restore,omitempty" doc:"For the restore hold of a namespace, the in-place Restore that set it."`
 }
 
 // Gate is what a runner asks: Held, and the time of the last release (zero when none).
@@ -72,51 +72,51 @@ type busy struct {
 // data no object names, which the reclaims would drop; FunctionsNotReady are <ns>/<name>; Namespaces are the
 // per-namespace markers.
 type Evidence struct {
-	Held              bool                      `json:"held"`
-	Marker            *Marker                   `json:"marker,omitempty"`
-	ReleasedAt        *v1.Timestamp             `json:"releasedAt,omitempty"`
-	Report            json.RawMessage           `json:"report,omitempty"`
-	Counts            map[v1.Kind]int           `json:"counts,omitempty"`
-	PausedRuns        []string                  `json:"pausedRuns,omitempty"`
-	DeadLetters       []string                  `json:"deadLetters,omitempty"`
-	Pending           map[string]map[string]int `json:"pending,omitempty"`
-	Orphans           []string                  `json:"orphans,omitempty"`
-	BucketOrphans     []string                  `json:"bucketOrphans,omitempty"`
-	SQLOrphans        []string                  `json:"sqlOrphans,omitempty"`
-	VolumeOrphans     []string                  `json:"volumeOrphans,omitempty"` // "<ns>/<function>/<volume>" (ADR-0262)
-	FunctionsNotReady []string                  `json:"functionsNotReady,omitempty"`
-	Namespaces        []NamespaceHold           `json:"namespaces,omitempty"`
+	Held              bool                      `json:"held" doc:"True while the platform is held: its timers, blob sources, Sensors, runs, rollouts, backups and sweeps wait for the release."`
+	Marker            *Marker                   `json:"marker,omitempty" doc:"Why the platform is held, and since when; absent when it is not held."`
+	ReleasedAt        *v1.Timestamp             `json:"releasedAt,omitempty" doc:"When the last release lifted the platform's hold."`
+	Report            json.RawMessage           `json:"report,omitempty" doc:"The report of funcd restore run, as it wrote restore.json: the generation that it loaded, the counts of its objects per kind, and the WorkflowRuns that it paused. Absent when no restore wrote one."`
+	Counts            map[v1.Kind]int           `json:"counts,omitempty" doc:"The number of objects of each kind that funcd stores now, to compare with the counts of report."`
+	PausedRuns        []string                  `json:"pausedRuns,omitempty" doc:"The WorkflowRuns that are paused and have not ended, each as <namespace>/<name>. A release leaves them paused, and funcdctl workflow resume runs one again."`
+	DeadLetters       []string                  `json:"deadLetters,omitempty" doc:"The dead letters of every namespace, each as <namespace>/<id>. Nothing delivers them again by itself."`
+	Pending           map[string]map[string]int `json:"pending,omitempty" doc:"For each blob EventSource, as <namespace>/<name>, how many objects of each event the release fires, since the source has not seen them yet."`
+	Orphans           []string                  `json:"orphans,omitempty" doc:"The KV data that no object names: the prefix of each KVStore that does not exist, as <namespace>/<store>/, and of each table that its KVStore no longer declares, as <namespace>/<store>/<table>/. To keep that data, apply its object while the platform is held."`
+	BucketOrphans     []string                  `json:"bucketOrphans,omitempty" doc:"The Buckets that do not exist and whose objects funcd still holds, each as <namespace>/<name>."`
+	SQLOrphans        []string                  `json:"sqlOrphans,omitempty" doc:"The SQL databases that do not exist and whose directory funcd still holds, each as <namespace>/<name>."`
+	VolumeOrphans     []string                  `json:"volumeOrphans,omitempty" doc:"The local volumes that no stored Function declares, each as <namespace>/<function>/<volume>."`
+	FunctionsNotReady []string                  `json:"functionsNotReady,omitempty" doc:"The Functions whose phase is not Ready, each as <namespace>/<name>."`
+	Namespaces        []NamespaceHold           `json:"namespaces,omitempty" doc:"The holds of single namespaces, one for each reason that holds a namespace."`
 	// Quarantine is the data the start-up reclaims moved aside instead of deleting it, held or not (ADR-0288).
-	Quarantine []QuarantineEntry `json:"quarantine,omitempty"`
+	Quarantine []QuarantineEntry `json:"quarantine,omitempty" doc:"The data that a start moved into the quarantine, since no object named it, held or not."`
 }
 
 // QuarantineEntry is one object's quarantined data (ADR-0288 Decision 4): a volume's Name is its Function. State is
 // moving, kept or returning; Until is when the sweep may delete a kept entry.
 type QuarantineEntry struct {
-	Kind      v1.Kind          `json:"kind"`
-	Namespace v1.NamespaceName `json:"namespace"`
-	Name      v1.ObjectName    `json:"name"`
-	Volume    v1.ObjectName    `json:"volume,omitempty"`
-	Since     v1.Timestamp     `json:"since"`
-	Until     v1.Timestamp     `json:"until"`
-	State     string           `json:"state"`
+	Kind      v1.Kind          `json:"kind" doc:"The kind of the object whose data the entry holds: KVStore, Bucket, SQLDatabase, or Function for a local volume."`
+	Namespace v1.NamespaceName `json:"namespace" doc:"The object's namespace."`
+	Name      v1.ObjectName    `json:"name" doc:"The object's name; for a volume, its Function's."`
+	Volume    v1.ObjectName    `json:"volume,omitempty" doc:"With kind Function, the name of the local volume."`
+	Since     v1.Timestamp     `json:"since" doc:"When the start began to move the data into the quarantine."`
+	Until     v1.Timestamp     `json:"until" doc:"When the sweep may delete the entry: since plus storage.quarantineRetention."`
+	State     string           `json:"state" doc:"The entry's state: moving while a start moves the data in, kept once all of it is in, and returning while a return brings it back."`
 }
 
 // QuarantineReturn asks for an object's quarantined data back (ADR-0288 Decision 6).
 type QuarantineReturn struct {
-	Kind      v1.Kind          `json:"kind" doc:"KVStore, Bucket, or Function for a Function's volume"`
-	Namespace v1.NamespaceName `json:"namespace"`
-	Name      v1.ObjectName    `json:"name"`
-	Volume    v1.ObjectName    `json:"volume,omitempty" doc:"the volume, with kind Function"`
-	Since     *v1.Timestamp    `json:"since,omitempty" doc:"the entry's since, as hold status lists it; the newest entry when absent"`
+	Kind      v1.Kind          `json:"kind" doc:"The object's kind: KVStore, Bucket, or Function for a Function's local volume."`
+	Namespace v1.NamespaceName `json:"namespace" doc:"The object's namespace."`
+	Name      v1.ObjectName    `json:"name" doc:"The object's name; for a volume, its Function's."`
+	Volume    v1.ObjectName    `json:"volume,omitempty" doc:"With kind Function, the name of the local volume."`
+	Since     *v1.Timestamp    `json:"since,omitempty" doc:"The entry to return, by its since as funcdctl hold status lists it; the object's newest entry when left out."`
 }
 
 // NamespaceHold is one per-namespace marker (ADR-0222 Decision 8); Phase is the phase of the in-place Restore a
 // restore marker names, empty once that Restore is deleted.
 type NamespaceHold struct {
-	Namespace v1.NamespaceName `json:"namespace"`
+	Namespace v1.NamespaceName `json:"namespace" doc:"The namespace that is held."`
 	Marker
-	Phase v1.RunPhase `json:"phase,omitempty"`
+	Phase v1.RunPhase `json:"phase,omitempty" doc:"The phase of the Restore that restore names; empty once that Restore is deleted."`
 }
 
 // Write writes the marker: the platform is held from the next start until a release.

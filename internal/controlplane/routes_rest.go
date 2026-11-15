@@ -500,19 +500,64 @@ func registerAppRevision(api huma.API, h Handlers) {
 // ===== BackupSchedule, Backup, Restore (namespaced) — ADR-0222, FEAT-0009/F111 =====
 
 func registerWorkloadBackup(api huma.API, h Handlers) {
+	schedule := backupScheduleWrites()
 	registerNamespacedCRUD(api, crudRoutes[v1.BackupSchedule]{
 		kind: "BackupSchedule", kinds: "BackupSchedules", path: "backupschedules",
 		list: h.ListBackupSchedules, create: h.CreateBackupSchedule, get: h.GetBackupSchedule,
 		replace: h.ReplaceBackupSchedule, remove: h.DeleteBackupSchedule,
+		cases: &kindCases{create: schedule, replace: schedule},
 	})
 	registerNamespacedCRUD(api, crudRoutes[v1.Backup]{
 		kind: "Backup", kinds: "Backups", path: "backups",
 		list: h.ListBackups, create: h.CreateBackup, get: h.GetBackup, replace: h.ReplaceBackup, remove: h.DeleteBackup,
+		cases: &kindCases{
+			create: []ErrorCase{problem(fault.Invalid, "spec.ttl is longer than the ttl of the schedule that "+
+				"spec.schedule names.", "Set spec.ttl to at most the schedule's ttl, or leave it out to take the schedule's.")},
+			replace: []ErrorCase{backupSpecFixed("Backup")},
+		},
 	})
 	registerNamespacedCRUD(api, crudRoutes[v1.Restore]{
 		kind: "Restore", kinds: "Restores", path: "restores",
 		list: h.ListRestores, create: h.CreateRestore, get: h.GetRestore, replace: h.ReplaceRestore, remove: h.DeleteRestore,
+		cases: &kindCases{create: restoreInPlaceCreates(), replace: []ErrorCase{backupSpecFixed("Restore")},
+			remove: []ErrorCase{problem(fault.Conflict, "The Restore loads a member in place and has not ended.",
+				"Delete it once it is Succeeded or Failed.")}},
 	})
+}
+
+// backupScheduleWrites are the cases a BackupSchedule's create and replace add to their verb's: its recipients and its
+// target, which the backup-schedule admission checks (ADR-0222 Decision 6).
+func backupScheduleWrites() []ErrorCase {
+	return []ErrorCase{
+		problem(fault.Invalid, "An entry of spec.encryption.recipients is not an age recipient, or the recipients mix "+
+			"X25519 and hybrid keys.", "List at least two distinct age recipients of one family: X25519 keys, which "+
+			"start with age1, or hybrid keys, which start with age1pq1."),
+		problem(fault.Invalid, "spec.target.url names the bucket of blob.target, the funcd server's own blob store, "+
+			"so one failure of that store would take the copies with it.", "Name another bucket, best one of another "+
+			"S3 provider."),
+	}
+}
+
+// backupSpecFixed is the 400 of a replace that changes the spec of a Backup or a Restore, which is fixed at creation
+// (ADR-0222 Decision 1).
+func backupSpecFixed(kind string) ErrorCase {
+	return problem(fault.Invalid, "The spec differs from the stored "+kind+"'s: the spec of "+an(kind)+" does not change.",
+		"Create another "+kind+" instead.")
+}
+
+// restoreInPlaceCreates are the refusals of a Restore with a member in place (ADR-0228 Decision 2.4): it needs update
+// on the Namespace, one runs at a time in a namespace, and none starts while an earlier load's hold stands.
+func restoreInPlaceCreates() []ErrorCase {
+	return []ErrorCase{
+		problem(fault.Forbidden, "A member sets inPlace, and the credential's role does not allow it to update the "+
+			"Namespace, as only an admin's does.", "Use an admin's credential, or load the member into another, empty "+
+			"store with as."),
+		problem(fault.Conflict, "A member sets inPlace, and another in-place Restore of the namespace has not ended.",
+			"Create the Restore once the other one is Succeeded or Failed."),
+		problem(fault.Conflict, "A member sets inPlace, and the namespace is still held by an earlier in-place Restore "+
+			"whose load did not complete.", "Check the namespace's stores, release the hold with funcdctl hold release "+
+			"--namespace, then create the Restore again."),
+	}
 }
 
 // crudRoutes is the REST surface of one namespaced kind under

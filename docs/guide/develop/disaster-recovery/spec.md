@@ -154,3 +154,579 @@ This page lists the spec and status fields of Backup, BackupSchedule and Restore
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Running`, `Paused`, `Succeeded`, `Failed`, `Cancelled` | Pending while it waits for its Backup and, in place, for its export; Running while it checks the whole copy and loads; then Succeeded or Failed. A Restore that was Running when funcd stopped ends Failed with reason Interrupted. |
 | `startTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the Restore turned Running, once its Backup and any export had Succeeded. |
+
+## HTTP API
+
+Each described operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
+
+| Authentication | How a call sends it |
+| --- | --- |
+| `bearer` | A credential of funcd's config, sent as Authorization: Bearer followed by its token. |
+| `apiKey` | A credential of funcd's config, sent in the X-Api-Key header. |
+
+### List the Backups of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backups` | `listBackups` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
+
+Answer: array of [`Backup`](#backup).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list Backups in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Create a Backup
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backups` | `createBackup` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Backup`](#backup), required. Answer: [`Backup`](#backup).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 400 | `urn:funcd:problem:invalid` | spec.ttl is longer than the ttl of the schedule that spec.schedule names. | Set spec.ttl to at most the schedule's ttl, or leave it out to take the schedule's. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create a Backup in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 409 | `urn:funcd:problem:conflict` | A Backup of that name already exists in the namespace. | Choose another name, or replace the existing Backup. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Read a Backup
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backups/{name}` | `getBackup` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`Backup`](#backup).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read a Backup in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Backup of that name exists in the namespace. | Check the name and the namespace. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Replace a Backup
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backups/{name}` | `replaceBackup` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Backup`](#backup), required. Answer: [`Backup`](#backup).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 400 | `urn:funcd:problem:invalid` | The spec differs from the stored Backup's: the spec of a Backup does not change. | Create another Backup instead. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace a Backup in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Backup of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Backup has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Backup again, apply the change to it, and send it with its new resourceVersion. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Delete a Backup
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backups/{name}` | `deleteBackup` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete a Backup in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Backup of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Backup has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Backup again, apply the change to it, and send it with its new resourceVersion. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+
+### List the BackupSchedules of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules` | `listBackupSchedules` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
+
+Answer: array of [`BackupSchedule`](#backupschedule).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list BackupSchedules in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Create a BackupSchedule
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules` | `createBackupSchedule` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`BackupSchedule`](#backupschedule), required. Answer: [`BackupSchedule`](#backupschedule).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 400 | `urn:funcd:problem:invalid` | An entry of spec.encryption.recipients is not an age recipient, or the recipients mix X25519 and hybrid keys. | List at least two distinct age recipients of one family: X25519 keys, which start with age1, or hybrid keys, which start with age1pq1. |
+| 400 | `urn:funcd:problem:invalid` | spec.target.url names the bucket of blob.target, the funcd server's own blob store, so one failure of that store would take the copies with it. | Name another bucket, best one of another S3 provider. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create a BackupSchedule in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 409 | `urn:funcd:problem:conflict` | A BackupSchedule of that name already exists in the namespace. | Choose another name, or replace the existing BackupSchedule. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Read a BackupSchedule
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules/{name}` | `getBackupSchedule` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`BackupSchedule`](#backupschedule).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read a BackupSchedule in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No BackupSchedule of that name exists in the namespace. | Check the name and the namespace. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Replace a BackupSchedule
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules/{name}` | `replaceBackupSchedule` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`BackupSchedule`](#backupschedule), required. Answer: [`BackupSchedule`](#backupschedule).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 400 | `urn:funcd:problem:invalid` | An entry of spec.encryption.recipients is not an age recipient, or the recipients mix X25519 and hybrid keys. | List at least two distinct age recipients of one family: X25519 keys, which start with age1, or hybrid keys, which start with age1pq1. |
+| 400 | `urn:funcd:problem:invalid` | spec.target.url names the bucket of blob.target, the funcd server's own blob store, so one failure of that store would take the copies with it. | Name another bucket, best one of another S3 provider. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace a BackupSchedule in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No BackupSchedule of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The BackupSchedule has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the BackupSchedule again, apply the change to it, and send it with its new resourceVersion. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Delete a BackupSchedule
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules/{name}` | `deleteBackupSchedule` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete a BackupSchedule in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No BackupSchedule of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The BackupSchedule has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the BackupSchedule again, apply the change to it, and send it with its new resourceVersion. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+
+### List the Restores of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/restores` | `listRestores` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
+
+Answer: array of [`Restore`](#restore).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list Restores in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Create a Restore
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/restores` | `createRestore` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Restore`](#restore), required. Answer: [`Restore`](#restore).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create a Restore in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 403 | `urn:funcd:problem:forbidden` | A member sets inPlace, and the credential's role does not allow it to update the Namespace, as only an admin's does. | Use an admin's credential, or load the member into another, empty store with as. |
+| 409 | `urn:funcd:problem:conflict` | A Restore of that name already exists in the namespace. | Choose another name, or replace the existing Restore. |
+| 409 | `urn:funcd:problem:conflict` | A member sets inPlace, and another in-place Restore of the namespace has not ended. | Create the Restore once the other one is Succeeded or Failed. |
+| 409 | `urn:funcd:problem:conflict` | A member sets inPlace, and the namespace is still held by an earlier in-place Restore whose load did not complete. | Check the namespace's stores, release the hold with funcdctl hold release --namespace, then create the Restore again. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Read a Restore
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/restores/{name}` | `getRestore` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`Restore`](#restore).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read a Restore in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Restore of that name exists in the namespace. | Check the name and the namespace. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Replace a Restore
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/restores/{name}` | `replaceRestore` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Restore`](#restore), required. Answer: [`Restore`](#restore).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 400 | `urn:funcd:problem:invalid` | The spec differs from the stored Restore's: the spec of a Restore does not change. | Create another Restore instead. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace a Restore in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Restore of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Restore has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Restore again, apply the change to it, and send it with its new resourceVersion. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Delete a Restore
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/restores/{name}` | `deleteRestore` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete a Restore in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Restore of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Restore has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Restore again, apply the change to it, and send it with its new resourceVersion. |
+| 409 | `urn:funcd:problem:conflict` | The Restore loads a member in place and has not ended. | Delete it once it is Succeeded or Failed. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+
+### Read the hold and its evidence
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/hold` | `getHold` | `bearer` or `apiKey` |
+
+Answer: [`Evidence`](#evidence).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to read the hold: only an admin's does. | Use an admin's credential. |
+
+#### `Evidence`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `bucketOrphans` | array of string values | The Buckets that do not exist and whose objects funcd still holds, each as &lt;namespace&gt;/&lt;name&gt;. |
+| `counts` | map of string to integer | The number of objects of each kind that funcd stores now, to compare with the counts of report. |
+| `deadLetters` | array of string values | The dead letters of every namespace, each as &lt;namespace&gt;/&lt;id&gt;. Nothing delivers them again by itself. |
+| `functionsNotReady` | array of string values | The Functions whose phase is not Ready, each as &lt;namespace&gt;/&lt;name&gt;. |
+| `held` | boolean, required | True while the platform is held: its timers, blob sources, Sensors, runs, rollouts, backups and sweeps wait for the release. |
+| `marker` | object, [`Evidence.marker`](#evidencemarker) | Why the platform is held, and since when; absent when it is not held. |
+| `namespaces` | array of [`Evidence.namespaces[]`](#evidencenamespaces) | The holds of single namespaces, one for each reason that holds a namespace. |
+| `orphans` | array of string values | The KV data that no object names: the prefix of each KVStore that does not exist, as &lt;namespace&gt;/&lt;store&gt;/, and of each table that its KVStore no longer declares, as &lt;namespace&gt;/&lt;store&gt;/&lt;table&gt;/. To keep that data, apply its object while the platform is held. |
+| `pausedRuns` | array of string values | The WorkflowRuns that are paused and have not ended, each as &lt;namespace&gt;/&lt;name&gt;. A release leaves them paused, and funcdctl workflow resume runs one again. |
+| `pending` | map of string to object | For each blob EventSource, as &lt;namespace&gt;/&lt;name&gt;, how many objects of each event the release fires, since the source has not seen them yet. |
+| `quarantine` | array of [`Evidence.quarantine[]`](#evidencequarantine) | The data that a start moved into the quarantine, since no object named it, held or not. |
+| `releasedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the last release lifted the platform's hold. |
+| `report` | any JSON value | The report of funcd restore run, as it wrote restore.json: the generation that it loaded, the counts of its objects per kind, and the WorkflowRuns that it paused. Absent when no restore wrote one. |
+| `sqlOrphans` | array of string values | The SQL databases that do not exist and whose directory funcd still holds, each as &lt;namespace&gt;/&lt;name&gt;. |
+| `volumeOrphans` | array of string values | The local volumes that no stored Function declares, each as &lt;namespace&gt;/&lt;function&gt;/&lt;volume&gt;. |
+
+#### `Evidence.marker`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `reason` | string, required | Why it is held: restore or safe-mode for the platform; for a namespace, data, which funcd restore run sets on a namespace with a BackupSchedule, or restore, which an in-place Restore sets while it loads. |
+| `restore` | string, a DNS-1123 label | For the restore hold of a namespace, the in-place Restore that set it. |
+| `since` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the hold began. |
+
+#### `Evidence.namespaces[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `namespace` | string, required, a DNS-1123 label | The namespace that is held. |
+| `phase` | string, one of `Pending`, `Running`, `Paused`, `Succeeded`, `Failed`, `Cancelled` | The phase of the Restore that restore names; empty once that Restore is deleted. |
+| `reason` | string, required | Why it is held: restore or safe-mode for the platform; for a namespace, data, which funcd restore run sets on a namespace with a BackupSchedule, or restore, which an in-place Restore sets while it loads. |
+| `restore` | string, a DNS-1123 label | For the restore hold of a namespace, the in-place Restore that set it. |
+| `since` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the hold began. |
+
+#### `Evidence.quarantine[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `kind` | string, required | The kind of the object whose data the entry holds: KVStore, Bucket, SQLDatabase, or Function for a local volume. |
+| `name` | string, required, a DNS-1123 label | The object's name; for a volume, its Function's. |
+| `namespace` | string, required, a DNS-1123 label | The object's namespace. |
+| `since` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the start began to move the data into the quarantine. |
+| `state` | string, required | The entry's state: moving while a start moves the data in, kept once all of it is in, and returning while a return brings it back. |
+| `until` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the sweep may delete the entry: since plus storage.quarantineRetention. |
+| `volume` | string, a DNS-1123 label | With kind Function, the name of the local volume. |
+
+### Release the hold of the platform or of namespaces
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/hold/release` | `releaseHold` | `bearer` or `apiKey` |
+
+Body: [`HoldReleaseInputBody`](#holdreleaseinputbody), required. Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The body sets both advance and namespaces: advance applies to the release of the platform's hold only. | Release the platform and the namespaces in two calls. |
+| 400 | `urn:funcd:problem:invalid` | An entry of advance does not name, as &lt;namespace&gt;/&lt;name&gt;, an EventSource with a blob event. | Name only blob EventSources, as funcdctl hold status lists them under pending. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to release a hold: only an admin's does. | Use an admin's credential. |
+| 409 | `urn:funcd:problem:conflict` | The body names no namespace, and the platform is not held. | There is nothing to release: funcdctl hold status shows what is held. |
+| 409 | `urn:funcd:problem:conflict` | A namespace of the body is not held; the namespaces before it are released. | Release the namespaces after it again, without it. |
+| 409 | `urn:funcd:problem:conflict` | A namespace of the body is held by an in-place Restore that is Pending or Running; the namespaces before it are released. | Release the namespace once the Restore has ended. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+#### `HoldReleaseInputBody`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `advance` | array of string values | With the release of the platform's hold: the blob EventSources, each as &lt;namespace&gt;/&lt;name&gt;, whose pending objects the release marks seen instead of firing them. |
+| `namespaces` | array of string values, each a DNS-1123 label | The namespaces whose hold to release, instead of the platform's: the hold for its data that funcd restore run sets on a namespace with a BackupSchedule, and the hold that an in-place Restore keeps when its load does not complete. |
+
+### Read the status of the platform backup
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/platformbackup` | `getPlatformBackup` | `bearer` or `apiKey` |
+
+Answer: [`PlatformBackupStatus`](#platformbackupstatus).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to read the status of the platform backup: only an admin's does. | Use an admin's credential. |
+| 503 | `urn:funcd:problem:unavailable` | funcd could not list backup.target, where the platform backup writes: the bucket does not exist, the URL is wrong, or the target fails. | Check backup.target and the key of backup.credentialsFile, then read the status again. |
+
+#### `PlatformBackupStatus`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `earliestRestorePoint` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the oldest generation that funcd restore run can load was written. |
+| `enabled` | boolean, required | True when funcd runs the platform backup, which needs backup.target and storage.mode file. |
+| `held` | boolean, required | True while the platform is held: the platform backup waits for the release. |
+| `interval` | string, required, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How often the platform backup runs: backup.interval. |
+| `lastFailure` | object, [`PlatformBackupStatus.lastFailure`](#platformbackupstatuslastfailure) | The last run that failed since funcd started; a run that succeeds clears it. |
+| `lastSuccessTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the newest complete generation on the target was written. |
+| `lastVerifiedTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the newest generation that funcdctl backup verify checked was written; absent when none is verified or its original has expired. |
+| `nextRunTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the next run is due. |
+| `rpo` | string, required, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The most data that a loss may take: backup.objectives.rpo. |
+| `rpoRisk` | boolean, required | True when no verified generation is newer than backup.objectives.rpo; funcd then logs backup rpo at risk. funcdctl backup verify clears it. |
+| `streams` | map of string to [`PlatformBackupStatus.streams.*`](#platformbackupstatusstreams) | The runs of the other backups since funcd started, by stream: blob for the mirror of Blob's files, kv for the KV backup. |
+
+#### `PlatformBackupStatus.lastFailure`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `error` | string, required | Why the run failed. |
+| `time` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the run ended. |
+
+#### `PlatformBackupStatus.streams.*`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `lastFailure` | object, [`PlatformBackupStatus.lastFailure`](#platformbackupstatuslastfailure) | The stream's last run that failed; a run that succeeds clears it. |
+| `lastSuccessTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the stream's last run that succeeded ended. |
+
+### Return quarantined data into its object
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/quarantine/return` | `returnQuarantined` | `bearer` or `apiKey` |
+
+Body: [`QuarantineReturn`](#quarantinereturn), required. Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The kind is none of KVStore, Bucket and Function. | Send KVStore, Bucket, or Function with the volume; a SQL database's directory goes back by hand, with funcd stopped. |
+| 400 | `urn:funcd:problem:invalid` | The kind is Function and the body names no volume, or it names a volume with another kind. | Name the volume with kind Function only. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to return quarantined data: only an admin's does. | Use an admin's credential. |
+| 404 | `urn:funcd:problem:not-found` | The quarantine holds no entry of the object, or none of that since. | Read the entries under quarantine in funcdctl hold status. |
+| 409 | `urn:funcd:problem:conflict` | The KVStore, the Bucket or the Function does not exist, or the Function declares no local volume of that name. | Apply the object again, then return its data. |
+| 409 | `urn:funcd:problem:conflict` | The object holds data: an entry returns only into an empty KVStore, Bucket or volume. | Delete what the object holds, if it is not needed, then return its data. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+| 503 | `urn:funcd:problem:unavailable` | This funcd server keeps no quarantine of that kind, such as of volumes while volumes are off. | Check the kind: funcdctl hold status lists the entries of the quarantine. |
+
+#### `QuarantineReturn`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `kind` | string, required | The object's kind: KVStore, Bucket, or Function for a Function's local volume. |
+| `name` | string, required, a DNS-1123 label | The object's name; for a volume, its Function's. |
+| `namespace` | string, required, a DNS-1123 label | The object's namespace. |
+| `since` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | The entry to return, by its since as funcdctl hold status lists it; the object's newest entry when left out. |
+| `volume` | string, a DNS-1123 label | With kind Function, the name of the local volume. |
