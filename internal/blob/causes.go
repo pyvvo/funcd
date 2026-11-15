@@ -44,7 +44,7 @@ var (
 			"or it has a . segment or a last segment of .., which the store would keep under another key's path.",
 		"Use another key.")
 	ErrKeyUnstorable = fault.NewKnownCause(fault.Invalid, "blob.key-unstorable",
-		"funcd's file store cannot hold the key: a segment is longer than the file system takes, or the key needs the "+
-			"path of another object, as a/b does while a is an object.",
+		"funcd's file store cannot hold the key: the key or one of its segments is longer than the file system takes, "+
+			"or the key needs the path of another object, as a/b does while a is an object.",
 		"Use another key, or delete the object whose path the key needs.")
 )
