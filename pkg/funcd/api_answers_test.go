@@ -90,8 +90,17 @@ func answersClient() *http.Client {
 
 func (a ask) run(t *testing.T, c *http.Client, base string) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), a.method, base+a.path, strings.NewReader(a.body))
+	resp, err := a.do(c, base)
 	require.NoError(t, err)
+	a.check(t, resp)
+}
+
+// do sends a's request with c to base.
+func (a ask) do(c *http.Client, base string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(context.Background(), a.method, base+a.path, strings.NewReader(a.body))
+	if err != nil {
+		return nil, err
+	}
 	if a.body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -101,8 +110,12 @@ func (a ask) run(t *testing.T, c *http.Client, base string) {
 	if a.token != "" {
 		req.Header.Set("Authorization", "Bearer "+a.token)
 	}
-	resp, err := c.Do(req)
-	require.NoError(t, err)
+	return c.Do(req)
+}
+
+// check holds resp to a's status, its problem type when a names one, and its detail.
+func (a ask) check(t *testing.T, resp *http.Response) {
+	t.Helper()
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
@@ -589,133 +602,6 @@ func lockedNamespace(t *testing.T, c *http.Client, base string) {
 	create(t, c, base, ns)
 }
 
-// Each case of invokeFunction, through the gateway, on workers that are the test's handlers; the limits' cases have
-// platforms of their own.
-func TestAnswersOfInvokeFunction(t *testing.T) {
-	t.Parallel()
-	workers := newFakeWorkers()
-	p := answersPlatform(t, funcd.WithStore(brokenNamespaceReads{store.New(memory.New())}), funcd.WithRuntime(workers),
-		funcd.WithRuntimeShim("node", "shim.mjs"), funcd.WithEdgeAuth(), funcd.WithGatewayReadTimeoutForTest(300*time.Millisecond))
-	c, api, gw := answersClient(), "http://"+p.Addr(), "http://"+p.DataPlaneAddr()
-	lockedNamespace(t, c, api)
-	workers.serve(t, "echo", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	})
-	workers.serve(t, "strict", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
-	})
-	workers.serve(t, "crash", func(w http.ResponseWriter, _ *http.Request) {
-		conn, _, err := http.NewResponseController(w).Hijack()
-		if err == nil {
-			_ = conn.Close()
-		}
-	})
-	workers.serve(t, "slow", func(_ http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body) // a read body lets the server see the cut connection
-		select {
-		case <-r.Context().Done():
-		case <-time.After(10 * time.Second):
-		}
-	})
-	workers.serve(t, "unread", func(http.ResponseWriter, *http.Request) {})
-	callable(t, c, api, "echo", "", nil)
-	callable(t, c, api, "strict", `{"input": {"type": "object", "required": ["a"]}, "output": {"type": "object", "required": ["b"]}}`, nil)
-	callable(t, c, api, "crash", "", nil)
-	callable(t, c, api, "slow", "", func(fn *v1.Function) { fn.Spec.Timeout = v1.Duration(time.Second) })
-	unread := callable(t, c, api, "unread", `{"input": {"type": "object"}, "output": {}}`, nil)
-	off, routed := function("closed"), function("routed")
-	off.Spec.Ingress = &v1.Ingress{Enabled: new(false)}
-	routed.Spec.Ingress = &v1.Ingress{Path: "/routed"}
-	create(t, c, api, off)
-	create(t, c, api, routed)
-	contract := filepath.Join(unread, "__funcd_contract.json")
-	require.NoError(t, os.Remove(contract))
-	require.NoError(t, os.Mkdir(contract, 0o700))
-
-	const call = "/function/"
-	for _, a := range []ask{
-		{what: "the handler's result", method: http.MethodPost, path: call + "echo", body: `{}`, status: 200,
-			detail: `{"ok":true}`},
-		{what: "a missing Function", method: http.MethodPost, path: call + "nope", body: `{}`, status: 404,
-			detail: "function default/nope is not exposed by name"},
-		{what: "a Function whose ingress is off", method: http.MethodPost, path: call + "closed", body: `{}`,
-			status: 404, detail: "function default/closed is not exposed by name"},
-		{what: "a Function at a path of its own", method: http.MethodPost, path: call + "routed", body: `{}`,
-			status: 404, detail: "function default/routed is not exposed by name"},
-		{what: "no credential where the stance asks for one", method: http.MethodPost, path: call + "ghost",
-			header: []string{"X-Funcd-Namespace", "locked"}, body: `{}`, status: 401, detail: "missing bearer token"},
-		{what: "a credential that funcd does not know", method: http.MethodPost, path: call + "ghost",
-			token: "unknown-token", header: []string{"X-Funcd-Namespace", "locked"}, body: `{}`, status: 401,
-			detail: "invalid credential"},
-		{what: "a credential of another namespace", method: http.MethodPost, path: call + "ghost", token: answersOther,
-			header: []string{"X-Funcd-Namespace", "locked"}, body: `{}`, status: 403, detail: "not authorized to invoke"},
-		{what: "a body over 1 MiB", method: http.MethodPost, path: call + "echo",
-			body: `"` + strings.Repeat("x", 1<<20) + `"`, status: 413, detail: "request body exceeds 1048576 bytes"},
-		{what: "data that breaks the input contract", method: http.MethodPost, path: call + "strict", body: `{}`,
-			status: 422, detail: "event data does not match the input contract"},
-		{what: "a result that breaks the output contract", method: http.MethodPost, path: call + "strict",
-			body: `{"a": 1}`, status: 500, detail: "handler result does not match the output contract"},
-		{what: "a worker that fails during the call", method: http.MethodPost, path: call + "crash", body: `{}`,
-			status: 503, detail: "upstream call failed"},
-		{what: "a namespace whose settings cannot be read", method: http.MethodPost, path: call + "ghost",
-			header: []string{"X-Funcd-Namespace", "broken"}, body: `{}`, status: 503, detail: "edge settings unavailable"},
-		{what: "a contract that cannot be read", method: http.MethodPost, path: call + "unread", body: `{}`,
-			status: 503, detail: "the contract of default/unread cannot be read"},
-		{what: "a worker past the deadline", method: http.MethodPost, path: call + "slow", body: `{}`, status: 504,
-			detail: "did not start its response within 1s (spec.timeout)"},
-	} {
-		a.run(t, c, gw)
-	}
-
-	conn, err := net.Dial("tcp", p.DataPlaneAddr())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
-	require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
-	_, err = io.WriteString(conn, "POST /function/echo HTTP/1.1\r\nHost: funcd\r\nContent-Length: 100\r\n\r\n{")
-	require.NoError(t, err)
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	require.NoError(t, err)
-	body, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	require.NoError(t, err)
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode, "a body that stops arriving: %s", body)
-	require.Contains(t, string(body), "could not read request body")
-}
-
-// The gateway's limits, and a stance that no authenticator can check: each needs a platform of its own.
-func TestAnswersOfInvokeFunctionLimits(t *testing.T) {
-	t.Parallel()
-	t.Run("rate", func(t *testing.T) {
-		t.Parallel()
-		p := answersPlatform(t, funcd.WithLimits(limit.Config{RatePerMin: 1, Burst: 1}))
-		c := answersClient()
-		lockedNamespace(t, c, "http://"+p.Addr())
-		gw := "http://" + p.DataPlaneAddr()
-		ask{what: "a stance that server.auth.edge off cannot check", method: http.MethodPost, path: "/function/ghost",
-			header: []string{"X-Funcd-Namespace", "locked"}, body: `{}`, status: 401,
-			detail: "no authenticator is configured"}.run(t, c, gw)
-		ask{what: "a call over the rate", method: http.MethodPost, path: "/function/ghost", body: `{}`, status: 429,
-			detail: "rate limit exceeded"}.run(t, c, gw)
-	})
-	t.Run("in flight", func(t *testing.T) {
-		t.Parallel()
-		p := answersPlatform(t, funcd.WithLimits(limit.Config{MaxInFlight: 1}),
-			funcd.WithGatewayReadTimeoutForTest(2*time.Second))
-		c := answersClient()
-		create(t, c, "http://"+p.Addr(), function("held"))
-		conn, err := net.Dial("tcp", p.DataPlaneAddr())
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = conn.Close() })
-		_, err = io.WriteString(conn, "POST /function/held HTTP/1.1\r\nHost: funcd\r\nContent-Length: 100\r\n\r\n{")
-		require.NoError(t, err)
-		gw := "http://" + p.DataPlaneAddr() + "/function/ghost"
-		require.Eventually(t, func() bool { return statusOf(c, http.MethodPost, gw, "") == http.StatusServiceUnavailable },
-			5*time.Second, 20*time.Millisecond, "the held call takes the only slot")
-	})
-}
-
 // answerEnv is a platform that rows of a matrix share: its client, its two servers, its workers and its stop.
 type answerEnv struct {
 	c       *http.Client
@@ -730,15 +616,20 @@ func newAnswerEnv(t *testing.T, opts ...funcd.Option) *answerEnv {
 	w := newFakeWorkers()
 	p, stop := stoppablePlatform(t, append([]funcd.Option{funcd.WithRuntime(w), funcd.WithRuntimeShim("node", "shim.mjs")},
 		opts...)...)
-	return &answerEnv{c: answersClient(), api: "http://" + p.Addr(), gw: "http://" + p.DataPlaneAddr(), workers: w, stop: stop}
+	c := answersClient()
+	// Before the stop: Shutdown waits 5 s for a connection that the client dialed for parallel rows and never used.
+	t.Cleanup(c.CloseIdleConnections)
+	return &answerEnv{c: c, api: "http://" + p.Addr(), gw: "http://" + p.DataPlaneAddr(), workers: w, stop: stop}
 }
 
 // answerRow provokes one case of an operation on its platform: after its setup, it sends its ask, whose status and
-// problem type are the case's.
+// problem type are the case's. A request that the client cannot make, such as one on a connection of its own, has a
+// send that makes it and returns its answer.
 type answerRow struct {
 	op, when string // the operation, and a part of its case's When that names the case alone; "" for its success
 	on       *answerEnv
 	setup    func(t *testing.T, e *answerEnv)
+	send     func(t *testing.T, e *answerEnv, a ask) *http.Response
 	ask      ask
 }
 
@@ -798,8 +689,8 @@ func (r answerRow) caseOf(t *testing.T, cases map[caseKey]documentedCase) caseKe
 }
 
 // runMatrix runs each row as a parallel subtest once it holds each row to one case and each case of the rows'
-// operations to one row, except the cases of the partial operations, which other tests provoke too.
-func runMatrix(t *testing.T, rows []answerRow, partial ...string) {
+// operations to one row.
+func runMatrix(t *testing.T, rows []answerRow) {
 	t.Helper()
 	cases := documentedCases(t, controlplane.SpecAPI().OpenAPI())
 	keys := make([]caseKey, len(rows))
@@ -815,7 +706,7 @@ func runMatrix(t *testing.T, rows []answerRow, partial ...string) {
 	for k, c := range cases {
 		_, tabled := byCase[k]
 		named := slices.ContainsFunc(rows, func(r answerRow) bool { return r.op == k.op })
-		if named && !tabled && !slices.Contains(partial, k.op) {
+		if named && !tabled {
 			missing = append(missing, fmt.Sprintf("%s %d %q", k.op, k.status, c.when))
 		}
 	}
@@ -830,6 +721,10 @@ func runMatrix(t *testing.T, rows []answerRow, partial ...string) {
 			}
 			a := r.ask
 			a.status, a.kind = k.status, cases[k].kind
+			if r.send != nil {
+				a.check(t, r.send(t, r.on, a))
+				return
+			}
 			base := r.on.api
 			if strings.HasPrefix(a.path, "/function/") {
 				base = r.on.gw
@@ -1012,9 +907,23 @@ func stopOnWake(e *answerEnv, name v1.ObjectName) {
 	}
 }
 
-// The answers of the Function feature's operations, one row per case of each: Function, Revision and Invocation, and
-// the calls of a Function that funcd refuses while it cannot serve them (ADR-0290, ADR-0161, ADR-0169, ADR-0028).
-// TestAnswersOfInvokeFunction provokes the call's other cases.
+// stalledBody sends a's call on a connection of its own, with a body that stops after its first byte, and returns the
+// gateway's answer once its read timeout ends the wait for the rest.
+func stalledBody(t *testing.T, e *answerEnv, a ask) *http.Response {
+	t.Helper()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(e.gw, "http://"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
+	_, err = io.WriteString(conn, a.method+" "+a.path+" HTTP/1.1\r\nHost: funcd\r\nContent-Length: 100\r\n\r\n{")
+	require.NoError(t, err)
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	require.NoError(t, err)
+	return resp
+}
+
+// The answers of the Function feature's operations, one row per case of each: Function, Revision, Invocation and the
+// call of a Function.
 func TestFunctionAnswersMatrix(t *testing.T) {
 	t.Parallel()
 	hd, err := hold.Open(t.TempDir())
@@ -1043,6 +952,76 @@ func TestFunctionAnswersMatrix(t *testing.T) {
 	create(t, vol.c, vol.api, tight)
 	slow := newAnswerEnv(t, funcd.WithPacing(funcd.Pacing{ActivationTimeout: 500 * time.Millisecond}))
 	stopping := newAnswerEnv(t)
+	lockedNamespace(t, sh.c, sh.api)
+
+	calls := newAnswerEnv(t, funcd.WithStore(brokenNamespaceReads{store.New(memory.New())}), funcd.WithEdgeAuth(),
+		funcd.WithGatewayReadTimeoutForTest(300*time.Millisecond))
+	lockedNamespace(t, calls.c, calls.api)
+	calls.workers.serve(t, "echo", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	calls.workers.serve(t, "strict", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	calls.workers.serve(t, "crash", func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	})
+	calls.workers.serve(t, "slow", func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body) // a read body lets the server see the cut connection
+		select {
+		case <-r.Context().Done():
+		case <-time.After(10 * time.Second):
+		}
+	})
+	calls.workers.serve(t, "unread", func(http.ResponseWriter, *http.Request) {})
+	callable(t, calls.c, calls.api, "echo", "", nil)
+	callable(t, calls.c, calls.api, "strict",
+		`{"input": {"type": "object", "required": ["a"]}, "output": {"type": "object", "required": ["b"]}}`, nil)
+	callable(t, calls.c, calls.api, "crash", "", nil)
+	callable(t, calls.c, calls.api, "slow", "", func(fn *v1.Function) { fn.Spec.Timeout = v1.Duration(time.Second) })
+	contract := filepath.Join(callable(t, calls.c, calls.api, "unread", `{"input": {"type": "object"}, "output": {}}`, nil),
+		"__funcd_contract.json")
+	require.NoError(t, os.Remove(contract))
+	require.NoError(t, os.Mkdir(contract, 0o700))
+	rate := newAnswerEnv(t, funcd.WithLimits(limit.Config{RatePerMin: 1, Burst: 1}))
+	inFlight := newAnswerEnv(t, funcd.WithLimits(limit.Config{MaxInFlight: 1}))
+	holding, release := make(chan struct{}, 1), make(chan struct{})
+	inFlight.workers.serve(t, "held", func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case holding <- struct{}{}:
+		default:
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	callable(t, inFlight.c, inFlight.api, "held", "", nil)
+	// pastInFlight sends a's call while a call to held, which its worker keeps until the row ends, takes the gateway's
+	// one in-flight slot, and returns a's answer.
+	pastInFlight := func(t *testing.T, e *answerEnv, a ask) *http.Response {
+		t.Helper()
+		t.Cleanup(func() { close(release) })
+		go func() {
+			if resp, err := (ask{method: http.MethodPost, path: "/function/held", body: `{}`}).do(e.c, e.gw); err == nil {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+			}
+		}()
+		select {
+		case <-holding:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the call to held did not reach its worker")
+		}
+		resp, err := a.do(e.c, e.gw)
+		require.NoError(t, err)
+		return resp
+	}
 
 	const fns = "/apis/funcd.io/v1alpha1/namespaces/default/functions"
 	const vols = "/apis/funcd.io/v1alpha1/namespaces/default/volumes"
@@ -1168,6 +1147,55 @@ func TestFunctionAnswersMatrix(t *testing.T) {
 				ask: ask{what: "a volume that its Function holds", method: http.MethodDelete, path: vols + "/holder/state",
 					token: answersDev, detail: "is held by Function default/holder"}},
 
+			{op: "invokeFunction", on: calls, ask: ask{what: "the handler's result", method: http.MethodPost,
+				path: "/function/echo", body: `{}`, detail: `{"ok":true}`}},
+			{op: "invokeFunction", when: "did not arrive within the gateway's read timeout", on: calls, send: stalledBody,
+				ask: ask{what: "a body that stops arriving", method: http.MethodPost, path: "/function/echo",
+					detail: "could not read request body"}},
+			{op: "invokeFunction", when: "and the call carries none", on: calls, ask: ask{
+				what: "no credential where the stance asks for one", method: http.MethodPost, path: "/function/ghost",
+				header: []string{"X-Funcd-Namespace", "locked"}, body: `{}`, detail: "missing bearer token"}},
+			{op: "invokeFunction", when: "while server.auth.edge is off", on: sh, ask: ask{
+				what: "a stance that server.auth.edge off cannot check", method: http.MethodPost, path: "/function/ghost",
+				header: []string{"X-Funcd-Namespace", "locked"}, body: `{}`, detail: "no authenticator is configured"}},
+			{op: "invokeFunction", when: "do not allow it to call Functions", on: calls, ask: ask{
+				what: "a credential of another namespace", method: http.MethodPost, path: "/function/ghost",
+				token: answersOther, header: []string{"X-Funcd-Namespace", "locked"}, body: `{}`,
+				detail: "not authorized to invoke"}},
+			{op: "invokeFunction", when: "answers at its own address", on: calls, ask: ask{what: "a missing Function",
+				method: http.MethodPost, path: "/function/nope", body: `{}`,
+				detail: "function default/nope is not exposed by name"}},
+			{op: "invokeFunction", when: "larger than 1 MiB", on: calls, ask: ask{what: "a body over 1 MiB",
+				method: http.MethodPost, path: "/function/echo", body: `"` + strings.Repeat("x", 1<<20) + `"`,
+				detail: "request body exceeds 1048576 bytes"}},
+			{op: "invokeFunction", when: "does not match the Function's input contract", on: calls, ask: ask{
+				what: "data that breaks the input contract", method: http.MethodPost, path: "/function/strict", body: `{}`,
+				detail: "event data does not match the input contract"}},
+			{op: "invokeFunction", when: "over the rate that server.limits sets", on: rate,
+				setup: func(t *testing.T, e *answerEnv) {
+					ask{what: "the call that takes the only token", method: http.MethodPost, path: "/function/ghost",
+						body: `{}`, status: http.StatusNotFound}.run(t, e.c, e.gw)
+				},
+				ask: ask{what: "a call over the rate", method: http.MethodPost, path: "/function/ghost", body: `{}`,
+					detail: "rate limit exceeded"}},
+			{op: "invokeFunction", when: "does not match the Function's output contract", on: calls, ask: ask{
+				what: "a result that breaks the output contract", method: http.MethodPost, path: "/function/strict",
+				body: `{"a": 1}`, detail: "handler result does not match the output contract"}},
+			{op: "invokeFunction", when: "server.limits.maxInFlight", on: inFlight, send: pastInFlight, ask: ask{
+				what: "a call past the in-flight ceiling", method: http.MethodPost, path: "/function/ghost", body: `{}`,
+				detail: "in-flight concurrency ceiling reached"}},
+			{op: "invokeFunction", when: "The worker failed during the call", on: calls, ask: ask{
+				what: "a worker that fails during the call", method: http.MethodPost, path: "/function/crash", body: `{}`,
+				detail: "upstream call failed"}},
+			{op: "invokeFunction", when: "could not read the namespace's settings", on: calls, ask: ask{
+				what: "a namespace whose settings cannot be read", method: http.MethodPost, path: "/function/ghost",
+				header: []string{"X-Funcd-Namespace", "broken"}, body: `{}`, detail: "edge settings unavailable"}},
+			{op: "invokeFunction", when: "cannot read the Function's contract", on: calls, ask: ask{
+				what: "a contract that cannot be read", method: http.MethodPost, path: "/function/unread", body: `{}`,
+				detail: "the contract of default/unread cannot be read"}},
+			{op: "invokeFunction", when: "within the call's deadline", on: calls, ask: ask{what: "a worker past the deadline",
+				method: http.MethodPost, path: "/function/slow", body: `{}`,
+				detail: "did not start its response within 1s (spec.timeout)"}},
 			{op: "invokeFunction", when: "held for its data", on: sh, ask: ask{what: "a namespace held for its data",
 				method: http.MethodPost, path: "/function/api", header: []string{"X-Funcd-Namespace", "held"}, body: `{}`,
 				detail: "namespace held is held for its data since"}},
@@ -1205,5 +1233,5 @@ func TestFunctionAnswersMatrix(t *testing.T) {
 					body: `{}`, detail: "activator stopped before default/cold became ready"}},
 		},
 	)
-	runMatrix(t, rows, "invokeFunction")
+	runMatrix(t, rows)
 }
