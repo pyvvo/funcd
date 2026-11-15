@@ -1,6 +1,7 @@
 # ADR-0330: Each local API route declares its error kinds, and one interceptor writes and checks them
 
-- **Status**: Draft (2026-11-15)
+- **Status**: Proposed (2026-11-15), after two rounds of an independent judge (a subagent): round 1 asked for another
+  draft (one Blocker, three Majors); round 2 found no Blocker or Major, and its six Minors are folded
 - **Date**: 2026-11-15
 - **Deciders**: green-0-rabbit
 - **Tags**: api, docs, errors
@@ -43,9 +44,9 @@ what its route answers: `kv.get` returns `null` for a 404, and `kv.putIfAbsent` 
 - `scenario: one-error-writer`: given the code of `internal/workernode/local`, when a function writes a problem other
   than through the interceptor, then a test fails and names the file; the pool's member refusal is the one exemption.
 - `scenario: every-method-mapped`: given the two shims' `api.json`, when a method has no entry in `kindref`'s table,
-  or its entry names a pattern that `local.Endpoints` lacks or excepts a kind that its endpoint does not declare, then
+  or its entry names a pattern that `local.Endpoints` lacks or excepts a cause that its endpoint does not declare, then
   the Spec generation fails and names it.
-- `scenario: facets-match`: given a built platform, when the segments of its facets differ from those of
+- `scenario: facets-match`: given a built platform, when its facet segments differ from the facet segments of
   `local.Endpoints`, then a `pkg/funcd` test fails.
 
 ## Scope
@@ -88,29 +89,31 @@ Out:
    interceptor answers a non-nil error as a problem through `fault.WriteProblem`, and a nil error leaves the handler's
    own answer. Every `fault.WriteProblem` call of the package goes through it, except the pool's member refusal
    (`manager.go`), which answers before any endpoint is chosen.
-2. **Declared cases.** A described endpoint declares one case per cause: a kind, when it happens and what the caller
-   does; `PUT /kv` has two `payload-too-large` cases, the body over the API's limit and the value over the store's cap.
+2. **Declared cases.** A described endpoint declares one case per cause: a cause name unique on the endpoint, a kind,
+   when it happens and what the caller does; `PUT /kv` has two `payload-too-large` cases, the body over the API's limit and the value over the store's cap.
    Nil cases mark an endpoint not yet described; an empty list, one that answers no error.
 3. **Internal.** `internal` is implicit on every endpoint: never declared, warned or compared. Each Handler API table
-   says once that any method can fail with 500.
+   that holds a method calling the local API says once that such a method can fail with 500.
 4. **Production.** When a described endpoint answers a kind that it does not declare, the answer is unchanged, and
-   the handler logs one warning per endpoint and kind, naming both.
+   funcd logs one warning per endpoint and kind in the process, naming both.
 5. **Tests.** `local.SetErrorRecorderForTest` installs a process-wide hook that receives the pattern and the kind of
    every error the interceptor answers, the facets that tests serve directly included. `pkg/funcd`'s `TestMain` adds
    the described endpoints to ADR-0329's comparison: an undeclared kind always fails; a declared kind that no test
    got fails on a full run that passed, as `checksAll` decides. Only `pkg/funcd`'s tests run the real facades:
-   `local`'s own tests use fakes that can return any kind, so they prove the interceptor, not a declaration.
+   `local`'s own tests use fakes that can return any kind, so they prove the interceptor, not a declaration. The
+   source scan of `one-error-writer` also refuses a call of `SetErrorRecorderForTest` from a file that is not a test.
 6. **Docs.** `local.Endpoints` builds the four facets over nil ports and the built-in endpoints on a recorder, to
-   which `handle` passes its cases through a type assertion, so `facetMux` (ADR-0310) is unchanged. `kindref` calls it
+   which `handle` passes its cases through a type assertion, so `facetMux` (ADR-0310) is unchanged; fetch's cases are
+   one value that `NewHandler`'s `wrap` call and `Endpoints` both read. `kindref` calls it
    itself, so `Render` (ADR-0323) keeps its signature. `kindref`'s table names, for each language and method, its
-   endpoint or none (`log`, `remainingMs`, `config.get`, `config.list`, `lake.get`), and the endpoint's kinds that the
-   method does not surface as an error: those its shim returns as a value (`kv.get`'s `not-found`) and those it never
-   provokes (plain `kv.put` sends no precondition). Under each method, `kindref` writes one row per remaining case:
+   endpoint or none (`log`, `remainingMs`, `config.get`, `config.list`, `lake.get`), and the causes of the endpoint's cases
+   that the method does not surface as an error: those its shim returns as a value (`kv.get`'s `not-found`) and those
+   it never provokes (plain `kv.put` sends no precondition). Under each method, `kindref` writes one row per remaining case:
    the status and problem type that `api/fault` gives the kind, when and what to do.
 7. **Rollout.** `internal/workernode/local/testdata/undescribed-endpoints.txt` lists the endpoints with nil cases, a
    test keeps it equal to them, and a second call of `scripts/check-list-only-shrinks.sh` in CI stops it from growing.
-   The guard and the warning skip an endpoint not yet described. The first pull request describes the KV endpoints;
-   each later one, one client.
+   The guard and the warning skip an endpoint not yet described. The first pull request describes the KV endpoints, and
+   health with no case, since its report is out of scope; each later one, one client.
 
 ## Design model
 
@@ -132,9 +135,10 @@ test and the CI call drop it.
 
 // ErrorCase is one documented failure of a local API endpoint, as ADR-0329's is of an operation.
 type ErrorCase struct {
-	Kind fault.Kind // e.g. fault.PayloadTooLarge
-	When string     // one sentence, e.g. "The value is larger than the store's cap."
-	Fix  string     // one sentence, e.g. "Store a smaller value, or raise the store's cap."
+	Cause string     // a short name, unique on its endpoint, e.g. "value-over-cap"
+	Kind  fault.Kind // e.g. fault.PayloadTooLarge
+	When  string     // one sentence, e.g. "The value is larger than the store's cap."
+	Fix   string     // one sentence, e.g. "Store a smaller value, or raise the store's cap."
 }
 
 // handle registers h on mux for pattern with its cases (nil: not yet described), and answers the error that h
@@ -160,6 +164,11 @@ func Endpoints() []Endpoint
 func SetErrorRecorderForTest(record func(pattern string, kind fault.Kind))
 
 var errorRecorder atomic.Pointer[func(pattern string, kind fault.Kind)] //nolint:gochecknoglobals // set only by tests
+
+var warned sync.Map //nolint:gochecknoglobals // one warning per endpoint and kind in the process
+
+// fetchCases are fetch's cases, which NewHandler's wrap call and Endpoints both read.
+func fetchCases() []ErrorCase
 ```
 
 ```go
@@ -168,7 +177,7 @@ var errorRecorder atomic.Pointer[func(pattern string, kind fault.Kind)] //nolint
 // methodEndpoint is what one method of a shim's api.json takes its rows from.
 type methodEndpoint struct {
 	Endpoint string       // a pattern of local.Endpoints, or "" for a method that calls no endpoint
-	Except   []fault.Kind // the endpoint's kinds that the method does not surface as an error
+	Except   []string // the causes of the endpoint's cases that the method does not surface as an error
 }
 
 // methods maps a language ("TypeScript", "Python") and a method ("kv.put", "kv.put_if_absent") to its endpoint.
@@ -185,7 +194,8 @@ var methods map[string]map[string]methodEndpoint //nolint:gochecknoglobals // an
 
 1. `internal/workernode/local`: `ErrorCase`, `handle`, `wrap`, `Endpoint`, `Endpoints`, the hook and the warning;
    every endpoint moves to `handle` or `wrap`, the KV ones with their cases, the others with nil cases and listed;
-   `TestScenarioUndeclaredKindLogged` and `TestScenarioOneErrorWriter`.
+   `TestScenarioUndeclaredKindLogged`, `TestScenarioOneErrorWriter` and `TestEveryEndpointIsDescribedOrListed`, which
+   keeps the list equal to the endpoints with nil cases.
 2. `internal/controlplane/kindref`: `methods` for both languages, the error rows and the 500 sentence,
    `TestScenarioMethodShowsItsErrors` and `TestScenarioEveryMethodMapped`.
 3. `pkg/funcd`: the hook in `main_test.go`'s `TestMain` beside ADR-0329's, with
@@ -196,7 +206,7 @@ var methods map[string]map[string]methodEndpoint //nolint:gochecknoglobals // an
 
 Definition of done: `just ci` passes; a second `just generate` changes nothing; the KV Spec tab shows each KV
 method's error rows in both languages, with no 404 under `get`; every endpoint goes through `handle` or `wrap`; the
-list holds every endpoint but KV's.
+list holds every endpoint but KV's and health.
 
 ## Review checklist
 
@@ -210,10 +220,11 @@ list holds every endpoint but KV's.
 
 ## Consequences
 
-- A reader of a Handler API table sees how each method fails, and every listed kind is proven by a test.
+- A reader of a Handler API table sees how each method fails, and every listed kind is proven by a test; a kind
+  with two causes is proven by either.
 - The error writes of the local API meet in one interceptor, but the pool's refusal; a new endpoint declares its
   cases when it is registered.
-- The shims need no change, and one set of rows serves both languages. `kindref`'s table must follow a shim that
+- The shims need no change, and one set of declared cases serves both languages. `kindref`'s table must follow a shim that
   starts or stops returning a kind as a value; its test catches a renamed method or endpoint, not that change.
 - The guard sees only the calls that the tests make: an untested path can still return an undeclared kind.
 
