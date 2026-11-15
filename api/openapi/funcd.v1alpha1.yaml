@@ -6672,14 +6672,14 @@ paths:
                 $ref: "#/components/schemas/FaultError"
           description: |-
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
               fix: Send only the parameters that the operation lists.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -7844,7 +7844,7 @@ paths:
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
             - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
@@ -7857,7 +7857,7 @@ paths:
               fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -8189,7 +8189,7 @@ paths:
             - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The namespace or the name in the path is not a DNS-1123 label.
@@ -8202,7 +8202,7 @@ paths:
               fix: Send dryRun=true, or leave it out.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -8389,7 +8389,7 @@ paths:
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
             - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
@@ -8402,7 +8402,7 @@ paths:
               fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -8738,7 +8738,7 @@ paths:
             - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The namespace or the name in the path is not a DNS-1123 label.
@@ -8751,7 +8751,7 @@ paths:
               fix: Send dryRun=true, or leave it out.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -11459,7 +11459,7 @@ paths:
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
             - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
@@ -11472,7 +11472,7 @@ paths:
               fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -11834,7 +11834,7 @@ paths:
             - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The namespace or the name in the path is not a DNS-1123 label.
@@ -11847,7 +11847,7 @@ paths:
               fix: Send dryRun=true, or leave it out.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -12878,7 +12878,7 @@ paths:
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
             - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
@@ -12891,7 +12891,7 @@ paths:
               fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -13219,7 +13219,7 @@ paths:
             - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The namespace or the name in the path is not a DNS-1123 label.
@@ -13232,7 +13232,7 @@ paths:
               fix: Send dryRun=true, or leave it out.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -13415,7 +13415,7 @@ paths:
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
             - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
@@ -13428,7 +13428,7 @@ paths:
               fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -13778,7 +13778,7 @@ paths:
             - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The namespace or the name in the path is not a DNS-1123 label.
@@ -13791,7 +13791,7 @@ paths:
               fix: Send dryRun=true, or leave it out.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -13918,7 +13918,7 @@ paths:
           description: |-
             - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The namespace or the name in the path is not a DNS-1123 label.
@@ -13928,7 +13928,7 @@ paths:
               fix: Send only the parameters that the operation lists.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -15772,7 +15772,7 @@ paths:
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
             - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
@@ -15785,7 +15785,7 @@ paths:
               fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -16122,7 +16122,7 @@ paths:
             - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The namespace or the name in the path is not a DNS-1123 label.
@@ -16135,7 +16135,7 @@ paths:
               fix: Send dryRun=true, or leave it out.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
       security:
         - bearer: []
         - apiKey: []
@@ -22044,14 +22044,14 @@ paths:
                 $ref: "#/components/schemas/FaultError"
           description: |-
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
-            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
               fix: Send only the parameters that the operation lists.
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
-              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+              fix: Correct the field at the location that the detail gives.
         "503":
           content:
             application/problem+json:

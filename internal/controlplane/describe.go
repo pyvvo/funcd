@@ -205,7 +205,7 @@ func bodyCases() []ErrorCase {
 			"Send the body as application/json."),
 		blank(http.StatusUnprocessableEntity,
 			"The body breaks the schema: a field that it does not know, of the wrong type or past its limits.",
-			"Correct the field at the location that the detail gives, such as body.spec.tables."),
+			"Correct the field at the location that the detail gives."),
 	}
 }
 
