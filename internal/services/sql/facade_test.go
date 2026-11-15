@@ -110,6 +110,9 @@ func TestFacadeRefusals(t *testing.T) {
 	require.Equal(t, fault.Unavailable, fault.KindOf(err))
 	require.ErrorIs(t, err, local.ErrEngineNotReady)
 	require.ErrorIs(t, noEngine.CheckRead(ctx, "default", "todo-api", "app"), local.ErrEngineNotReady)
+	require.EqualError(t, noEngine.CheckRead(ctx, "default", "todo-api", "app"),
+		`sql.CheckRead: the engine of SQLDatabase "todo-db" is not Ready: the database's engine is not ready`,
+		"the text that a dependency report carries")
 	require.NoError(t, ok.CheckRead(ctx, "default", "todo-api", "app"))
 }
 

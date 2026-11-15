@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -16,6 +17,10 @@ import (
 	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
+
+// errNoEngine is what an error raised from local.ErrEngineNotReady wraps, so its text, which a binding's dependency
+// report carries, ends as it did before the sentinel became a known cause (ADR-0330 Decision 2).
+var errNoEngine = errors.New("the database's engine is not ready")
 
 // DefaultCallTimeout bounds one SQL call when sql.callTimeout is unset (ADR-0233 Decision 4).
 const DefaultCallTimeout = 30 * time.Second
@@ -101,14 +106,14 @@ func (f *Facade) Execute(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectN
 }
 
 // CheckRead resolves the alias, asks sql::read and checks that the engine is Ready, with no engine call: the
-// dependency check of a binding (ADR-0233 Decision 8). A missing engine wraps local.ErrEngineNotReady.
+// dependency check of a binding (ADR-0233 Decision 8). A missing engine is raised from local.ErrEngineNotReady.
 func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) error {
 	db, err := f.authorize(ctx, ns, fn, alias, auth.ActionSQLRead)
 	if err != nil {
 		return err
 	}
 	if _, ok := f.d.Engines.Address(ns, db); !ok {
-		return fault.Wrapf(local.ErrEngineNotReady, fault.Unavailable, "sql.CheckRead", "the engine of SQLDatabase %q is not Ready", db)
+		return local.ErrEngineNotReady.Wrapf(errNoEngine, "sql.CheckRead", "the engine of SQLDatabase %q is not Ready", db)
 	}
 	return nil
 }
@@ -125,7 +130,7 @@ func (f *Facade) run(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 	}
 	addr, ok := f.d.Engines.Address(ns, db)
 	if !ok {
-		return nil, fault.Wrapf(local.ErrEngineNotReady, fault.Unavailable, op, "the engine of SQLDatabase %q is not Ready", db)
+		return nil, local.ErrEngineNotReady.Wrapf(errNoEngine, op, "the engine of SQLDatabase %q is not Ready", db)
 	}
 	settle := quota.Settle(func(bool) {})
 	if writes {
@@ -152,9 +157,9 @@ func (f *Facade) run(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 	for i, r := range res {
 		switch {
 		case r.Error == engineTimeout:
-			return nil, fault.Unavailablef(op, "statement %d ran past %s", i, f.d.CallTimeout)
+			return nil, local.ErrSQLTimeout.Errorf(op, "statement %d ran past %s", i, f.d.CallTimeout)
 		case r.Error != "":
-			return nil, fault.Invalidf(op, "statement %d: %s", i, r.Error)
+			return nil, local.ErrSQLStatementFailed.Errorf(op, "statement %d: %s", i, r.Error)
 		}
 	}
 	if len(res) != len(stmts) {
@@ -171,7 +176,7 @@ func (f *Facade) Usage(ctx context.Context, ns v1.NamespaceName, db v1.ObjectNam
 	const op = "sql.Usage"
 	addr, ok := f.d.Engines.Address(ns, db)
 	if !ok {
-		return 0, fault.Wrapf(local.ErrEngineNotReady, fault.Unavailable, op, "the engine of SQLDatabase %q is not Ready", db)
+		return 0, local.ErrEngineNotReady.Wrapf(errNoEngine, op, "the engine of SQLDatabase %q is not Ready", db)
 	}
 	ctx, cancel := context.WithTimeout(ctx, f.d.CallTimeout)
 	defer cancel()
@@ -188,7 +193,8 @@ func (f *Facade) Usage(ctx context.Context, ns v1.NamespaceName, db v1.ObjectNam
 	return n, nil
 }
 
-// authorize resolves the alias, then asks Cedar every action on the database; any deny is Forbidden.
+// authorize resolves the alias, then asks Cedar every action on the database; any deny is Forbidden, raised from the
+// read or the write deny's known cause (ADR-0330).
 func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string, actions ...auth.Action) (v1.ObjectName, error) {
 	const op = "sql.authorize"
 	db, err := f.d.Resolver.Resolve(ctx, ns, fn, alias)
@@ -205,7 +211,11 @@ func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.Objec
 			return "", fault.Wrapf(aerr, fault.KindOf(aerr), op, "authorize %s on SQLDatabase %q", a, db)
 		}
 		if !dec.Allowed {
-			return "", fault.Forbiddenf(op, "function %q is not authorized to %s SQLDatabase %q: %s", fn, a, db, dec.Reason)
+			deny := local.ErrSQLWriteDenied
+			if a == auth.ActionSQLRead {
+				deny = local.ErrSQLReadDenied
+			}
+			return "", deny.Errorf(op, "function %q is not authorized to %s SQLDatabase %q: %s", fn, a, db, dec.Reason)
 		}
 	}
 	return db, nil
@@ -218,28 +228,28 @@ func validateStatements(stmts []json.RawMessage) error {
 	for i, raw := range stmts {
 		var parts []json.RawMessage
 		if err := json.Unmarshal(raw, &parts); err != nil || len(parts) == 0 {
-			return fault.Invalidf(op, "statement %d is not [\"SQL\", params...]", i)
+			return local.ErrSQLStatementMalformed.Errorf(op, "statement %d is not [\"SQL\", params...]", i)
 		}
 		var text string
 		if err := json.Unmarshal(parts[0], &text); err != nil || text == "" {
-			return fault.Invalidf(op, "statement %d does not start with its SQL text", i)
+			return local.ErrSQLStatementMalformed.Errorf(op, "statement %d does not start with its SQL text", i)
 		}
 		params := parts[1:]
 		if len(params) == 1 && bytes.HasPrefix(bytes.TrimSpace(params[0]), []byte("{")) {
 			var named map[string]json.RawMessage
 			if err := json.Unmarshal(params[0], &named); err != nil {
-				return fault.Invalidf(op, "statement %d: named parameters are not an object", i)
+				return local.ErrSQLStatementMalformed.Errorf(op, "statement %d: named parameters are not an object", i)
 			}
 			for name, v := range named {
 				if !scalar(v) {
-					return fault.Invalidf(op, "statement %d: parameter %q is an array or an object", i, name)
+					return local.ErrSQLParameterNotScalar.Errorf(op, "statement %d: parameter %q is an array or an object", i, name)
 				}
 			}
 			continue
 		}
 		for j, p := range params {
 			if !scalar(p) {
-				return fault.Invalidf(op, "statement %d: parameter %d is an array or an object", i, j+1)
+				return local.ErrSQLParameterNotScalar.Errorf(op, "statement %d: parameter %d is an array or an object", i, j+1)
 			}
 		}
 	}

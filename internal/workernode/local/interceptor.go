@@ -46,8 +46,11 @@ func (l *endpointList) declare(pattern string, causes []*fault.KnownCause) {
 // fetchPattern is fetch's endpoint, served around the mux (ADR-0243 Decision 6).
 const fetchPattern = "/fetch/"
 
-// fetchCauses are the causes of fetch's errors, which NewHandler's wrap and Endpoints both read: not yet described.
-func fetchCauses() []*fault.KnownCause { return nil }
+// fetchCauses are the causes of fetch's errors, which NewHandler's wrap and Endpoints both read: those funcd raises
+// itself, since the target's reply that fetch forwards is no error of the endpoint.
+func fetchCauses() []*fault.KnownCause {
+	return slices.Concat([]*fault.KnownCause{ErrFetchPathMalformed}, callCauses(), []*fault.KnownCause{ErrTargetNotHTTP})
+}
 
 // handle registers h at pattern on mux through the interceptor, with the causes of the errors the endpoint answers.
 // On the list that Endpoints registers on, it declares the endpoint instead.

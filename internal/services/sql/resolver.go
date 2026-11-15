@@ -7,6 +7,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/services"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // Resolver maps a caller's alias to the database its spec.bindings.sql binds (ADR-0233 Decision 4). The binding is the read
@@ -44,7 +45,7 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 	obj, err := m.r.Get(ctx, v1.KindFunction.GVK(), ns, fn)
 	switch {
 	case fault.KindOf(err) == fault.NotFound:
-		return "", fault.Forbiddenf(op, "function %q in %q not found; no SQL binding for alias %q", fn, ns, alias)
+		return "", local.ErrSQLCallerMissing.Errorf(op, "function %q in %q not found; no SQL binding for alias %q", fn, ns, alias)
 	case err != nil:
 		return "", fault.Wrapf(err, fault.Internal, op, "get function %q", fn)
 	}
@@ -58,5 +59,5 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 			return b.Database, nil
 		}
 	}
-	return "", fault.Forbiddenf(op, "function %q in %q has no SQL binding for alias %q", fn, ns, alias)
+	return "", local.ErrSQLNoBinding.Errorf(op, "function %q in %q has no SQL binding for alias %q", fn, ns, alias)
 }

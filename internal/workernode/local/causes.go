@@ -46,3 +46,87 @@ var (
 		"The version is empty or holds a space, a quote or a control character, so If-Match is not one strong entity-tag.",
 		"Pass the version that a read or a write of the key returned.")
 )
+
+// The known causes of the SQL endpoints (ADR-0330 Decision 2): readStatements raises those of the body, and
+// internal/services/sql the others. This package holds the SQL port, and no lower one is shared by the service and the
+// endpoints.
+var (
+	ErrSQLBodyMalformed = fault.NewKnownCause(fault.Invalid, "local.sql-body-malformed",
+		"The body is not a JSON object whose statements field is a list.",
+		`Send {"statements": [...]}, with one ["SQL", params...] list for each statement.`)
+	ErrSQLNoStatements = fault.NewKnownCause(fault.Invalid, "local.sql-no-statements",
+		"The call holds no statement.",
+		"Send at least one statement.")
+	ErrSQLTooManyStatements = fault.NewKnownCause(fault.PayloadTooLarge, "local.sql-too-many-statements",
+		fmt.Sprintf("The call holds more than %d statements.", MaxSQLStatements),
+		fmt.Sprintf("Send at most %d statements in one call.", MaxSQLStatements))
+	ErrSQLStatementMalformed = fault.NewKnownCause(fault.Invalid, "local.sql-statement-malformed",
+		"A statement is not a list whose first item is its SQL text, or that text is empty.",
+		`Send each statement as ["SQL", params...], with its SQL text.`)
+	ErrSQLParameterNotScalar = fault.NewKnownCause(fault.Invalid, "local.sql-parameter-not-scalar",
+		"A parameter of a statement is a list or an object, other than the one object of its named parameters.",
+		"Pass each parameter as a string, a number, a boolean or null.")
+	ErrSQLCallerMissing = fault.NewKnownCause(fault.Forbidden, "local.sql-caller-missing",
+		"The calling Function no longer exists, so it binds no database.",
+		"Call from a Function that exists; a deleted Function's worker stops.")
+	ErrSQLNoBinding = fault.NewKnownCause(fault.Forbidden, "local.sql-no-binding",
+		"The Function's spec.bindings.sql has no entry for the alias.",
+		"Add the binding to spec.bindings.sql, or call an alias that the Function binds.")
+	ErrSQLReadDenied = fault.NewKnownCause(fault.Forbidden, "local.sql-read-denied",
+		"A Policy forbids the Function to read the database.",
+		"Change or remove the Policy that forbids sql::read on the database.")
+	ErrSQLWriteDenied = fault.NewKnownCause(fault.Forbidden, "local.sql-write-denied",
+		"The Function does not own the database, no RolesAssignment makes it a writer, or a Policy forbids the write.",
+		"Execute from the database's owner, or grant the Function sql::write with a RolesAssignment, such as the SQL Data Writer role.")
+	// ErrEngineNotReady also marks the dependency check of a binding whose database has no Ready engine (ADR-0233
+	// Decision 8).
+	ErrEngineNotReady = fault.NewKnownCause(fault.Unavailable, "local.sql-engine-not-ready",
+		"The database that the binding names does not exist, or its engine is not Ready yet.",
+		"Create the SQLDatabase, or wait until it is Ready, then retry.")
+	ErrSQLEngineUnavailable = fault.NewKnownCause(fault.Unavailable, "local.sql-engine-unavailable",
+		"The database's engine does not answer, its answer broke off, or it answered with an error.",
+		"Retry the call; if it keeps failing, read the SQLDatabase's status and funcd's log.")
+	ErrSQLTimeout = fault.NewKnownCause(fault.Unavailable, "local.sql-timeout",
+		"The call ran past sql.callTimeout.",
+		"Make the statements faster, or raise sql.callTimeout.")
+	ErrSQLAnswerTooLarge = fault.NewKnownCause(fault.PayloadTooLarge, "local.sql-answer-too-large",
+		"The engine's answer to the call is larger than funcd reads for one call.",
+		"Read fewer rows or columns in one call, as with LIMIT.")
+	ErrSQLStatementFailed = fault.NewKnownCause(fault.Invalid, "local.sql-statement-failed",
+		"The database refused a statement, as when its SQL is not valid, it breaks a constraint or a query writes; an execute then applies none of its statements.",
+		"Correct the statement that the detail names, with the database's error.")
+)
+
+// The known causes of a call of another Function, through invoke or fetch (ADR-0330 Decision 2), which only the local
+// API raises.
+var (
+	ErrNoLink = fault.NewKnownCause(fault.Forbidden, "local.no-link",
+		"The Function's spec.bindings.links has no entry for the alias.",
+		"Add the link to spec.bindings.links, or call an alias that the Function links.")
+	// ErrLinkTargetMissing is declared by no endpoint: admission refuses a link to a missing Function and the delete of
+	// a linked one (ADR-0064), so no request reaches it.
+	ErrLinkTargetMissing = fault.NewKnownCause(fault.NotFound, "local.link-target-missing",
+		"The Function that the link targets does not exist.",
+		"Create the Function, or link one that exists.")
+	ErrTargetServesHTTP = fault.NewKnownCause(fault.Conflict, "local.target-serves-http",
+		"The link's target serves HTTP, which ctx.invoke does not call.",
+		"Call it with ctx.fetch, which only the TypeScript shim has, or link a Function whose protocol is cloudevent.")
+	ErrTargetNotHTTP = fault.NewKnownCause(fault.Conflict, "local.target-not-http",
+		"The link's target does not serve HTTP, which ctx.fetch needs.",
+		"Call it with ctx.invoke, or link a Function whose protocol is http.")
+	ErrLinkDenied = fault.NewKnownCause(fault.Forbidden, "local.link-denied",
+		"A Policy forbids the Function to call the link's target.",
+		"Change or remove the Policy that forbids link::invoke on the target.")
+	ErrNestedCapReached = fault.NewKnownCause(fault.ResourceExhausted, "local.nested-cap-reached",
+		"The target already has as many calls from Functions in flight as invoke.maxNestedInFlight allows.",
+		"Retry once a call to the target returns, or raise invoke.maxNestedInFlight.")
+	ErrReplyCutOff = fault.NewKnownCause(fault.Unavailable, "local.reply-cut-off",
+		"The target's reply broke off before its end: its worker failed during the call, or the link's timeout ended it.",
+		"Retry the call, and raise the link's timeout if the target needs longer.")
+	ErrReplyTooLarge = fault.NewKnownCause(fault.PayloadTooLarge, "local.reply-too-large",
+		fmt.Sprintf("The target's reply is larger than %d MiB, the most that a call carries back.", maxInvokeBytes>>20),
+		"Return a smaller reply, or pass the data through a Bucket.")
+	ErrFetchPathMalformed = fault.NewKnownCause(fault.NotFound, "local.fetch-path-malformed",
+		"The path names no alias: it is not /fetch/<alias>/<path>.",
+		"Pass the alias of a link, and a path that starts with /.")
+)
