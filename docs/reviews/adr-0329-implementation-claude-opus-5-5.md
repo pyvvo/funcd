@@ -189,3 +189,84 @@ can fix the three Minors before the stamp. Minor 1 matters most, because later f
 
 No feature issue exists. FEAT-0000/F02 has none, and the ADR's References cite #1463, a merged pull request. The pull
 request closes no issue.
+
+## Round 2 (a158b0b0): the three Minors closed, and the decider's ruling settles the routed items
+
+The same subagent checked commit `a158b0b0`, which fixes the three Minors on top of this report's first commit. It
+reran the checks below through `scripts/agent/d`, on the committed tree.
+
+- **Minor 1: closed.**
+  - `invokeCases` in `internal/controlplane/spec.go` now has two 401 cases. The first is a missing or unknown
+    credential, with the fix "Send a credential…". The second is a stance that asks for a credential while
+    server.auth.edge is off, with the fix "Ask funcd's operator to set server.auth.edge to true."
+  - The spec and the Function Spec tab show both rows. `TestScenarioFunctionCallDocumented` checks both, and
+    `TestAnswersOfInvokeFunctionLimits/rate` still gets the second 401.
+- **Minor 2: closed.**
+  - `pkg/funcd/answers.go` no longer calls `SpecAPI`, and `operationIDs` is gone. The one production global left is
+    `answerRecorder`, which the Contracts provide for.
+  - `controlplane.OperationOf(h, r)` names a request by the route that its router matches, in the server's own API
+    document. `NewServer` keeps its signature and returns a `*server` that holds its router and that document. No
+    caller asserts the handler's type.
+  - `TestOperationOfNamesTheServersOwnOperations` checks a described route, the handover, another kind's route, a
+    route that `Deps` leaves out, a method with no route, `POST /function/echo`, `/docs` and a handler that
+    `NewServer` did not build.
+  - The verbs' operations are now built by the non-generic `restOperationsOf`. From `a7c1e41b` to `a158b0b0` the
+    spec changes in one hunk only, the 401 of `invokeFunction`.
+  - The size of `cmd/funcd`, each commit built the same way, from a `git archive` extract at a path of the same
+    length: main `e0532d80` is 109,473,330 bytes, `a7c1e41b` 110,252,274, and `a158b0b0` 109,547,794, which is
+    74,464 bytes over main.
+  - `go tool nm` finds none of `SpecAPI`, `NewStubHandlers`, `RegisterStub*`, `addInvokeFunction` and `invokeCases`
+    in `a158b0b0`. It finds 5 of these symbols in `a7c1e41b`.
+  - The reported growth of 41,440 bytes compares builds made at paths of different lengths. The binary holds about
+    400 source paths, so its size follows its build path: main grows 16,512 bytes when it is built 46 characters
+    deeper. Built in the worktree, `a158b0b0` is 109,514,770 bytes, which is the reported figure.
+- **Minor 3: closed.** The section's first sentence reads "Each described operation of these kinds, …", and
+  `TestScenarioOperationShowsItsAnswers` checks it.
+
+### Checks run in round 2
+
+| Check | Result |
+| --- | --- |
+| `just ci` | exit 0, 535 s, with `pkg/funcd` ok in 59.8 s; the tree was clean after it |
+| `just generate`, twice | exit 0 both times; the tree was clean after each |
+| `go test -race -count=1 ./pkg/funcd`, no filter: the two-sided guard | ok, 95.3 s |
+| `go test -race -count=1 ./internal/controlplane/...` | 4 packages ok, 17 s |
+| The eight `TestScenario*` tests and `TestOperationOfNamesTheServersOwnOperations` | PASS each |
+| `-run '^TestAnswersOfKVStoreQuota$'`; `-list TestAnswers` | ok each |
+| The `ContractViolation` wire test of round 1 | ok |
+
+The round 1 mutants ran again on the new code, and two new ones ran on `OperationOf`. Each failed a test:
+
+| Mutant | Failed |
+| --- | --- |
+| The three on `compareAnswers` and `checksAll` | the same guard scenarios as in round 1 |
+| The recorder reports the status plus 1 | `TestMain` on `TestAnswersOfKVStoreQuota` alone: `createKVStore answered 201 Created, which it does not list` |
+| `listKVStores` lists a 409 that no test gets | `TestMain` on the full run: `listKVStores lists 409 Conflict, which no test got` |
+| `Describe` sets `op.Errors`; `Describe` keeps one case per status | the same tests as in round 1 |
+| `OperationOf` names no operation | `TestOperationOfNamesTheServersOwnOperations` |
+| `OperationOf` ignores the method | `TestOperationOfNamesTheServersOwnOperations`; `TestMain` on `TestAnswersOfKVStoreQuota` alone: `listKVStores answered 400 Bad Request, which it does not list` |
+
+### The decider's ruling of 2026-11-15
+
+The decider ruled on the three routed `adr` items:
+
+> 1. ADR-0147's 429 is not an answer of POST /function/{name}, because external requests never pass the nested-call
+>    Invoker. The work stands as built: invokeFunction lists 429 with the ADR-0112 rate case only.
+> 2. The scenario's "with its ADR" yields to Decision 7. Each answer's ADR stays in the test's table, and the page does
+>    not show it. The work stands as built.
+> 3. The five decided 503 cases of the call (ADR-0290, ADR-0161, ADR-0169, ADR-0028, ADR-0044) go into the Function
+>    feature's rollout pull request, each with its test, not into this pilot.
+
+The ruling settles the Definition-of-done item on the cases of Decision 2 and the scenario clause. The five 503 cases
+belong to the Function feature's rollout pull request.
+
+### Verdict after round 2
+
+**Pass, with no finding open.**
+
+- All 16 Definition-of-done and checklist items hold. `just ci` passed in this round, and the ruling settles the cases
+  of Decision 2.
+- The ledger row keeps round 1's counts (3 Minors, all model-attributed). Its DoD becomes 16/16, and its notes record
+  round 2 and the ruling.
+- This gate stamps the ADR `Implemented (2026-11-15)` and moves the F02 row's "operation answers" to `implemented`.
+- No feature issue exists, so the pull request closes none.
