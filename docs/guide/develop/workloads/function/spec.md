@@ -440,7 +440,7 @@ Body: [`Function`](#function), required. Answer: [`Function`](#function).
 | 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
 | 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
 | 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
-| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives. |
 
 ### Read a Function
 
@@ -501,7 +501,7 @@ Body: [`Function`](#function), required. Answer: [`Function`](#function).
 | 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
 | 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
 | 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
-| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives. |
 
 ### Delete a Function
 
@@ -742,7 +742,7 @@ Body: [`Invocation`](#invocation), required. Answer: [`Invocation`](#invocation)
 | 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
 | 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
 | 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
-| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives. |
 
 ### Read an Invocation
 
@@ -796,7 +796,7 @@ Body: [`Invocation`](#invocation), required. Answer: [`Invocation`](#invocation)
 | 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
 | 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
 | 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
-| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives. |
 
 ### Delete an Invocation
 
