@@ -47,11 +47,23 @@ func inOrder(got, want []string) bool {
 	return true
 }
 
-// checkLayout holds the reference's files to paths and to the order of ADR-0331 Decision 3.2: the sections in the
-// order of Features, a section's kinds in that order and then its tags by name, a kind's operations list, create,
-// get, replace and delete and then by name, no folder without a page, and no other file.
-func checkLayout(t *testing.T, files map[string][]byte, paths map[string]string) {
+// firstOperations are the operations that a kind's folder lists first, in the order of ADR-0331 Decision 3.2, spelled
+// here rather than read from the package's verbs.
+func firstOperations() []string { return []string{"list", "create", "get", "replace", "delete"} }
+
+// checkLayout holds the reference's files to doc's paths and to the order of ADR-0331 Decision 3.2: the sections in
+// the order of Features, a section's kinds in that order and then its tags by name, a kind's folder titled with the
+// tag of its operations, which it lists list, create, get, replace and delete and then by name, no folder without a
+// page, and no other file.
+func checkLayout(t *testing.T, doc *huma.OpenAPI, files map[string][]byte) {
 	t.Helper()
+	paths := ReferencePaths(doc)
+	tagOf := map[string]string{}
+	for _, o := range operationsOf(doc) {
+		if p, ok := paths[o.op.OperationID]; ok {
+			tagOf[p] = o.tag()
+		}
+	}
 	var written map[string]string
 	require.NoError(t, json.Unmarshal(files[pathsFile], &written))
 	require.Equal(t, paths, written, "reference-paths.json")
@@ -71,11 +83,12 @@ func checkLayout(t *testing.T, files map[string][]byte, paths map[string]string)
 		s := topFolder(TagFeatures[tag])
 		tags[s] = append(tags[s], strings.ToLower(tag))
 	}
+	first := firstOperations()
 	rank := func(name string) int {
-		if i := slices.Index(verbs, name); i >= 0 {
+		if i := slices.Index(first, name); i >= 0 {
 			return i
 		}
-		return len(verbs)
+		return len(first)
 	}
 
 	seen := map[string]bool{pathsFile: true, referenceDir + "/meta.json": true}
@@ -97,10 +110,11 @@ func checkLayout(t *testing.T, files map[string][]byte, paths map[string]string)
 			name := referenceDir + "/" + s + "/" + k + "/meta.json"
 			seen[name] = true
 			kind := metaOf(t, files, name)
-			require.Equal(t, k, strings.ToLower(kind.Title), "a kind's folder is titled with the kind")
 			require.NotEmpty(t, kind.Pages, k)
 			for i, page := range kind.Pages {
 				shown = append(shown, s+"/"+k+"/"+page)
+				require.Equal(t, tagOf[s+"/"+k+"/"+page], kind.Title, "%s/%s: the folder is titled with its operations' tag",
+					s, k)
 				if i > 0 {
 					prev := kind.Pages[i-1]
 					require.True(t, rank(prev) < rank(page) || rank(prev) == rank(page) && prev < page,
@@ -143,7 +157,7 @@ func TestReferencePaths(t *testing.T) {
 			require.GreaterOrEqual(t, feature, 0, "%s: a Spec tab lists it", id)
 			require.Equal(t, topFolder(Features[feature].Path), parts[0], "%s: the section of its Spec tab", id)
 			require.Equal(t, strings.ToLower(o.tag()), parts[1], id)
-			for _, verb := range verbs {
+			for _, verb := range firstOperations() {
 				if id == verb+o.tag() {
 					require.Equal(t, verb, parts[2], "%s: its kind's name is stripped", id)
 				}
@@ -157,7 +171,7 @@ func TestReferencePaths(t *testing.T) {
 
 		files, err := ReferenceFiles(doc, guideSections())
 		require.NoError(t, err)
-		checkLayout(t, files, paths)
+		checkLayout(t, doc, files)
 	})
 
 	t.Run("the layout's rules", func(t *testing.T) {
@@ -181,7 +195,7 @@ func TestReferencePaths(t *testing.T) {
 		}, paths, "an Omitted kind's operation and an undescribed one have no page")
 		files, err := ReferenceFiles(doc, guideSections())
 		require.NoError(t, err)
-		checkLayout(t, files, paths)
+		checkLayout(t, doc, files)
 		require.Equal(t, []string{"index", "security-and-networking", "disaster-recovery"},
 			metaOf(t, files, referenceDir+"/meta.json").Pages, "a section with no page has no folder")
 		require.Equal(t, []string{"backup", "restore", "hold", "platformbackup"},
