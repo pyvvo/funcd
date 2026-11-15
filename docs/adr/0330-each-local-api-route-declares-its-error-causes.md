@@ -2,7 +2,7 @@
 
 - **Status**: Accepted (2026-11-15), on the decider's go, after three rounds of an independent judge (a subagent);
   the decider chose `KnownCause`, confirmed the drafter's defaults (Decisions 5 and 6, the two-sided guard) and the
-  method table, and asked that the causes be proven by one parametrized test over a matrix
+  method table, and asked that each service's causes be proven by one parametrized test over its own matrix
 - **Date**: 2026-11-15
 - **Deciders**: green-0-rabbit
 - **Tags**: api, docs, errors
@@ -127,8 +127,8 @@ Out:
    kind of every error the interceptor answers. `pkg/funcd`'s `TestMain` adds the described endpoints to ADR-0329's
    comparison: an undeclared cause, an error with none, or a kind that is not its cause's always fails; a declared cause that no test got fails on a
    full run that passed, as `checksAll` decides. Only `pkg/funcd`'s tests run the real facades; `local`'s own fakes
-   prove the interceptor, not a declaration. The causes are proven by one parametrized test over a matrix with one row per endpoint and known cause, each row
-   giving its setup and its request, and a test fails when a declared cause has no row. A cause that only a raw
+   prove the interceptor, not a declaration. Each service's causes are proven by one parametrized test over its own matrix, with one row per endpoint and known
+   cause, each row giving its setup and its request; a test fails when a declared cause has no row in its service's matrix. A cause that only a raw
    request can provoke, such as a repeated `If-Match` line, is proven by a raw request to the socket and shows under no method; one that only a store raises, such as the
    `file://` store's key rules, by a test on that store; one that no request can reach is not declared. A scan of the module refuses a call of `SetErrorRecorderForTest`
    from a file that is not a test.
@@ -228,8 +228,8 @@ var methods map[string]map[string]methodEndpoint //nolint:gochecknoglobals // an
 4. `internal/controlplane/kindref`: `methods` for both languages, the rows and the 500 sentence,
    `TestScenarioMethodShowsItsErrors` and `TestScenarioEveryMethodMapped`.
 5. `pkg/funcd`: the hook in `TestMain` beside ADR-0329's, `TestScenarioUndeclaredCauseFailsATest` and
-   `TestScenarioDeclaredCauseUnprovenFails` on a fixed set of answers, `TestLocalAPICauseMatrix`, one row per KV
-   endpoint and cause, with `TestEveryDeclaredCauseHasARow`, and
+   `TestScenarioDeclaredCauseUnprovenFails` on a fixed set of answers, `TestKVCauseMatrix`, the KV service's
+   matrix, with `TestEveryDeclaredCauseHasARow`, and
    `TestScenarioFacetsMatch`. `.github/workflows/ci.yml`: the second call of `scripts/check-list-only-shrinks.sh`.
 6. `scripts/agent/d just generate`, then `scripts/agent/d just ci`.
 
@@ -245,7 +245,7 @@ holds every endpoint but KV's and health; no problem's `detail` changed.
 - [ ] Each KV method's rows leave out the causes its shim returns as a value or never provokes.
 - [ ] An undeclared cause keeps its answer and logs once; only test files call the hook.
 - [ ] No status, body, header or `detail` changed; `facetMux` and `Render` keep their signatures.
-- [ ] Each declared cause is one row of the matrix test, and the guard's tests run outside the e2e build.
+- [ ] Each declared cause is one row of its service's matrix test, and the guard's tests run outside the e2e build.
 
 ## Consequences
 
