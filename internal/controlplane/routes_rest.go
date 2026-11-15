@@ -11,6 +11,47 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
+// ===== Namespace (cluster-scoped) =====
+
+func registerNamespace(api huma.API, h Handlers) {
+	registerClusterCRUD(api, clusterRoutes[v1.Namespace]{
+		kind: "Namespace", kinds: "Namespaces", path: "namespaces",
+		list: h.ListNamespaces, create: h.CreateNamespace, get: h.GetNamespace,
+		replace: h.ReplaceNamespace, remove: h.DeleteNamespace, cases: &kindCases{},
+	})
+}
+
+// ===== ResourceGroup (namespaced) — ADR-0170 =====
+
+// deleteResourceGroupInput is a ResourceGroup delete's input: a namespaced delete's, and force.
+type deleteResourceGroupInput struct {
+	IfMatchParams
+	Namespace v1.NamespaceName `path:"namespace" doc:"The object's namespace."`
+	Name      v1.ObjectName    `path:"name" doc:"The object's name."`
+	Force     bool             `query:"force" doc:"Delete the members first; each member's protections still apply."`
+}
+
+func registerResourceGroup(api huma.API, h Handlers) {
+	ops := registerNamespacedCRUD(api, crudRoutes[v1.ResourceGroup]{
+		kind: "ResourceGroup", kinds: "ResourceGroups", path: "resourcegroups",
+		list: h.ListResourceGroups, create: h.CreateResourceGroup, get: h.GetResourceGroup,
+		replace: h.ReplaceResourceGroup,
+		cases: &kindCases{remove: []ErrorCase{
+			problem(fault.Conflict, "The ResourceGroup still has members: objects of the namespace whose "+
+				"metadata.resourceGroup names it and that no other object owns.",
+				"Delete the members first, or delete the ResourceGroup with force=true, which deletes them."),
+			problem(fault.Conflict, "With force=true, funcd refuses the delete of a member, such as a Function that "+
+				"a Function outside the group links to; the detail gives that refusal.",
+				"Do what the refusal asks, then delete again; the members deleted already stay deleted."),
+			blank(http.StatusUnprocessableEntity, "The force parameter is neither true nor false.",
+				"Send force=true, or leave it out."),
+		}},
+	})
+	huma.Register(api, ops.remove, func(ctx context.Context, in *deleteResourceGroupInput) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteResourceGroup(ctx, in.Namespace, in.Name, in.Force, in.rv))
+	})
+}
+
 // ===== Function (namespaced) =====
 
 func registerFunction(api huma.API, h Handlers) {
@@ -110,7 +151,7 @@ func registerIdentity(api huma.API, h Handlers) {
 	registerNamespacedCRUD(api, crudRoutes[v1.Identity]{
 		kind: "Identity", kinds: "Identities", path: "identities",
 		list: h.ListIdentities, create: h.CreateIdentity, get: h.GetIdentity,
-		replace: h.ReplaceIdentity, remove: h.DeleteIdentity,
+		replace: h.ReplaceIdentity, remove: h.DeleteIdentity, cases: &kindCases{},
 	})
 }
 
@@ -120,6 +161,7 @@ func registerRole(api huma.API, h Handlers) {
 	registerNamespacedCRUD(api, crudRoutes[v1.Role]{
 		kind: "Role", kinds: "Roles", path: "roles",
 		list: h.ListRoles, create: h.CreateRole, get: h.GetRole, replace: h.ReplaceRole, remove: h.DeleteRole,
+		cases: &kindCases{},
 	})
 }
 
@@ -127,7 +169,7 @@ func registerRolesAssignment(api huma.API, h Handlers) {
 	registerNamespacedCRUD(api, crudRoutes[v1.RolesAssignment]{
 		kind: "RolesAssignment", kinds: "RolesAssignments", path: "rolesassignments",
 		list: h.ListRolesAssignments, create: h.CreateRolesAssignment, get: h.GetRolesAssignment,
-		replace: h.ReplaceRolesAssignment, remove: h.DeleteRolesAssignment,
+		replace: h.ReplaceRolesAssignment, remove: h.DeleteRolesAssignment, cases: &kindCases{},
 	})
 }
 
@@ -218,10 +260,28 @@ func registerSQLDatabase(api huma.API, h Handlers) {
 // ===== Policy (namespaced) — ADR-0074 =====
 
 func registerPolicy(api huma.API, h Handlers) {
+	writes := policyWrites()
 	registerNamespacedCRUD(api, crudRoutes[v1.Policy]{
 		kind: "Policy", kinds: "Policies", path: "policies",
 		list: h.ListPolicies, create: h.CreatePolicy, get: h.GetPolicy, replace: h.ReplacePolicy, remove: h.DeletePolicy,
+		cases: &kindCases{create: writes, replace: writes},
 	})
+}
+
+// policyWrites are the cases a Policy's create and replace add to their verb's: the refusals of the policy-validity
+// admission, which holds spec.cedar to the actions and entity types of the registered capabilities (ADR-0116) and to
+// the Policy's namespace (ADR-0177).
+func policyWrites() []ErrorCase {
+	return []ErrorCase{
+		problem(fault.Invalid, "The text in spec.cedar does not parse as Cedar, or holds no statement.",
+			"Correct the text where the detail says it breaks, and keep at least one permit or forbid statement."),
+		problem(fault.Invalid, "A statement of spec.cedar does not name exactly one action that funcd knows, or "+
+			"names an entity of a type that funcd does not know.",
+			"Name one action that funcd knows, such as kv::read, and only entity types that it knows; the detail lists both."),
+		problem(fault.Invalid, "A statement of spec.cedar names an entity of another namespace: its id does not "+
+			"begin with the Policy's namespace and a slash.",
+			"Name only entities of the Policy's namespace, or apply the Policy in the namespace of the entities it names."),
+	}
 }
 
 // ===== EgressPolicy (namespaced) =====
@@ -230,7 +290,7 @@ func registerEgressPolicy(api huma.API, h Handlers) {
 	registerNamespacedCRUD(api, crudRoutes[v1.EgressPolicy]{
 		kind: "EgressPolicy", kinds: "EgressPolicies", path: "egresspolicies",
 		list: h.ListEgressPolicies, create: h.CreateEgressPolicy, get: h.GetEgressPolicy,
-		replace: h.ReplaceEgressPolicy, remove: h.DeleteEgressPolicy,
+		replace: h.ReplaceEgressPolicy, remove: h.DeleteEgressPolicy, cases: &kindCases{},
 	})
 }
 
@@ -384,7 +444,9 @@ func respond[T crudKind](v T, err error) (*bodyOutput[T], error) {
 	return &bodyOutput[T]{Body: v}, nil
 }
 
-func registerNamespacedCRUD[T crudKind, PT objectPtr[T]](api huma.API, r crudRoutes[T]) {
+// registerNamespacedCRUD registers r's five operations and returns them. A kind whose delete takes more than a
+// version, such as a ResourceGroup's force, leaves remove nil and registers its own delete on the returned operation.
+func registerNamespacedCRUD[T crudKind, PT objectPtr[T]](api huma.API, r crudRoutes[T]) restOperations {
 	ops := registerNamespacedRead(api, r)
 	huma.Register(api, ops.create,
 		func(ctx context.Context, in *namespacedBodyInput[T]) (*bodyOutput[T], error) {
@@ -400,10 +462,14 @@ func registerNamespacedCRUD[T crudKind, PT objectPtr[T]](api huma.API, r crudRou
 			}
 			return respond(r.replace(withDryRun(ctx, in.DryRun), in.Namespace, in.Name, in.Body))
 		})
+	if r.remove == nil {
+		return ops
+	}
 	huma.Register(api, ops.remove,
 		func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
 			return nil, wrapFaultError(r.remove(ctx, in.Namespace, in.Name, in.rv))
 		})
+	return ops
 }
 
 // registerNamespacedRead registers r's list and get only, and returns all five of its operations. A read-only kind
@@ -446,7 +512,7 @@ type clusterBodyInput[T crudKind] struct {
 type clusterNameBodyInput[T crudKind] struct {
 	IfMatchParams
 	DryRunParams
-	Name v1.ObjectName `path:"name"`
+	Name v1.ObjectName `path:"name" doc:"The object's name."`
 	Body T
 }
 
