@@ -39,18 +39,18 @@ const SinceForms = v1.DurationGrammar + " or " + v1.TimestampForm
 
 // Line is one log record returned to a caller (the wire + CLI DTO; a friendlier view of compact.Row).
 type Line struct {
-	Time           v1.Timestamp    `json:"time"`
-	Severity       string          `json:"severity"`
-	SeverityNumber int32           `json:"severityNumber"`
-	Body           string          `json:"body"`
-	Namespace      string          `json:"namespace"`
-	Function       string          `json:"function"`
-	Replica        string          `json:"replica"`
-	Source         string          `json:"source"`
-	Invocation     string          `json:"inv,omitempty"`
-	TraceID        string          `json:"traceId,omitempty"`
-	SpanID         string          `json:"spanId,omitempty"`
-	Attrs          json.RawMessage `json:"attrs,omitempty"`
+	Time           v1.Timestamp    `json:"time" doc:"When the worker wrote the line."`
+	Severity       string          `json:"severity" doc:"The line's level: TRACE, DEBUG, INFO, WARN, ERROR or FATAL."`
+	SeverityNumber int32           `json:"severityNumber" doc:"The level as an OpenTelemetry severity number: 1 to 4 for trace, 5 to 8 for debug, 9 to 12 for info, 13 to 16 for warn, 17 to 20 for error and 21 to 24 for fatal."`
+	Body           string          `json:"body" doc:"The line's text."`
+	Namespace      string          `json:"namespace" doc:"The Function's namespace."`
+	Function       string          `json:"function" doc:"The Function whose worker wrote the line."`
+	Replica        string          `json:"replica" doc:"The replica of the worker that wrote the line."`
+	Source         string          `json:"source" doc:"Where the worker wrote the line: console, logging, stdout or stderr."`
+	Invocation     string          `json:"inv,omitempty" doc:"The ID of the call during which the worker wrote the line, when one is known."`
+	TraceID        string          `json:"traceId,omitempty" doc:"The trace of that call, as 32 hexadecimal digits, when one is known."`
+	SpanID         string          `json:"spanId,omitempty" doc:"The span of that call, as 16 hexadecimal digits, when one is known."`
+	Attrs          json.RawMessage `json:"attrs,omitempty" doc:"The line's other attributes, as a JSON object."`
 }
 
 // Query selects + bounds a read. Namespace is required; Function OR TraceID must be set (a bare

@@ -27,16 +27,16 @@ type LogQuerier interface {
 // v1.NamespaceName/v1.ObjectName, so huma enforces their DNS-label schema at the boundary (no `/`, no
 // `..`) — the prefix the reader builds is always confined to the authorized namespace.
 type logsInput struct {
-	Namespace v1.NamespaceName `path:"namespace"`
-	Name      v1.ObjectName    `path:"name"`
-	Since     string           `query:"since" doc:"a duration (15m, 1h30m, 500ms) or a UTC timestamp with exactly 3 fractional digits (2026-10-07T22:00:00.000Z); empty ⇒ no lower bound"`
-	Severity  string           `query:"severity" doc:"minimum level: trace|debug|info|warn|error|fatal"`
-	Limit     int              `query:"limit" doc:"max records returned, most-recent first-bounded; default 1000, capped 10000"`
+	Namespace v1.NamespaceName `path:"namespace" doc:"The Function's namespace."`
+	Name      v1.ObjectName    `path:"name" doc:"The Function's name."`
+	Since     string           `query:"since" doc:"Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."`
+	Severity  string           `query:"severity" doc:"Only the lines at this level or above: trace, debug, info, warn, error or fatal."`
+	Limit     int              `query:"limit" doc:"The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."`
 }
 
 type logsOutput struct {
 	Body struct {
-		Items []logread.Line `json:"items"`
+		Items []logread.Line `json:"items" doc:"The most recent lines that match, at most limit, oldest first."`
 	}
 }
 
@@ -46,12 +46,19 @@ type logsOutput struct {
 // never a client-asserted filter. NewServer calls it when a reader is configured; spec generation calls
 // RegisterStubLogs so the operation is documented in the committed OpenAPI.
 func RegisterLogs(api huma.API, q LogQuerier, authz auth.Authorizer) {
-	huma.Register(api, huma.Operation{
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "getFunctionLogs",
 		Method:      http.MethodGet,
 		Path:        "/apis/funcd.io/v1alpha1/namespaces/{namespace}/functions/{name}/logs",
 		Tags:        []string{"Function"},
-	}, func(ctx context.Context, in *logsInput) (*logsOutput, error) {
+	}, "Read the logs of a Function", unauthorized(), forbidden("read Functions in the namespace"),
+		problem(fault.Invalid, "The since parameter is neither a duration, such as 15m, nor a UTC timestamp with "+
+			"three fractional digits, such as 2026-10-07T22:00:00.000Z.", "Send since in one of those two forms."),
+		problem(fault.Invalid, "The severity parameter is none of trace, debug, info, warn, error and fatal.",
+			"Send one of those levels, or leave severity out."),
+		badPath("namespace or the name"),
+		blank(http.StatusUnprocessableEntity, "The limit parameter is not an integer.", "Send limit as a whole number."),
+	), func(ctx context.Context, in *logsInput) (*logsOutput, error) {
 		if err := authorizeLogs(ctx, authz, in.Namespace); err != nil {
 			return nil, wrapFaultError(err)
 		}

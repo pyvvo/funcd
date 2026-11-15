@@ -46,16 +46,16 @@ type secretValue struct {
 // document (403 on a deny). Values are never logged.
 func registerSecrets(mux facetMux, caller Ref, s Secrets, logger *slog.Logger) {
 	ns, fn := caller.Namespace, caller.Function
-	mux.HandleFunc("GET /secret", func(w http.ResponseWriter, r *http.Request) {
+	handle(mux, logger, "GET /secret", nil, func(w http.ResponseWriter, r *http.Request) error {
 		keys, err := s.List(r.Context(), ns, fn)
 		if err != nil {
 			logger.Warn("secret list denied/failed", "caller", caller.String(), "err", err.Error())
-			fault.WriteProblem(w, err)
-			return
+			return err
 		}
 		writeSecret(w, secretKeys{Keys: keys})
+		return nil
 	})
-	mux.HandleFunc("GET /secret/{key}", func(w http.ResponseWriter, r *http.Request) {
+	handle(mux, logger, "GET /secret/{key}", nil, func(w http.ResponseWriter, r *http.Request) error {
 		key := r.PathValue("key")
 		value, found, err := s.Get(r.Context(), ns, fn, key)
 		if err == nil && !found {
@@ -63,12 +63,12 @@ func registerSecrets(mux facetMux, caller Ref, s Secrets, logger *slog.Logger) {
 		}
 		if err != nil {
 			logger.Warn("secret get denied/failed", "caller", caller.String(), "key", key, "err", err.Error())
-			fault.WriteProblem(w, err)
-			return
+			return err
 		}
 		writeSecret(w, secretValue{Value: value})
+		return nil
 	})
-	mux.HandleFunc("PUT /secret/{binding}/{key}", func(w http.ResponseWriter, r *http.Request) {
+	handle(mux, logger, "PUT /secret/{binding}/{key}", nil, func(w http.ResponseWriter, r *http.Request) error {
 		const op = "workernode.local.secret.put"
 		binding, key := r.PathValue("binding"), r.PathValue("key")
 		body, err := readBody(w, r, op, maxSecretBytes)
@@ -79,22 +79,22 @@ func registerSecrets(mux facetMux, caller Ref, s Secrets, logger *slog.Logger) {
 		if err == nil {
 			err = s.Put(r.Context(), ns, fn, binding, key, in.Value)
 		}
-		writeSecretChange(w, logger, caller, "put", binding, key, err)
+		return writeSecretChange(w, logger, caller, "put", binding, key, err)
 	})
-	mux.HandleFunc("DELETE /secret/{binding}/{key}", func(w http.ResponseWriter, r *http.Request) {
+	handle(mux, logger, "DELETE /secret/{binding}/{key}", nil, func(w http.ResponseWriter, r *http.Request) error {
 		binding, key := r.PathValue("binding"), r.PathValue("key")
-		writeSecretChange(w, logger, caller, "delete", binding, key, s.Delete(r.Context(), ns, fn, binding, key))
+		return writeSecretChange(w, logger, caller, "delete", binding, key, s.Delete(r.Context(), ns, fn, binding, key))
 	})
 }
 
-// writeSecretChange answers a write: 204, or its problem document, logged with no value.
-func writeSecretChange(w http.ResponseWriter, logger *slog.Logger, caller Ref, verb, binding, key string, err error) {
+// writeSecretChange answers a write: 204, or returns its error, logged with no value.
+func writeSecretChange(w http.ResponseWriter, logger *slog.Logger, caller Ref, verb, binding, key string, err error) error {
 	if err != nil {
 		logger.Warn("secret "+verb+" denied/failed", "caller", caller.String(), "binding", binding, "key", key, "err", err.Error())
-		fault.WriteProblem(w, err)
-		return
+		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 // writeSecret writes a successful secret read.

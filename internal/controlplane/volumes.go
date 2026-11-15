@@ -19,20 +19,26 @@ type VolumeDeleter interface {
 }
 
 type volumeDeleteInput struct {
-	Namespace v1.NamespaceName `path:"namespace"`
-	Function  v1.ObjectName    `path:"function"`
-	Name      v1.ObjectName    `path:"name"`
+	Namespace v1.NamespaceName `path:"namespace" doc:"The Function's namespace."`
+	Function  v1.ObjectName    `path:"function" doc:"The name of the Function that declared the volume."`
+	Name      v1.ObjectName    `path:"name" doc:"The volume's name."`
 }
 
 // RegisterVolumes registers DELETE …/namespaces/{ns}/volumes/{function}/{name}, which `funcdctl volume delete` calls;
 // it authorizes delete/Function in the namespace, the right to delete the volume's owner.
 func RegisterVolumes(api huma.API, d VolumeDeleter, authz auth.Authorizer) {
-	huma.Register(api, huma.Operation{
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "deleteVolume",
 		Method:      http.MethodDelete,
 		Path:        "/apis/funcd.io/v1alpha1/namespaces/{namespace}/volumes/{function}/{name}",
 		Tags:        []string{"Function"},
-	}, func(ctx context.Context, in *volumeDeleteInput) (*struct{}, error) {
+	}, "Delete a retained volume of a Function", unauthorized(), forbidden("delete Functions in the namespace"),
+		problem(fault.NotFound, "No volume of that name exists for the Function in the namespace.",
+			"Check the namespace, the Function's name and the volume's name."),
+		badPath("namespace, the function or the name"), badQuery(),
+		problem(fault.Conflict, "The Function still exists and declares the volume.",
+			"Delete the Function, or remove the volume from its spec, then retry."),
+	), func(ctx context.Context, in *volumeDeleteInput) (*struct{}, error) {
 		const op = "controlplane.volumes"
 		id, ok := middleware.IdentityFrom(ctx)
 		if !ok {

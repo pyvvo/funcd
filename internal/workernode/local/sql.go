@@ -74,50 +74,52 @@ func SQLFacet(s SQL) Facet {
 // that is not Ready 503, an oversized body or answer 413.
 func registerSQL(mux facetMux, caller Ref, s SQL, logger *slog.Logger) {
 	ns, fn := caller.Namespace, caller.Function
-	mux.HandleFunc("POST /sql/{binding}/query", func(w http.ResponseWriter, r *http.Request) {
-		stmts, ok := readStatements(w, r, "workernode.local.sql.query")
-		if !ok {
-			return
-		}
-		res, err := s.Query(r.Context(), ns, fn, r.PathValue("binding"), stmts)
-		writeSQL(w, logger, caller, "query", r.PathValue("binding"), queryResponse{res}, err)
-	})
-	mux.HandleFunc("POST /sql/{binding}/execute", func(w http.ResponseWriter, r *http.Request) {
-		stmts, ok := readStatements(w, r, "workernode.local.sql.execute")
-		if !ok {
-			return
-		}
-		res, err := s.Execute(r.Context(), ns, fn, r.PathValue("binding"), stmts)
-		writeSQL(w, logger, caller, "execute", r.PathValue("binding"), execResponse{res}, err)
-	})
+	handle(mux, logger, "POST /sql/{binding}/query", nil, serveSQL(logger, caller, "query",
+		func(r *http.Request, stmts []json.RawMessage) (queryResponse, error) {
+			res, err := s.Query(r.Context(), ns, fn, r.PathValue("binding"), stmts)
+			return queryResponse{res}, err
+		}))
+	handle(mux, logger, "POST /sql/{binding}/execute", nil, serveSQL(logger, caller, "execute",
+		func(r *http.Request, stmts []json.RawMessage) (execResponse, error) {
+			res, err := s.Execute(r.Context(), ns, fn, r.PathValue("binding"), stmts)
+			return execResponse{res}, err
+		}))
 }
 
-// readStatements reads and bounds a SQL request body; on a failure it has written the problem and returns false.
-func readStatements(w http.ResponseWriter, r *http.Request, op string) ([]json.RawMessage, bool) {
+// serveSQL is the handler of one SQL verb: it reads and bounds the statements, runs them, and writes the results or
+// returns the error, logged without the statements.
+func serveSQL[T queryResponse | execResponse](logger *slog.Logger, caller Ref, verb string,
+	run func(r *http.Request, stmts []json.RawMessage) (T, error)) func(http.ResponseWriter, *http.Request) error {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		stmts, err := readStatements(w, r, "workernode.local.sql."+verb)
+		if err != nil {
+			return err
+		}
+		out, err := run(r, stmts)
+		if err != nil {
+			logger.Warn("sql "+verb+" denied/failed", "caller", caller.String(), "binding", r.PathValue("binding"), "err", err.Error())
+			return err
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+		return nil
+	}
+}
+
+// readStatements reads and bounds a SQL request body.
+func readStatements(w http.ResponseWriter, r *http.Request, op string) ([]json.RawMessage, error) {
 	body, err := readBody(w, r, op, maxSQLBytes)
-	if err == nil {
-		var req sqlRequest
-		if uerr := json.Unmarshal(body, &req); uerr != nil {
-			err = fault.Invalidf(op, "the body is not {\"statements\": [...]}: %v", uerr)
-		} else if len(req.Statements) == 0 {
-			err = fault.Invalidf(op, "no statements")
-		} else if len(req.Statements) > MaxSQLStatements {
-			err = fault.PayloadTooLargef(op, "%d statements exceed the limit of %d", len(req.Statements), MaxSQLStatements)
-		} else {
-			return req.Statements, true
-		}
-	}
-	fault.WriteProblem(w, err)
-	return nil, false
-}
-
-// writeSQL writes a SQL call's results, or its problem, logged without the statements.
-func writeSQL[T queryResponse | execResponse](w http.ResponseWriter, logger *slog.Logger, caller Ref, verb, binding string, out T, err error) {
 	if err != nil {
-		logger.Warn("sql "+verb+" denied/failed", "caller", caller.String(), "binding", binding, "err", err.Error())
-		fault.WriteProblem(w, err)
-		return
+		return nil, err
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	var req sqlRequest
+	switch uerr := json.Unmarshal(body, &req); {
+	case uerr != nil:
+		return nil, fault.Invalidf(op, "the body is not {\"statements\": [...]}: %v", uerr)
+	case len(req.Statements) == 0:
+		return nil, fault.Invalidf(op, "no statements")
+	case len(req.Statements) > MaxSQLStatements:
+		return nil, fault.PayloadTooLargef(op, "%d statements exceed the limit of %d", len(req.Statements), MaxSQLStatements)
+	}
+	return req.Statements, nil
 }

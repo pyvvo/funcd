@@ -44,14 +44,16 @@ const (
 
 // Error is the typed error used throughout the platform. It carries a Kind (for
 // HTTP mapping), an Op (free string describing the operation that failed), a
-// human-readable Msg, optional flat Detail (key-value pairs), and the wrapped
-// cause via Err.
+// human-readable Msg, optional flat Detail (key-value pairs), the wrapped
+// error via Err, and the KnownCause it was raised from, if any (ADR-0330).
 type Error struct {
 	Kind   Kind
 	Op     string            // e.g. "store.Get", "blob.Put" — free string, open set
 	Msg    string            // human-readable, safe to surface to callers
 	Detail map[string]string // deliberately flat, key-value diagnostic pairs
-	Err    error             // wrapped cause
+	Err    error             // wrapped error
+	// KnownCause names why the error happened; Error() does not print it, so a problem's detail stays the same.
+	KnownCause *KnownCause
 }
 
 // Error implements the error interface.
@@ -62,9 +64,14 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.Op, e.Msg)
 }
 
-// Unwrap returns the wrapped cause, enabling errors.As and errors.Is traversal.
+// Unwrap returns the wrapped error, enabling errors.As and errors.Is traversal.
 func (e *Error) Unwrap() error {
 	return e.Err
+}
+
+// Is reports whether target is e's KnownCause, so errors.Is finds a known cause through any wrapping.
+func (e *Error) Is(target error) bool {
+	return e.KnownCause != nil && target == error(e.KnownCause)
 }
 
 // KindOf walks the error chain via errors.As and returns the first Kind found.
@@ -145,4 +152,55 @@ func Internalf(op, format string, a ...any) *Error {
 func Wrapf(err error, k Kind, op, format string, a ...any) *Error {
 	msg := fmt.Sprintf(format, a...)
 	return &Error{Kind: k, Op: op, Msg: msg, Err: err}
+}
+
+// KnownCause is one named reason for an error, made only by NewKnownCause; it is an error, so errors.Is can find it.
+// Each is defined once, beside the code that raises it, as io.EOF is (ADR-0330 Decision 1).
+type KnownCause struct {
+	kind            Kind
+	name, when, fix string
+}
+
+// NewKnownCause names its known cause "<package>.<name>", e.g. "kvstore.value-over-cap"; when and fix are one sentence
+// each, written for the caller who gets the error.
+func NewKnownCause(k Kind, name, when, fix string) *KnownCause {
+	return &KnownCause{kind: k, name: name, when: when, fix: fix}
+}
+
+// Name is the cause's "<package>.<name>".
+func (c *KnownCause) Name() string { return c.name }
+
+// Kind is the kind of every error raised from the cause.
+func (c *KnownCause) Kind() Kind { return c.kind }
+
+// When says when the cause happens.
+func (c *KnownCause) When() string { return c.when }
+
+// Fix says what the caller does about it.
+func (c *KnownCause) Fix() string { return c.fix }
+
+// Error is the cause's name.
+func (c *KnownCause) Error() string { return c.name }
+
+// Errorf builds an Error of c's kind whose KnownCause is c, with a formatted message.
+func (c *KnownCause) Errorf(op, format string, a ...any) *Error {
+	return &Error{Kind: c.kind, Op: op, Msg: fmt.Sprintf(format, a...), KnownCause: c}
+}
+
+// Wrapf is Errorf around a lower error, which the Error wraps as Wrapf does.
+func (c *KnownCause) Wrapf(err error, op, format string, a ...any) *Error {
+	return &Error{Kind: c.kind, Op: op, Msg: fmt.Sprintf(format, a...), Err: err, KnownCause: c}
+}
+
+// KnownCauseOf returns the known cause of the first Error in err's chain that has one, as KindOf returns the first
+// Error's kind: the outermost cause wins. It returns nil when no Error of the chain has one.
+func KnownCauseOf(err error) *KnownCause {
+	var ferr *Error
+	for errors.As(err, &ferr) {
+		if ferr.KnownCause != nil {
+			return ferr.KnownCause
+		}
+		err = ferr.Err
+	}
+	return nil
 }

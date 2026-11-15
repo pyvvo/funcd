@@ -50,76 +50,72 @@ func registerBlob(mux facetMux, caller Ref, b Blob, logger *slog.Logger) {
 	ns := caller.Namespace
 	fn := caller.Function
 
-	mux.HandleFunc("GET /blob/{binding}/{key...}", func(w http.ResponseWriter, r *http.Request) {
+	handle(mux, logger, "GET /blob/{binding}/{key...}", nil, func(w http.ResponseWriter, r *http.Request) error {
 		const op = "workernode.local.blob.get"
 		binding := r.PathValue("binding")
 		key := r.PathValue("key")
 		if r.URL.Query().Get("sign") != "" {
 			opts, err := signOptsFromQuery(r.URL.Query())
 			if err != nil {
-				fault.WriteProblem(w, err)
-				return
+				return err
 			}
 			signed, err := b.SignedURL(r.Context(), ns, fn, binding, key, opts)
 			if err != nil {
 				logger.Warn("blob sign denied/failed", "caller", caller.String(), "binding", binding, "err", err.Error())
-				fault.WriteProblem(w, err)
-				return
+				return err
 			}
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			_, _ = io.WriteString(w, signed)
-			return
+			return nil
 		}
 		v, found, err := b.Get(r.Context(), ns, fn, binding, key)
 		if err != nil {
 			logger.Warn("blob get denied/failed", "caller", caller.String(), "binding", binding, "err", err.Error())
-			fault.WriteProblem(w, err)
-			return
+			return err
 		}
 		if !found {
-			fault.WriteProblem(w, fault.NotFoundf(op, "object %q not found in binding %q", key, binding))
-			return
+			return fault.NotFoundf(op, "object %q not found in binding %q", key, binding)
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write(v)
+		return nil
 	})
 
-	mux.HandleFunc("PUT /blob/{binding}/{key...}", func(w http.ResponseWriter, r *http.Request) {
+	handle(mux, logger, "PUT /blob/{binding}/{key...}", nil, func(w http.ResponseWriter, r *http.Request) error {
 		const op = "workernode.local.blob.put"
 		body, err := readBody(w, r, op, maxBlobBytes)
 		if err != nil {
-			fault.WriteProblem(w, err)
-			return
+			return err
 		}
 		if err := b.Put(r.Context(), ns, fn, r.PathValue("binding"), r.PathValue("key"), body); err != nil {
 			logger.Warn("blob put denied/failed", "caller", caller.String(), "binding", r.PathValue("binding"), "err", err.Error())
-			fault.WriteProblem(w, err)
-			return
+			return err
 		}
 		w.WriteHeader(http.StatusNoContent)
+		return nil
 	})
 
-	mux.HandleFunc("DELETE /blob/{binding}/{key...}", func(w http.ResponseWriter, r *http.Request) {
+	handle(mux, logger, "DELETE /blob/{binding}/{key...}", nil, func(w http.ResponseWriter, r *http.Request) error {
 		if err := b.Delete(r.Context(), ns, fn, r.PathValue("binding"), r.PathValue("key")); err != nil {
 			logger.Warn("blob delete denied/failed", "caller", caller.String(), "binding", r.PathValue("binding"), "err", err.Error())
-			fault.WriteProblem(w, err)
-			return
+			return err
 		}
 		w.WriteHeader(http.StatusNoContent)
+		return nil
 	})
 
-	mux.HandleFunc("GET /blob/{binding}", func(w http.ResponseWriter, r *http.Request) {
+	handle(mux, logger, "GET /blob/{binding}", nil, func(w http.ResponseWriter, r *http.Request) error {
 		keys, err := b.List(r.Context(), ns, fn, r.PathValue("binding"), r.URL.Query().Get("prefix"))
 		if err != nil {
 			logger.Warn("blob list denied/failed", "caller", caller.String(), "binding", r.PathValue("binding"), "err", err.Error())
-			fault.WriteProblem(w, err)
-			return
+			return err
 		}
 		if keys == nil {
 			keys = []string{}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(keys)
+		return nil
 	})
 }
 

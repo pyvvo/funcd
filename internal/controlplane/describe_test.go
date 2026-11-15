@@ -50,7 +50,7 @@ func TestOnlyDescribedKindsLoseTheDefault(t *testing.T) {
 	require.Nil(t, replace.Responses["default"])
 	require.Contains(t, replace.Responses, "409")
 	require.NotContains(t, replace.Responses, "500", "huma adds no 500 to a described operation")
-	other := doc.Paths["/apis/funcd.io/v1alpha1/namespaces/{namespace}/functions/{name}"].Put
+	other := doc.Paths["/apis/funcd.io/v1alpha1/namespaces/{namespace}/routes/{name}"].Put
 	require.Empty(t, other.Summary)
 	require.NotNil(t, other.Responses["default"])
 }

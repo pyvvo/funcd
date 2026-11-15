@@ -61,14 +61,16 @@ func TestHandlerSectionGroupsOverloads(t *testing.T) {
 		{"name": "log", "signature": "log(level: Level, msg: string): void", "doc": "Writes a line."},
 		{"name": "put", "signature": "put(k: string): void", "doc": "First."},
 		{"name": "put", "signature": "put(k: string, v: string): void", "doc": "Second."}]}]}`)
-	lines, err := handlerSection([]string{""}, []language{{"TypeScript", api}})
+	docs := handlerDocs{langs: []language{{"TypeScript", api}},
+		methods: map[string]map[string]methodEndpoint{"TypeScript": {"log": {}, "put": {}}}}
+	lines, err := docs.section([]string{""})
 	require.NoError(t, err)
 	page := strings.Join(lines, "\n")
 	require.Contains(t, page, "### `ctx`\n\n#### TypeScript\n\nThe call's context.")
 	require.Contains(t, page, "| `log(msg: string): void` or `log(level: Level, msg: string): void` | Writes a line. |")
 	require.Contains(t, page, "| `put(k: string): void` or `put(k: string, v: string): void` | First. |")
 	require.NotContains(t, page, "Second.")
-	_, err = handlerSection([]string{"kv"}, []language{{"TypeScript", api}})
+	_, err = docs.section([]string{"kv"})
 	require.ErrorContains(t, err, "the TypeScript shim has no ctx.kv")
 }
 

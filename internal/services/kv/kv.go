@@ -79,7 +79,7 @@ func tablePrefix(ns v1.NamespaceName, b Binding) string {
 // authorize asks the PDP a per-object question for the resolved binding (ADR-0074): action kv::read
 // (get/list) or kv::write (put/del) on the KVTable (a sub-resource of the KVStore). The principal is
 // the connection-scoped caller Function; a deny (default-deny for reads; the built-in owner-forbid
-// for writes) maps to fault.Forbidden.
+// for writes) maps to fault.Forbidden, raised from the read or the write deny's known cause (ADR-0330).
 func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, action auth.Action, b Binding) error {
 	const op = "services.kv.authorize"
 	principal := &auth.EntityRef{Type: v1.KindFunction, Namespace: ns, Name: fn}
@@ -93,7 +93,11 @@ func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.Objec
 		return fault.Wrapf(err, fault.KindOf(err), op, "authorize %s on table %q/%q", action, b.Store, b.Table)
 	}
 	if !dec.Allowed {
-		return fault.Forbiddenf(op, "function %q is not authorized to %s table %q (store %q): %s", fn, action, b.Table, b.Store, dec.Reason)
+		deny := kvstore.ErrWriteDenied
+		if action == auth.ActionKVRead {
+			deny = kvstore.ErrReadDenied
+		}
+		return deny.Errorf(op, "function %q is not authorized to %s table %q (store %q): %s", fn, action, b.Table, b.Store, dec.Reason)
 	}
 	return nil
 }
@@ -165,10 +169,10 @@ func (f *Facade) put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 		return err
 	}
 	if int64(len(value)) > b.MaxValueBytes {
-		return fault.PayloadTooLargef("services.kv.put", "value (%d bytes) exceeds the store cap (%d bytes)", len(value), b.MaxValueBytes)
+		return kvstore.ErrValueOverCap.Errorf("services.kv.put", "value (%d bytes) exceeds the store cap (%d bytes)", len(value), b.MaxValueBytes)
 	}
 	if len(key) > b.MaxKeyBytes {
-		return fault.PayloadTooLargef("services.kv.put", "key (%d bytes) exceeds the store cap (%d bytes)", len(key), b.MaxKeyBytes)
+		return kvstore.ErrKeyOverCap.Errorf("services.kv.put", "key (%d bytes) exceeds the store cap (%d bytes)", len(key), b.MaxKeyBytes)
 	}
 	k := tableKey(ns, b, key)
 	settle, err := f.quota.Admit(ctx, quota.Request{
@@ -247,7 +251,7 @@ func (f *Facade) GetEntry(ctx context.Context, ns v1.NamespaceName, fn v1.Object
 func (f *Facade) conditional(op string) (kvstore.Conditional, error) {
 	c, ok := f.kv.(kvstore.Conditional)
 	if !ok {
-		return nil, fault.Unavailablef(op, "the KV driver offers no conditional writes")
+		return nil, kvstore.ErrNoConditional.Errorf(op, "the KV driver offers no conditional writes")
 	}
 	return c, nil
 }
@@ -256,7 +260,7 @@ func (f *Facade) conditional(op string) (kvstore.Conditional, error) {
 // store's maxKeyBytes, so lowering that cap never strands a stored key.
 func checkKeyLimit(op, key string) error {
 	if len(key) > v1.MaxKeyBytesLimit {
-		return fault.PayloadTooLargef(op, "key (%d bytes) exceeds the largest storable key (%d bytes)", len(key), v1.MaxKeyBytesLimit)
+		return kvstore.ErrKeyOverLimit.Errorf(op, "key (%d bytes) exceeds the largest storable key (%d bytes)", len(key), v1.MaxKeyBytesLimit)
 	}
 	return nil
 }

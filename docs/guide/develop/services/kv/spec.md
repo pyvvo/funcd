@@ -70,6 +70,100 @@ The key-value tables that the function binds, by alias: read, write and list the
 | `delIf(binding: string, key: string, version: string): Promise<boolean>` | Deletes the key while it is at version, as a lease holder releases what it holds: true when it did. |
 | `list(binding: string, prefix?: string): Promise<string[]>` | The keys that start with prefix; without a prefix, every key of the table. |
 
+Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
+
+When funcd refuses a call, the method fails with an error that holds funcd's status and problem type. This table gives them for each method, with when each happens and what to do.
+
+| Method | Status | Problem type | When | What to do |
+| --- | --- | --- | --- | --- |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the table. | Change or remove the Policy that forbids kv::read on the table. |
+| `get` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `get` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `getEntry` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `getEntry` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `getEntry` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `getEntry` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `getEntry` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the table. | Change or remove the Policy that forbids kv::read on the table. |
+| `getEntry` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `getEntry` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `getText` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `getText` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `getText` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `getText` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `getText` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the table. | Change or remove the Policy that forbids kv::read on the table. |
+| `getText` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `getText` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `getJSON` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `getJSON` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `getJSON` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `getJSON` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `getJSON` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the table. | Change or remove the Policy that forbids kv::read on the table. |
+| `getJSON` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `getJSON` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `put` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the table, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the table's owner, or grant the Function kv::write with a RolesAssignment, such as the KV Data Writer role. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The value is larger than the store's spec.quota.maxValueBytes. | Write a smaller value, or raise the store's spec.quota.maxValueBytes. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the store's spec.quota.maxKeyBytes. | Use a shorter key, or raise the store's spec.quota.maxKeyBytes. |
+| `put` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `put` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `putIfAbsent` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
+| `putIfAbsent` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `putIfAbsent` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `putIfAbsent` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `putIfAbsent` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `putIfAbsent` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the table, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the table's owner, or grant the Function kv::write with a RolesAssignment, such as the KV Data Writer role. |
+| `putIfAbsent` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `putIfAbsent` | 413 | `urn:funcd:problem:payload-too-large` | The value is larger than the store's spec.quota.maxValueBytes. | Write a smaller value, or raise the store's spec.quota.maxValueBytes. |
+| `putIfAbsent` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the store's spec.quota.maxKeyBytes. | Use a shorter key, or raise the store's spec.quota.maxKeyBytes. |
+| `putIfAbsent` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `putIfAbsent` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
+| `putIfAbsent` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
+| `putIfAbsent` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `compareAndSet` | 400 | `urn:funcd:problem:invalid` | The version is empty or holds a space, a quote or a control character, so If-Match is not one strong entity-tag. | Pass the version that a read or a write of the key returned. |
+| `compareAndSet` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
+| `compareAndSet` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `compareAndSet` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `compareAndSet` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `compareAndSet` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `compareAndSet` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the table, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the table's owner, or grant the Function kv::write with a RolesAssignment, such as the KV Data Writer role. |
+| `compareAndSet` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `compareAndSet` | 413 | `urn:funcd:problem:payload-too-large` | The value is larger than the store's spec.quota.maxValueBytes. | Write a smaller value, or raise the store's spec.quota.maxValueBytes. |
+| `compareAndSet` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the store's spec.quota.maxKeyBytes. | Use a shorter key, or raise the store's spec.quota.maxKeyBytes. |
+| `compareAndSet` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `compareAndSet` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
+| `compareAndSet` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
+| `compareAndSet` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `del` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `del` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `del` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `del` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `del` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the table, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the table's owner, or grant the Function kv::write with a RolesAssignment, such as the KV Data Writer role. |
+| `del` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `delIf` | 400 | `urn:funcd:problem:invalid` | The version is empty or holds a space, a quote or a control character, so If-Match is not one strong entity-tag. | Pass the version that a read or a write of the key returned. |
+| `delIf` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `delIf` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `delIf` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `delIf` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `delIf` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the table, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the table's owner, or grant the Function kv::write with a RolesAssignment, such as the KV Data Writer role. |
+| `delIf` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `delIf` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the table. | Change or remove the Policy that forbids kv::read on the table. |
+
 #### Python
 
 The key-value tables that the function binds, by alias: read, write and list their keys.
@@ -86,6 +180,100 @@ The key-value tables that the function binds, by alias: read, write and list the
 | `delete(binding: str, key: str) -> None` | Deletes the key. |
 | `delete_if(binding: str, key: str, version: str) -> bool` | Deletes the key while it is at ``version``, as a lease holder releases what it holds: ``True`` when it did. |
 | `list(binding: str, prefix: str = '') -> list[str]` | The keys that start with ``prefix``; without a prefix, every key of the table. |
+
+Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
+
+When funcd refuses a call, the method fails with an error that holds funcd's status and problem type. This table gives them for each method, with when each happens and what to do.
+
+| Method | Status | Problem type | When | What to do |
+| --- | --- | --- | --- | --- |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the table. | Change or remove the Policy that forbids kv::read on the table. |
+| `get` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `get` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `get_entry` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `get_entry` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `get_entry` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `get_entry` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `get_entry` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the table. | Change or remove the Policy that forbids kv::read on the table. |
+| `get_entry` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `get_entry` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `get_str` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `get_str` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `get_str` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `get_str` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `get_str` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the table. | Change or remove the Policy that forbids kv::read on the table. |
+| `get_str` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `get_str` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `get_json` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `get_json` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `get_json` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `get_json` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `get_json` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the table. | Change or remove the Policy that forbids kv::read on the table. |
+| `get_json` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `get_json` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `put` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the table, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the table's owner, or grant the Function kv::write with a RolesAssignment, such as the KV Data Writer role. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The value is larger than the store's spec.quota.maxValueBytes. | Write a smaller value, or raise the store's spec.quota.maxValueBytes. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the store's spec.quota.maxKeyBytes. | Use a shorter key, or raise the store's spec.quota.maxKeyBytes. |
+| `put` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `put` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `put_if_absent` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
+| `put_if_absent` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `put_if_absent` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `put_if_absent` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `put_if_absent` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `put_if_absent` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the table, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the table's owner, or grant the Function kv::write with a RolesAssignment, such as the KV Data Writer role. |
+| `put_if_absent` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `put_if_absent` | 413 | `urn:funcd:problem:payload-too-large` | The value is larger than the store's spec.quota.maxValueBytes. | Write a smaller value, or raise the store's spec.quota.maxValueBytes. |
+| `put_if_absent` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the store's spec.quota.maxKeyBytes. | Use a shorter key, or raise the store's spec.quota.maxKeyBytes. |
+| `put_if_absent` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `put_if_absent` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
+| `put_if_absent` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
+| `put_if_absent` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `compare_and_set` | 400 | `urn:funcd:problem:invalid` | The version is empty or holds a space, a quote or a control character, so If-Match is not one strong entity-tag. | Pass the version that a read or a write of the key returned. |
+| `compare_and_set` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
+| `compare_and_set` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `compare_and_set` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `compare_and_set` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `compare_and_set` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `compare_and_set` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the table, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the table's owner, or grant the Function kv::write with a RolesAssignment, such as the KV Data Writer role. |
+| `compare_and_set` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `compare_and_set` | 413 | `urn:funcd:problem:payload-too-large` | The value is larger than the store's spec.quota.maxValueBytes. | Write a smaller value, or raise the store's spec.quota.maxValueBytes. |
+| `compare_and_set` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the store's spec.quota.maxKeyBytes. | Use a shorter key, or raise the store's spec.quota.maxKeyBytes. |
+| `compare_and_set` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `compare_and_set` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
+| `compare_and_set` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
+| `compare_and_set` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `delete` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `delete` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `delete` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `delete` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `delete` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the table, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the table's owner, or grant the Function kv::write with a RolesAssignment, such as the KV Data Writer role. |
+| `delete` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `delete_if` | 400 | `urn:funcd:problem:invalid` | The version is empty or holds a space, a quote or a control character, so If-Match is not one strong entity-tag. | Pass the version that a read or a write of the key returned. |
+| `delete_if` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `delete_if` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `delete_if` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `delete_if` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `delete_if` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the table, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the table's owner, or grant the Function kv::write with a RolesAssignment, such as the KV Data Writer role. |
+| `delete_if` | 413 | `urn:funcd:problem:payload-too-large` | The key is longer than the longest key that any store can hold. | Use a shorter key. |
+| `delete_if` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The binding names a table that its KVStore does not declare. | Add the table to the KVStore's spec.tables, or bind a table that it declares. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the table. | Change or remove the Policy that forbids kv::read on the table. |
 
 ## HTTP API
 

@@ -11,6 +11,51 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
+// ===== Function (namespaced) =====
+
+func registerFunction(api huma.API, h Handlers) {
+	writes := functionWrites()
+	registerNamespacedCRUD(api, crudRoutes[v1.Function]{
+		kind: "Function", kinds: "Functions", path: "functions",
+		list: h.ListFunctions, create: h.CreateFunction, get: h.GetFunction,
+		replace: h.ReplaceFunction, remove: h.DeleteFunction,
+		cases: &kindCases{create: writes, replace: writes, remove: []ErrorCase{problem(fault.Conflict,
+			"Another Function's spec.bindings.links names the Function.", "Remove that link first.")}},
+	})
+}
+
+// functionWrites are the cases a Function's create and replace add to their verb's: the admissions of its links
+// (ADR-0064), its bindings (ADR-0248) and its local volumes (ADR-0262).
+func functionWrites() []ErrorCase {
+	return []ErrorCase{
+		problem(fault.Invalid, "A link in spec.bindings.links names a Function that does not exist in the namespace.",
+			"Apply the target Function first."),
+		problem(fault.Invalid, "The links would close a cycle among the namespace's Functions, such as a Function "+
+			"that links to itself.", "Remove a link of the cycle."),
+		problem(fault.Invalid, "A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not "+
+			"declare, such as a KVStore missing from spec.kv.", "Declare it in the spec, or bind one that it declares."),
+		problem(fault.Invalid, "The spec sets spec.volumes, and volumes are off on this daemon.",
+			"Remove spec.volumes, or ask the operator to turn volumes on."),
+		problem(fault.Invalid, "A local volume's size differs from the size it was applied with: a volume is not "+
+			"resized.", "Keep the volume's size. A new size needs a new volume, under another name."),
+		problem(fault.Conflict, "A local volume does not fit in the capacity that volumes.capacity sets, with the "+
+			"volumes reserved already.", "Delete the volumes that are no longer needed, or ask the operator to raise "+
+			"volumes.capacity."),
+		problem(fault.Conflict, "A local volume does not fit in the namespace's spec.volumeBudget, with the "+
+			"namespace's other volumes.", "Delete the namespace's volumes that are no longer needed, or ask an admin "+
+			"to raise its spec.volumeBudget."),
+	}
+}
+
+// ===== Revision (namespaced, read-only) — ADR-0172 =====
+
+func registerRevision(api huma.API, h Handlers) {
+	registerNamespacedRead(api, crudRoutes[v1.Revision]{
+		kind: "Revision", kinds: "Revisions", path: "revisions",
+		list: h.ListRevisions, get: h.GetRevision, cases: &kindCases{},
+	})
+}
+
 // ===== Service (namespaced) =====
 
 func registerService(api huma.API, h Handlers) {
@@ -195,7 +240,7 @@ func registerInvocation(api huma.API, h Handlers) {
 	registerNamespacedCRUD(api, crudRoutes[v1.Invocation]{
 		kind: "Invocation", kinds: "Invocations", path: "invocations",
 		list: h.ListInvocations, create: h.CreateInvocation, get: h.GetInvocation,
-		replace: h.ReplaceInvocation, remove: h.DeleteInvocation,
+		replace: h.ReplaceInvocation, remove: h.DeleteInvocation, cases: &kindCases{},
 	})
 }
 

@@ -16,6 +16,9 @@ type Facet struct {
 	register func(mux facetMux, caller Ref, logger *slog.Logger)
 }
 
+// Segment is the path segment the facet serves under, "" for the zero Facet.
+func (f Facet) Segment() string { return f.segment }
+
 // facetMux is what a facet registers on: the handler's *http.ServeMux, or CheckFacets' recorder.
 type facetMux interface {
 	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))

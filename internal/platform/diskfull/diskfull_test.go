@@ -30,8 +30,10 @@ func TestScenarioEnospcIs507(t *testing.T) {
 		require.Equal(t, fault.InsufficientStorage, fault.KindOf(got), name)
 		require.ErrorIs(t, got, syscall.ENOSPC, name)
 		require.Equal(t, http.StatusInsufficientStorage, fault.ToProblem(got).Status, name)
+		require.Same(t, diskfull.ErrDiskFull, fault.KnownCauseOf(got), "%s: raised from its known cause (ADR-0330)", name)
 	}
 	text := diskfull.Wrapf(errors.New("cannot create new mem table err: no space left on device"), "kvbadger.write", "put")
 	require.Equal(t, fault.Internal, fault.KindOf(text), "an error that keeps only its text is not recognised")
+	require.Nil(t, fault.KnownCauseOf(text), "an internal error has no known cause")
 	require.Equal(t, fault.Internal, fault.KindOf(diskfull.Wrapf(errors.New("conflict"), "op", "put")))
 }

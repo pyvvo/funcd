@@ -364,6 +364,8 @@ The per-invocation context the shim passes to the handler.
 | `fetch(alias: string, path: string, init?: RequestInit): Promise<Response>` | Sends an HTTP request to the function that the link named alias targets, which serves HTTP, and returns its reply as a Response, whatever its status. path starts with "/" and may carry a query; init sets the method, the headers and the body, as for the global fetch. The request body and the reply are each at most 1 MiB, and the link's timeout, 30 seconds by default, bounds the call. Fails with the HTTP status 403 when the function declares no link named alias, and 409 when the target does not serve HTTP. |
 | `remainingMs(): number \| null` | The whole milliseconds left before the call's deadline, 0 once it has passed, or null when the call has none. |
 
+Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
+
 #### Python
 
 The per-invocation context the shim passes to the handler.
@@ -374,6 +376,8 @@ The per-invocation context the shim passes to the handler.
 | `invoke(alias: str, payload: Any) -> Any` | Calls the function that the link named ``alias`` targets, and returns its result parsed from JSON, or ``None`` when it returns nothing. The target's ``event["data"]`` is ``payload``, except that a dict with a top-level ``"data"`` or ``"specversion"`` key is taken as the whole CloudEvent, so ``event["data"]`` is only its ``"data"`` value: send such a dict inside an envelope, as ``{"specversion": "1.0", "data": payload}``. The link's timeout, 30 seconds by default, bounds the call. Fails with the HTTP status 403 when the function declares no link named ``alias``, 409 when the target serves HTTP, 422 when ``payload`` does not match the target's contract, and the target's status when its handler fails, such as 500. |
 | `remaining_ms() -> int \| None` | The whole milliseconds left before the call's deadline, 0 once it has passed, or ``None`` when the call has none. |
 
+Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
+
 ## HTTP API
 
 Each described operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
@@ -382,6 +386,221 @@ Each described operation of these kinds, with its parameters, its body and its a
 | --- | --- |
 | `bearer` | A credential of funcd's config, sent as Authorization: Bearer followed by its token. |
 | `apiKey` | A credential of funcd's config, sent in the X-Api-Key header. |
+
+### List the Functions of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/functions` | `listFunctions` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
+
+Answer: array of [`Function`](#function).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list Functions in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Create a Function
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/functions` | `createFunction` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Function`](#function), required. Answer: [`Function`](#function).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 400 | `urn:funcd:problem:invalid` | A link in spec.bindings.links names a Function that does not exist in the namespace. | Apply the target Function first. |
+| 400 | `urn:funcd:problem:invalid` | The links would close a cycle among the namespace's Functions, such as a Function that links to itself. | Remove a link of the cycle. |
+| 400 | `urn:funcd:problem:invalid` | A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not declare, such as a KVStore missing from spec.kv. | Declare it in the spec, or bind one that it declares. |
+| 400 | `urn:funcd:problem:invalid` | The spec sets spec.volumes, and volumes are off on this daemon. | Remove spec.volumes, or ask the operator to turn volumes on. |
+| 400 | `urn:funcd:problem:invalid` | A local volume's size differs from the size it was applied with: a volume is not resized. | Keep the volume's size. A new size needs a new volume, under another name. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create a Function in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 409 | `urn:funcd:problem:conflict` | A Function of that name already exists in the namespace. | Choose another name, or replace the existing Function. |
+| 409 | `urn:funcd:problem:conflict` | A local volume does not fit in the capacity that volumes.capacity sets, with the volumes reserved already. | Delete the volumes that are no longer needed, or ask the operator to raise volumes.capacity. |
+| 409 | `urn:funcd:problem:conflict` | A local volume does not fit in the namespace's spec.volumeBudget, with the namespace's other volumes. | Delete the namespace's volumes that are no longer needed, or ask an admin to raise its spec.volumeBudget. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Read a Function
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/functions/{name}` | `getFunction` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`Function`](#function).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read a Function in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Function of that name exists in the namespace. | Check the name and the namespace. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Replace a Function
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/functions/{name}` | `replaceFunction` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Function`](#function), required. Answer: [`Function`](#function).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 400 | `urn:funcd:problem:invalid` | A link in spec.bindings.links names a Function that does not exist in the namespace. | Apply the target Function first. |
+| 400 | `urn:funcd:problem:invalid` | The links would close a cycle among the namespace's Functions, such as a Function that links to itself. | Remove a link of the cycle. |
+| 400 | `urn:funcd:problem:invalid` | A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not declare, such as a KVStore missing from spec.kv. | Declare it in the spec, or bind one that it declares. |
+| 400 | `urn:funcd:problem:invalid` | The spec sets spec.volumes, and volumes are off on this daemon. | Remove spec.volumes, or ask the operator to turn volumes on. |
+| 400 | `urn:funcd:problem:invalid` | A local volume's size differs from the size it was applied with: a volume is not resized. | Keep the volume's size. A new size needs a new volume, under another name. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace a Function in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Function of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Function has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Function again, apply the change to it, and send it with its new resourceVersion. |
+| 409 | `urn:funcd:problem:conflict` | A local volume does not fit in the capacity that volumes.capacity sets, with the volumes reserved already. | Delete the volumes that are no longer needed, or ask the operator to raise volumes.capacity. |
+| 409 | `urn:funcd:problem:conflict` | A local volume does not fit in the namespace's spec.volumeBudget, with the namespace's other volumes. | Delete the namespace's volumes that are no longer needed, or ask an admin to raise its spec.volumeBudget. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Delete a Function
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/functions/{name}` | `deleteFunction` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete a Function in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Function of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Function has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Function again, apply the change to it, and send it with its new resourceVersion. |
+| 409 | `urn:funcd:problem:conflict` | Another Function's spec.bindings.links names the Function. | Remove that link first. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+
+### Read the logs of a Function
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/functions/{name}/logs` | `getFunctionLogs` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The Function's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The Function's name. |
+| `since` | query | string | Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first. |
+| `severity` | query | string | Only the lines at this level or above: trace, debug, info, warn, error or fatal. |
+| `limit` | query | integer | The most lines to answer, the most recent ones: 1000 when left out, and at most 10000. |
+
+Answer: [`LogsOutputBody`](#logsoutputbody).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The since parameter is neither a duration, such as 15m, nor a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. | Send since in one of those two forms. |
+| 400 | `urn:funcd:problem:invalid` | The severity parameter is none of trace, debug, info, warn, error and fatal. | Send one of those levels, or leave severity out. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read Functions in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The limit parameter is not an integer. | Send limit as a whole number. |
+
+#### `LogsOutputBody`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `items` | array of [`LogsOutputBody.items[]`](#logsoutputbodyitems), required | The most recent lines that match, at most limit, oldest first. |
+
+#### `LogsOutputBody.items[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `attrs` | any JSON value | The line's other attributes, as a JSON object. |
+| `body` | string, required | The line's text. |
+| `function` | string, required | The Function whose worker wrote the line. |
+| `inv` | string | The ID of the call during which the worker wrote the line, when one is known. |
+| `namespace` | string, required | The Function's namespace. |
+| `replica` | string, required | The replica of the worker that wrote the line. |
+| `severity` | string, required | The line's level: TRACE, DEBUG, INFO, WARN, ERROR or FATAL. |
+| `severityNumber` | integer, required | The level as an OpenTelemetry severity number: 1 to 4 for trace, 5 to 8 for debug, 9 to 12 for info, 13 to 16 for warn, 17 to 20 for error and 21 to 24 for fatal. |
+| `source` | string, required | Where the worker wrote the line: console, logging, stdout or stderr. |
+| `spanId` | string | The span of that call, as 16 hexadecimal digits, when one is known. |
+| `time` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the worker wrote the line. |
+| `traceId` | string | The trace of that call, as 32 hexadecimal digits, when one is known. |
+
+### Delete a retained volume of a Function
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/volumes/{function}/{name}` | `deleteVolume` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The Function's namespace. |
+| `function` | path | string, required, a DNS-1123 label | The name of the Function that declared the volume. |
+| `name` | path | string, required, a DNS-1123 label | The volume's name. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete Functions in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No volume of that name exists for the Function in the namespace. | Check the namespace, the Function's name and the volume's name. |
+| 409 | `urn:funcd:problem:conflict` | The Function still exists and declares the volume. | Delete the Function, or remove the volume from its spec, then retry. |
+| 422 | `about:blank` | The namespace, the function or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
 
 ### Call a Function
 
@@ -416,6 +635,11 @@ Body: any JSON value. Answer: any JSON value.
 | 503 | `urn:funcd:problem:unavailable` | The worker failed during the call, before its answer. funcd does not retry the call. | Retry it, if the handler may run twice. |
 | 503 | `urn:funcd:problem:unavailable` | funcd could not read the namespace's settings, so it does not know how to serve the call. | Retry the call later. |
 | 503 | `urn:funcd:problem:unavailable` | funcd cannot read the Function's contract. | Retry the call later. |
+| 503 | `urn:funcd:problem:unavailable` | The namespace is held for its data, so funcd refuses its calls until the hold is released. | Retry after the seconds that the Retry-After header gives; funcdctl hold release --namespace releases the hold. |
+| 503 | `urn:funcd:problem:unavailable` | The namespace is held while a Restore loads it. | Retry after the seconds that the Retry-After header gives, once the Restore has ended. |
+| 503 | `urn:funcd:problem:unavailable` | No worker of the Function became ready within invoke.activationTimeout, 30 s by default. | Retry the call; if it keeps failing, read the Function's status for why its worker is not ready. |
+| 503 | `urn:funcd:problem:unavailable` | The Function is Failed; the detail names the reason, such as ShapeInvalid. | Correct what the Function's status names, such as its artifact, then retry. |
+| 503 | `urn:funcd:problem:unavailable` | funcd is stopping, and the call was waiting for a worker of the Function to become ready. | Retry the call once funcd runs again. |
 | 504 | `urn:funcd:problem:deadline-exceeded` | The worker did not start its answer within the call's deadline: the Function's spec.timeout, else invoke.defaultTimeout. | Make the handler answer sooner, or raise its spec.timeout. |
 
 #### `ContractViolation`
@@ -431,3 +655,170 @@ Body: any JSON value. Answer: any JSON value.
 | --- | --- | --- |
 | `message` | string, required | Why the value breaks the contract, for people to read. |
 | `path` | string, required | The value's place, as an RFC 6901 JSON Pointer; empty is the whole document. |
+
+### List the Revisions of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/revisions` | `listRevisions` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
+
+Answer: array of [`Revision`](#revision).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list Revisions in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Read a Revision
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/revisions/{name}` | `getRevision` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`Revision`](#revision).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read a Revision in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Revision of that name exists in the namespace. | Check the name and the namespace. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### List the Invocations of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/invocations` | `listInvocations` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
+
+Answer: array of [`Invocation`](#invocation).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list Invocations in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Create an Invocation
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/invocations` | `createInvocation` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Invocation`](#invocation), required. Answer: [`Invocation`](#invocation).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create an Invocation in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 409 | `urn:funcd:problem:conflict` | An Invocation of that name already exists in the namespace. | Choose another name, or replace the existing Invocation. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Read an Invocation
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/invocations/{name}` | `getInvocation` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`Invocation`](#invocation).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read an Invocation in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Invocation of that name exists in the namespace. | Check the name and the namespace. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Replace an Invocation
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/invocations/{name}` | `replaceInvocation` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Invocation`](#invocation), required. Answer: [`Invocation`](#invocation).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace an Invocation in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Invocation of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Invocation has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Invocation again, apply the change to it, and send it with its new resourceVersion. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Delete an Invocation
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/invocations/{name}` | `deleteInvocation` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete an Invocation in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Invocation of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Invocation has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Invocation again, apply the change to it, and send it with its new resourceVersion. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
