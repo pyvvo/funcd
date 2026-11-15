@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.45.0](https://github.com/pyvvo/funcd/compare/v0.44.2...v0.45.0) (2026-11-15)
+
+
+### Features
+
+* **api:** each API operation documents its answers, and its feature's Spec tab shows them (ADR-0329) ([#1468](https://github.com/pyvvo/funcd/issues/1468)) ([edcafaf](https://github.com/pyvvo/funcd/commit/edcafaf3671c8f5e0db3a04b958ffbc9fcea9c5f))
+* **api:** every control plane operation lists its answers (ADR-0329) ([e3d49be](https://github.com/pyvvo/funcd/commit/e3d49be65712a781ee3bb21f2750f1bce8d02a7a))
+* **api:** the Function, Revision and Invocation operations list their answers (ADR-0329) ([6ac8d85](https://github.com/pyvvo/funcd/commit/6ac8d85527c50bb3ae3c2b130b5fbeb4ad5c9085))
+* **kindref:** the API reference's layout comes from kindref, and each Spec tab links its operations' pages (ADR-0331) ([e3d49be](https://github.com/pyvvo/funcd/commit/e3d49be65712a781ee3bb21f2750f1bce8d02a7a))
+* **local:** each local API route declares its error causes, KV first, and each ctx method lists its errors (ADR-0330) ([6ac8d85](https://github.com/pyvvo/funcd/commit/6ac8d85527c50bb3ae3c2b130b5fbeb4ad5c9085))
+* **local:** every local API endpoint declares its error causes (ADR-0330) ([e3d49be](https://github.com/pyvvo/funcd/commit/e3d49be65712a781ee3bb21f2750f1bce8d02a7a))
+
 ## [0.44.2](https://github.com/pyvvo/funcd/compare/v0.44.1...v0.44.2) (2026-11-14)
 
 
