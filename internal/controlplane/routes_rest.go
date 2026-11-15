@@ -321,9 +321,6 @@ func registerApp(api huma.API, h Handlers) {
 		kind: "App", kinds: "Apps", path: "apps",
 		list: h.ListApps, create: h.CreateApp, get: h.GetApp, replace: h.ReplaceApp, remove: h.DeleteApp,
 		cases: &kindCases{create: writes, replace: slices.Concat(writes, []ErrorCase{
-			problem(fault.Invalid, "A ref entry names an object that the App controls, such as a part that an earlier "+
-				"spec declared by name.", "Declare it by name again; to keep a store as a ref, apply it with "+
-				"deletion: retain first."),
 			problem(fault.Conflict, "The new spec.version is outside the range that another App, once started, "+
 				"requires of the App in its spec.requires.", "Widen that App's range first, or keep a version within it."),
 		}), remove: []ErrorCase{problem(fault.Conflict, "Another App's spec.requires names the App.",
@@ -333,11 +330,15 @@ func registerApp(api huma.API, h Handlers) {
 
 // appWrites are the cases an App's create and replace add to their verb's: the rules of the app-parts admission
 // (ADR-0199 Decision 3, ADR-0213 Decision 7), which runs each part through the admissions of its kind, and the cycle of
-// app-requires (ADR-0219 Decision 7).
+// app-requires (ADR-0219 Decision 7). A create meets the ref rule too: the admissions run before the store refuses a
+// taken name, and the rule matches the controller by kind and name.
 func appWrites() []ErrorCase {
 	return []ErrorCase{
 		problem(fault.Invalid, "A Function, a Lake or a Workflow's image step of the App binds a Secret that "+
 			"spec.secrets does not declare.", "Declare the Secret in spec.secrets, or remove it from the bindings."),
+		problem(fault.Invalid, "A ref entry names an object that the App of this name controls, such as a part that "+
+			"an earlier spec declared by name.", "Declare it by name instead; to keep a store as a ref, apply the App "+
+			"with the store's deletion set to retain first."),
 		problem(fault.Invalid, "The App's spec.requires would close a cycle among the namespace's Apps, such as an "+
 			"App that requires itself.", "Remove a requirement of the cycle."),
 		problem(fault.Invalid, "A part breaks a rule that a write of its kind is held to, such as a Function's link "+

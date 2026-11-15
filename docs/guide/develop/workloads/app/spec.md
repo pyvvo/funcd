@@ -978,6 +978,7 @@ Body: [`App`](#app), required. Answer: [`App`](#app).
 | 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
 | 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
 | 400 | `urn:funcd:problem:invalid` | A Function, a Lake or a Workflow's image step of the App binds a Secret that spec.secrets does not declare. | Declare the Secret in spec.secrets, or remove it from the bindings. |
+| 400 | `urn:funcd:problem:invalid` | A ref entry names an object that the App of this name controls, such as a part that an earlier spec declared by name. | Declare it by name instead; to keep a store as a ref, apply the App with the store's deletion set to retain first. |
 | 400 | `urn:funcd:problem:invalid` | The App's spec.requires would close a cycle among the namespace's Apps, such as an App that requires itself. | Remove a requirement of the cycle. |
 | 400 | `urn:funcd:problem:invalid` | A part breaks a rule that a write of its kind is held to, such as a Function's link to a Function that neither the App nor the namespace holds; the detail names the part's entry, such as spec.functions[0]. | Correct that entry as the detail says. |
 | 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
@@ -1035,9 +1036,9 @@ Body: [`App`](#app), required. Answer: [`App`](#app).
 | 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
 | 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
 | 400 | `urn:funcd:problem:invalid` | A Function, a Lake or a Workflow's image step of the App binds a Secret that spec.secrets does not declare. | Declare the Secret in spec.secrets, or remove it from the bindings. |
+| 400 | `urn:funcd:problem:invalid` | A ref entry names an object that the App of this name controls, such as a part that an earlier spec declared by name. | Declare it by name instead; to keep a store as a ref, apply the App with the store's deletion set to retain first. |
 | 400 | `urn:funcd:problem:invalid` | The App's spec.requires would close a cycle among the namespace's Apps, such as an App that requires itself. | Remove a requirement of the cycle. |
 | 400 | `urn:funcd:problem:invalid` | A part breaks a rule that a write of its kind is held to, such as a Function's link to a Function that neither the App nor the namespace holds; the detail names the part's entry, such as spec.functions[0]. | Correct that entry as the detail says. |
-| 400 | `urn:funcd:problem:invalid` | A ref entry names an object that the App controls, such as a part that an earlier spec declared by name. | Declare it by name again; to keep a store as a ref, apply it with deletion: retain first. |
 | 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
 | 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace an App in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
 | 404 | `urn:funcd:problem:not-found` | No App of that name exists in the namespace. | Check the name and the namespace. |

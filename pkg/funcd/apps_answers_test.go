@@ -140,6 +140,7 @@ func TestAppAnswersMatrix(t *testing.T) {
 	requiring := func(app v1.ObjectName) func(*v1.AppSpec) {
 		return func(s *v1.AppSpec) { s.Requires = []v1.AppRequirement{{App: app}} }
 	}
+	keptRef := func(s *v1.AppSpec) { s.KV = []v1.KVStoreEntry{{Ref: "kept"}} }
 	plain := kindFixture{kind: "App", kinds: "Apps", path: "apps", name: "plain", json: appJSON("plain", nil),
 		broken: appJSON("plain", func(s *v1.AppSpec) { s.KV = []v1.KVStoreEntry{{Name: "t"}, {Name: "t"}} }),
 		detail: `spec.kv[1] repeats the name "t" of spec.kv[0]`}
@@ -161,6 +162,9 @@ func TestAppAnswersMatrix(t *testing.T) {
 			{op: "createApp", when: "A part conflicts with", on: vol, ask: ask{what: "a volume over the capacity",
 				method: http.MethodPost, path: apps, token: answersDev, body: appJSON("hoarder", hoarding),
 				detail: "spec.functions[0] (Function/hoard)"}},
+			{op: "createApp", when: "A ref entry names an object", on: e, ask: ask{
+				what: "a ref to a store that the App of this name controls", method: http.MethodPost, path: apps,
+				token: answersDev, body: appJSON("keeper", keptRef), detail: "is controlled by App/keeper"}},
 
 			{op: "replaceApp", when: "binds a Secret that spec.secrets does not declare", on: e, ask: ask{
 				what: "an undeclared Secret", method: http.MethodPut, path: apps + "/edited", token: answersDev,
@@ -175,10 +179,9 @@ func TestAppAnswersMatrix(t *testing.T) {
 			{op: "replaceApp", when: "A part conflicts with", on: vol, ask: ask{what: "a volume over the capacity",
 				method: http.MethodPut, path: apps + "/spare", token: answersDev, body: appJSON("spare", hoarding),
 				detail: "spec.functions[0] (Function/hoard)"}},
-			{op: "replaceApp", when: "A ref entry names an object that the App controls", on: e, ask: ask{
+			{op: "replaceApp", when: "A ref entry names an object", on: e, ask: ask{
 				what: "a ref to a store that the App controls", method: http.MethodPut, path: apps + "/keeper",
-				token: answersDev, body: appJSON("keeper", func(s *v1.AppSpec) { s.KV = []v1.KVStoreEntry{{Ref: "kept"}} }),
-				detail: "is controlled by App/keeper"}},
+				token: answersDev, body: appJSON("keeper", keptRef), detail: "is controlled by App/keeper"}},
 			{op: "replaceApp", when: "outside the range", on: e, ask: ask{what: "a version that a started App refuses",
 				method: http.MethodPut, path: apps + "/lib", token: answersDev,
 				body:   appJSON("lib", func(s *v1.AppSpec) { s.Version = "2.0.0" }),
