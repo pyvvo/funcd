@@ -7,27 +7,34 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/volume"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -43,6 +50,13 @@ const (
 // answersPlatform runs an in-memory platform whose credentials are an admin, a developer of default and one of other.
 func answersPlatform(t *testing.T, opts ...funcd.Option) *funcd.Platform {
 	t.Helper()
+	p, _ := stoppablePlatform(t, opts...)
+	return p
+}
+
+// stoppablePlatform is answersPlatform with the stop that its cleanup runs: it ends the platform's Run and waits for it.
+func stoppablePlatform(t *testing.T, opts ...funcd.Option) (*funcd.Platform, func()) {
+	t.Helper()
 	p, err := funcd.New(append([]funcd.Option{funcd.InMemory(), funcd.WithCredentials(
 		funcd.Credential{Token: answersAdmin, Role: "admin"},
 		funcd.Credential{Token: answersDev, Role: "developer", Namespaces: []string{"default"}},
@@ -52,8 +66,9 @@ func answersPlatform(t *testing.T, opts ...funcd.Option) *funcd.Platform {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- p.Run(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
-	return p
+	stop := sync.OnceFunc(func() { cancel(); <-done })
+	t.Cleanup(stop)
+	return p, stop
 }
 
 // ask is one request and the answer it gets: its status and a part of its body.
@@ -64,6 +79,7 @@ type ask struct {
 	header       []string // name, value pairs; a JSON body gets Content-Type application/json unless one is given
 	body         string
 	status       int
+	kind         string // the problem type of the answer, checked when it is set
 	detail       string
 }
 
@@ -92,9 +108,13 @@ func (a ask) run(t *testing.T, c *http.Client, base string) {
 	require.NoError(t, err)
 	require.Equal(t, a.status, resp.StatusCode, "%s %s, %s: %s", a.method, a.path, a.what, body)
 	var problem struct {
+		Type   string `json:"type"`
 		Detail string `json:"detail"`
 	}
 	_ = json.Unmarshal(body, &problem) // a problem's detail, unescaped; another body is matched as it is
+	if a.kind != "" {
+		require.Equal(t, a.kind, problem.Type, "%s %s, %s: the problem type of %s", a.method, a.path, a.what, body)
+	}
 	require.Contains(t, string(body)+"\n"+problem.Detail, a.detail, "%s %s, %s", a.method, a.path, a.what)
 }
 
@@ -499,9 +519,8 @@ func (s brokenNamespaceReads) Get(ctx context.Context, gvk v1.GroupVersionKind, 
 	return s.Store.Get(ctx, gvk, ns, name)
 }
 
-// callable applies Function name, always on, whose artifact holds contract when it is not empty, and waits for it to
-// be Ready; it returns the artifact's directory.
-func callable(t *testing.T, c *http.Client, base string, name v1.ObjectName, contract string, edit func(*v1.Function)) string {
+// artifact writes a handler, and contract when it is not empty, into a directory of its own, and returns the directory.
+func artifact(t *testing.T, contract string) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "funcd")
 	require.NoError(t, err)
@@ -510,6 +529,14 @@ func callable(t *testing.T, c *http.Client, base string, name v1.ObjectName, con
 	if contract != "" {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "__funcd_contract.json"), []byte(contract), 0o600))
 	}
+	return dir
+}
+
+// callable applies Function name, always on, whose artifact holds contract when it is not empty, and waits for it to
+// be Ready; it returns the artifact's directory.
+func callable(t *testing.T, c *http.Client, base string, name v1.ObjectName, contract string, edit func(*v1.Function)) string {
+	t.Helper()
+	dir := artifact(t, contract)
 	fn := function(name)
 	fn.Spec.Image = "file://" + filepath.Join(dir, "handler.mjs")
 	fn.Spec.Replicas, fn.Spec.Scaling = 1, v1.Scaling{MinReplicas: 1}
@@ -517,26 +544,47 @@ func callable(t *testing.T, c *http.Client, base string, name v1.ObjectName, con
 		edit(fn)
 	}
 	create(t, c, base, fn)
-	require.Eventually(t, func() bool {
-		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet,
-			base+"/apis/funcd.io/v1alpha1/namespaces/default/functions/"+string(name), nil)
-		req.Header.Set("Authorization", "Bearer "+answersAdmin)
-		resp, err := c.Do(req)
-		if err != nil {
-			return false
-		}
-		defer func() { _ = resp.Body.Close() }()
-		var got v1.Function
-		return json.NewDecoder(resp.Body).Decode(&got) == nil && got.Status.Phase == v1.PhaseReady
-	}, 20*time.Second, 20*time.Millisecond, "Function %s is Ready", name)
+	require.Eventually(t, func() bool { return phaseOf(c, base, fn.Namespace, name) == v1.PhaseReady },
+		20*time.Second, 20*time.Millisecond, "Function %s is Ready", name)
 	return dir
+}
+
+// readFunction reads Function ns/name with the admin's token.
+func readFunction(c *http.Client, base string, ns v1.NamespaceName, name v1.ObjectName) (v1.Function, error) {
+	var fn v1.Function
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		base+"/apis/funcd.io/v1alpha1/namespaces/"+string(ns)+"/functions/"+string(name), nil)
+	if err != nil {
+		return fn, err
+	}
+	req.Header.Set("Authorization", "Bearer "+answersAdmin)
+	resp, err := c.Do(req)
+	if err != nil {
+		return fn, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return fn, json.NewDecoder(resp.Body).Decode(&fn)
+}
+
+// phaseOf is the phase of Function ns/name, "" when it cannot be read.
+func phaseOf(c *http.Client, base string, ns v1.NamespaceName, name v1.ObjectName) v1.Phase {
+	fn, err := readFunction(c, base, ns, name)
+	if err != nil {
+		return ""
+	}
+	return fn.Status.Phase
+}
+
+// namespace is Namespace name, with no spec.
+func namespace(name v1.ObjectName) *v1.Namespace {
+	return &v1.Namespace{TypeMeta: v1.TypeMeta{APIVersion: v1.KindNamespace.GVK().APIVersion(), Kind: v1.KindNamespace},
+		ObjectMeta: v1.ObjectMeta{Name: name}}
 }
 
 // lockedNamespace applies Namespace locked, whose stance asks every caller for a credential.
 func lockedNamespace(t *testing.T, c *http.Client, base string) {
 	t.Helper()
-	ns := &v1.Namespace{TypeMeta: v1.TypeMeta{APIVersion: v1.KindNamespace.GVK().APIVersion(), Kind: v1.KindNamespace},
-		ObjectMeta: v1.ObjectMeta{Name: "locked"}}
+	ns := namespace("locked")
 	ns.Spec.EdgeDefaults = &v1.EdgeDefaults{Auth: &v1.EdgeAuth{Mode: v1.AuthAuthenticated}}
 	create(t, c, base, ns)
 }
@@ -666,4 +714,496 @@ func TestAnswersOfInvokeFunctionLimits(t *testing.T) {
 		require.Eventually(t, func() bool { return statusOf(c, http.MethodPost, gw, "") == http.StatusServiceUnavailable },
 			5*time.Second, 20*time.Millisecond, "the held call takes the only slot")
 	})
+}
+
+// answerEnv is a platform that rows of a matrix share: its client, its two servers, its workers and its stop.
+type answerEnv struct {
+	c       *http.Client
+	api, gw string
+	workers *fakeWorkers
+	stop    func()
+}
+
+// newAnswerEnv runs a platform like answersPlatform, whose workers are the test's handlers.
+func newAnswerEnv(t *testing.T, opts ...funcd.Option) *answerEnv {
+	t.Helper()
+	w := newFakeWorkers()
+	p, stop := stoppablePlatform(t, append([]funcd.Option{funcd.WithRuntime(w), funcd.WithRuntimeShim("node", "shim.mjs")},
+		opts...)...)
+	return &answerEnv{c: answersClient(), api: "http://" + p.Addr(), gw: "http://" + p.DataPlaneAddr(), workers: w, stop: stop}
+}
+
+// answerRow provokes one case of an operation on its platform: after its setup, it sends its ask, whose status and
+// problem type are the case's.
+type answerRow struct {
+	op, when string // the operation, and a part of its case's When that names the case alone; "" for its success
+	on       *answerEnv
+	setup    func(t *testing.T, e *answerEnv)
+	ask      ask
+}
+
+// caseKey names a case of an operation: its status and its place among that status's cases, -1 for the success.
+type caseKey struct {
+	op     string
+	status int
+	index  int
+}
+
+// documentedCase is what the document says of a case: when it happens, and the problem type of its answer, "" for a
+// success and for a case whose body is another schema.
+type documentedCase struct{ when, kind string }
+
+// documentedCases are the cases of every operation of doc.
+func documentedCases(t *testing.T, doc *huma.OpenAPI) map[caseKey]documentedCase {
+	t.Helper()
+	out := map[caseKey]documentedCase{}
+	for _, item := range doc.Paths {
+		for _, op := range []*huma.Operation{item.Get, item.Post, item.Put, item.Patch, item.Delete} {
+			if op == nil {
+				continue
+			}
+			for code, resp := range op.Responses {
+				status, err := strconv.Atoi(code)
+				if err != nil {
+					continue // the default of an operation not described yet
+				}
+				if status < http.StatusMultipleChoices {
+					out[caseKey{op.OperationID, status, -1}] = documentedCase{}
+					continue
+				}
+				raw, err := json.Marshal(resp.Extensions["x-funcd-cases"])
+				require.NoError(t, err)
+				var cases []struct{ Type, When string }
+				require.NoError(t, json.Unmarshal(raw, &cases))
+				for i, c := range cases {
+					out[caseKey{op.OperationID, status, i}] = documentedCase{when: c.When, kind: c.Type}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// caseOf is the one case of r's operation that r provokes.
+func (r answerRow) caseOf(t *testing.T, cases map[caseKey]documentedCase) caseKey {
+	t.Helper()
+	var found []caseKey
+	for k, c := range cases {
+		if k.op == r.op && (r.when == "") == (k.index < 0) && strings.Contains(c.when, r.when) {
+			found = append(found, k)
+		}
+	}
+	require.Len(t, found, 1, "%s: one case holds %q", r.op, r.when)
+	return found[0]
+}
+
+// runMatrix runs each row as a parallel subtest once it holds each row to one case and each case of the rows'
+// operations to one row, except the cases of the partial operations, which other tests provoke too.
+func runMatrix(t *testing.T, rows []answerRow, partial ...string) {
+	t.Helper()
+	cases := documentedCases(t, controlplane.SpecAPI().OpenAPI())
+	keys := make([]caseKey, len(rows))
+	byCase := map[caseKey]string{}
+	for i, r := range rows {
+		keys[i] = r.caseOf(t, cases)
+		name := r.op + "/" + r.ask.what
+		prev, taken := byCase[keys[i]]
+		require.False(t, taken, "%s and %s provoke the same case", prev, name)
+		byCase[keys[i]] = name
+	}
+	var missing []string
+	for k, c := range cases {
+		_, tabled := byCase[k]
+		named := slices.ContainsFunc(rows, func(r answerRow) bool { return r.op == k.op })
+		if named && !tabled && !slices.Contains(partial, k.op) {
+			missing = append(missing, fmt.Sprintf("%s %d %q", k.op, k.status, c.when))
+		}
+	}
+	slices.Sort(missing)
+	require.Empty(t, missing, "cases with no row")
+	for i, r := range rows {
+		k := keys[i]
+		t.Run(r.op+"/"+r.ask.what, func(t *testing.T) {
+			t.Parallel()
+			if r.setup != nil {
+				r.setup(t, r.on)
+			}
+			a := r.ask
+			a.status, a.kind = k.status, cases[k].kind
+			base := r.on.api
+			if strings.HasPrefix(a.path, "/function/") {
+				base = r.on.gw
+			}
+			a.run(t, r.on.c, base)
+		})
+	}
+}
+
+// kindFixture is an object of a namespaced kind in default, for the rows of the cases its kind's operations share: json
+// is its body, empty for a read-only kind, and broken that body against a rule the schema cannot hold, which detail
+// names.
+type kindFixture struct {
+	kind, kinds, path    string // such as Function, Functions and functions
+	name                 v1.ObjectName
+	json, broken, detail string
+}
+
+// renamed is body with the fixture's name replaced by name.
+func (k kindFixture) renamed(body string, name v1.ObjectName) string {
+	return strings.Replace(body, `"name":"`+string(k.name)+`"`, `"name":"`+string(name)+`"`, 1)
+}
+
+// sharedRows are the rows of the cases that each verb of a described kind shares with every other kind's (ADR-0329
+// Decision 1), on e: list and get, then create, replace and delete for a writable kind.
+func (k kindFixture) sharedRows(e *answerEnv) []answerRow {
+	coll := "/apis/funcd.io/v1alpha1/namespaces/default/" + k.path
+	bad := "/apis/funcd.io/v1alpha1/namespaces/Not_A_Label/" + k.path
+	item, named := coll+"/"+string(k.name), `"name":"`+string(k.name)+`"`
+	list, get := "list"+k.kinds, "get"+k.kind
+	row := func(op, when string, a ask) answerRow { return answerRow{op: op, when: when, on: e, ask: a} }
+	rows := []answerRow{
+		row(list, "", ask{what: "the list", method: http.MethodGet, path: coll, token: answersDev, detail: named}),
+		row(list, "carries no bearer token", ask{what: "no credential", method: http.MethodGet, path: coll,
+			detail: "missing bearer token"}),
+		row(list, "do not allow it", ask{what: "another namespace's developer", method: http.MethodGet, path: coll,
+			token: answersOther, detail: "denied"}),
+		row(list, "in the path is not", ask{what: "a namespace that is no DNS-1123 label", method: http.MethodGet,
+			path: bad, token: answersDev, detail: "path.namespace"}),
+		row(get, "", ask{what: "an object", method: http.MethodGet, path: item, token: answersDev, detail: named}),
+		row(get, "carries no bearer token", ask{what: "no credential", method: http.MethodGet, path: item,
+			detail: "missing bearer token"}),
+		row(get, "do not allow it", ask{what: "another namespace's developer", method: http.MethodGet, path: item,
+			token: answersOther, detail: "denied"}),
+		row(get, "of that name exists in the namespace", ask{what: "a missing object", method: http.MethodGet,
+			path: coll + "/nope", token: answersDev, detail: "not found"}),
+		row(get, "in the path is not", ask{what: "a name that is no DNS-1123 label", method: http.MethodGet,
+			path: coll + "/Not_A_Label", token: answersDev, detail: "path.name"}),
+	}
+	if k.json == "" {
+		return rows
+	}
+	s, plain := k.json, []string{"Content-Type", "text/plain"}
+	otherNS := strings.Replace(s, `"namespace":"default"`, `"namespace":"other"`, 1)
+	unknown := `{"bogus":1,` + strings.TrimPrefix(s, "{")
+	create, replace, remove := "create"+k.kind, "replace"+k.kind, "delete"+k.kind
+	doomed := k.name + "-doomed"
+	return append(rows,
+		row(create, "", ask{what: "a new object", method: http.MethodPost, path: coll, token: answersDev,
+			body: k.renamed(s, k.name+"-new"), detail: `"name":"` + string(k.name) + `-new"`}),
+		row(create, "carries no bearer token", ask{what: "no credential", method: http.MethodPost, path: coll, body: s,
+			detail: "missing bearer token"}),
+		row(create, "do not allow it", ask{what: "another namespace's developer", method: http.MethodPost, path: coll,
+			token: answersOther, body: s, detail: "denied"}),
+		row(create, "The query holds a parameter", ask{what: "an unknown query parameter", method: http.MethodPost,
+			path: coll + "?force=true", token: answersDev, body: s, detail: "unknown query parameter"}),
+		row(create, "The dryRun parameter", ask{what: "a dryRun that is no boolean", method: http.MethodPost,
+			path: coll + "?dryRun=maybe", token: answersDev, body: s, detail: "invalid boolean"}),
+		row(create, "breaks a rule that the schema cannot hold", ask{what: "a broken rule", method: http.MethodPost,
+			path: coll, token: answersDev, body: k.renamed(k.broken, k.name+"-broken"), detail: k.detail}),
+		row(create, "already exists", ask{what: "a taken name", method: http.MethodPost, path: coll, token: answersDev,
+			body: s, detail: "already exists"}),
+		row(create, "in the path is not", ask{what: "a namespace that is no DNS-1123 label", method: http.MethodPost,
+			path: bad, token: answersDev, body: s, detail: "path.namespace"}),
+		row(create, "is not the namespace of the path", ask{what: "a body in another namespace",
+			method: http.MethodPost, path: coll, token: answersDev, body: otherNS,
+			detail: `body namespace "other" does not match path "default"`}),
+		row(create, "The body is missing or is not JSON", ask{what: "a body that is not JSON", method: http.MethodPost,
+			path: coll, token: answersDev, body: "{", detail: "unexpected end of JSON input"}),
+		row(create, "larger than 1 MiB", ask{what: "a body over 1 MiB", method: http.MethodPost, path: coll,
+			token: answersDev, body: tooLarge(), detail: "request body is too large limit=1048576 bytes"}),
+		row(create, "The Content-Type of the body", ask{what: "a body that is not JSON by its Content-Type",
+			method: http.MethodPost, path: coll, token: answersDev, header: plain, body: s, detail: "unknown content type"}),
+		row(create, "The body breaks the schema", ask{what: "a field the schema does not know", method: http.MethodPost,
+			path: coll, token: answersDev, body: unknown, detail: "unexpected property"}),
+
+		row(replace, "", ask{what: "the same object again", method: http.MethodPut, path: item, token: answersDev, body: s,
+			detail: named}),
+		row(replace, "carries no bearer token", ask{what: "no credential", method: http.MethodPut, path: item, body: s,
+			detail: "missing bearer token"}),
+		row(replace, "do not allow it", ask{what: "another namespace's developer", method: http.MethodPut, path: item,
+			token: answersOther, body: s, detail: "denied"}),
+		row(replace, "of that name exists in the namespace", ask{what: "a missing object", method: http.MethodPut,
+			path: coll + "/nope", token: answersDev, body: k.renamed(s, "nope"), detail: "not found"}),
+		row(replace, "in the path is not", ask{what: "a name that is no DNS-1123 label", method: http.MethodPut,
+			path: coll + "/Not_A_Label", token: answersDev, body: s, detail: "path.name"}),
+		row(replace, "The query holds a parameter", ask{what: "an unknown query parameter", method: http.MethodPut,
+			path: item + "?force=true", token: answersDev, body: s, detail: "unknown query parameter"}),
+		row(replace, "The dryRun parameter", ask{what: "a dryRun that is no boolean", method: http.MethodPut,
+			path: item + "?dryRun=maybe", token: answersDev, body: s, detail: "invalid boolean"}),
+		row(replace, "The If-Match header is not one strong", ask{what: "a weak If-Match", method: http.MethodPut,
+			path: item, token: answersDev, header: []string{"If-Match", `W/"1"`}, body: s, detail: "is a weak entity-tag"}),
+		row(replace, "breaks a rule that the schema cannot hold", ask{what: "a broken rule", method: http.MethodPut,
+			path: item, token: answersDev, body: k.broken, detail: k.detail}),
+		row(replace, "has changed since", ask{what: "a stale If-Match", method: http.MethodPut, path: item,
+			token: answersDev, header: []string{"If-Match", `"1"`}, body: s, detail: "has changed since resourceVersion"}),
+		row(replace, "is not the path's", ask{what: "a body of another name", method: http.MethodPut, path: item,
+			token: answersDev, body: k.renamed(s, "x"), detail: `body name "x" does not match path`}),
+		row(replace, "The body is missing or is not JSON", ask{what: "a body that is not JSON", method: http.MethodPut,
+			path: item, token: answersDev, body: "{", detail: "unexpected end of JSON input"}),
+		row(replace, "larger than 1 MiB", ask{what: "a body over 1 MiB", method: http.MethodPut, path: item,
+			token: answersDev, body: tooLarge(), detail: "request body is too large limit=1048576 bytes"}),
+		row(replace, "The Content-Type of the body", ask{what: "a body that is not JSON by its Content-Type",
+			method: http.MethodPut, path: item, token: answersDev, header: plain, body: s, detail: "unknown content type"}),
+		row(replace, "The body breaks the schema", ask{what: "a field the schema does not know", method: http.MethodPut,
+			path: item, token: answersDev, body: unknown, detail: "unexpected property"}),
+
+		answerRow{op: remove, on: e, setup: func(t *testing.T, e *answerEnv) {
+			ask{what: "the fixture " + string(doomed), method: http.MethodPost, path: coll, token: answersAdmin,
+				body: k.renamed(s, doomed), status: http.StatusOK}.run(t, e.c, e.api)
+		}, ask: ask{what: "an object", method: http.MethodDelete, path: coll + "/" + string(doomed), token: answersDev}},
+		row(remove, "carries no bearer token", ask{what: "no credential", method: http.MethodDelete, path: item,
+			detail: "missing bearer token"}),
+		row(remove, "do not allow it", ask{what: "another namespace's developer", method: http.MethodDelete, path: item,
+			token: answersOther, detail: "denied"}),
+		row(remove, "of that name exists in the namespace", ask{what: "a missing object", method: http.MethodDelete,
+			path: coll + "/nope", token: answersDev, detail: "not found"}),
+		row(remove, "in the path is not", ask{what: "a name that is no DNS-1123 label", method: http.MethodDelete,
+			path: coll + "/Not_A_Label", token: answersDev, detail: "path.name"}),
+		row(remove, "The query holds a parameter", ask{what: "an unknown query parameter", method: http.MethodDelete,
+			path: item + "?force=true", token: answersDev, detail: "unknown query parameter"}),
+		row(remove, "The If-Match header is not one strong", ask{what: "a weak If-Match", method: http.MethodDelete,
+			path: item, token: answersDev, header: []string{"If-Match", `W/"1"`}, detail: "is a weak entity-tag"}),
+		row(remove, "has changed since", ask{what: "a stale If-Match", method: http.MethodDelete, path: item,
+			token: answersDev, header: []string{"If-Match", `"1"`}, detail: "resourceVersion"}),
+	)
+}
+
+// invocation is an Invocation record of default.
+func invocation(name v1.ObjectName) *v1.Invocation {
+	return &v1.Invocation{TypeMeta: v1.TypeMeta{APIVersion: v1.KindInvocation.GVK().APIVersion(), Kind: v1.KindInvocation},
+		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1"}}
+}
+
+// linking is Function name, whose one link targets target.
+func linking(name, target v1.ObjectName) *v1.Function {
+	fn := function(name)
+	fn.Spec.Bindings.Links = []v1.FunctionLink{{Alias: "l", Target: target}}
+	return fn
+}
+
+// withVolumes is fn with a local volume of each size: state, then extra-1, extra-2 and so on.
+func withVolumes(fn *v1.Function, sizes ...int64) *v1.Function {
+	fn.Spec.Volumes = nil
+	for i, size := range sizes {
+		name := v1.ObjectName("state")
+		if i > 0 {
+			name = v1.ObjectName(fmt.Sprintf("extra-%d", i))
+		}
+		fn.Spec.Volumes = append(fn.Spec.Volumes, v1.VolumeEntry{Name: name, Type: v1.VolumeLocal, SizeBytes: size})
+	}
+	return fn
+}
+
+// inNamespace is fn in namespace ns.
+func inNamespace(ns v1.NamespaceName, fn *v1.Function) *v1.Function {
+	fn.Namespace = ns
+	return fn
+}
+
+// stopOnWake stops e once its workers hold one of Function name, so the stop releases the call that woke it; it stops
+// e after 20 s at the latest.
+func stopOnWake(e *answerEnv, name v1.ObjectName) {
+	defer e.stop()
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		workers, _ := e.workers.List(context.Background(), "default")
+		if slices.ContainsFunc(workers, func(in runtime.Instance) bool { return in.Name == name }) {
+			return
+		}
+	}
+}
+
+// The answers of the Function feature's operations, one row per case of each: Function, Revision and Invocation, and
+// the calls of a Function that funcd refuses while it cannot serve them (ADR-0290, ADR-0161, ADR-0169, ADR-0028).
+// TestAnswersOfInvokeFunction provokes the call's other cases.
+func TestFunctionAnswersMatrix(t *testing.T) {
+	t.Parallel()
+	hd, err := hold.Open(t.TempDir())
+	require.NoError(t, err)
+	sh := newAnswerEnv(t, funcd.WithHold(hd))
+	sh.workers.serve(t, "echo", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+	callable(t, sh.c, sh.api, "echo", "", nil)
+	for _, obj := range []v1.Object{function("plain"), function("target"), linking("linker", "target"),
+		invocation("inv"), namespace("held"), namespace("loading"), inNamespace("held", function("api")),
+		inNamespace("loading", function("api"))} {
+		create(t, sh.c, sh.api, obj)
+	}
+	since := v1.NewTimestamp(time.Now())
+	require.NoError(t, hd.HoldNamespace("held", hold.Marker{Reason: hold.ReasonData, Since: since}))
+	require.NoError(t, hd.HoldNamespace("loading", hold.Marker{Reason: hold.ReasonRestore, Since: since, Restore: "nightly"}))
+	echo, err := readFunction(sh.c, sh.api, "default", "echo")
+	require.NoError(t, err)
+	require.NotEmpty(t, echo.Status.CurrentRevision)
+
+	root, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	vol := newAnswerEnv(t, funcd.WithFunctionVolumes(volume.Options{Root: root, CapacityBytes: 64 << 20}, true))
+	tight := namespace("tight")
+	tight.Spec.VolumeBudget = "1Mi"
+	create(t, vol.c, vol.api, tight)
+	slow := newAnswerEnv(t, funcd.WithPacing(funcd.Pacing{ActivationTimeout: 500 * time.Millisecond}))
+	stopping := newAnswerEnv(t)
+
+	const fns = "/apis/funcd.io/v1alpha1/namespaces/default/functions"
+	const vols = "/apis/funcd.io/v1alpha1/namespaces/default/volumes"
+	broken := function("plain")
+	broken.Spec.Protocol, broken.Spec.Runtime = v1.ProtocolHTTP, "python314"
+	unbound := func(name v1.ObjectName) string {
+		fn := function(name)
+		fn.Spec.Bindings.KV = []v1.FunctionKV{{Alias: "b", Store: "ghost", Table: "t"}}
+		return jsonOf(t, fn)
+	}
+	// ready applies Function name of e with a local volume of 1 MiB, its workers the test's, and waits for it to be
+	// Ready, so its volume exists.
+	ready := func(t *testing.T, e *answerEnv, name v1.ObjectName) {
+		e.workers.serve(t, name, func(http.ResponseWriter, *http.Request) {})
+		callable(t, e.c, e.api, name, "", func(fn *v1.Function) { withVolumes(fn, 1<<20) })
+	}
+	gone := func(t *testing.T, e *answerEnv, name v1.ObjectName) {
+		ask{what: "the delete of " + string(name), method: http.MethodDelete, path: fns + "/" + string(name),
+			token: answersAdmin, status: http.StatusNoContent}.run(t, e.c, e.api)
+	}
+	applied := func(fn *v1.Function) func(*testing.T, *answerEnv) {
+		return func(t *testing.T, e *answerEnv) { create(t, e.c, e.api, fn) }
+	}
+	inv := kindFixture{kind: "Invocation", kinds: "Invocations", path: "invocations", name: "inv",
+		json: jsonOf(t, invocation("inv")), detail: `resourceGroup is required for kind "Invocation"`}
+	inv.broken = strings.Replace(inv.json, `,"resourceGroup":"rg1"`, "", 1)
+
+	rows := slices.Concat(
+		kindFixture{kind: "Function", kinds: "Functions", path: "functions", name: "plain",
+			json: jsonOf(t, function("plain")), broken: jsonOf(t, broken),
+			detail: `spec.protocol http needs a node runtime, not "python314"`}.sharedRows(sh),
+		kindFixture{kind: "Revision", kinds: "Revisions", path: "revisions",
+			name: v1.ObjectName(echo.Status.CurrentRevision)}.sharedRows(sh),
+		inv.sharedRows(sh),
+		[]answerRow{
+			{op: "createFunction", when: "names a Function that does not exist", on: sh, ask: ask{
+				what: "a link to a missing Function", method: http.MethodPost, path: fns, token: answersDev,
+				body:   jsonOf(t, linking("lonely", "ghost")),
+				detail: `spec.bindings.links[l].target "ghost" does not exist in namespace "default"`}},
+			{op: "createFunction", when: "would close a cycle", on: sh, ask: ask{what: "a link to itself",
+				method: http.MethodPost, path: fns, token: answersDev, body: jsonOf(t, linking("selfish", "selfish")),
+				detail: "would create a dependency cycle (selfish → selfish)"}},
+			{op: "createFunction", when: "does not declare", on: sh, ask: ask{what: "a binding to an undeclared store",
+				method: http.MethodPost, path: fns, token: answersDev, body: unbound("unbound"),
+				detail: `KVStore "ghost" is not declared in spec.kv`}},
+			{op: "createFunction", when: "volumes are off", on: sh, ask: ask{what: "a volume while volumes are off",
+				method: http.MethodPost, path: fns, token: answersDev, body: jsonOf(t, withVolumes(function("vol"), 1<<20)),
+				detail: "VolumesOff"}},
+			{op: "createFunction", when: "differs from the size it was applied with", on: vol,
+				setup: func(t *testing.T, e *answerEnv) { ready(t, e, "resized"); gone(t, e, "resized") },
+				ask: ask{what: "another size for a retained volume", method: http.MethodPost, path: fns, token: answersDev,
+					body: jsonOf(t, withVolumes(function("resized"), 2<<20)), detail: "a volume is not resized"}},
+			{op: "createFunction", when: "does not fit in the capacity", on: vol, ask: ask{what: "a volume over the capacity",
+				method: http.MethodPost, path: fns, token: answersDev,
+				body: jsonOf(t, withVolumes(function("huge"), 128<<20)), detail: "volumes.capacityBytes"}},
+			{op: "createFunction", when: "spec.volumeBudget", on: vol, ask: ask{what: "a volume over the budget",
+				method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/namespaces/tight/functions", token: answersAdmin,
+				body: jsonOf(t, inNamespace("tight", withVolumes(function("spender"), 2<<20))), detail: "volumeBudgetBytes"}},
+
+			{op: "replaceFunction", when: "names a Function that does not exist", on: sh, ask: ask{
+				what: "a link to a missing Function", method: http.MethodPut, path: fns + "/plain", token: answersDev,
+				body: jsonOf(t, linking("plain", "ghost")), detail: `target "ghost" does not exist in namespace "default"`}},
+			{op: "replaceFunction", when: "would close a cycle", on: sh, ask: ask{what: "a link that closes a cycle",
+				method: http.MethodPut, path: fns + "/target", token: answersDev, body: jsonOf(t, linking("target", "linker")),
+				detail: "would create a dependency cycle"}},
+			{op: "replaceFunction", when: "does not declare", on: sh, ask: ask{what: "a binding to an undeclared store",
+				method: http.MethodPut, path: fns + "/plain", token: answersDev, body: unbound("plain"),
+				detail: `KVStore "ghost" is not declared in spec.kv`}},
+			{op: "replaceFunction", when: "volumes are off", on: sh, ask: ask{what: "a volume while volumes are off",
+				method: http.MethodPut, path: fns + "/plain", token: answersDev,
+				body: jsonOf(t, withVolumes(function("plain"), 1<<20)), detail: "VolumesOff"}},
+			{op: "replaceFunction", when: "differs from the size it was applied with", on: vol,
+				setup: applied(withVolumes(function("grower"), 1<<20)),
+				ask: ask{what: "another size for its volume", method: http.MethodPut, path: fns + "/grower", token: answersDev,
+					body: jsonOf(t, withVolumes(function("grower"), 2<<20)), detail: "a volume is not resized"}},
+			{op: "replaceFunction", when: "does not fit in the capacity", on: vol,
+				setup: applied(withVolumes(function("widener"), 1<<20)),
+				ask: ask{what: "a volume over the capacity", method: http.MethodPut, path: fns + "/widener",
+					token: answersDev, body: jsonOf(t, withVolumes(function("widener"), 1<<20, 128<<20)),
+					detail: "volumes.capacityBytes"}},
+			{op: "replaceFunction", when: "spec.volumeBudget", on: vol,
+				setup: applied(inNamespace("tight", withVolumes(function("saver"), 512<<10))),
+				ask: ask{what: "a volume over the budget", method: http.MethodPut,
+					path: "/apis/funcd.io/v1alpha1/namespaces/tight/functions/saver", token: answersAdmin,
+					body: jsonOf(t, inNamespace("tight", withVolumes(function("saver"), 512<<10, 1<<20))), detail: "volumeBudgetBytes"}},
+
+			{op: "deleteFunction", when: "links names the Function", on: sh, ask: ask{what: "a link's target",
+				method: http.MethodDelete, path: fns + "/target", token: answersDev, detail: `is linked by "linker"`}},
+
+			{op: "getFunctionLogs", on: sh, ask: ask{what: "the logs", method: http.MethodGet, path: fns + "/echo/logs",
+				token: answersDev, detail: `"items"`}},
+			{op: "getFunctionLogs", when: "carries no bearer token", on: sh, ask: ask{what: "no credential",
+				method: http.MethodGet, path: fns + "/echo/logs", detail: "missing bearer token"}},
+			{op: "getFunctionLogs", when: "do not allow it", on: sh, ask: ask{what: "another namespace's developer",
+				method: http.MethodGet, path: fns + "/echo/logs", token: answersOther, detail: `read logs in "default" denied`}},
+			{op: "getFunctionLogs", when: "The since parameter", on: sh, ask: ask{what: "a since of neither form",
+				method: http.MethodGet, path: fns + "/echo/logs?since=yesterday", token: answersDev,
+				detail: `since "yesterday" is not`}},
+			{op: "getFunctionLogs", when: "The severity parameter", on: sh, ask: ask{what: "an unknown severity",
+				method: http.MethodGet, path: fns + "/echo/logs?severity=loud", token: answersDev,
+				detail: `unknown severity "loud"`}},
+			{op: "getFunctionLogs", when: "in the path is not", on: sh, ask: ask{what: "a name that is no DNS-1123 label",
+				method: http.MethodGet, path: fns + "/Not_A_Label/logs", token: answersDev, detail: "path.name"}},
+			{op: "getFunctionLogs", when: "The limit parameter", on: sh, ask: ask{what: "a limit that is no integer",
+				method: http.MethodGet, path: fns + "/echo/logs?limit=many", token: answersDev, detail: "query.limit"}},
+
+			{op: "deleteVolume", on: vol, setup: func(t *testing.T, e *answerEnv) { ready(t, e, "gone"); gone(t, e, "gone") },
+				ask: ask{what: "a retained volume", method: http.MethodDelete, path: vols + "/gone/state", token: answersDev}},
+			{op: "deleteVolume", when: "carries no bearer token", on: vol, ask: ask{what: "no credential",
+				method: http.MethodDelete, path: vols + "/nobody/state", detail: "missing bearer token"}},
+			{op: "deleteVolume", when: "do not allow it", on: vol, ask: ask{what: "another namespace's developer",
+				method: http.MethodDelete, path: vols + "/nobody/state", token: answersOther,
+				detail: `volume delete in "default" denied`}},
+			{op: "deleteVolume", when: "No volume of that name", on: vol, ask: ask{what: "a missing volume",
+				method: http.MethodDelete, path: vols + "/nobody/state", token: answersDev, detail: "does not exist"}},
+			{op: "deleteVolume", when: "in the path is not", on: vol, ask: ask{what: "a Function name that is no DNS-1123 label",
+				method: http.MethodDelete, path: vols + "/Not_A_Label/state", token: answersDev, detail: "path.function"}},
+			{op: "deleteVolume", when: "The query holds a parameter", on: vol, ask: ask{what: "an unknown query parameter",
+				method: http.MethodDelete, path: vols + "/nobody/state?force=true", token: answersDev,
+				detail: "unknown query parameter"}},
+			{op: "deleteVolume", when: "still exists and declares the volume", on: vol,
+				setup: func(t *testing.T, e *answerEnv) { ready(t, e, "holder") },
+				ask: ask{what: "a volume that its Function holds", method: http.MethodDelete, path: vols + "/holder/state",
+					token: answersDev, detail: "is held by Function default/holder"}},
+
+			{op: "invokeFunction", when: "held for its data", on: sh, ask: ask{what: "a namespace held for its data",
+				method: http.MethodPost, path: "/function/api", header: []string{"X-Funcd-Namespace", "held"}, body: `{}`,
+				detail: "namespace held is held for its data since"}},
+			{op: "invokeFunction", when: "held while a Restore loads it", on: sh, ask: ask{
+				what: "a namespace that a Restore loads", method: http.MethodPost, path: "/function/api",
+				header: []string{"X-Funcd-Namespace", "loading"}, body: `{}`,
+				detail: "namespace loading is held while Restore nightly loads it since"}},
+			{op: "invokeFunction", when: "invoke.activationTimeout", on: slow,
+				setup: func(t *testing.T, e *answerEnv) {
+					fn := function("never")
+					fn.Spec.Image = "file://" + filepath.Join(artifact(t, ""), "handler.mjs")
+					create(t, e.c, e.api, fn)
+				},
+				ask: ask{what: "no worker ready in time", method: http.MethodPost, path: "/function/never", body: `{}`,
+					detail: "function default/never did not become ready within 500ms"}},
+			{op: "invokeFunction", when: "is Failed", on: sh,
+				setup: func(t *testing.T, e *answerEnv) {
+					fn := function("broken") // no handler: a pass of a Function that wants a worker fails it ShapeInvalid
+					fn.Spec.Image = "file://" + filepath.Join(artifact(t, ""), "handler.mjs")
+					fn.Spec.Handler, fn.Spec.Replicas = "", 1
+					create(t, e.c, e.api, fn)
+					require.Eventually(t, func() bool { return phaseOf(e.c, e.api, "default", "broken") == v1.PhaseFailed },
+						20*time.Second, 20*time.Millisecond, "Function broken is Failed")
+				},
+				ask: ask{what: "a Failed Function", method: http.MethodPost, path: "/function/broken", body: `{}`,
+					detail: "function default/broken is Failed (ShapeInvalid)"}},
+			{op: "invokeFunction", when: "funcd is stopping", on: stopping,
+				setup: func(t *testing.T, e *answerEnv) {
+					fn := function("cold")
+					fn.Spec.Image = "file://" + filepath.Join(artifact(t, ""), "handler.mjs")
+					create(t, e.c, e.api, fn)
+					go stopOnWake(e, "cold")
+				},
+				ask: ask{what: "a call waiting for a worker at a stop", method: http.MethodPost, path: "/function/cold",
+					body: `{}`, detail: "activator stopped before default/cold became ready"}},
+		},
+	)
+	runMatrix(t, rows, "invokeFunction")
 }
