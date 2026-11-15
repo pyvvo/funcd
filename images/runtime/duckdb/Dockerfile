@@ -33,7 +33,7 @@
 # --- stage 1: pip-install the pinned duckdb + boto3 wheels + pre-install the DuckDB extensions -----
 # Built on python:3.14-slim-bookworm to match the python314 curated base's interpreter + glibc
 # (ADR-0054/0071 — the cc-debian12 final stage links the SAME glibc 2.36).
-FROM python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 AS deps
+FROM python:3.14-slim-bookworm@sha256:3fe1a0b6c2d6b2ebb572906cdabeca75aeb558c0c17db5ffefbcf8094871c32b AS deps
 ARG TARGETARCH
 ARG SOURCE_DATE_EPOCH
 COPY images/runtime/duckdb/requirements.txt images/runtime/duckdb/duckdb.sha256 /tmp/
