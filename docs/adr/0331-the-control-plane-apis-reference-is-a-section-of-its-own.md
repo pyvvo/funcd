@@ -31,7 +31,8 @@ an API reference, beside the guide.
 
 - `scenario: reference-shows-an-operation` (replaces `operation-shows-its-answers`): given the API reference, when a
   reader opens Services › KVStore › Replace a KVStore, then they see its method, path, parameters, body and
-  authentication, and an Answers table with one row per case (status, problem type, when, what to do) with no click.
+  authentication, and an Answers table with one row per case and per status with no case (status, problem type, when,
+  what to do) with no click.
 - `scenario: function-call-in-reference` (replaces `function-call-documented`): given the API reference, when a reader
   opens Workloads › Function › Call a Function, then each answer of ADR-0329 Decision 2 is a row of its Answers table.
 - `scenario: spec-tab-links-the-reference`: given the KV Spec tab, when a reader looks at its HTTP API section, then each
@@ -39,7 +40,7 @@ an API reference, beside the guide.
 - `scenario: search-finds-a-case`: given the site's search, when a reader searches a case's when text, then a result is
   the reference page of an operation that answers it.
 - `scenario: agent-reads-an-operation`: given an operation's Markdown copy, when an agent reads it, then it holds the
-  method and path, the summary, the authentication, the parameters, the body and one Answers row per case.
+  method and path, the summary, the authentication, the parameters, the body and the Answers rows.
 - `scenario: reference-has-its-own-sidebar`: given a reference page, when a reader looks at the sidebar, then it lists
   the reference's sections only, and its switcher leads to the Documentation.
 
@@ -53,7 +54,7 @@ questions).
 
 ADR-0329's driver that the pages live in funcd as plain Markdown changes, by the decider's choice of 2026-11-15: the
 answers live in the spec, and on the docs site with Markdown copies for agents; the layout, the Spec tabs' links and the
-Overview stay in funcd's guide. The other drivers are unchanged (ADR-0329), with: the site is static, pre-rendered for
+Overview stay in funcd. The other drivers are unchanged (ADR-0329), with: the site is static, pre-rendered for
 GitHub Pages; no placement or naming rule is written twice; fumadocs-openapi 12.6.4 is MIT, and every package it adds
 has a permissive license (experiment 0021).
 
@@ -86,11 +87,12 @@ has a permissive license (experiment 0021).
       files. It covers each described operation whose tag is not an `Omitted` kind: a kind's operations go to the
       section of its feature (`Features`), a tag's where `TagFeatures` places it. `<path>` is `<section>/<kind>/<name>`:
       `<kind>` is the kind or tag in lowercase, and `<name>` the operation ID without its kind's name or plural, in
-      kebab case (`listKVStores` → `services/kvstore/list`, `getFunctionLogs` → `workloads/function/get-logs`). A
-      section keeps the guide's title and icon and lists its kinds in the order of `Features`; a kind's folder is titled
-      with the kind and lists its operations list, create, get, replace, delete, then by name. `kindref`'s field check
-      (ADR-0323 Decision 2) also covers the request and response schemas of each operation in the reference, which no
-      Spec page shows any more.
+      kebab case (`listKVStores` → `services/kvstore/list`, `getFunctionLogs` → `workloads/function/get-logs`). The
+      sections keep the guide's order, titles and icons; a section lists its kinds in the order of `Features`, then its
+      tags by name; a kind's folder is titled with the kind and lists its operations list, create, get, replace,
+      delete, then by name. A section or kind with no covered operation gets no folder. `Undescribed` (ADR-0323
+      Decision 2) also returns the fields of the reference's schemas that no Spec page shows, and `FaultError`'s
+      fields get doc tags in `api/fault`, with no wire change.
    3. **Every answer is on the page and in search.** Under fumadocs' rendering, each page shows an Answers table, in the
       static HTML: one row per case of `x-funcd-cases` and one per status with no case, with the status, the problem
       type, when and what to do; a case whose body is another schema names it in place of the problem type. One
@@ -99,14 +101,17 @@ has a permissive license (experiment 0021).
    4. **The spec is loaded once.** The pages leave the spec out of their props (`includeDocument: false`); the build
       reads it from disk, and a browser fetches `/openapi.json` once per session.
    5. **Agents read Markdown.** Each page's Markdown copy, in the site's `llms` export, is written by the site from the
-      spec: the method and path, the summary, the authentication (a bearer token or `X-Api-Key`), the parameters, the
-      body's schema and the Answers rows.
+      spec: the method and path, the summary, the authentication from the operation's own security, the parameters,
+      the body's schema and the Answers rows.
    6. **Each Spec tab links the reference.** `kindref`'s HTTP API section becomes a table: one row per described
-      operation of the tab's kinds and of the tags that `TagFeatures` places on it, its summary linking to
-      `/docs/api/<path>`, and its method and path.
+      operation of the tab's kinds and of the tags that `TagFeatures` places on it, with its method and path, and its
+      summary linking to its page relative to the Spec page's file, as the guide links pages
+      (`../../../api/services/kvstore/replace.md` from `develop/services/kv/spec.md`). The site turns the link into
+      the page's URL, and the Markdown copies into the copy's, which the site's link check verifies.
    7. **The Overview is in the guide.** `docs/guide/api/index.md` says that this is the control plane API, under
       `/apis/funcd.io/v1alpha1`, and that the call of a Function is its one operation on the gateway; then
-      authentication, errors with the problem types, conditional writes and dry runs, and where each server serves
+      authentication, errors with the problem types, that any operation can also answer 500 when funcd meets an error
+      it does not expect (which no operation lists), conditional writes and dry runs, and where each server serves
       `/openapi` and `/docs`. The guide's root `meta.json` lists `api`.
 
 ## Design model
@@ -133,10 +138,11 @@ func ReferencePaths(doc *huma.OpenAPI) map[string]string
 // SectionMeta is a guide section's title and icon, from docs/guide/develop/<section>/meta.json.
 type SectionMeta struct{ Title, Icon string }
 
-// ReferenceFiles returns the reference's generated files by path: api/openapi/reference-paths.json, the map that
+// ReferenceFiles returns the reference's generated files by path from the repository root, unlike Render:
+// api/openapi/reference-paths.json, the map that
 // ReferencePaths returns; docs/guide/api/meta.json ({root, title, description, icon "SquareCode", pages: index and
 // the sections}); one meta.json per section ({title, icon, pages: its kinds}); and one per kind ({title: the kind,
-// pages: its operations in order}). specgen passes the guide's sections, read from their meta.json files.
+// pages: its operations in order}). specgen passes the guide's sections by directory, read from their meta.json files.
 func ReferenceFiles(doc *huma.OpenAPI, sections map[string]SectionMeta) (map[string][]byte, error)
 
 // Render (ADR-0323) writes the HTTP API section as the table of Decision 3.6.
@@ -147,7 +153,7 @@ funcd-frontend, `packages/docs`:
 | File | Holds |
 | --- | --- |
 | `app/lib/openapi.ts` | `createOpenAPI` with `includeDocument: false`; `apiSource()`, the pages at the paths of `reference-paths.json` |
-| `app/lib/collections.ts` | the guide's MDX collection, moved out of `source.ts`, which now reads files; it leaves out JSON that is no meta |
+| `app/lib/collections.ts` | the guide's MDX collection, moved out of `source.ts`, which now reads files |
 | `app/lib/source.ts` | the guide and the reference as two sources; the "Documentation" root; each page's cases in its structured data; the reference pages' Markdown copies; the bundled `SquareCode` icon |
 | `app/components/api-page.tsx` | the page: fumadocs' `OpenAPIPage` with `loadDocument`, then the Answers table |
 | `app/routes/docs.tsx`, `app/app.css` | a reference page's route branch; fumadocs-openapi's CSS preset |
@@ -164,14 +170,15 @@ funcd-frontend, `packages/docs`:
 ## Implementation plan
 
 funcd, one pull request:
-1. `internal/controlplane/kindref`: `ReferencePaths`, `ReferenceFiles`, the HTTP API table, and the field check over the
-   reference's schemas. Tests: `TestReferencePaths` (one path per covered operation, unique, ordered, the plural
+1. `internal/controlplane/kindref`: `ReferencePaths`, `ReferenceFiles`, the HTTP API table, and `Undescribed` over the
+   reference's schemas; doc tags on `FaultError`'s fields in `api/fault`. Tests: `TestReferencePaths` (one path per covered operation, unique, ordered, the plural
    stripped), `TestScenarioSpecTabLinksTheReference` (each link's path is in `reference-paths.json`).
    `TestScenarioOperationShowsItsAnswers` goes; `TestScenarioFunctionCallDocumented` keeps only its checks of ADR-0329
-   Decision 2 (the `{gateway}` server, the optional security, the control plane neither documents nor routes the call),
-   renamed `TestFunctionCallInTheSpec`.
+   Decision 2 (the `{gateway}` server, the `X-Funcd-Namespace` parameter, the optional security, the control plane
+   neither documents nor routes the call), renamed `TestFunctionCallInTheSpec`.
 2. The generate step writes `ReferenceFiles` and removes stale `meta.json` files under `docs/guide/api`;
-   `scripts/check-generated.sh` also checks `docs/guide/api` and `api/openapi/reference-paths.json`.
+   `scripts/check-generated.sh` also checks `docs/guide/api` and `api/openapi/reference-paths.json`, and CI's
+   `generated` path filter gains `docs/guide/api/**`.
 3. `docs/guide/api/index.md`, the Overview, and `api` in `docs/guide/meta.json`.
 4. `scripts/agent/d just generate`, then `scripts/agent/d just ci`.
 
@@ -188,7 +195,7 @@ page for each entry of `reference-paths.json` and no other; the KV Spec tab's HT
 ## Review checklist
 
 - [ ] `reference-paths.json` holds each described operation whose tag is not an `Omitted` kind, and nothing else; no
-  name is plural.
+  name keeps its kind's plural.
 - [ ] Each Answers table has one row per case and per status with no case, in the static HTML.
 - [ ] A page's search entries hold each of its cases' when texts.
 - [ ] A Markdown copy holds its operation's authentication, body and Answers rows, and the site's link check passes.
@@ -203,8 +210,10 @@ page for each entry of `reference-paths.json` and no other; the KV Spec tab's HT
 
 - A reader finds the control plane API in a reference of its own, with each answer shown, searchable and exported for
   agents; a Spec tab points to it.
-- On GitHub, the answers are in the spec, and a Spec tab's links lead to the docs site's paths: a GitHub reader follows
-  them there.
+- On GitHub, the answers are in the spec, and a Spec tab's links open no file, since a reference page is no file in
+  funcd: a GitHub reader follows them on the docs site.
+- No pull request's CI builds the docs site, so the site's checks run at review and then at funcd's next release: a
+  broken one shows when that release's site build fails and nothing publishes.
 - The site grows and builds longer: experiment 0021's `tuned-site` and `build-tuned` against `baseline-site` and
   `build-baseline`.
 - funcd-frontend gains a renderer to keep in step with fumadocs-openapi's releases, and code of its own for the Answers
