@@ -67,8 +67,8 @@ var (
 // endpoints.
 var (
 	ErrSQLBodyMalformed = fault.NewKnownCause(fault.Invalid, "local.sql-body-malformed",
-		"The body is not a JSON object whose statements field is a list.",
-		`Send {"statements": [...]}, with one ["SQL", params...] list for each statement.`)
+		"The body is not a JSON object whose statements field is a list, as when a parameter is a float NaN or infinity, which JSON cannot hold.",
+		`Pass such a float as null or as a string, and send {"statements": [...]} with one ["SQL", params...] list for each statement.`)
 	ErrSQLNoStatements = fault.NewKnownCause(fault.Invalid, "local.sql-no-statements",
 		"The call holds no statement.",
 		"Send at least one statement.")

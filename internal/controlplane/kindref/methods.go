@@ -65,27 +65,35 @@ func methodTable() map[string]map[string]methodEndpoint {
 		secrets.ErrCallerMissing, secrets.ErrSecretMissing}}
 	secretWrite := methodEndpoint{Endpoint: secretPut, Except: []*fault.KnownCause{local.ErrBodyUnreadable}}
 	at := func(endpoint string) methodEndpoint { return methodEndpoint{Endpoint: endpoint} }
+	// sent is endpoint less what its method never provokes: a shim sends each body whole, with its length. A query
+	// method also sends one statement, and TypeScript's SQL body is always JSON, since JSON.stringify writes NaN and
+	// Infinity as null; Python's json.dumps writes them as NaN and Infinity, which are not JSON.
+	sent := func(endpoint string, never ...*fault.KnownCause) methodEndpoint {
+		return methodEndpoint{Endpoint: endpoint, Except: append([]*fault.KnownCause{local.ErrBodyUnreadable}, never...)}
+	}
+	tsQuery := sent(sqlQuery, local.ErrSQLBodyMalformed, local.ErrSQLNoStatements, local.ErrSQLTooManyStatements)
+	pyQuery := sent(sqlQuery, local.ErrSQLNoStatements, local.ErrSQLTooManyStatements)
 	return map[string]map[string]methodEndpoint{
 		"TypeScript": {
-			"log": {}, "invoke": at("POST /invoke/{alias}"), "fetch": at("/fetch/"), "remainingMs": {},
+			"log": {}, "invoke": sent("POST /invoke/{alias}"), "fetch": sent("/fetch/"), "remainingMs": {},
 			"kv.get": read, "kv.getEntry": read, "kv.getText": read, "kv.getJSON": read,
 			"kv.put": put, "kv.putIfAbsent": put, "kv.compareAndSet": compareAndSet,
 			"kv.del": del, "kv.delIf": delIf, "kv.list": at(kvList),
 			"blob.get": blobRead, "blob.put": blobWrite, "blob.del": blobDelete, "blob.list": at(blobList),
 			"blob.signedUrl": blobSign,
-			"sql.query":      at(sqlQuery), "sql.queryValues": at(sqlQuery), "sql.execute": at(sqlExec),
+			"sql.query":      tsQuery, "sql.queryValues": tsQuery, "sql.execute": sent(sqlExec, local.ErrSQLBodyMalformed),
 			"config.get": {}, "config.list": {},
 			"secret.get": secretRead, "secret.list": at(secret), "secret.put": secretWrite, "secret.del": at(secDel),
 			"lake.get": {},
 		},
 		"Python": {
-			"log": {}, "invoke": at("POST /invoke/{alias}"), "remaining_ms": {},
+			"log": {}, "invoke": sent("POST /invoke/{alias}"), "remaining_ms": {},
 			"kv.get": read, "kv.get_entry": read, "kv.get_str": read, "kv.get_json": read,
 			"kv.put": put, "kv.put_if_absent": put, "kv.compare_and_set": compareAndSet,
 			"kv.delete": del, "kv.delete_if": delIf, "kv.list": at(kvList),
 			"blob.get": blobRead, "blob.put": blobWrite, "blob.delete": blobDelete, "blob.list": at(blobList),
 			"blob.signed_url": blobSign,
-			"sql.query":       at(sqlQuery), "sql.query_values": at(sqlQuery), "sql.execute": at(sqlExec),
+			"sql.query":       pyQuery, "sql.query_values": pyQuery, "sql.execute": sent(sqlExec),
 			"config.get": {}, "config.list": {},
 			"secret.get": secretRead, "secret.list": at(secret), "secret.put": secretWrite, "secret.delete": at(secDel),
 			"lake.get": {},
