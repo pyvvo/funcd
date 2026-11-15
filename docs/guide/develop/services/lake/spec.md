@@ -159,3 +159,141 @@ The Lakes that the function binds, by alias: the address of each Lake's gateway,
 | Method | What it does |
 | --- | --- |
 | `get(alias: str) -> LakeEndpoint` | The gateway of the Lake bound as ``alias``: ``url``, its address as ``host:port``, and ``token``, the token that it accepts from the function. Raises ``KeyError`` naming the alias when the function binds no Lake with that alias. |
+
+## HTTP API
+
+Each described operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
+
+| Authentication | How a call sends it |
+| --- | --- |
+| `bearer` | A credential of funcd's config, sent as Authorization: Bearer followed by its token. |
+| `apiKey` | A credential of funcd's config, sent in the X-Api-Key header. |
+
+### List the Lakes of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes` | `listLakes` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
+
+Answer: array of [`Lake`](#lake).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list Lakes in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Create a Lake
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes` | `createLake` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Lake`](#lake), required. Answer: [`Lake`](#lake).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 400 | `urn:funcd:problem:invalid` | A binding names a Bucket, a ConfigMap or a Secret that the spec does not declare, such as a Bucket missing from spec.buckets. | Declare it in the spec, or bind one that it declares. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create a Lake in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 409 | `urn:funcd:problem:conflict` | A Lake of that name already exists in the namespace. | Choose another name, or replace the existing Lake. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Read a Lake
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes/{name}` | `getLake` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`Lake`](#lake).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read a Lake in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Lake of that name exists in the namespace. | Check the name and the namespace. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Replace a Lake
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes/{name}` | `replaceLake` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Lake`](#lake), required. Answer: [`Lake`](#lake).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 400 | `urn:funcd:problem:invalid` | A binding names a Bucket, a ConfigMap or a Secret that the spec does not declare, such as a Bucket missing from spec.buckets. | Declare it in the spec, or bind one that it declares. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace a Lake in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Lake of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Lake has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Lake again, apply the change to it, and send it with its new resourceVersion. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Delete a Lake
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes/{name}` | `deleteLake` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete a Lake in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No Lake of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The Lake has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Lake again, apply the change to it, and send it with its new resourceVersion. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |

@@ -74,3 +74,144 @@ The SQL databases that the function binds, by alias: ``query`` reads rows, ``que
 | `execute(alias: str, sql_or_statements: str \| Sequence[SQLStatement], params: SQLParams \| None = None) -> Any` | Runs one statement, or a list of up to 500 statements, in one transaction that applies all or none of them. Returns the statement's result, or one result for each statement of a list: a dict with ``rowsAffected`` and ``lastInsertId``, and ``columns`` and ``values`` for a RETURNING statement. A statement that the database refuses fails the call with the HTTP status 400. Only the database's owner and the writers that a RolesAssignment names can execute. |
 
 Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
+
+## HTTP API
+
+Each described operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
+
+| Authentication | How a call sends it |
+| --- | --- |
+| `bearer` | A credential of funcd's config, sent as Authorization: Bearer followed by its token. |
+| `apiKey` | A credential of funcd's config, sent in the X-Api-Key header. |
+
+### List the SQLDatabases of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases` | `listSQLDatabases` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
+
+Answer: array of [`SQLDatabase`](#sqldatabase).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list SQLDatabases in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Create a SQLDatabase
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases` | `createSQLDatabase` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`SQLDatabase`](#sqldatabase), required. Answer: [`SQLDatabase`](#sqldatabase).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 400 | `urn:funcd:problem:invalid` | The namespace already holds the most SQLDatabases that sql.maxDatabasesPerNamespace allows. | Delete a SQLDatabase that the namespace no longer needs, or ask the operator to raise the cap. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create a SQLDatabase in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 409 | `urn:funcd:problem:conflict` | A SQLDatabase of that name already exists in the namespace. | Choose another name, or replace the existing SQLDatabase. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Read a SQLDatabase
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases/{name}` | `getSQLDatabase` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`SQLDatabase`](#sqldatabase).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read a SQLDatabase in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No SQLDatabase of that name exists in the namespace. | Check the name and the namespace. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Replace a SQLDatabase
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases/{name}` | `replaceSQLDatabase` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`SQLDatabase`](#sqldatabase), required. Answer: [`SQLDatabase`](#sqldatabase).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace a SQLDatabase in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No SQLDatabase of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The SQLDatabase has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the SQLDatabase again, apply the change to it, and send it with its new resourceVersion. |
+| 409 | `urn:funcd:problem:conflict` | The Function, Workflow or App that made the SQLDatabase still exists, and owns it. | Change the SQLDatabase through that owner, or delete the owner first. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Delete a SQLDatabase
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases/{name}` | `deleteSQLDatabase` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete a SQLDatabase in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No SQLDatabase of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The SQLDatabase has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the SQLDatabase again, apply the change to it, and send it with its new resourceVersion. |
+| 409 | `urn:funcd:problem:conflict` | A Function's spec.bindings.sql still names the database. | Remove that binding from the Function first. |
+| 409 | `urn:funcd:problem:conflict` | The database still holds a table. | Drop its tables first. |
+| 409 | `urn:funcd:problem:conflict` | funcd cannot ask the database's engine whether it holds a table: the engine does not answer, or it is not Ready and the database has data. | Retry once the SQLDatabase is Ready. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
