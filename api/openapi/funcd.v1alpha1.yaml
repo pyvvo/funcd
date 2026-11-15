@@ -4170,10 +4170,10 @@ components:
           description: True when funcd runs the platform backup, which needs backup.target and storage.mode file.
           type: boolean
         held:
-          description: "True while the platform is held: the platform backup waits for the release."
+          description: "True while the platform is held: the backups wait for the release. It reads false, as interval and rpo read 0s, when funcd runs no backup: under storage.mode memory, or with neither backup.target nor kvstore.backup.enabled set."
           type: boolean
         interval:
-          description: "How often the platform backup runs: backup.interval."
+          description: "How often the platform backup runs: backup.interval; 0s when funcd runs no backup."
           pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
           patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
           type: string
@@ -4199,12 +4199,12 @@ components:
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         rpo:
-          description: "The most data that a loss may take: backup.objectives.rpo."
+          description: "The most data that a loss may take: backup.objectives.rpo; 0s when funcd runs no backup."
           pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
           patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
           type: string
         rpoRisk:
-          description: True when no verified generation is newer than backup.objectives.rpo; funcd then logs backup rpo at risk. funcdctl backup verify clears it.
+          description: True when the platform backup is on and no verified generation is newer than backup.objectives.rpo; funcd then logs backup rpo at risk, and funcdctl backup verify clears it.
           type: boolean
         streams:
           additionalProperties:
@@ -4355,7 +4355,7 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         since:
-          description: The entry to return, by its since as funcdctl hold status lists it; the object's newest entry when left out.
+          description: The entry to return, by its since as funcdctl hold status lists it. Left out, a return that was cut short resumes first, else the object's newest kept entry returns.
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
@@ -6617,7 +6617,7 @@ paths:
           description: |-
             - `urn:funcd:problem:conflict`: The body names no namespace, and the platform is not held. There is nothing to release: funcdctl hold status shows what is held.
             - `urn:funcd:problem:conflict`: A namespace of the body is not held; the namespaces before it are released. Release the namespaces after it again, without it.
-            - `urn:funcd:problem:conflict`: A namespace of the body is held by an in-place Restore that is Pending or Running; the namespaces before it are released. Release the namespace once the Restore has ended.
+            - `urn:funcd:problem:conflict`: A namespace of the body is held by an in-place Restore that is Pending or Running; the namespaces before it are released. Release the namespaces after it again; release this one once the Restore has ended.
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
               when: The body names no namespace, and the platform is not held.
@@ -6627,7 +6627,7 @@ paths:
               fix: Release the namespaces after it again, without it.
             - type: urn:funcd:problem:conflict
               when: A namespace of the body is held by an in-place Restore that is Pending or Running; the namespaces before it are released.
-              fix: Release the namespace once the Restore has ended.
+              fix: Release the namespaces after it again; release this one once the Restore has ended.
         "413":
           content:
             application/problem+json:
@@ -12205,7 +12205,7 @@ paths:
                 $ref: "#/components/schemas/FaultError"
           description: |-
             - `urn:funcd:problem:conflict`: A Restore of that name already exists in the namespace. Choose another name, or replace the existing Restore.
-            - `urn:funcd:problem:conflict`: A member sets inPlace, and another in-place Restore of the namespace has not ended. Create the Restore once the other one is Succeeded or Failed.
+            - `urn:funcd:problem:conflict`: A member sets inPlace, and another in-place Restore of the namespace has not ended. Create the Restore once the other one is Succeeded or Failed. A Restore stuck in Pending fails once the Backup that it waits for is deleted.
             - `urn:funcd:problem:conflict`: A member sets inPlace, and the namespace is still held by an earlier in-place Restore whose load did not complete. Check the namespace's stores, release the hold with funcdctl hold release --namespace, then create the Restore again.
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
@@ -12213,7 +12213,7 @@ paths:
               fix: Choose another name, or replace the existing Restore.
             - type: urn:funcd:problem:conflict
               when: A member sets inPlace, and another in-place Restore of the namespace has not ended.
-              fix: Create the Restore once the other one is Succeeded or Failed.
+              fix: Create the Restore once the other one is Succeeded or Failed. A Restore stuck in Pending fails once the Backup that it waits for is deleted.
             - type: urn:funcd:problem:conflict
               when: A member sets inPlace, and the namespace is still held by an earlier in-place Restore whose load did not complete.
               fix: Check the namespace's stores, release the hold with funcdctl hold release --namespace, then create the Restore again.
@@ -12346,14 +12346,14 @@ paths:
                 $ref: "#/components/schemas/FaultError"
           description: |-
             - `urn:funcd:problem:conflict`: The Restore has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Restore again, apply the change to it, and send it with its new resourceVersion.
-            - `urn:funcd:problem:conflict`: The Restore loads a member in place and has not ended. Delete it once it is Succeeded or Failed.
+            - `urn:funcd:problem:conflict`: The Restore loads a member in place and has not ended. Delete it once it is Succeeded or Failed. A Restore stuck in Pending fails once the Backup that it waits for is deleted.
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
               when: The Restore has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
               fix: Read the Restore again, apply the change to it, and send it with its new resourceVersion.
             - type: urn:funcd:problem:conflict
               when: The Restore loads a member in place and has not ended.
-              fix: Delete it once it is Succeeded or Failed.
+              fix: Delete it once it is Succeeded or Failed. A Restore stuck in Pending fails once the Backup that it waits for is deleted.
         "422":
           content:
             application/problem+json:
@@ -15212,23 +15212,23 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:not-found`: The quarantine holds no entry of the object, or none of that since. Read the entries under quarantine in funcdctl hold status."
+          description: "`urn:funcd:problem:not-found`: The quarantine holds no entry of the object, or none of that since, that is kept or returning; a moving entry, which a failed move leaves, does not return. Read the entries under quarantine in funcdctl hold status; a moving entry returns once a later start of funcd has finished its move."
           x-funcd-cases:
             - type: urn:funcd:problem:not-found
-              when: The quarantine holds no entry of the object, or none of that since.
-              fix: Read the entries under quarantine in funcdctl hold status.
+              when: The quarantine holds no entry of the object, or none of that since, that is kept or returning; a moving entry, which a failed move leaves, does not return.
+              fix: Read the entries under quarantine in funcdctl hold status; a moving entry returns once a later start of funcd has finished its move.
         "409":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
           description: |-
-            - `urn:funcd:problem:conflict`: The KVStore, the Bucket or the Function does not exist, or the Function declares no local volume of that name. Apply the object again, then return its data.
+            - `urn:funcd:problem:conflict`: The KVStore, the Bucket or the Function does not exist, or the Function declares no local volume of that name. Apply the KVStore or the Bucket again, or the Function with the volume in its spec.volumes, then return its data.
             - `urn:funcd:problem:conflict`: The object holds data: an entry returns only into an empty KVStore, Bucket or volume. Delete what the object holds, if it is not needed, then return its data.
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
               when: The KVStore, the Bucket or the Function does not exist, or the Function declares no local volume of that name.
-              fix: Apply the object again, then return its data.
+              fix: Apply the KVStore or the Bucket again, or the Function with the volume in its spec.volumes, then return its data.
             - type: urn:funcd:problem:conflict
               when: "The object holds data: an entry returns only into an empty KVStore, Bucket or volume."
               fix: Delete what the object holds, if it is not needed, then return its data.

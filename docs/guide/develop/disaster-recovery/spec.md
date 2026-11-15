@@ -466,7 +466,7 @@ Body: [`Restore`](#restore), required. Answer: [`Restore`](#restore).
 | 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create a Restore in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
 | 403 | `urn:funcd:problem:forbidden` | A member sets inPlace, and the credential's role does not allow it to update the Namespace, as only an admin's does. | Use an admin's credential, or load the member into another, empty store with as. |
 | 409 | `urn:funcd:problem:conflict` | A Restore of that name already exists in the namespace. | Choose another name, or replace the existing Restore. |
-| 409 | `urn:funcd:problem:conflict` | A member sets inPlace, and another in-place Restore of the namespace has not ended. | Create the Restore once the other one is Succeeded or Failed. |
+| 409 | `urn:funcd:problem:conflict` | A member sets inPlace, and another in-place Restore of the namespace has not ended. | Create the Restore once the other one is Succeeded or Failed. A Restore stuck in Pending fails once the Backup that it waits for is deleted. |
 | 409 | `urn:funcd:problem:conflict` | A member sets inPlace, and the namespace is still held by an earlier in-place Restore whose load did not complete. | Check the namespace's stores, release the hold with funcdctl hold release --namespace, then create the Restore again. |
 | 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
 | 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
@@ -552,7 +552,7 @@ Answer: none.
 | 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete a Restore in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
 | 404 | `urn:funcd:problem:not-found` | No Restore of that name exists in the namespace. | Check the name and the namespace. |
 | 409 | `urn:funcd:problem:conflict` | The Restore has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Restore again, apply the change to it, and send it with its new resourceVersion. |
-| 409 | `urn:funcd:problem:conflict` | The Restore loads a member in place and has not ended. | Delete it once it is Succeeded or Failed. |
+| 409 | `urn:funcd:problem:conflict` | The Restore loads a member in place and has not ended. | Delete it once it is Succeeded or Failed. A Restore stuck in Pending fails once the Backup that it waits for is deleted. |
 | 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
 | 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
 
@@ -638,7 +638,7 @@ Body: [`HoldReleaseInputBody`](#holdreleaseinputbody), required. Answer: none.
 | 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to release a hold: only an admin's does. | Use an admin's credential. |
 | 409 | `urn:funcd:problem:conflict` | The body names no namespace, and the platform is not held. | There is nothing to release: funcdctl hold status shows what is held. |
 | 409 | `urn:funcd:problem:conflict` | A namespace of the body is not held; the namespaces before it are released. | Release the namespaces after it again, without it. |
-| 409 | `urn:funcd:problem:conflict` | A namespace of the body is held by an in-place Restore that is Pending or Running; the namespaces before it are released. | Release the namespace once the Restore has ended. |
+| 409 | `urn:funcd:problem:conflict` | A namespace of the body is held by an in-place Restore that is Pending or Running; the namespaces before it are released. | Release the namespaces after it again; release this one once the Restore has ended. |
 | 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
 | 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
 | 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
@@ -672,14 +672,14 @@ Answer: [`PlatformBackupStatus`](#platformbackupstatus).
 | --- | --- | --- |
 | `earliestRestorePoint` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the oldest generation that funcd restore run can load was written. |
 | `enabled` | boolean, required | True when funcd runs the platform backup, which needs backup.target and storage.mode file. |
-| `held` | boolean, required | True while the platform is held: the platform backup waits for the release. |
-| `interval` | string, required, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How often the platform backup runs: backup.interval. |
+| `held` | boolean, required | True while the platform is held: the backups wait for the release. It reads false, as interval and rpo read 0s, when funcd runs no backup: under storage.mode memory, or with neither backup.target nor kvstore.backup.enabled set. |
+| `interval` | string, required, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How often the platform backup runs: backup.interval; 0s when funcd runs no backup. |
 | `lastFailure` | object, [`PlatformBackupStatus.lastFailure`](#platformbackupstatuslastfailure) | The last run that failed since funcd started; a run that succeeds clears it. |
 | `lastSuccessTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the newest complete generation on the target was written. |
 | `lastVerifiedTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the newest generation that funcdctl backup verify checked was written; absent when none is verified or its original has expired. |
 | `nextRunTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the next run is due. |
-| `rpo` | string, required, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The most data that a loss may take: backup.objectives.rpo. |
-| `rpoRisk` | boolean, required | True when no verified generation is newer than backup.objectives.rpo; funcd then logs backup rpo at risk. funcdctl backup verify clears it. |
+| `rpo` | string, required, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The most data that a loss may take: backup.objectives.rpo; 0s when funcd runs no backup. |
+| `rpoRisk` | boolean, required | True when the platform backup is on and no verified generation is newer than backup.objectives.rpo; funcd then logs backup rpo at risk, and funcdctl backup verify clears it. |
 | `streams` | map of string to [`PlatformBackupStatus.streams.*`](#platformbackupstatusstreams) | The runs of the other backups since funcd started, by stream: blob for the mirror of Blob's files, kv for the KV backup. |
 
 #### `PlatformBackupStatus.lastFailure`
@@ -712,8 +712,8 @@ Body: [`QuarantineReturn`](#quarantinereturn), required. Answer: none.
 | 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
 | 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
 | 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to return quarantined data: only an admin's does. | Use an admin's credential. |
-| 404 | `urn:funcd:problem:not-found` | The quarantine holds no entry of the object, or none of that since. | Read the entries under quarantine in funcdctl hold status. |
-| 409 | `urn:funcd:problem:conflict` | The KVStore, the Bucket or the Function does not exist, or the Function declares no local volume of that name. | Apply the object again, then return its data. |
+| 404 | `urn:funcd:problem:not-found` | The quarantine holds no entry of the object, or none of that since, that is kept or returning; a moving entry, which a failed move leaves, does not return. | Read the entries under quarantine in funcdctl hold status; a moving entry returns once a later start of funcd has finished its move. |
+| 409 | `urn:funcd:problem:conflict` | The KVStore, the Bucket or the Function does not exist, or the Function declares no local volume of that name. | Apply the KVStore or the Bucket again, or the Function with the volume in its spec.volumes, then return its data. |
 | 409 | `urn:funcd:problem:conflict` | The object holds data: an entry returns only into an empty KVStore, Bucket or volume. | Delete what the object holds, if it is not needed, then return its data. |
 | 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
 | 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
@@ -728,5 +728,5 @@ Body: [`QuarantineReturn`](#quarantinereturn), required. Answer: none.
 | `kind` | string, required | The object's kind: KVStore, Bucket, or Function for a Function's local volume. |
 | `name` | string, required, a DNS-1123 label | The object's name; for a volume, its Function's. |
 | `namespace` | string, required, a DNS-1123 label | The object's namespace. |
-| `since` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | The entry to return, by its since as funcdctl hold status lists it; the object's newest entry when left out. |
+| `since` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | The entry to return, by its since as funcdctl hold status lists it. Left out, a return that was cut short resumes first, else the object's newest kept entry returns. |
 | `volume` | string, a DNS-1123 label | With kind Function, the name of the local volume. |

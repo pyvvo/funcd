@@ -352,7 +352,7 @@ func registerWorkloadBackup(api huma.API, h Handlers) {
 		list: h.ListRestores, create: h.CreateRestore, get: h.GetRestore, replace: h.ReplaceRestore, remove: h.DeleteRestore,
 		cases: &kindCases{create: restoreInPlaceCreates(), replace: []ErrorCase{backupSpecFixed("Restore")},
 			remove: []ErrorCase{problem(fault.Conflict, "The Restore loads a member in place and has not ended.",
-				"Delete it once it is Succeeded or Failed.")}},
+				"Delete it once it is Succeeded or Failed. "+restoreStuck)}},
 	})
 }
 
@@ -376,6 +376,10 @@ func backupSpecFixed(kind string) ErrorCase {
 		"Create another "+kind+" instead.")
 }
 
+// restoreStuck is the way out of an in-place Restore that waits in Pending for good, which no cancel ends (ADR-0228
+// Decision 2.4 and its Open questions).
+const restoreStuck = "A Restore stuck in Pending fails once the Backup that it waits for is deleted."
+
 // restoreInPlaceCreates are the refusals of a Restore with a member in place (ADR-0228 Decision 2.4): it needs update
 // on the Namespace, one runs at a time in a namespace, and none starts while an earlier load's hold stands.
 func restoreInPlaceCreates() []ErrorCase {
@@ -384,7 +388,7 @@ func restoreInPlaceCreates() []ErrorCase {
 			"Namespace, as only an admin's does.", "Use an admin's credential, or load the member into another, empty "+
 			"store with as."),
 		problem(fault.Conflict, "A member sets inPlace, and another in-place Restore of the namespace has not ended.",
-			"Create the Restore once the other one is Succeeded or Failed."),
+			"Create the Restore once the other one is Succeeded or Failed. "+restoreStuck),
 		problem(fault.Conflict, "A member sets inPlace, and the namespace is still held by an earlier in-place Restore "+
 			"whose load did not complete.", "Check the namespace's stores, release the hold with funcdctl hold release "+
 			"--namespace, then create the Restore again."),

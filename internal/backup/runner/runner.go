@@ -49,10 +49,10 @@ type Inputs struct {
 // restart; LastFailure and Streams are since the start.
 type Status struct {
 	Enabled              bool              `json:"enabled" doc:"True when funcd runs the platform backup, which needs backup.target and storage.mode file."`
-	Held                 bool              `json:"held" doc:"True while the platform is held: the platform backup waits for the release."`
-	RPORisk              bool              `json:"rpoRisk" doc:"True when no verified generation is newer than backup.objectives.rpo; funcd then logs backup rpo at risk. funcdctl backup verify clears it."`
-	Interval             v1.Duration       `json:"interval" doc:"How often the platform backup runs: backup.interval."`
-	RPO                  v1.Duration       `json:"rpo" doc:"The most data that a loss may take: backup.objectives.rpo."`
+	Held                 bool              `json:"held" doc:"True while the platform is held: the backups wait for the release. It reads false, as interval and rpo read 0s, when funcd runs no backup: under storage.mode memory, or with neither backup.target nor kvstore.backup.enabled set."`
+	RPORisk              bool              `json:"rpoRisk" doc:"True when the platform backup is on and no verified generation is newer than backup.objectives.rpo; funcd then logs backup rpo at risk, and funcdctl backup verify clears it."`
+	Interval             v1.Duration       `json:"interval" doc:"How often the platform backup runs: backup.interval; 0s when funcd runs no backup."`
+	RPO                  v1.Duration       `json:"rpo" doc:"The most data that a loss may take: backup.objectives.rpo; 0s when funcd runs no backup."`
 	LastFailure          *Failure          `json:"lastFailure,omitempty" doc:"The last run that failed since funcd started; a run that succeeds clears it."`
 	LastSuccessTime      *v1.Timestamp     `json:"lastSuccessTime,omitempty" doc:"When the newest complete generation on the target was written."`
 	LastVerifiedTime     *v1.Timestamp     `json:"lastVerifiedTime,omitempty" doc:"When the newest generation that funcdctl backup verify checked was written; absent when none is verified or its original has expired."`

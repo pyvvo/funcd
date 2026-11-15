@@ -108,7 +108,7 @@ type QuarantineReturn struct {
 	Namespace v1.NamespaceName `json:"namespace" doc:"The object's namespace."`
 	Name      v1.ObjectName    `json:"name" doc:"The object's name; for a volume, its Function's."`
 	Volume    v1.ObjectName    `json:"volume,omitempty" doc:"With kind Function, the name of the local volume."`
-	Since     *v1.Timestamp    `json:"since,omitempty" doc:"The entry to return, by its since as funcdctl hold status lists it; the object's newest entry when left out."`
+	Since     *v1.Timestamp    `json:"since,omitempty" doc:"The entry to return, by its since as funcdctl hold status lists it. Left out, a return that was cut short resumes first, else the object's newest kept entry returns."`
 }
 
 // NamespaceHold is one per-namespace marker (ADR-0222 Decision 8); Phase is the phase of the in-place Restore a
