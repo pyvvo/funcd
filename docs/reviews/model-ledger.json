@@ -14143,5 +14143,20 @@
     "dod_total": 16,
     "report": "docs/reviews/adr-0329-implementation-claude-opus-5-5.md",
     "notes": "pass; the Implemented stamp waits for the decider. 3 Minors (model): invokeFunction's 401 fix cannot help when server.auth.edge is off; answers.go links SpecAPI into the daemon (+608,864 bytes, a second global); the HTTP API section's first sentence claims every operation. Routed (adr): Decision 2 cites ADR-0147 for a 429 that no external call gets (a DoD item impossible as written); the function-call-documented scenario asks for an ADR on the page, which Decision 7 refuses; Decision 2's 503 list misses the cases of ADR-0290, ADR-0161, ADR-0169, ADR-0028 and ADR-0044. Routed (elsewhere): the cluster-scoped shared cases are proven by the first cluster kind's PR. DoD 14/16: just ci runs in the gate. Round 2 (a158b0b0): the 3 Minors closed, with no finding open; just ci exit 0. The decider's ruling of 2026-11-15 settles the routed items: the 429 and the scenario's ADR stand as built, and the five 503 cases go to the Function feature's rollout PR. Implemented 2026-11-15."
+  },
+  {
+    "date": "2026-11-15",
+    "adr": "0330",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 13,
+    "report": "docs/reviews/adr-0330-implementation-claude-opus-5-5.md",
+    "notes": "pass, independent subagent review of the KV pilot; no finding placed here. Routed: 8f4207ff edits Decision 7, plan step 5 and the checklist after acceptance, on the decider's ask, not on main yet (adr, the decider rules); diskfull.ErrDiskFull is declared on no KV endpoint, right while the pinned Badger keeps only the text (ADR-0297 Decision 3), owed by the Badger bump (none); the two dependency-check tests fail only under host load, 60 of 60 or more in every targeted run beside the matrix, even on one CPU (none, #1142). 46 matrix answers byte-identical to main; 6 overlay mutants caught; DoD 12/13, just ci left to the gate"
   }
 ]
