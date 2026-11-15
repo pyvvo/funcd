@@ -71,6 +71,7 @@ jobs:
             generated:
               - 'docs/guide/develop/**/spec.md'
               - 'docs/guide/develop/common-definitions.md'
+              - 'docs/guide/api/**'
 
   # Fast lane — runs on every change but a docs-only one (and always on push to main). The heavy
   # pkg/funcd e2e suite is build-tagged out of `just ci`, so this is fmt + lint + fast tests +
@@ -114,14 +115,6 @@ jobs:
           key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
           restore-keys: go-${{ runner.os }}-
 
-      - name: Check that the lists of operations and local API endpoints not yet described do not grow (ADR-0329, ADR-0330)
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: |
-          git fetch --no-tags --depth=1 origin "$BASE"
-          scripts/check-list-only-shrinks.sh "$BASE" internal/controlplane/kindref/testdata/undescribed-operations.txt
-          scripts/check-list-only-shrinks.sh "$BASE" internal/workernode/local/testdata/undescribed-endpoints.txt
       - name: Run CI (fmt check + lint + fast tests + build)
         if: needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.generated == 'true' || github.event_name == 'push'
         run: nix develop --command just ci

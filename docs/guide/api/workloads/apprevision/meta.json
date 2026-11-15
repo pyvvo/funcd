@@ -1,0 +1,7 @@
+{
+  "title": "AppRevision",
+  "pages": [
+    "list",
+    "get"
+  ]
+}

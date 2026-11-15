@@ -123,12 +123,12 @@ func TestScenarioEveryKindInOneFeature(t *testing.T) {
 	require.Empty(t, listed, "kinds that v1.AllKinds() does not return")
 }
 
-// TestEveryFieldIsDescribed holds every field a Spec page shows to a description written for users (ADR-0323
-// Decision 2).
+// TestEveryFieldIsDescribed holds every field a Spec page or the API reference shows to a description written for
+// users (ADR-0323 Decision 2, ADR-0331 Decision 3.2).
 func TestEveryFieldIsDescribed(t *testing.T) {
 	doc := controlplane.SpecAPI().OpenAPI()
 	require.NoError(t, check(Undescribed(doc)))
-	_, fields, err := render(documentOf(doc), Features)
+	fields, err := fieldsOf(documentOf(doc))
 	require.NoError(t, err)
 	for path, desc := range fields {
 		require.NotContains(t, desc, "ADR-", "%s: a description is written for users and names no ADR", path)

@@ -104,3 +104,30 @@ This page lists the spec and status fields of Identity, Role, RolesAssignment an
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `cedar` | string, required | One or more Cedar permit or forbid statements, which apply with funcd's built-in rules to each request whose principal and resource are both in the Policy's namespace; a forbid wins over any permit. Each statement names one action funcd knows, such as kv::read, and its principal and resource scopes name only entity types funcd knows and, for a type with a namespace, ids that begin with the Policy's namespace and a slash. funcd refuses text that does not parse, holds no statement or breaks these rules. |
+
+## HTTP API
+
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
+
+| Method | Path | Operation |
+| --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/identities` | [List the Identities of a namespace](../../../api/security-and-networking/identity/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/identities` | [Create an Identity](../../../api/security-and-networking/identity/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/identities/{name}` | [Read an Identity](../../../api/security-and-networking/identity/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/identities/{name}` | [Replace an Identity](../../../api/security-and-networking/identity/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/identities/{name}` | [Delete an Identity](../../../api/security-and-networking/identity/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/roles` | [List the Roles of a namespace](../../../api/security-and-networking/role/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/roles` | [Create a Role](../../../api/security-and-networking/role/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/roles/{name}` | [Read a Role](../../../api/security-and-networking/role/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/roles/{name}` | [Replace a Role](../../../api/security-and-networking/role/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/roles/{name}` | [Delete a Role](../../../api/security-and-networking/role/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/rolesassignments` | [List the RolesAssignments of a namespace](../../../api/security-and-networking/rolesassignment/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/rolesassignments` | [Create a RolesAssignment](../../../api/security-and-networking/rolesassignment/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/rolesassignments/{name}` | [Read a RolesAssignment](../../../api/security-and-networking/rolesassignment/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/rolesassignments/{name}` | [Replace a RolesAssignment](../../../api/security-and-networking/rolesassignment/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/rolesassignments/{name}` | [Delete a RolesAssignment](../../../api/security-and-networking/rolesassignment/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/policies` | [List the Policies of a namespace](../../../api/security-and-networking/policy/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/policies` | [Create a Policy](../../../api/security-and-networking/policy/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/policies/{name}` | [Read a Policy](../../../api/security-and-networking/policy/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/policies/{name}` | [Replace a Policy](../../../api/security-and-networking/policy/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/policies/{name}` | [Delete a Policy](../../../api/security-and-networking/policy/delete.md) |

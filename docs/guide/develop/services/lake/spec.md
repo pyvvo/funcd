@@ -159,3 +159,15 @@ The Lakes that the function binds, by alias: the address of each Lake's gateway,
 | Method | What it does |
 | --- | --- |
 | `get(alias: str) -> LakeEndpoint` | The gateway of the Lake bound as ``alias``: ``url``, its address as ``host:port``, and ``token``, the token that it accepts from the function. Raises ``KeyError`` naming the alias when the function binds no Lake with that alias. |
+
+## HTTP API
+
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
+
+| Method | Path | Operation |
+| --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes` | [List the Lakes of a namespace](../../../api/services/lake/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes` | [Create a Lake](../../../api/services/lake/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes/{name}` | [Read a Lake](../../../api/services/lake/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes/{name}` | [Replace a Lake](../../../api/services/lake/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes/{name}` | [Delete a Lake](../../../api/services/lake/delete.md) |

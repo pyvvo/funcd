@@ -1,0 +1,13 @@
+{
+  "title": "Function",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete",
+    "delete-volume",
+    "get-logs",
+    "invoke"
+  ]
+}

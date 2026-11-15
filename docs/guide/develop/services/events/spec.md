@@ -115,3 +115,24 @@ This page lists the spec and status fields of EventSource and Sensor, each with 
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
+
+## HTTP API
+
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
+
+| Method | Path | Operation |
+| --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources` | [List the EventSources of a namespace](../../../api/services/eventsource/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources` | [Create an EventSource](../../../api/services/eventsource/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources/{name}` | [Read an EventSource](../../../api/services/eventsource/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources/{name}` | [Replace an EventSource](../../../api/services/eventsource/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources/{name}` | [Delete an EventSource](../../../api/services/eventsource/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors` | [List the Sensors of a namespace](../../../api/services/sensor/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors` | [Create a Sensor](../../../api/services/sensor/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors/{name}` | [Read a Sensor](../../../api/services/sensor/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors/{name}` | [Replace a Sensor](../../../api/services/sensor/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors/{name}` | [Delete a Sensor](../../../api/services/sensor/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/deadletters` | [List the dead letters of a namespace](../../../api/services/deadletter/list.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/deadletters/{id}` | [Read a dead letter](../../../api/services/deadletter/get.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/deadletters/{id}` | [Discard a dead letter](../../../api/services/deadletter/discard.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/deadletters/{id}/replay` | [Replay a dead letter](../../../api/services/deadletter/replay.md) |

@@ -1,0 +1,15 @@
+{
+  "title": "Workloads",
+  "icon": "Boxes",
+  "pages": [
+    "function",
+    "revision",
+    "invocation",
+    "app",
+    "apprevision",
+    "site",
+    "workflow",
+    "workflowrun",
+    "configmap"
+  ]
+}

@@ -162,7 +162,7 @@ func TestScenarioUnlistedAnswerFails(t *testing.T) {
 	got := provenAnswers(t, doc)
 	require.NoError(t, compareAnswers(doc, got, true))
 	got[answer{"replaceKVStore", http.StatusTeapot}] = true
-	got[answer{"listNamespaces", http.StatusTeapot}] = true // no described operation: nothing to compare
+	got[answer{"listThings", http.StatusTeapot}] = true // no described operation: nothing to compare
 	for _, full := range []bool{true, false} {
 		err := compareAnswers(doc, got, full)
 		require.EqualError(t, err, "replaceKVStore answered 418 I'm a teapot, which it does not list")
@@ -299,15 +299,16 @@ func provenCauses(t *testing.T, endpoints []local.Endpoint) map[localError]int {
 
 // scenario: undeclared-cause-fails-a-test
 func TestScenarioUndeclaredCauseFailsATest(t *testing.T) {
-	endpoints := local.Endpoints()
+	// GET /undescribed stands for an endpoint not yet described, however far the rollout has gone.
+	endpoints := append(local.Endpoints(), local.Endpoint{Pattern: "GET /undescribed"})
 	got := provenCauses(t, endpoints)
 	require.NoError(t, compareCauses(endpoints, got, true))
 	const put = "PUT /kv/{binding}/{key...}"
 	got[localError{put, local.ErrKeyNotFound, fault.NotFound}]++
 	got[localError{put, nil, fault.Conflict}]++
 	got[localError{put, kvstore.ErrNoBinding, fault.Conflict}]++
-	got[localError{put, nil, fault.Internal}]++                     // internal: implicit on every endpoint
-	got[localError{"POST /invoke/{alias}", nil, fault.Forbidden}]++ // an endpoint not yet described
+	got[localError{put, nil, fault.Internal}]++                 // internal: implicit on every endpoint
+	got[localError{"GET /undescribed", nil, fault.Forbidden}]++ // an endpoint not yet described
 	for _, full := range []bool{true, false} {
 		require.EqualError(t, compareCauses(endpoints, got, full), put+" answered an error of kind conflict with no known cause\n"+
 			put+" answered kvstore.no-binding with the kind conflict, not its own forbidden\n"+

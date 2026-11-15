@@ -93,3 +93,20 @@ This page lists the spec and status fields of Route and EgressPolicy, each with 
 | --- | --- | --- |
 | `cidrs` | array of string values | Address ranges, such as 10.0.0.0/8, that the dialled address must fall in. A host reached by name needs a domains entry too, since funcd answers a worker's lookup only for a name that a domain rule applying to it allows. |
 | `domains` | array of string values | Host names in lower case: exact, such as api.x.com, or a wildcard, such as \*.x.com, which matches every name under x.com but not x.com. A connection matches a name only at an address that the worker's own lookup of it through funcd returned, within the answer's TTL, and never at an address that is not globally reachable, such as a private one, which needs a cidrs entry. |
+
+## HTTP API
+
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
+
+| Method | Path | Operation |
+| --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/routes` | [List the Routes of a namespace](../../../api/security-and-networking/route/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/routes` | [Create a Route](../../../api/security-and-networking/route/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/routes/{name}` | [Read a Route](../../../api/security-and-networking/route/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/routes/{name}` | [Replace a Route](../../../api/security-and-networking/route/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/routes/{name}` | [Delete a Route](../../../api/security-and-networking/route/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/egresspolicies` | [List the EgressPolicies of a namespace](../../../api/security-and-networking/egresspolicy/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/egresspolicies` | [Create an EgressPolicy](../../../api/security-and-networking/egresspolicy/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/egresspolicies/{name}` | [Read an EgressPolicy](../../../api/security-and-networking/egresspolicy/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/egresspolicies/{name}` | [Replace an EgressPolicy](../../../api/security-and-networking/egresspolicy/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/egresspolicies/{name}` | [Delete an EgressPolicy](../../../api/security-and-networking/egresspolicy/delete.md) |

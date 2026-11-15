@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/dataplane"
 )
 
@@ -49,10 +48,10 @@ func (p proxyInvoker) Invoke(ctx context.Context, target Ref, input []byte, time
 		if err := cctx.Err(); err != nil {
 			cause = err.Error()
 		}
-		return nil, fault.Unavailablef(op, "the response of %s was cut off: %s", target, cause)
+		return nil, ErrReplyCutOff.Errorf(op, "the response of %s was cut off: %s", target, cause)
 	}
 	if rec.over {
-		return nil, fault.PayloadTooLargef(op, "the response of %s exceeds the %d-byte invoke limit", target, maxInvokeBytes)
+		return nil, ErrReplyTooLarge.Errorf(op, "the response of %s exceeds the %d-byte invoke limit", target, maxInvokeBytes)
 	}
 	res := rec.Result()
 	body := rec.Body.Bytes()
@@ -91,10 +90,10 @@ func (p proxyInvoker) Fetch(ctx context.Context, target Ref, f FetchRequest, tim
 		if err := cctx.Err(); err != nil {
 			cause = err.Error()
 		}
-		return FetchReply{}, fault.Unavailablef(op, "the response of %s was cut off: %s", target, cause)
+		return FetchReply{}, ErrReplyCutOff.Errorf(op, "the response of %s was cut off: %s", target, cause)
 	}
 	if rec.over {
-		return FetchReply{}, fault.PayloadTooLargef(op, "the response of %s exceeds the %d-byte invoke limit", target, maxInvokeBytes)
+		return FetchReply{}, ErrReplyTooLarge.Errorf(op, "the response of %s exceeds the %d-byte invoke limit", target, maxInvokeBytes)
 	}
 	res := rec.Result()
 	return FetchReply{Status: res.StatusCode, Header: res.Header, Body: rec.Body.Bytes()}, nil

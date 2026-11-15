@@ -1,0 +1,10 @@
+{
+  "title": "EventSource",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

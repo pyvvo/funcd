@@ -64,3 +64,20 @@ This page lists the spec and status fields of Namespace and ResourceGroup, each 
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
+
+## HTTP API
+
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
+
+| Method | Path | Operation |
+| --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces` | [List the Namespaces](../../../api/tenancy-and-limits/namespace/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces` | [Create a Namespace](../../../api/tenancy-and-limits/namespace/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{name}` | [Read a Namespace](../../../api/tenancy-and-limits/namespace/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{name}` | [Replace a Namespace](../../../api/tenancy-and-limits/namespace/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{name}` | [Delete a Namespace](../../../api/tenancy-and-limits/namespace/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups` | [List the ResourceGroups of a namespace](../../../api/tenancy-and-limits/resourcegroup/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups` | [Create a ResourceGroup](../../../api/tenancy-and-limits/resourcegroup/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups/{name}` | [Read a ResourceGroup](../../../api/tenancy-and-limits/resourcegroup/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups/{name}` | [Replace a ResourceGroup](../../../api/tenancy-and-limits/resourcegroup/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups/{name}` | [Delete a ResourceGroup](../../../api/tenancy-and-limits/resourcegroup/delete.md) |

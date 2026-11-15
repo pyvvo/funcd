@@ -393,3 +393,21 @@ This page lists the spec and status fields of Workflow and WorkflowRun, each wit
 | `phase` | string, one of `Pending`, `Running`, `Succeeded`, `Failed`, `Skipped`, `Cancelled` | Where the step is. It is Skipped when its when.condition is false, its join cannot be met or a step it depends on failed; a running step that a failure elsewhere stops goes back to Pending. |
 | `revision` | string | The step's image with the digest it resolved to when the run started; empty for a builtin or workflow step. A replay compares it to detect a changed artifact. |
 | `startedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the step started running. |
+
+## HTTP API
+
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
+
+| Method | Path | Operation |
+| --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows` | [List the Workflows of a namespace](../../../api/workloads/workflow/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows` | [Create a Workflow](../../../api/workloads/workflow/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows/{name}` | [Read a Workflow](../../../api/workloads/workflow/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows/{name}` | [Replace a Workflow](../../../api/workloads/workflow/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows/{name}` | [Delete a Workflow](../../../api/workloads/workflow/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns` | [List the WorkflowRuns of a namespace](../../../api/workloads/workflowrun/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns` | [Create a WorkflowRun](../../../api/workloads/workflowrun/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns/{name}` | [Read a WorkflowRun](../../../api/workloads/workflowrun/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns/{name}` | [Replace a WorkflowRun](../../../api/workloads/workflowrun/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns/{name}` | [Delete a WorkflowRun](../../../api/workloads/workflowrun/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns/{name}/logs` | [Read the logs of a WorkflowRun](../../../api/workloads/workflowrun/get-logs.md) |

@@ -50,7 +50,7 @@ func (r storeResolver) Resolve(ctx context.Context, caller Ref, alias string) (R
 		}
 		return target, protocol, timeout, nil
 	}
-	return Ref{}, "", 0, fault.Forbiddenf(op, "caller %s/%s declares no link %q (no link is no grant)", caller.Namespace, caller.Function, alias)
+	return Ref{}, "", 0, ErrNoLink.Errorf(op, "caller %s/%s declares no link %q (no link is no grant)", caller.Namespace, caller.Function, alias)
 }
 
 // protocolOf reads how target is called (ADR-0243), so invoke and fetch each refuse the other kind of target.
@@ -58,7 +58,7 @@ func (r storeResolver) protocolOf(ctx context.Context, target Ref) (v1.FunctionP
 	const op = "workernode.local.resolve"
 	obj, err := r.store.Get(ctx, v1.KindFunction.GVK(), target.Namespace, target.Function)
 	if fault.KindOf(err) == fault.NotFound {
-		return "", fault.NotFoundf(op, "link target %s does not exist", target)
+		return "", ErrLinkTargetMissing.Errorf(op, "link target %s does not exist", target)
 	}
 	if err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "load link target %s", target)

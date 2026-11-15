@@ -1,0 +1,10 @@
+{
+  "title": "Namespace",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

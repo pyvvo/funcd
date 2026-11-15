@@ -1,0 +1,10 @@
+{
+  "title": "EgressPolicy",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

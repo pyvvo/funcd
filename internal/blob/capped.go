@@ -1,10 +1,6 @@
 package blob
 
-import (
-	"context"
-
-	"github.com/pyvvo/funcd/api/fault"
-)
+import "context"
 
 // Capped returns a view of inner whose Put refuses an object larger than maxBytes with
 // fault.PayloadTooLarge: the Bucket.spec.quota.maxObjectBytes per-object policy (ADR-0080, ADR-0148, ADR-0292). It also
@@ -29,14 +25,14 @@ type cappedBucket struct {
 
 func (c *cappedBucket) Put(ctx context.Context, key string, data []byte, opts PutOptions) error {
 	if int64(len(data)) > c.max {
-		return fault.PayloadTooLargef("blob.Capped.Put", "object %q is %d bytes, over the bucket's maxObjectBytes (%d)", key, len(data), c.max)
+		return ErrObjectOverCap.Errorf("blob.Capped.Put", "object %q is %d bytes, over the bucket's maxObjectBytes (%d)", key, len(data), c.max)
 	}
 	return c.Bucket.Put(ctx, key, data, opts)
 }
 
 func (c *cappedBucket) SignedURL(ctx context.Context, key string, opts SignOptions) (string, error) {
 	if opts.Method == SignPut {
-		return "", fault.Forbiddenf("blob.Capped.SignedURL", "a presigned PUT for %q cannot enforce the bucket's maxObjectBytes (%d)", key, c.max)
+		return "", ErrSignPutCapped.Errorf("blob.Capped.SignedURL", "a presigned PUT for %q cannot enforce the bucket's maxObjectBytes (%d)", key, c.max)
 	}
 	return c.Bucket.SignedURL(ctx, key, opts)
 }

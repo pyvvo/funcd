@@ -110,11 +110,25 @@ func blank(status int, when, fix string) ErrorCase {
 	return ErrorCase{Status: status, Type: "about:blank", When: when, Fix: fix}
 }
 
-// kindCases are the cases a described kind's operations add to their verb's shared ones (ADR-0329 Decision 1). A kind
-// whose operations are not described yet has none and keeps huma's responses.
+// kindCases are the cases a described kind's operations add to their verb's shared ones (ADR-0329 Decision 1), and the
+// kind's own words for a shared case whose text misleads for it. A kind whose operations are not described yet has none
+// and keeps huma's responses.
 type kindCases struct {
 	create, replace, remove []ErrorCase
+	words                   map[sharedCase]wording
 }
+
+// sharedCase names a shared case that a kind may word for itself, in kindCases.words.
+type sharedCase int
+
+// The shared cases that a kind may word for itself.
+const (
+	nameTaken sharedCase = iota // create's 409 for a name already taken
+)
+
+// wording is a kind's own When and Fix for a shared case, which keeps its status and its problem type; an empty text
+// keeps the shared one.
+type wording struct{ when, fix string }
 
 // restOperations are the operations of one kind's REST surface: list and create on its collection, get, replace and
 // delete on an item.
@@ -136,7 +150,7 @@ func restOperationsOf(kind, kinds, base, item string, namespaced bool, cases *ki
 	if cases == nil {
 		return ops
 	}
-	v := verbCases{kind: kind, kinds: kinds, namespaced: namespaced}
+	v := verbCases{kind: kind, kinds: kinds, namespaced: namespaced, words: cases.words}
 	list := "List the " + kinds
 	if namespaced {
 		list += " of a namespace"
@@ -191,7 +205,7 @@ func bodyCases() []ErrorCase {
 			"Send the body as application/json."),
 		blank(http.StatusUnprocessableEntity,
 			"The body breaks the schema: a field that it does not know, of the wrong type or past its limits.",
-			"Correct the field at the location that the detail gives, such as body.spec.tables."),
+			"Correct the field at the location that the detail gives."),
 	}
 }
 
@@ -206,6 +220,19 @@ func badIfMatch() ErrorCase {
 type verbCases struct {
 	kind, kinds string
 	namespaced  bool
+	words       map[sharedCase]wording // the kind's own words for some of these cases
+}
+
+// worded is c, the shared case s, with the kind's own When and Fix for it, when the kind words it.
+func (v verbCases) worded(s sharedCase, c ErrorCase) ErrorCase {
+	w := v.words[s]
+	if w.when != "" {
+		c.When = w.when
+	}
+	if w.fix != "" {
+		c.Fix = w.fix
+	}
+	return c
 }
 
 // in is where the kind's objects are, after a verb.
@@ -266,8 +293,8 @@ func (v verbCases) get() []ErrorCase {
 
 func (v verbCases) create(own []ErrorCase) []ErrorCase {
 	cases := []ErrorCase{unauthorized(), v.forbidden("create " + an(v.kind)), badQuery(), badDryRun(), ruleBroken(),
-		problem(fault.Conflict, capital(an(v.kind))+" of that name already exists"+v.in()+".",
-			"Choose another name, or replace the existing "+v.kind+".")}
+		v.worded(nameTaken, problem(fault.Conflict, capital(an(v.kind))+" of that name already exists"+v.in()+".",
+			"Choose another name, or replace the existing "+v.kind+"."))}
 	if v.namespaced {
 		cases = append(cases, badPath("namespace"), problem(fault.Invalid,
 			"The body's metadata.namespace is not the namespace of the path.",
@@ -277,14 +304,17 @@ func (v verbCases) create(own []ErrorCase) []ErrorCase {
 }
 
 func (v verbCases) replace(own []ErrorCase) []ErrorCase {
-	meta := "metadata.name"
-	if v.namespaced {
-		meta = "metadata.namespace or metadata.name"
+	when, fix := "The body's metadata.namespace or metadata.name is not the path's", "Send the object to its own path"
+	if !v.namespaced {
+		// A cluster-scoped kind's path has no namespace, so the detail of a body that sets one names an empty one.
+		when = "The body sets metadata.namespace, which the detail compares with the path's empty namespace, or its " +
+			"metadata.name is not the path's"
+		fix = "Leave metadata.namespace empty, and send the object to its own path"
 	}
 	return slices.Concat([]ErrorCase{unauthorized(), v.forbidden("replace " + an(v.kind)), v.notFound(),
 		badPath(v.path()), badQuery(), badDryRun(), badIfMatch(), ruleBroken(), v.stale(),
-		problem(fault.Invalid, "The body's "+meta+" is not the path's, or If-Match and metadata.resourceVersion "+
-			"name two versions.", "Send the object to its own path, with at most one version.")},
+		problem(fault.Invalid, when+", or If-Match and metadata.resourceVersion name two versions.",
+			fix+", with at most one version.")},
 		bodyCases(), own)
 }
 

@@ -1,0 +1,10 @@
+{
+  "title": "ResourceGroup",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

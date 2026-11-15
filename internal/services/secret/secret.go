@@ -98,7 +98,7 @@ func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.Objec
 func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key, value string) error {
 	return f.write(ctx, ns, fn, binding, func(data map[string][]byte) error {
 		if k, p := secrets.EnvDataProblem(map[string][]byte{key: []byte(value)}); p != "" {
-			return fault.Invalidf("secret.Put", "secret %q key %q %s", binding, k, p)
+			return secrets.ErrValueNotText.Errorf("secret.Put", "secret %q key %q %s", binding, k, p)
 		}
 		data[key] = []byte(value)
 		return nil
@@ -124,11 +124,14 @@ func (f *Facade) write(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNam
 		return err
 	}
 	if !slices.Contains(function.Spec.Bindings.Secret, v1.ObjectName(binding)) {
-		return fault.Forbiddenf(op, "function %q in %q does not bind Secret %q", fn, ns, binding)
+		return secrets.ErrNoBinding.Errorf(op, "function %q in %q does not bind Secret %q", fn, ns, binding)
 	}
 	id := secrets.WorkloadIdentity(v1.KindFunction, ns, fn)
 	for range writeAttempts {
 		obj, err := f.store.Get(ctx, v1.KindSecret.GVK(), ns, v1.ObjectName(binding))
+		if fault.KindOf(err) == fault.NotFound {
+			return secrets.ErrSecretMissing.Wrapf(err, op, "get secret %q", binding)
+		}
 		if err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "get secret %q", binding)
 		}
@@ -146,20 +149,29 @@ func (f *Facade) write(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNam
 			return err
 		}
 		_, err = f.store.Update(ctx, sec)
-		if fault.KindOf(err) != fault.Conflict {
-			if err != nil {
-				return fault.Wrapf(err, fault.KindOf(err), op, "update secret %q", binding)
-			}
-			return nil
+		switch fault.KindOf(err) {
+		case fault.Conflict:
+			continue
+		case fault.Invalid:
+			return secrets.ErrKeyInvalid.Wrapf(err, op, "update secret %q", binding)
+		case fault.NotFound:
+			return secrets.ErrSecretMissing.Wrapf(err, op, "update secret %q", binding)
 		}
+		if err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "update secret %q", binding)
+		}
+		return nil
 	}
-	return fault.Conflictf(op, "secret %q changed under each of %d attempts to write it", binding, writeAttempts)
+	return secrets.ErrWriteContended.Errorf(op, "secret %q changed under each of %d attempts to write it", binding, writeAttempts)
 }
 
 // function reads fn's current spec, whose bindings name what it may read and write (ADR-0249 Decision 2).
 func (f *Facade) function(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (*v1.Function, error) {
 	const op = "secret.function"
 	obj, err := f.store.Get(ctx, v1.KindFunction.GVK(), ns, fn)
+	if fault.KindOf(err) == fault.NotFound {
+		return nil, secrets.ErrCallerMissing.Wrapf(err, op, "get function %s/%s", ns, fn)
+	}
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "get function %s/%s", ns, fn)
 	}

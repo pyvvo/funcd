@@ -1,0 +1,14 @@
+{
+  "title": "Services",
+  "icon": "Database",
+  "pages": [
+    "kvstore",
+    "bucket",
+    "sqldatabase",
+    "lake",
+    "secret",
+    "eventsource",
+    "sensor",
+    "deadletter"
+  ]
+}

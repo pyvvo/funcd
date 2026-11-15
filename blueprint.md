@@ -931,8 +931,9 @@ Removed from the draft list:
 - Client config in `~/.funcd/config.yaml` (contexts: server URL, token, default namespace).
 - The SDK and CLI consume the generated OpenAPI client, so CLI, SDK, and server cannot drift from the spec.
 - Each operation of the spec lists the answers it gives, with when and what to do, and tests hold the list to the
-  handlers' real answers; each feature's Spec tab and funcd's `/docs` page show them
-  ([ADR-0329](docs/adr/0329-each-api-operation-documents-its-answers.md)).
+  handlers' real answers; the docs site's API reference shows them, each feature's Spec tab links it, and funcd's
+  `/docs` page shows them ([ADR-0329](docs/adr/0329-each-api-operation-documents-its-answers.md),
+  [ADR-0331](docs/adr/0331-the-control-plane-apis-reference-is-a-section-of-its-own.md)).
 
 ### Control-plane API & IaC
 

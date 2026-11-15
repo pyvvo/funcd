@@ -8,8 +8,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
-
-	"github.com/pyvvo/funcd/api/fault"
 )
 
 // NestedCapOp is the fault Op of a nested call refused by the per-target in-flight cap (ADR-0147).
@@ -28,9 +26,9 @@ type nestedCapInvoker struct {
 
 // NewNestedCapInvoker wraps inner with the per-target nested-call in-flight cap (ADR-0147): a call is counted
 // from before the data-plane hand-off until it returns (a cold wake included). With maxPerTarget (≥ 1) calls to
-// the target in flight, the next is refused at once without calling inner: fault.ResourceExhausted (429, no
-// Retry-After: a slot frees on return, not on a clock), Op NestedCapOp, and the Int64Counter
-// "funcd.invoke.nested.refused" +1 with the target's namespace and function.
+// the target in flight, the next is refused at once without calling inner: ErrNestedCapReached, of kind
+// fault.ResourceExhausted (429, no Retry-After: a slot frees on return, not on a clock), Op NestedCapOp, and the
+// Int64Counter "funcd.invoke.nested.refused" +1 with the target's namespace and function.
 func NewNestedCapInvoker(inner Invoker, maxPerTarget int, meter metric.Meter) Invoker {
 	refused, err := meter.Int64Counter("funcd.invoke.nested.refused",
 		metric.WithDescription("Nested fn-to-fn calls refused by the per-target in-flight cap (ADR-0147)."))
@@ -65,7 +63,7 @@ func (n *nestedCapInvoker) take(ctx context.Context, target Ref) error {
 		n.refused.Add(ctx, 1, metric.WithAttributes(
 			attribute.String("namespace", string(target.Namespace)),
 			attribute.String("function", string(target.Function))))
-		return fault.ResourceExhaustedf(NestedCapOp,
+		return ErrNestedCapReached.Errorf(NestedCapOp,
 			"%s has %d nested calls in flight, the cap set by invoke.maxNestedInFlight", target, n.max)
 	}
 	n.inFlight[target]++

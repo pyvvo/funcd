@@ -341,9 +341,54 @@ type quarantineReturnInput struct {
 
 type holdReleaseInput struct {
 	Body struct {
-		Advance    []string           `json:"advance,omitempty" doc:"blob EventSources, <namespace>/<name>, whose listed keys are marked seen instead of replayed"`
-		Namespaces []v1.NamespaceName `json:"namespaces,omitempty" doc:"namespaces whose hold a restore left is released, instead of the platform's: restore run's data marker, and the marker of an in-place Restore that has ended"`
+		Advance    []string           `json:"advance,omitempty" doc:"With the release of the platform's hold: the blob EventSources, each as <namespace>/<name>, whose pending objects the release marks seen instead of firing them."`
+		Namespaces []v1.NamespaceName `json:"namespaces,omitempty" doc:"The namespaces whose hold to release, instead of the platform's: the hold for its data that funcd restore run sets on a namespace with a BackupSchedule, and the hold that an in-place Restore keeps when its load does not complete."`
 	}
+}
+
+// drForbidden is the 403 of a hold route or of the platform backup's status, which only an admin's credential may call.
+func drForbidden(what string) ErrorCase {
+	return problem(fault.Forbidden, "The credential's role does not allow it to "+what+": only an admin's does.",
+		"Use an admin's credential.")
+}
+
+// releaseHoldCases are the answers of a release of the platform's hold (ADR-0206 Decision 8) or of namespaces'
+// (ADR-0228 Decision 5).
+func releaseHoldCases() []ErrorCase {
+	return slices.Concat([]ErrorCase{unauthorized(), drForbidden("release a hold"),
+		problem(fault.Invalid, "The body sets both advance and namespaces: advance applies to the release of the "+
+			"platform's hold only.", "Release the platform and the namespaces in two calls."),
+		problem(fault.Invalid, "An entry of advance does not name, as <namespace>/<name>, an EventSource with a blob event.",
+			"Name only blob EventSources, as funcdctl hold status lists them under pending."),
+		problem(fault.Conflict, "The body names no namespace, and the platform is not held.",
+			"There is nothing to release: funcdctl hold status shows what is held."),
+		problem(fault.Conflict, "A namespace of the body is not held; the namespaces before it are released.",
+			"Release the namespaces after it again, without it."),
+		problem(fault.Conflict, "A namespace of the body is held by an in-place Restore that is Pending or Running; the "+
+			"namespaces before it are released.", "Release the namespaces after it again; release this one once the "+
+			"Restore has ended."),
+		badQuery()}, bodyCases())
+}
+
+// returnQuarantinedCases are the answers of a return of quarantined data (ADR-0288 Decision 6).
+func returnQuarantinedCases() []ErrorCase {
+	return slices.Concat([]ErrorCase{unauthorized(), drForbidden("return quarantined data"),
+		problem(fault.Invalid, "The kind is none of KVStore, Bucket and Function.", "Send KVStore, Bucket, or Function "+
+			"with the volume; a SQL database's directory goes back by hand, with funcd stopped."),
+		problem(fault.Invalid, "The kind is Function and the body names no volume, or it names a volume with another kind.",
+			"Name the volume with kind Function only."),
+		problem(fault.NotFound, "The quarantine holds no entry of the object, or none of that since, that is kept or "+
+			"returning; a moving entry, which a failed move leaves, does not return.", "Read the entries under "+
+			"quarantine in funcdctl hold status; a moving entry returns once a later start of funcd has finished its "+
+			"move."),
+		problem(fault.Conflict, "The KVStore, the Bucket or the Function does not exist, or the Function declares no "+
+			"local volume of that name.", "Apply the KVStore or the Bucket again, or the Function with the volume in "+
+			"its spec.volumes, then return its data."),
+		problem(fault.Conflict, "The object holds data: an entry returns only into an empty KVStore, Bucket or volume.",
+			"Delete what the object holds, if it is not needed, then return its data."),
+		problem(fault.Unavailable, "This funcd server keeps no quarantine of that kind, such as of volumes while "+
+			"volumes are off.", "Check the kind: funcdctl hold status lists the entries of the quarantine."),
+		badQuery()}, bodyCases())
 }
 
 // RegisterHold registers the hold routes (ADR-0206 Decision 8), cluster-scoped and admin-only as ADR-0205's
@@ -351,9 +396,10 @@ type holdReleaseInput struct {
 // (ADR-0222 Decision 8) authorizes update on the Namespace instead.
 func RegisterHold(api huma.API, h Holder, authz auth.Authorizer) {
 	const base = "/apis/funcd.io/v1alpha1/hold"
-	huma.Register(api, huma.Operation{
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "getHold", Method: http.MethodGet, Path: base, Tags: []string{"Hold"},
-	}, func(ctx context.Context, _ *struct{}) (*holdStatusOutput, error) {
+	}, "Read the hold and its evidence", unauthorized(), drForbidden("read the hold"),
+	), func(ctx context.Context, _ *struct{}) (*holdStatusOutput, error) {
 		if err := authorizeHold(ctx, authz, auth.VerbGet, v1.KindWorkerNode); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -363,9 +409,10 @@ func RegisterHold(api huma.API, h Holder, authz auth.Authorizer) {
 		}
 		return &holdStatusOutput{Body: st}, nil
 	})
-	huma.Register(api, huma.Operation{
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "releaseHold", Method: http.MethodPost, Path: base + "/release", Tags: []string{"Hold"},
-	}, func(ctx context.Context, in *holdReleaseInput) (*struct{}, error) {
+	}, "Release the hold of the platform or of namespaces", releaseHoldCases()...,
+	), func(ctx context.Context, in *holdReleaseInput) (*struct{}, error) {
 		if nss := in.Body.Namespaces; len(nss) > 0 {
 			if len(in.Body.Advance) > 0 {
 				return nil, wrapFaultError(fault.Invalidf("controlplane.ReleaseHold", "advance applies to the platform's release, not to a namespace's"))
@@ -381,10 +428,11 @@ func RegisterHold(api huma.API, h Holder, authz auth.Authorizer) {
 		return nil, wrapFaultError(h.Release(ctx, in.Body.Advance))
 	})
 	// ADR-0288 Decision 6: an admin returns a quarantined entry into its object, authorized as a platform release.
-	huma.Register(api, huma.Operation{
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "returnQuarantined", Method: http.MethodPost, Path: "/apis/funcd.io/v1alpha1/quarantine/return",
 		Tags: []string{"Hold"},
-	}, func(ctx context.Context, in *quarantineReturnInput) (*struct{}, error) {
+	}, "Return quarantined data into its object", returnQuarantinedCases()...,
+	), func(ctx context.Context, in *quarantineReturnInput) (*struct{}, error) {
 		if err := authorizeHold(ctx, authz, auth.VerbUpdate, v1.KindWorkerNode); err != nil {
 			return nil, wrapFaultError(err)
 		}

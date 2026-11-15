@@ -1,0 +1,10 @@
+{
+  "title": "Lake",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

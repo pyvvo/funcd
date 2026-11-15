@@ -11,6 +11,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/services/sql/engineargs"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // maxEngineResponse bounds what funcd reads from an engine for one call.
@@ -27,11 +28,12 @@ type engineResult struct {
 
 // call POSTs statements to an engine endpoint (/db/query or /db/execute) as user funcd and decodes rqlite's results.
 // A refused connection or a timeout is Unavailable, a 401 Internal; neither the password nor the address appears in
-// the error.
+// the error. Each failure that a SQL call of the local API can meet is raised from its known cause (ADR-0330).
 func call(ctx context.Context, client *http.Client, addr, password, path string, query url.Values, stmts []json.RawMessage) ([]engineResult, error) {
 	const op = "sql.engine"
 	body, err := json.Marshal(stmts)
 	if err != nil {
+		// No known cause: the local API passes only statements it parsed as JSON, so no request reaches it.
 		return nil, fault.Wrapf(err, fault.Invalid, op, "encode statements")
 	}
 	u := url.URL{Scheme: "http", Host: addr, Path: path, RawQuery: query.Encode()}
@@ -46,22 +48,22 @@ func call(ctx context.Context, client *http.Client, addr, password, path string,
 	resp, err := client.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, fault.Unavailablef(op, "the database's engine did not answer in time")
+			return nil, local.ErrSQLTimeout.Errorf(op, "the database's engine did not answer in time")
 		}
-		return nil, fault.Unavailablef(op, "the database's engine does not answer")
+		return nil, local.ErrSQLEngineUnavailable.Errorf(op, "the database's engine does not answer")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxEngineResponse+1))
 	if err != nil {
-		return nil, fault.Unavailablef(op, "the engine's answer broke off")
+		return nil, local.ErrSQLEngineUnavailable.Errorf(op, "the engine's answer broke off")
 	}
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
 		return nil, fault.Internalf(op, "the engine refused funcd's credential")
 	case resp.StatusCode != http.StatusOK:
-		return nil, fault.Unavailablef(op, "the engine answered %d", resp.StatusCode)
+		return nil, local.ErrSQLEngineUnavailable.Errorf(op, "the engine answered %d", resp.StatusCode)
 	case len(raw) > maxEngineResponse:
-		return nil, fault.PayloadTooLargef(op, "the engine's answer is over %d bytes", maxEngineResponse)
+		return nil, local.ErrSQLAnswerTooLarge.Errorf(op, "the engine's answer is over %d bytes", maxEngineResponse)
 	}
 	var out struct {
 		Results []engineResult `json:"results"`

@@ -154,3 +154,29 @@ This page lists the spec and status fields of Backup, BackupSchedule and Restore
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Running`, `Paused`, `Succeeded`, `Failed`, `Cancelled` | Pending while it waits for its Backup and, in place, for its export; Running while it checks the whole copy and loads; then Succeeded or Failed. A Restore that was Running when funcd stopped ends Failed with reason Interrupted. |
 | `startTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the Restore turned Running, once its Backup and any export had Succeeded. |
+
+## HTTP API
+
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
+
+| Method | Path | Operation |
+| --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backups` | [List the Backups of a namespace](../../api/disaster-recovery/backup/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backups` | [Create a Backup](../../api/disaster-recovery/backup/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backups/{name}` | [Read a Backup](../../api/disaster-recovery/backup/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backups/{name}` | [Replace a Backup](../../api/disaster-recovery/backup/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backups/{name}` | [Delete a Backup](../../api/disaster-recovery/backup/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules` | [List the BackupSchedules of a namespace](../../api/disaster-recovery/backupschedule/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules` | [Create a BackupSchedule](../../api/disaster-recovery/backupschedule/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules/{name}` | [Read a BackupSchedule](../../api/disaster-recovery/backupschedule/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules/{name}` | [Replace a BackupSchedule](../../api/disaster-recovery/backupschedule/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules/{name}` | [Delete a BackupSchedule](../../api/disaster-recovery/backupschedule/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/restores` | [List the Restores of a namespace](../../api/disaster-recovery/restore/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/restores` | [Create a Restore](../../api/disaster-recovery/restore/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/restores/{name}` | [Read a Restore](../../api/disaster-recovery/restore/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/restores/{name}` | [Replace a Restore](../../api/disaster-recovery/restore/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/restores/{name}` | [Delete a Restore](../../api/disaster-recovery/restore/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/hold` | [Read the hold and its evidence](../../api/disaster-recovery/hold/get.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/hold/release` | [Release the hold of the platform or of namespaces](../../api/disaster-recovery/hold/release.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/platformbackup` | [Read the status of the platform backup](../../api/disaster-recovery/platformbackup/get.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/quarantine/return` | [Return quarantined data into its object](../../api/disaster-recovery/hold/return-quarantined.md) |

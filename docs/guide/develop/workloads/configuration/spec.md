@@ -43,3 +43,15 @@ The keys of the ConfigMaps that the function binds, with the values that the wor
 | --- | --- |
 | `get(key: str) -> str \| None` | The key's value, or ``None`` when ``list()`` does not include the key. |
 | `list() -> list[str]` | The keys of the bound ConfigMaps, sorted, without the keys left out. |
+
+## HTTP API
+
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
+
+| Method | Path | Operation |
+| --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps` | [List the ConfigMaps of a namespace](../../../api/workloads/configmap/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps` | [Create a ConfigMap](../../../api/workloads/configmap/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps/{name}` | [Read a ConfigMap](../../../api/workloads/configmap/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps/{name}` | [Replace a ConfigMap](../../../api/workloads/configmap/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps/{name}` | [Delete a ConfigMap](../../../api/workloads/configmap/delete.md) |

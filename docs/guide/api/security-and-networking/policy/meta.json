@@ -1,0 +1,10 @@
+{
+  "title": "Policy",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

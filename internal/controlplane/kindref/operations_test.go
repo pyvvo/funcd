@@ -1,14 +1,11 @@
 package kindref
 
 import (
-	"errors"
-	"flag"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -18,11 +15,6 @@ import (
 
 	"github.com/pyvvo/funcd/internal/controlplane"
 )
-
-//nolint:gochecknoglobals // the -update flag of this package's tests
-var update = flag.Bool("update", false, "rewrite testdata/undescribed-operations.txt from the API document")
-
-const operationsList = "testdata/undescribed-operations.txt"
 
 // section is the part of page under the heading, up to the next heading of the same level or higher.
 func section(t *testing.T, page, heading string) string {
@@ -56,86 +48,19 @@ func operationOf(t *testing.T, doc *huma.OpenAPI, id string) *huma.Operation {
 	return nil
 }
 
-// scenario: operation-shows-its-answers
-func TestScenarioOperationShowsItsAnswers(t *testing.T) {
-	doc := controlplane.SpecAPI().OpenAPI()
-	pages, err := Render(doc)
-	require.NoError(t, err)
-	kv := string(pages["develop/services/kv/spec.md"])
-	require.Less(t, strings.Index(kv, "## Handler API"), strings.Index(kv, "## HTTP API"), "after the Handler API")
-	require.Contains(t, kv, "## HTTP API\n\nEach described operation of these kinds,")
-	replace := section(t, kv, "### Replace a KVStore")
-	require.Contains(t, replace, "| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}` | "+
-		"`replaceKVStore` | `bearer` or `apiKey` |")
-	for _, param := range []string{"| `namespace` | path | string, required, a DNS-1123 label |",
-		"| `name` | path | string, required, a DNS-1123 label |", "| `If-Match` | header | string |",
-		"| `dryRun` | query | boolean |"} {
-		require.Contains(t, replace, param)
-	}
-	require.Contains(t, replace, "Body: [`KVStore`](#kvstore), required. Answer: [`KVStore`](#kvstore).")
-	require.Contains(t, replace, "| 409 | `urn:funcd:problem:conflict` | The KVStore has changed since the "+
-		"resourceVersion that If-Match or metadata.resourceVersion names. | Read the KVStore again,")
-	op := operationOf(t, doc, "replaceKVStore")
-	for code, resp := range op.Responses {
-		cases, err := casesOf(resp)
-		require.NoError(t, err)
-		require.Equal(t, max(len(cases), 1), strings.Count(replace, "\n| "+code+" | "),
-			"one row for each case of status %s", code)
-	}
-	require.Contains(t, kv, "| `bearer` | A credential of funcd's config, sent as Authorization: Bearer")
-	require.Contains(t, section(t, kv, "### Hand a kept KVStore over to a Workflow"),
-		"Body: [`KVStoreHandover`](#kvstorehandover), required.")
-	require.Contains(t, kv, "#### `KVStoreHandover`\n\n| Field | Type and limits | Description |")
-}
-
-// scenario: function-call-documented
-func TestScenarioFunctionCallDocumented(t *testing.T) {
-	doc := controlplane.SpecAPI().OpenAPI()
-	pages, err := Render(doc)
-	require.NoError(t, err)
-	call := section(t, string(pages["develop/workloads/function/spec.md"]), "### Call a Function")
-	require.Contains(t, call, "| `POST` | `/function/{name}` | `invokeFunction` | none, `bearer` or `apiKey` |")
-	require.Contains(t, call, "It is served at `{gateway}`, funcd's gateway")
-	require.Contains(t, call, "| `X-Funcd-Namespace` | header |")
-	violation := "[`ContractViolation`](#contractviolation)"
-	for _, want := range []struct {
-		status int
-		body   string // the problem type, or the link to the body's table
-		adr    string // the decision behind the answer
-		when   string
-	}{
-		{200, "", "ADR-0329 Decision 2", "The handler's result."},
-		{400, "`urn:funcd:problem:invalid`", "#90", "did not arrive within the gateway's read timeout"},
-		{401, "`urn:funcd:problem:unauthorized`", "ADR-0113", "the call carries none, or one that funcd does not know"},
-		{401, "`urn:funcd:problem:unauthorized`", "ADR-0113", "while server.auth.edge is off"},
-		{403, "`urn:funcd:problem:forbidden`", "ADR-0113", "do not allow it to call Functions"},
-		{404, "`urn:funcd:problem:not-found`", "ADR-0241", "answers at its own address"},
-		{413, "`urn:funcd:problem:payload-too-large`", "ADR-0134", "larger than 1 MiB"},
-		{422, violation, "ADR-0303", "does not match the Function's input contract"},
-		{429, "`urn:funcd:problem:resource-exhausted`", "ADR-0112", "over the rate that server.limits sets"},
-		{500, violation, "ADR-0303", "does not match the Function's output contract"},
-		{503, "`urn:funcd:problem:unavailable`", "ADR-0112", "server.limits.maxInFlight"},
-		{503, "`urn:funcd:problem:unavailable`", "ADR-0155", "The worker failed during the call"},
-		{503, "`urn:funcd:problem:unavailable`", "ADR-0176", "could not read the namespace's settings"},
-		{503, "`urn:funcd:problem:unavailable`", "ADR-0303", "cannot read the Function's contract"},
-		{503, "`urn:funcd:problem:unavailable`", "ADR-0290", "The namespace is held for its data"},
-		{503, "`urn:funcd:problem:unavailable`", "ADR-0290", "The namespace is held while a Restore loads it"},
-		{503, "`urn:funcd:problem:unavailable`", "ADR-0161", "within invoke.activationTimeout"},
-		{503, "`urn:funcd:problem:unavailable`", "ADR-0169", "The Function is Failed"},
-		{503, "`urn:funcd:problem:unavailable`", "ADR-0028", "funcd is stopping"},
-		{504, "`urn:funcd:problem:deadline-exceeded`", "ADR-0151", "within the call's deadline"},
-	} {
-		row := "\n| " + strconv.Itoa(want.status) + " | " + want.body + " | "
-		i := strings.Index(call, row)
-		require.GreaterOrEqual(t, i, 0, "%d (%s): no row %q", want.status, want.adr, row)
-		require.Contains(t, call[i:], want.when, "%d (%s)", want.status, want.adr)
-	}
-	require.Contains(t, call, "#### `ContractViolation`\n\n| Field | Type and limits | Description |")
-	require.Contains(t, call, "#### `ContractViolation.details[]`")
-
-	op := operationOf(t, doc, "invokeFunction")
+// TestFunctionCallInTheSpec holds the call of a Function, which the API reference shows, to ADR-0329 Decision 2: a
+// server on the gateway's address, the namespace in the X-Funcd-Namespace header, an optional security, and a control
+// plane that neither documents nor routes the call.
+func TestFunctionCallInTheSpec(t *testing.T) {
+	op := operationOf(t, controlplane.SpecAPI().OpenAPI(), "invokeFunction")
+	require.Len(t, op.Servers, 1)
 	require.Equal(t, "{gateway}", op.Servers[0].URL)
+	require.Contains(t, op.Servers[0].Variables["gateway"].Description, "server.dataPlaneAddr")
+	require.True(t, slices.ContainsFunc(op.Parameters, func(p *huma.Param) bool {
+		return p.Name == "X-Funcd-Namespace" && p.In == "header"
+	}), "the call names its namespace in the X-Funcd-Namespace header")
 	require.Contains(t, op.Security, map[string][]string{}, "a call's security is optional")
+
 	live := controlplane.NewAPI(chi.NewRouter(), controlplane.NewStubHandlers())
 	for _, o := range operationsOf(live.OpenAPI()) {
 		require.NotEqual(t, "invokeFunction", o.op.OperationID, "the control plane does not document the call")
@@ -147,21 +72,12 @@ func TestScenarioFunctionCallDocumented(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rec.Code, "the control plane does not route the call")
 }
 
-// TestEveryOperationIsDescribed holds every operation to a summary and its answers, but those that
-// testdata/undescribed-operations.txt lists; the list only shrinks (ADR-0329 Decision 5). go test -run
-// TestEveryOperationIsDescribed -update rewrites it. A described operation's cases each have a problem type or a body,
-// a when and a fix, and it lists no default; no description names an ADR (Decision 7).
+// TestEveryOperationIsDescribed holds every operation to a summary and its answers (ADR-0329 Decision 5). A described
+// operation's cases each have a problem type or a body, a when and a fix, and it lists no default; no description names
+// an ADR (Decision 7).
 func TestEveryOperationIsDescribed(t *testing.T) {
 	doc := controlplane.SpecAPI().OpenAPI()
-	got := UndescribedOperations(doc)
-	if *update {
-		require.NoError(t, os.WriteFile(operationsList, []byte(strings.Join(got, "\n")+"\n"), 0o644))
-		return
-	}
-	b, err := os.ReadFile(operationsList)
-	require.NoError(t, err)
-	listed := slices.DeleteFunc(strings.Split(strings.TrimSpace(string(b)), "\n"), func(s string) bool { return s == "" })
-	require.NoError(t, checkOperations(got, listed))
+	require.Empty(t, UndescribedOperations(doc), "operations with no summary or answers, which need controlplane.Describe")
 	require.Empty(t, adrNamed(doc), "a description is written for users and names no ADR")
 	for _, o := range operationsOf(doc) {
 		if !o.described() {
@@ -181,22 +97,27 @@ func TestEveryOperationIsDescribed(t *testing.T) {
 	}
 }
 
-// checkOperations fails on an undescribed operation that the list does not hold, and on a listed one that is described
-// or gone: the list only shrinks.
-func checkOperations(got, listed []string) error {
-	var problems []string
-	if missing := slices.DeleteFunc(slices.Clone(got), func(id string) bool { return slices.Contains(listed, id) }); len(missing) > 0 {
-		problems = append(problems, "operations with no summary or answers, which need controlplane.Describe: "+
-			strings.Join(missing, ", "))
+// errorCase is one entry of a response's x-funcd-cases, the extension in which controlplane.Describe lists a status's
+// cases.
+type errorCase struct {
+	Type string `json:"type"`
+	Body string `json:"body"`
+	When string `json:"when"`
+	Fix  string `json:"fix"`
+}
+
+// casesOf reads a response's x-funcd-cases.
+func casesOf(r *huma.Response) ([]errorCase, error) {
+	ext, ok := r.Extensions["x-funcd-cases"]
+	if !ok {
+		return nil, nil
 	}
-	if stale := slices.DeleteFunc(slices.Clone(listed), func(id string) bool { return slices.Contains(got, id) }); len(stale) > 0 {
-		problems = append(problems, "listed operations that are described or gone, to remove from "+operationsList+": "+
-			strings.Join(stale, ", "))
+	raw, err := json.Marshal(ext)
+	if err != nil {
+		return nil, err
 	}
-	if len(problems) == 0 {
-		return nil
-	}
-	return errors.New(strings.Join(problems, "; "))
+	var cases []errorCase
+	return cases, json.Unmarshal(raw, &cases)
 }
 
 var adrName = regexp.MustCompile(`\bADR-\d{4}\b`)
@@ -254,12 +175,6 @@ func testDoc() *huma.OpenAPI {
 func TestScenarioUndocumentedOperationRefused(t *testing.T) {
 	got := UndescribedOperations(testDoc())
 	require.Equal(t, []string{"createThing", "listThings"}, got, "the Omitted kind's and the described one are not listed")
-	err := checkOperations(got, nil)
-	require.ErrorContains(t, err, "createThing")
-	require.ErrorContains(t, err, "listThings")
-	require.NoError(t, checkOperations(got, []string{"createThing", "listThings"}), "the list holds them")
-	require.ErrorContains(t, checkOperations(got, []string{"createThing", "getThing", "listThings"}), "getThing",
-		"a described operation leaves the list")
 }
 
 // scenario: no-adr-in-description

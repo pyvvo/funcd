@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -210,10 +211,11 @@ func registerHealth(mux facetMux, logger *slog.Logger, caller Ref, deps Dependen
 }
 
 // registerInvoke adds POST /invoke/{alias} (ADR-0064/0075): the caller's link to alias resolves its target, the PDP
-// checks it, and the target's answer comes back, a non-2xx one verbatim.
+// checks it, and the target's answer comes back, a non-2xx one verbatim, as no error of the endpoint.
 func registerInvoke(mux facetMux, logger *slog.Logger, caller Ref, identity auth.Identity, res Resolver, inv Invoker,
 	authz auth.Authorizer) {
-	handle(mux, logger, "POST /invoke/{alias}", nil, func(w http.ResponseWriter, r *http.Request) error {
+	causes := slices.Concat(callCauses(), []*fault.KnownCause{ErrTargetServesHTTP})
+	handle(mux, logger, "POST /invoke/{alias}", causes, func(w http.ResponseWriter, r *http.Request) error {
 		const op = "workernode.local.invoke"
 		start := time.Now()
 		alias := r.PathValue("alias")
@@ -227,7 +229,7 @@ func registerInvoke(mux facetMux, logger *slog.Logger, caller Ref, identity auth
 			return err // Forbidden (no link) / NotFound (unknown target)
 		}
 		if protocol == v1.ProtocolHTTP {
-			return fault.Conflictf(op, "%s serves HTTP; call it with context.fetch, not invoke", target)
+			return ErrTargetServesHTTP.Errorf(op, "%s serves HTTP; call it with context.fetch, not invoke", target)
 		}
 		if err := authorizeLink(r.Context(), authz, identity, target, op); err != nil {
 			logger.Warn("fn-to-fn invoke refused", "caller", caller.String(), "alias", alias, "target", target.String(), "err", err.Error())
@@ -262,6 +264,13 @@ func registerInvoke(mux facetMux, logger *slog.Logger, caller Ref, identity auth
 	})
 }
 
+// callCauses are the causes that invoke and fetch both answer, which funcd raises itself: the target's reply, whatever
+// its status, is no error of theirs.
+func callCauses() []*fault.KnownCause {
+	return []*fault.KnownCause{ErrBodyTooLarge, ErrBodyUnreadable, ErrNoLink, ErrLinkTargetMissing, ErrLinkDenied,
+		ErrNestedCapReached, ErrReplyCutOff, ErrReplyTooLarge}
+}
+
 // FetchReplyHeader marks a context.fetch answer that is the target's reply, so the shim tells it from a call the local
 // API refused before it reached the target (ADR-0243 Decision 6).
 const FetchReplyHeader = "X-Funcd-Fetch-Reply"
@@ -275,7 +284,7 @@ func serveFetch(w http.ResponseWriter, r *http.Request, caller Ref, identity aut
 	rawAlias, path, found := strings.Cut(strings.TrimPrefix(r.URL.EscapedPath(), fetchPattern), "/")
 	alias, aerr := url.PathUnescape(rawAlias)
 	if !found || aerr != nil || alias == "" {
-		return fault.NotFoundf(op, "no fetch route %s: want /fetch/<alias>/<path>", r.URL.EscapedPath())
+		return ErrFetchPathMalformed.Errorf(op, "no fetch route %s: want /fetch/<alias>/<path>", r.URL.EscapedPath())
 	}
 	body, err := readBody(w, r, op, maxInvokeBytes)
 	if err != nil {
@@ -287,7 +296,7 @@ func serveFetch(w http.ResponseWriter, r *http.Request, caller Ref, identity aut
 		return err
 	}
 	if protocol != v1.ProtocolHTTP {
-		return fault.Conflictf(op, "%s does not serve HTTP; call it with context.invoke, not fetch", target)
+		return ErrTargetNotHTTP.Errorf(op, "%s does not serve HTTP; call it with context.invoke, not fetch", target)
 	}
 	if err := authorizeLink(r.Context(), authz, identity, target, op); err != nil {
 		logger.Warn("fn-to-fn fetch refused", "caller", caller.String(), "alias", alias, "target", target.String(), "err", err.Error())
@@ -328,7 +337,7 @@ func authorizeLink(ctx context.Context, authz auth.Authorizer, identity auth.Ide
 		return fault.Wrapf(err, fault.KindOf(err), op, "authorize link::invoke")
 	}
 	if !dec.Allowed {
-		return fault.Forbiddenf(op, "caller %s is not authorized to invoke %s: %s", identity.Subject, target.String(), dec.Reason)
+		return ErrLinkDenied.Errorf(op, "caller %s is not authorized to invoke %s: %s", identity.Subject, target.String(), dec.Reason)
 	}
 	return nil
 }

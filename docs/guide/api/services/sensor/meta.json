@@ -1,0 +1,10 @@
+{
+  "title": "Sensor",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

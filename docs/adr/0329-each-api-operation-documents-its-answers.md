@@ -4,6 +4,10 @@
   ([report](../reviews/adr-0329-implementation-claude-opus-5-5.md)); Reviewing (2026-11-15, implemented); Accepted
   (2026-11-14), on the decider's go, after two rounds of an independent judge (a subagent): round 1 asked for another
   draft (one Blocker, three Majors); round 2 found no Blocker or Major, and its seven Minors are folded
+- **Superseded in part by**: [ADR-0331](0331-the-control-plane-apis-reference-is-a-section-of-its-own.md) (2026-11-15) —
+  Decision 3, its two Spec-tab scenarios, Scope's interactive page, the plain-Markdown driver, the two rejected
+  alternatives, the Contracts' Spec-tab row, the Definition of done's Spec-tab item and the first Consequence: the
+  answers move to a reference of their own on the docs site, which each Spec tab links.
 - **Date**: 2026-11-14
 - **Deciders**: green-0-rabbit
 - **Tags**: api, docs, codegen

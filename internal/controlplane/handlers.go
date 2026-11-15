@@ -800,6 +800,7 @@ func (h *storeHandlers) DeleteRestore(ctx context.Context, ns v1.NamespaceName, 
 // the stub helpers): a new kind joins the union instead of copying the per-kind boilerplate.
 type crudKind interface {
 	v1.Function | v1.Revision | v1.Service | v1.EventSource | v1.ConfigMap | v1.Secret | v1.Grant | v1.Identity |
+		v1.Namespace | v1.ResourceGroup | v1.Route |
 		v1.Role | v1.RolesAssignment | v1.KVStore | v1.Bucket | v1.Lake | v1.SQLDatabase | v1.Policy |
 		v1.EgressPolicy | v1.Invocation | v1.RuntimeClass | v1.WorkerNode | v1.Gateway | v1.Workflow | v1.WorkflowRun |
 		v1.Sensor | v1.Site | v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore

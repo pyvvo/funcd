@@ -122,3 +122,15 @@ This page lists the spec and status fields of Site, each with its type, its limi
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
 | `servingPrefix` | string | Where that bundle's files are in the Bucket: &lt;prefix&gt;/sha256-&lt;hex&gt;/, from the prefix of spec.bindings.blob and the digest. |
+
+## HTTP API
+
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
+
+| Method | Path | Operation |
+| --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sites` | [List the Sites of a namespace](../../../api/workloads/site/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sites` | [Create a Site](../../../api/workloads/site/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sites/{name}` | [Read a Site](../../../api/workloads/site/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sites/{name}` | [Replace a Site](../../../api/workloads/site/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sites/{name}` | [Delete a Site](../../../api/workloads/site/delete.md) |

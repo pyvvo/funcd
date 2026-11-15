@@ -1,0 +1,12 @@
+{
+  "title": "Security and networking",
+  "icon": "ShieldCheck",
+  "pages": [
+    "identity",
+    "role",
+    "rolesassignment",
+    "policy",
+    "route",
+    "egresspolicy"
+  ]
+}

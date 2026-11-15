@@ -79,6 +79,45 @@ The Bucket prefixes that the function binds, by alias: read, write, delete and l
 
 Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
 
+When funcd refuses a call, the method fails with an error that holds funcd's status and problem type. This table gives them for each method, with when each happens and what to do.
+
+| Method | Status | Problem type | When | What to do |
+| --- | --- | --- | --- | --- |
+| `get` | 400 | `urn:funcd:problem:invalid` | funcd's file store refuses the key: it ends in .attrs or .funcd-tmp or holds \_\_0x, which the store reserves, or it has a . segment or a last segment of .., which the store would keep under another key's path. | Use another key. |
+| `get` | 400 | `urn:funcd:problem:invalid` | funcd's file store cannot hold the key: the key or one of its segments is longer than the file system takes, or the key needs the path of another object, as a/b does while a is an object. | Use another key, or delete the object whose path the key needs. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no prefix. | Call from a Function that exists; a deleted Function's worker stops. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.blob has no entry for the alias. | Add the binding to spec.bindings.blob, or call an alias that the Function binds. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the prefix. | Change or remove the Policy that forbids s3::read on the prefix. |
+| `put` | 400 | `urn:funcd:problem:invalid` | funcd's file store refuses the key: it ends in .attrs or .funcd-tmp or holds \_\_0x, which the store reserves, or it has a . segment or a last segment of .., which the store would keep under another key's path. | Use another key. |
+| `put` | 400 | `urn:funcd:problem:invalid` | funcd's file store cannot hold the key: the key or one of its segments is longer than the file system takes, or the key needs the path of another object, as a/b does while a is an object. | Use another key, or delete the object whose path the key needs. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no prefix. | Call from a Function that exists; a deleted Function's worker stops. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.blob has no entry for the alias. | Add the binding to spec.bindings.blob, or call an alias that the Function binds. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the prefix, no RolesAssignment makes it a writer, a Policy forbids the write, or the Bucket does not exist. | Create the Bucket if it is missing; then write from the prefix's owner, or grant the Function s3::write with a RolesAssignment, such as the Blob Data Writer role. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The object is larger than the Bucket's spec.quota.maxObjectBytes. | Write a smaller object, or raise the Bucket's spec.quota.maxObjectBytes. |
+| `put` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
+| `del` | 400 | `urn:funcd:problem:invalid` | funcd's file store refuses the key: it ends in .attrs or .funcd-tmp or holds \_\_0x, which the store reserves, or it has a . segment or a last segment of .., which the store would keep under another key's path. | Use another key. |
+| `del` | 400 | `urn:funcd:problem:invalid` | funcd's file store cannot hold the key: the key or one of its segments is longer than the file system takes, or the key needs the path of another object, as a/b does while a is an object. | Use another key, or delete the object whose path the key needs. |
+| `del` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no prefix. | Call from a Function that exists; a deleted Function's worker stops. |
+| `del` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.blob has no entry for the alias. | Add the binding to spec.bindings.blob, or call an alias that the Function binds. |
+| `del` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the prefix, no RolesAssignment makes it a writer, a Policy forbids the write, or the Bucket does not exist. | Create the Bucket if it is missing; then write from the prefix's owner, or grant the Function s3::write with a RolesAssignment, such as the Blob Data Writer role. |
+| `del` | 404 | `urn:funcd:problem:not-found` | The object does not exist. | Write the object first, or handle its absence. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no prefix. | Call from a Function that exists; a deleted Function's worker stops. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.blob has no entry for the alias. | Add the binding to spec.bindings.blob, or call an alias that the Function binds. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the prefix. | Change or remove the Policy that forbids s3::read on the prefix. |
+| `list` | 404 | `urn:funcd:problem:not-found` | The binding names a Bucket that does not exist. | Create the Bucket, or bind one that exists. |
+| `signedUrl` | 400 | `urn:funcd:problem:invalid` | The method of the presigned URL is not GET, PUT or DELETE. | Sign GET, PUT or DELETE. |
+| `signedUrl` | 400 | `urn:funcd:problem:invalid` | The expiry of the presigned URL is not a duration such as 10m or 1h30m in whole seconds from 1s to 168h. | Send an expiry in that range, or none for 15 minutes. |
+| `signedUrl` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no prefix. | Call from a Function that exists; a deleted Function's worker stops. |
+| `signedUrl` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.blob has no entry for the alias. | Add the binding to spec.bindings.blob, or call an alias that the Function binds. |
+| `signedUrl` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the prefix. | Change or remove the Policy that forbids s3::read on the prefix. |
+| `signedUrl` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the prefix, no RolesAssignment makes it a writer, a Policy forbids the write, or the Bucket does not exist. | Create the Bucket if it is missing; then write from the prefix's owner, or grant the Function s3::write with a RolesAssignment, such as the Blob Data Writer role. |
+| `signedUrl` | 403 | `urn:funcd:problem:forbidden` | The Bucket sets maxObjectBytes or a size quota, or the prefix sets a size quota, which funcd could not enforce on the upload of a presigned PUT. | Write the object with put, or sign a GET or a DELETE. |
+| `signedUrl` | 404 | `urn:funcd:problem:not-found` | The binding names a Bucket that does not exist. | Create the Bucket, or bind one that exists. |
+| `signedUrl` | 503 | `urn:funcd:problem:unavailable` | The blob store that funcd runs with signs no URL, as no store that funcd opens does. | Read and write the object with get and put, or serve it from a Function. |
+
 #### Python
 
 The Bucket prefixes that the function binds, by alias: read, write, delete and list their objects, whose keys are relative to the binding's prefix.
@@ -92,3 +131,54 @@ The Bucket prefixes that the function binds, by alias: read, write, delete and l
 | `signed_url(binding: str, key: str, method: str = 'GET', expiry: str \| None = None) -> str` | A presigned URL that lets its holder send a ``method`` request for the object until ``expiry`` passes: a duration string such as ``"10m"`` or ``"1h30m"``, in whole seconds from 1s to 168h, or 15 minutes when ``None``. A method other than ``GET``, ``PUT`` or ``DELETE``, or any other expiry, ``""`` included, fails with the HTTP status 400; an ``expiry`` that is not a string raises ``TypeError`` before any request. A ``PUT`` or ``DELETE`` URL needs permission to write the prefix, and a ``PUT`` URL fails with the HTTP status 403 when the Bucket sets ``maxObjectBytes`` or a size quota applies to the Bucket or the prefix, since funcd could not enforce it on the upload. No blob store that funcd opens signs URLs, so a call that passes these checks fails with the HTTP status 503. |
 
 Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
+
+When funcd refuses a call, the method fails with an error that holds funcd's status and problem type. This table gives them for each method, with when each happens and what to do.
+
+| Method | Status | Problem type | When | What to do |
+| --- | --- | --- | --- | --- |
+| `get` | 400 | `urn:funcd:problem:invalid` | funcd's file store refuses the key: it ends in .attrs or .funcd-tmp or holds \_\_0x, which the store reserves, or it has a . segment or a last segment of .., which the store would keep under another key's path. | Use another key. |
+| `get` | 400 | `urn:funcd:problem:invalid` | funcd's file store cannot hold the key: the key or one of its segments is longer than the file system takes, or the key needs the path of another object, as a/b does while a is an object. | Use another key, or delete the object whose path the key needs. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no prefix. | Call from a Function that exists; a deleted Function's worker stops. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.blob has no entry for the alias. | Add the binding to spec.bindings.blob, or call an alias that the Function binds. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the prefix. | Change or remove the Policy that forbids s3::read on the prefix. |
+| `put` | 400 | `urn:funcd:problem:invalid` | funcd's file store refuses the key: it ends in .attrs or .funcd-tmp or holds \_\_0x, which the store reserves, or it has a . segment or a last segment of .., which the store would keep under another key's path. | Use another key. |
+| `put` | 400 | `urn:funcd:problem:invalid` | funcd's file store cannot hold the key: the key or one of its segments is longer than the file system takes, or the key needs the path of another object, as a/b does while a is an object. | Use another key, or delete the object whose path the key needs. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no prefix. | Call from a Function that exists; a deleted Function's worker stops. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.blob has no entry for the alias. | Add the binding to spec.bindings.blob, or call an alias that the Function binds. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the prefix, no RolesAssignment makes it a writer, a Policy forbids the write, or the Bucket does not exist. | Create the Bucket if it is missing; then write from the prefix's owner, or grant the Function s3::write with a RolesAssignment, such as the Blob Data Writer role. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The object is larger than the Bucket's spec.quota.maxObjectBytes. | Write a smaller object, or raise the Bucket's spec.quota.maxObjectBytes. |
+| `put` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
+| `delete` | 400 | `urn:funcd:problem:invalid` | funcd's file store refuses the key: it ends in .attrs or .funcd-tmp or holds \_\_0x, which the store reserves, or it has a . segment or a last segment of .., which the store would keep under another key's path. | Use another key. |
+| `delete` | 400 | `urn:funcd:problem:invalid` | funcd's file store cannot hold the key: the key or one of its segments is longer than the file system takes, or the key needs the path of another object, as a/b does while a is an object. | Use another key, or delete the object whose path the key needs. |
+| `delete` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no prefix. | Call from a Function that exists; a deleted Function's worker stops. |
+| `delete` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.blob has no entry for the alias. | Add the binding to spec.bindings.blob, or call an alias that the Function binds. |
+| `delete` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the prefix, no RolesAssignment makes it a writer, a Policy forbids the write, or the Bucket does not exist. | Create the Bucket if it is missing; then write from the prefix's owner, or grant the Function s3::write with a RolesAssignment, such as the Blob Data Writer role. |
+| `delete` | 404 | `urn:funcd:problem:not-found` | The object does not exist. | Write the object first, or handle its absence. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no prefix. | Call from a Function that exists; a deleted Function's worker stops. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.blob has no entry for the alias. | Add the binding to spec.bindings.blob, or call an alias that the Function binds. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the prefix. | Change or remove the Policy that forbids s3::read on the prefix. |
+| `list` | 404 | `urn:funcd:problem:not-found` | The binding names a Bucket that does not exist. | Create the Bucket, or bind one that exists. |
+| `signed_url` | 400 | `urn:funcd:problem:invalid` | The method of the presigned URL is not GET, PUT or DELETE. | Sign GET, PUT or DELETE. |
+| `signed_url` | 400 | `urn:funcd:problem:invalid` | The expiry of the presigned URL is not a duration such as 10m or 1h30m in whole seconds from 1s to 168h. | Send an expiry in that range, or none for 15 minutes. |
+| `signed_url` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no prefix. | Call from a Function that exists; a deleted Function's worker stops. |
+| `signed_url` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.blob has no entry for the alias. | Add the binding to spec.bindings.blob, or call an alias that the Function binds. |
+| `signed_url` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the prefix. | Change or remove the Policy that forbids s3::read on the prefix. |
+| `signed_url` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the prefix, no RolesAssignment makes it a writer, a Policy forbids the write, or the Bucket does not exist. | Create the Bucket if it is missing; then write from the prefix's owner, or grant the Function s3::write with a RolesAssignment, such as the Blob Data Writer role. |
+| `signed_url` | 403 | `urn:funcd:problem:forbidden` | The Bucket sets maxObjectBytes or a size quota, or the prefix sets a size quota, which funcd could not enforce on the upload of a presigned PUT. | Write the object with put, or sign a GET or a DELETE. |
+| `signed_url` | 404 | `urn:funcd:problem:not-found` | The binding names a Bucket that does not exist. | Create the Bucket, or bind one that exists. |
+| `signed_url` | 503 | `urn:funcd:problem:unavailable` | The blob store that funcd runs with signs no URL, as no store that funcd opens does. | Read and write the object with get and put, or serve it from a Function. |
+
+## HTTP API
+
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
+
+| Method | Path | Operation |
+| --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets` | [List the Buckets of a namespace](../../../api/services/bucket/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets` | [Create a Bucket](../../../api/services/bucket/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets/{name}` | [Read a Bucket](../../../api/services/bucket/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets/{name}` | [Replace a Bucket](../../../api/services/bucket/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets/{name}` | [Delete a Bucket](../../../api/services/bucket/delete.md) |

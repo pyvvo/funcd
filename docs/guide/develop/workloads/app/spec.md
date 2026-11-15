@@ -929,3 +929,18 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `invocation` | string, required, a DNS-1123 label | The Invocation that records the call, with its start, end and error. It belongs to this revision and is deleted with it. |
 | `phase` | string, required, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Ready when the call succeeded and Failed when it did not; no other phase appears here. |
 | `point` | string, required, one of `preApply`, `postApply` | The hook list the call was made for. |
+
+## HTTP API
+
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
+
+| Method | Path | Operation |
+| --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/apps` | [List the Apps of a namespace](../../../api/workloads/app/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/apps` | [Create an App](../../../api/workloads/app/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/apps/{name}` | [Read an App](../../../api/workloads/app/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/apps/{name}` | [Replace an App](../../../api/workloads/app/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/apps/{name}` | [Delete an App](../../../api/workloads/app/delete.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/apps/{name}/retry` | [Retry the failed hook of an App](../../../api/workloads/app/retry.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/apprevisions` | [List the AppRevisions of a namespace](../../../api/workloads/apprevision/list.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/apprevisions/{name}` | [Read an AppRevision](../../../api/workloads/apprevision/get.md) |

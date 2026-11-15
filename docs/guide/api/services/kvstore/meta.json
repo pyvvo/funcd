@@ -1,0 +1,11 @@
+{
+  "title": "KVStore",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete",
+    "handover"
+  ]
+}

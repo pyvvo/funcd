@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -25,19 +26,19 @@ type Replayer interface {
 // deadLetterListInput is the namespaced DLQ list request; the typed path param confines the namespace at the
 // huma boundary (DNS-label schema), so the store prefix is always within the authorized namespace.
 type deadLetterListInput struct {
-	Namespace v1.NamespaceName `path:"namespace"`
+	Namespace v1.NamespaceName `path:"namespace" doc:"The namespace of the dead letters."`
 }
 
 type deadLetterListOutput struct {
 	Body struct {
-		Items []deadletter.DeadLetter `json:"items"`
+		Items []deadletter.DeadLetter `json:"items" doc:"The namespace's dead letters, newest first."`
 	}
 }
 
 // deadLetterItemInput is the single-record DLQ request (describe / replay / discard).
 type deadLetterItemInput struct {
-	Namespace v1.NamespaceName `path:"namespace"`
-	ID        string           `path:"id"`
+	Namespace v1.NamespaceName `path:"namespace" doc:"The dead letter's namespace."`
+	ID        string           `path:"id" doc:"The dead letter's ID."`
 }
 
 type deadLetterItemOutput struct {
@@ -57,12 +58,16 @@ type deadLetterItemOutput struct {
 func RegisterDeadLetters(api huma.API, store deadletter.Store, replayer Replayer, authz auth.Authorizer) {
 	const base = "/apis/funcd.io/v1alpha1/namespaces/{namespace}/deadletters"
 
-	huma.Register(api, huma.Operation{
+	read, write := forbidden("read Sensors in the namespace"), forbidden("delete Sensors in the namespace")
+	missing := problem(fault.NotFound, "No dead letter of that ID exists in the namespace.",
+		"Check the ID: funcdctl eventing dlq list lists the namespace's dead letters.")
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "listDeadLetters",
 		Method:      http.MethodGet,
 		Path:        base,
 		Tags:        []string{"DeadLetter"},
-	}, func(ctx context.Context, in *deadLetterListInput) (*deadLetterListOutput, error) {
+	}, "List the dead letters of a namespace", unauthorized(), read, badPath("namespace"),
+	), func(ctx context.Context, in *deadLetterListInput) (*deadLetterListOutput, error) {
 		if err := authorizeDeadLetters(ctx, authz, in.Namespace, auth.VerbGet); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -75,12 +80,13 @@ func RegisterDeadLetters(api huma.API, store deadletter.Store, replayer Replayer
 		return out, nil
 	})
 
-	huma.Register(api, huma.Operation{
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "getDeadLetter",
 		Method:      http.MethodGet,
 		Path:        base + "/{id}",
 		Tags:        []string{"DeadLetter"},
-	}, func(ctx context.Context, in *deadLetterItemInput) (*deadLetterItemOutput, error) {
+	}, "Read a dead letter", unauthorized(), read, missing, badPath("namespace"),
+	), func(ctx context.Context, in *deadLetterItemInput) (*deadLetterItemOutput, error) {
 		if err := authorizeDeadLetters(ctx, authz, in.Namespace, auth.VerbGet); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -91,29 +97,54 @@ func RegisterDeadLetters(api huma.API, store deadletter.Store, replayer Replayer
 		return &deadLetterItemOutput{Body: dl}, nil
 	})
 
-	huma.Register(api, huma.Operation{
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "replayDeadLetter",
 		Method:      http.MethodPost,
 		Path:        base + "/{id}/replay",
 		Tags:        []string{"DeadLetter"},
-	}, func(ctx context.Context, in *deadLetterItemInput) (*struct{}, error) {
+	}, "Replay a dead letter", slices.Concat([]ErrorCase{unauthorized(), write, missing, badPath("namespace"),
+		badQuery()}, replayCases())...,
+	), func(ctx context.Context, in *deadLetterItemInput) (*struct{}, error) {
 		if err := authorizeDeadLetters(ctx, authz, in.Namespace, auth.VerbDelete); err != nil {
 			return nil, wrapFaultError(err)
 		}
 		return nil, wrapFaultError(replayer.Replay(ctx, in.Namespace, in.ID))
 	})
 
-	huma.Register(api, huma.Operation{
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "discardDeadLetter",
 		Method:      http.MethodDelete,
 		Path:        base + "/{id}",
 		Tags:        []string{"DeadLetter"},
-	}, func(ctx context.Context, in *deadLetterItemInput) (*struct{}, error) {
+	}, "Discard a dead letter", unauthorized(), write, badPath("namespace"), badQuery(),
+	), func(ctx context.Context, in *deadLetterItemInput) (*struct{}, error) {
 		if err := authorizeDeadLetters(ctx, authz, in.Namespace, auth.VerbDelete); err != nil {
 			return nil, wrapFaultError(err)
 		}
 		return nil, wrapFaultError(store.Delete(ctx, in.Namespace, in.ID))
 	})
+}
+
+// replayCases are the answers of Replayer, whose one delivery attempt re-parks a dead letter that it fails to deliver.
+func replayCases() []ErrorCase {
+	return []ErrorCase{
+		problem(fault.NotFound, "The Sensor that the dead letter names no longer exists.",
+			"Apply the Sensor again, then retry, or discard the dead letter."),
+		problem(fault.NotFound, "The Sensor no longer has the dead letter's action.",
+			"Add the action back to the Sensor, then retry, or discard the dead letter."),
+		problem(fault.Conflict, "Another replay of the dead letter is running.", "Retry once that replay has ended."),
+		problem(fault.Conflict, "The action's Function serves HTTP, so only the edge calls it; the dead letter stays.",
+			"Point the action at a Function that does not serve HTTP, then retry."),
+		problem(fault.Invalid, "The action's input in the Sensor is not a JSON object, or holds an expression that "+
+			"does not evaluate; the dead letter stays.", "Correct the action's input in the Sensor, then retry."),
+		problem(fault.Unavailable, "The platform is held, or the namespace is held for its data or while a Restore "+
+			"loads it, so funcd delivers no event.", "Retry once the hold is released: funcdctl hold release releases "+
+			"the platform's hold, and funcdctl hold release --namespace the namespace's, once any Restore that loads it "+
+			"has ended."),
+		problem(fault.Unavailable, "The delivery failed again, such as on a Function that is missing, has no ready "+
+			"worker or answers an error; the dead letter stays, with its attempts reset and the new reason.",
+			"Correct what the dead letter's reason names, then retry."),
+	}
 }
 
 // authorizeDeadLetters runs the ADR-0018 PEP for a DLQ operation: reads require get/Sensor in the

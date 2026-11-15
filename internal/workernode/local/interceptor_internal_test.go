@@ -3,7 +3,6 @@ package local
 import (
 	"bytes"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -27,11 +26,6 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 )
-
-//nolint:gochecknoglobals // the -update flag of this package's tests
-var update = flag.Bool("update", false, "rewrite testdata/undescribed-endpoints.txt from Endpoints")
-
-const endpointsList = "testdata/undescribed-endpoints.txt"
 
 //nolint:gochecknoglobals // numbers each run of a test whose endpoint must be new to the process, as under -count
 var runs atomic.Int64
@@ -181,21 +175,16 @@ func problemWriters(t *testing.T, sources fs.FS) []string {
 	return slices.Compact(out)
 }
 
-// TestEveryEndpointIsDescribedOrListed holds every endpoint to its causes, but those that
-// testdata/undescribed-endpoints.txt lists, and the list only shrinks (ADR-0330 Decision 9): it fails on an endpoint
-// with nil causes that the list does not hold, and on a listed one that is described or gone. go test -run
-// TestEveryEndpointIsDescribedOrListed -update rewrites the list. A declared cause is never internal, is declared once
-// and has a name, a when and a fix.
-func TestEveryEndpointIsDescribedOrListed(t *testing.T) {
+// TestEveryEndpointIsDescribed holds every endpoint to its causes (ADR-0330 Decision 9): it fails on an endpoint with
+// nil causes. A declared cause is never internal, is declared once and has a name, a when and a fix.
+func TestEveryEndpointIsDescribed(t *testing.T) {
 	name := regexp.MustCompile(`^[a-z]+\.[a-z0-9]+(-[a-z0-9]+)*$`)
-	var undescribed []string
 	seen := map[string]bool{}
 	for _, e := range Endpoints() {
 		require.False(t, seen[e.Pattern], "%s: one endpoint per pattern", e.Pattern)
 		seen[e.Pattern] = true
 		if e.Causes == nil {
-			undescribed = append(undescribed, e.Pattern)
-			continue
+			require.Failf(t, "endpoint without causes", "%s has nil causes: declare them", e.Pattern)
 		}
 		declared := map[*fault.KnownCause]bool{}
 		for _, c := range e.Causes {
@@ -207,18 +196,6 @@ func TestEveryEndpointIsDescribedOrListed(t *testing.T) {
 			require.NotEmpty(t, c.Fix(), "%s: %s says what to do", e.Pattern, c)
 		}
 	}
-	slices.Sort(undescribed)
-	if *update {
-		require.NoError(t, os.WriteFile(endpointsList, []byte(strings.Join(undescribed, "\n")+"\n"), 0o644))
-		return
-	}
-	b, err := os.ReadFile(endpointsList)
-	require.NoError(t, err)
-	listed := slices.DeleteFunc(strings.Split(strings.TrimSpace(string(b)), "\n"), func(s string) bool { return s == "" })
-	missing := slices.DeleteFunc(slices.Clone(undescribed), func(p string) bool { return slices.Contains(listed, p) })
-	require.Empty(t, missing, "endpoints with nil causes, which need their causes declared")
-	stale := slices.DeleteFunc(slices.Clone(listed), func(p string) bool { return slices.Contains(undescribed, p) })
-	require.Empty(t, stale, "listed endpoints that are described or gone, to remove from %s", endpointsList)
 }
 
 // Only a test sets the error recorder (ADR-0330 Decision 7): a scan of the module refuses a call of

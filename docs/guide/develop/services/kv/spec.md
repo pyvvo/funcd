@@ -116,7 +116,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `put` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `put` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `put` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `putIfAbsent` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
 | `putIfAbsent` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
 | `putIfAbsent` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
@@ -129,7 +129,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `putIfAbsent` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `putIfAbsent` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `putIfAbsent` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `putIfAbsent` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `putIfAbsent` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `compareAndSet` | 400 | `urn:funcd:problem:invalid` | The version is empty or holds a space, a quote or a control character, so If-Match is not one strong entity-tag. | Pass the version that a read or a write of the key returned. |
 | `compareAndSet` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
 | `compareAndSet` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
@@ -143,7 +143,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `compareAndSet` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `compareAndSet` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `compareAndSet` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `compareAndSet` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `compareAndSet` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `del` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
 | `del` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
 | `del` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
@@ -227,7 +227,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `put` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `put` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `put` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `put_if_absent` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
 | `put_if_absent` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
 | `put_if_absent` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
@@ -240,7 +240,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `put_if_absent` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `put_if_absent` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `put_if_absent` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `put_if_absent` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `put_if_absent` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `compare_and_set` | 400 | `urn:funcd:problem:invalid` | The version is empty or holds a space, a quote or a control character, so If-Match is not one strong entity-tag. | Pass the version that a read or a write of the key returned. |
 | `compare_and_set` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
 | `compare_and_set` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
@@ -254,7 +254,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `compare_and_set` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `compare_and_set` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `compare_and_set` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `compare_and_set` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `compare_and_set` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `delete` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
 | `delete` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
 | `delete` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
@@ -277,176 +277,13 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 
 ## HTTP API
 
-Each described operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
+The table lists each described operation of these kinds, with its method and path. The operation's page in the API reference gives its parameters, its body, its authentication and every answer, with when it happens and what to do.
 
-| Authentication | How a call sends it |
-| --- | --- |
-| `bearer` | A credential of funcd's config, sent as Authorization: Bearer followed by its token. |
-| `apiKey` | A credential of funcd's config, sent in the X-Api-Key header. |
-
-### List the KVStores of a namespace
-
-| Method | Path | Operation ID | Authentication |
-| --- | --- | --- | --- |
-| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores` | `listKVStores` | `bearer` or `apiKey` |
-
-| Parameter | In | Type and limits | Description |
-| --- | --- | --- | --- |
-| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
-
-Answer: array of [`KVStore`](#kvstore).
-
-| Status | Problem type | When | What to do |
-| --- | --- | --- | --- |
-| 200 |  | OK |  |
-| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
-| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list KVStores in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
-| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
-
-### Create a KVStore
-
-| Method | Path | Operation ID | Authentication |
-| --- | --- | --- | --- |
-| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores` | `createKVStore` | `bearer` or `apiKey` |
-
-| Parameter | In | Type and limits | Description |
-| --- | --- | --- | --- |
-| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
-| `dryRun` | query | boolean | Admit the write and store nothing. |
-
-Body: [`KVStore`](#kvstore), required. Answer: [`KVStore`](#kvstore).
-
-| Status | Problem type | When | What to do |
-| --- | --- | --- | --- |
-| 200 |  | OK |  |
-| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
-| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
-| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
-| 400 | `urn:funcd:problem:invalid` | The namespace already holds the most KVStores that kvstore.maxStoresPerNamespace allows. | Delete a KVStore that the namespace no longer needs, or ask the operator to raise the cap. |
-| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
-| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create a KVStore in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
-| 409 | `urn:funcd:problem:conflict` | A KVStore of that name already exists in the namespace. | Choose another name, or replace the existing KVStore. |
-| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
-| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
-| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
-| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
-| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
-| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
-
-### Read a KVStore
-
-| Method | Path | Operation ID | Authentication |
-| --- | --- | --- | --- |
-| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}` | `getKVStore` | `bearer` or `apiKey` |
-
-| Parameter | In | Type and limits | Description |
-| --- | --- | --- | --- |
-| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
-| `name` | path | string, required, a DNS-1123 label | The object's name. |
-
-Answer: [`KVStore`](#kvstore).
-
-| Status | Problem type | When | What to do |
-| --- | --- | --- | --- |
-| 200 |  | OK |  |
-| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
-| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read a KVStore in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
-| 404 | `urn:funcd:problem:not-found` | No KVStore of that name exists in the namespace. | Check the name and the namespace. |
-| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
-
-### Replace a KVStore
-
-| Method | Path | Operation ID | Authentication |
-| --- | --- | --- | --- |
-| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}` | `replaceKVStore` | `bearer` or `apiKey` |
-
-| Parameter | In | Type and limits | Description |
-| --- | --- | --- | --- |
-| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
-| `name` | path | string, required, a DNS-1123 label | The object's name. |
-| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
-| `dryRun` | query | boolean | Admit the write and store nothing. |
-
-Body: [`KVStore`](#kvstore), required. Answer: [`KVStore`](#kvstore).
-
-| Status | Problem type | When | What to do |
-| --- | --- | --- | --- |
-| 200 |  | OK |  |
-| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
-| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
-| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
-| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
-| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
-| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace a KVStore in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
-| 404 | `urn:funcd:problem:not-found` | No KVStore of that name exists in the namespace. | Check the name and the namespace. |
-| 409 | `urn:funcd:problem:conflict` | The KVStore has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the KVStore again, apply the change to it, and send it with its new resourceVersion. |
-| 409 | `urn:funcd:problem:conflict` | The Function, Workflow or App that made the KVStore still exists, and owns it. | Change the KVStore through that owner, or delete the owner first. |
-| 409 | `urn:funcd:problem:conflict` | The spec drops a table that a Function's spec.bindings.kv still names. | Remove that binding from the Function first. |
-| 409 | `urn:funcd:problem:conflict` | The spec adds back a table that was dropped, and funcd has not yet deleted the dropped table's data. | Retry after a few seconds. |
-| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
-| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
-| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
-| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
-| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
-| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
-
-### Delete a KVStore
-
-| Method | Path | Operation ID | Authentication |
-| --- | --- | --- | --- |
-| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}` | `deleteKVStore` | `bearer` or `apiKey` |
-
-| Parameter | In | Type and limits | Description |
-| --- | --- | --- | --- |
-| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
-| `name` | path | string, required, a DNS-1123 label | The object's name. |
-| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
-
-Answer: none.
-
-| Status | Problem type | When | What to do |
-| --- | --- | --- | --- |
-| 204 |  | No Content |  |
-| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
-| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
-| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete a KVStore in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
-| 404 | `urn:funcd:problem:not-found` | No KVStore of that name exists in the namespace. | Check the name and the namespace. |
-| 409 | `urn:funcd:problem:conflict` | The KVStore has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the KVStore again, apply the change to it, and send it with its new resourceVersion. |
-| 409 | `urn:funcd:problem:conflict` | A Function's spec.bindings.kv still names the store. | Remove that binding from the Function first. |
-| 409 | `urn:funcd:problem:conflict` | The store still holds keys. | Delete its keys first. |
-| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
-| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
-
-### Hand a kept KVStore over to a Workflow
-
-| Method | Path | Operation ID | Authentication |
-| --- | --- | --- | --- |
-| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}/handover` | `handoverKVStore` | `bearer` or `apiKey` |
-
-| Parameter | In | Type and limits | Description |
-| --- | --- | --- | --- |
-| `namespace` | path | string, required, a DNS-1123 label | The store's namespace. |
-| `name` | path | string, required, a DNS-1123 label | The store's name. |
-
-Body: [`KVStoreHandover`](#kvstorehandover), required. Answer: [`KVStore`](#kvstore).
-
-| Status | Problem type | When | What to do |
-| --- | --- | --- | --- |
-| 200 |  | OK |  |
-| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
-| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
-| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to update and delete KVStores and read Workflows in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
-| 404 | `urn:funcd:problem:not-found` | No KVStore or no Workflow of those names exists in the namespace. | Check the names and the namespace. |
-| 409 | `urn:funcd:problem:conflict` | The Workflow does not declare the store in its spec.kv. | Declare the store in the Workflow's spec.kv, then retry. |
-| 409 | `urn:funcd:problem:conflict` | The Function, Workflow or App that made the KVStore still exists, and owns it. | Change the KVStore through that owner, or delete the owner first. |
-| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
-| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
-| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
-| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
-| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
-
-#### `KVStoreHandover`
-
-| Field | Type and limits | Description |
+| Method | Path | Operation |
 | --- | --- | --- |
-| `workflow` | string, required, a DNS-1123 label | The Workflow that becomes the store's owner. Its spec.kv declares the store. |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores` | [List the KVStores of a namespace](../../../api/services/kvstore/list.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores` | [Create a KVStore](../../../api/services/kvstore/create.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}` | [Read a KVStore](../../../api/services/kvstore/get.md) |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}` | [Replace a KVStore](../../../api/services/kvstore/replace.md) |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}` | [Delete a KVStore](../../../api/services/kvstore/delete.md) |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}/handover` | [Hand a kept KVStore over to a Workflow](../../../api/services/kvstore/handover.md) |
