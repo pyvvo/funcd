@@ -277,14 +277,17 @@ func (v verbCases) create(own []ErrorCase) []ErrorCase {
 }
 
 func (v verbCases) replace(own []ErrorCase) []ErrorCase {
-	meta := "metadata.name"
-	if v.namespaced {
-		meta = "metadata.namespace or metadata.name"
+	when, fix := "The body's metadata.namespace or metadata.name is not the path's", "Send the object to its own path"
+	if !v.namespaced {
+		// A cluster-scoped kind's path has no namespace, so the detail of a body that sets one names an empty one.
+		when = "The body sets metadata.namespace, which the detail compares with the path's empty namespace, or its " +
+			"metadata.name is not the path's"
+		fix = "Leave metadata.namespace empty, and send the object to its own path"
 	}
 	return slices.Concat([]ErrorCase{unauthorized(), v.forbidden("replace " + an(v.kind)), v.notFound(),
 		badPath(v.path()), badQuery(), badDryRun(), badIfMatch(), ruleBroken(), v.stale(),
-		problem(fault.Invalid, "The body's "+meta+" is not the path's, or If-Match and metadata.resourceVersion "+
-			"name two versions.", "Send the object to its own path, with at most one version.")},
+		problem(fault.Invalid, when+", or If-Match and metadata.resourceVersion name two versions.",
+			fix+", with at most one version.")},
 		bodyCases(), own)
 }
 

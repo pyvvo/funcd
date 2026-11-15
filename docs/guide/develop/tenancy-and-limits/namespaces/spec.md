@@ -153,7 +153,7 @@ Body: [`Namespace`](#namespace), required. Answer: [`Namespace`](#namespace).
 | 200 |  | OK |  |
 | 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
 | 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
-| 400 | `urn:funcd:problem:invalid` | The body's metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `urn:funcd:problem:invalid` | The body sets metadata.namespace, which the detail compares with the path's empty namespace, or its metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Leave metadata.namespace empty, and send the object to its own path, with at most one version. |
 | 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
 | 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
 | 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to replace a Namespace. | Use an admin's credential. |
@@ -315,7 +315,7 @@ Answer: none.
 | 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete a ResourceGroup in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
 | 404 | `urn:funcd:problem:not-found` | No ResourceGroup of that name exists in the namespace. | Check the name and the namespace. |
 | 409 | `urn:funcd:problem:conflict` | The ResourceGroup has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the ResourceGroup again, apply the change to it, and send it with its new resourceVersion. |
-| 409 | `urn:funcd:problem:conflict` | The ResourceGroup still has members: objects of the namespace whose metadata.resourceGroup names it and that no other object owns. | Delete the members first, or delete the ResourceGroup with force=true, which deletes them. |
+| 409 | `urn:funcd:problem:conflict` | The ResourceGroup still has members: objects of the namespace, other than ResourceGroups, whose metadata.resourceGroup names it and that no other object controls. | Delete the members first, or delete the ResourceGroup with force=true, which deletes them. |
 | 409 | `urn:funcd:problem:conflict` | With force=true, funcd refuses the delete of a member, such as a Function that a Function outside the group links to; the detail gives that refusal. | Do what the refusal asks, then delete again; the members deleted already stay deleted. |
 | 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
 | 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
