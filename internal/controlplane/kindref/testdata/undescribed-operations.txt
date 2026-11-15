@@ -6,7 +6,6 @@ createConfigMap
 createEventSource
 createLake
 createRestore
-createRoute
 createSQLDatabase
 createSecret
 createSensor
@@ -21,7 +20,6 @@ deleteConfigMap
 deleteEventSource
 deleteLake
 deleteRestore
-deleteRoute
 deleteSQLDatabase
 deleteSecret
 deleteSensor
@@ -41,7 +39,6 @@ getHold
 getLake
 getPlatformBackup
 getRestore
-getRoute
 getSQLDatabase
 getSecret
 getSensor
@@ -59,7 +56,6 @@ listDeadLetters
 listEventSources
 listLakes
 listRestores
-listRoutes
 listSQLDatabases
 listSecrets
 listSensors
@@ -75,7 +71,6 @@ replaceConfigMap
 replaceEventSource
 replaceLake
 replaceRestore
-replaceRoute
 replaceSQLDatabase
 replaceSecret
 replaceSensor
