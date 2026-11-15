@@ -212,6 +212,7 @@ Answer: none.
 | 409 | `urn:funcd:problem:conflict` | The SQLDatabase has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the SQLDatabase again, apply the change to it, and send it with its new resourceVersion. |
 | 409 | `urn:funcd:problem:conflict` | A Function's spec.bindings.sql still names the database. | Remove that binding from the Function first. |
 | 409 | `urn:funcd:problem:conflict` | The database still holds a table. | Drop its tables first. |
-| 409 | `urn:funcd:problem:conflict` | funcd cannot ask the database's engine whether it holds a table: the engine does not answer, or it is not Ready and the database has data. | Retry once the SQLDatabase is Ready. |
+| 409 | `urn:funcd:problem:conflict` | The database's engine is not Ready and the database has data, so funcd cannot check whether it holds a table. | Retry once the SQLDatabase is Ready and its engine answers. |
+| 409 | `urn:funcd:problem:conflict` | The database's engine does not answer, so funcd cannot check whether it holds a table. | Retry once the SQLDatabase is Ready and its engine answers. |
 | 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
 | 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
