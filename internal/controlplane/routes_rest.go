@@ -37,8 +37,8 @@ func registerResourceGroup(api huma.API, h Handlers) {
 		list: h.ListResourceGroups, create: h.CreateResourceGroup, get: h.GetResourceGroup,
 		replace: h.ReplaceResourceGroup,
 		cases: &kindCases{remove: []ErrorCase{
-			problem(fault.Conflict, "The ResourceGroup still has members: objects of the namespace whose "+
-				"metadata.resourceGroup names it and that no other object owns.",
+			problem(fault.Conflict, "The ResourceGroup still has members: objects of the namespace, other than "+
+				"ResourceGroups, whose metadata.resourceGroup names it and that no other object controls.",
 				"Delete the members first, or delete the ResourceGroup with force=true, which deletes them."),
 			problem(fault.Conflict, "With force=true, funcd refuses the delete of a member, such as a Function that "+
 				"a Function outside the group links to; the detail gives that refusal.",
@@ -324,7 +324,8 @@ func policyWrites() []ErrorCase {
 			"Correct the text where the detail says it breaks, and keep at least one permit or forbid statement."),
 		problem(fault.Invalid, "A statement of spec.cedar does not name exactly one action that funcd knows, or "+
 			"names an entity of a type that funcd does not know.",
-			"Name one action that funcd knows, such as kv::read, and only entity types that it knows; the detail lists both."),
+			"Name exactly one action that funcd knows, such as kv::read, and only entity types that it knows; when the "+
+				"detail names an unknown action or entity type, it lists the ones that funcd knows."),
 		problem(fault.Invalid, "A statement of spec.cedar names an entity of another namespace: its id does not "+
 			"begin with the Policy's namespace and a slash.",
 			"Name only entities of the Policy's namespace, or apply the Policy in the namespace of the entities it names."),

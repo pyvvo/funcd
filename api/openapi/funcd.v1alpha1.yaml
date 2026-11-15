@@ -13238,7 +13238,7 @@ paths:
             - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
             - `about:blank`: The body is missing or is not JSON. Send a JSON body.
             - `urn:funcd:problem:invalid`: The text in spec.cedar does not parse as Cedar, or holds no statement. Correct the text where the detail says it breaks, and keep at least one permit or forbid statement.
-            - `urn:funcd:problem:invalid`: A statement of spec.cedar does not name exactly one action that funcd knows, or names an entity of a type that funcd does not know. Name one action that funcd knows, such as kv::read, and only entity types that it knows; the detail lists both.
+            - `urn:funcd:problem:invalid`: A statement of spec.cedar does not name exactly one action that funcd knows, or names an entity of a type that funcd does not know. Name exactly one action that funcd knows, such as kv::read, and only entity types that it knows; when the detail names an unknown action or entity type, it lists the ones that funcd knows.
             - `urn:funcd:problem:invalid`: A statement of spec.cedar names an entity of another namespace: its id does not begin with the Policy's namespace and a slash. Name only entities of the Policy's namespace, or apply the Policy in the namespace of the entities it names.
           x-funcd-cases:
             - type: urn:funcd:problem:invalid
@@ -13255,7 +13255,7 @@ paths:
               fix: Correct the text where the detail says it breaks, and keep at least one permit or forbid statement.
             - type: urn:funcd:problem:invalid
               when: A statement of spec.cedar does not name exactly one action that funcd knows, or names an entity of a type that funcd does not know.
-              fix: Name one action that funcd knows, such as kv::read, and only entity types that it knows; the detail lists both.
+              fix: Name exactly one action that funcd knows, such as kv::read, and only entity types that it knows; when the detail names an unknown action or entity type, it lists the ones that funcd knows.
             - type: urn:funcd:problem:invalid
               when: "A statement of spec.cedar names an entity of another namespace: its id does not begin with the Policy's namespace and a slash."
               fix: Name only entities of the Policy's namespace, or apply the Policy in the namespace of the entities it names.
@@ -13578,7 +13578,7 @@ paths:
             - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
             - `about:blank`: The body is missing or is not JSON. Send a JSON body.
             - `urn:funcd:problem:invalid`: The text in spec.cedar does not parse as Cedar, or holds no statement. Correct the text where the detail says it breaks, and keep at least one permit or forbid statement.
-            - `urn:funcd:problem:invalid`: A statement of spec.cedar does not name exactly one action that funcd knows, or names an entity of a type that funcd does not know. Name one action that funcd knows, such as kv::read, and only entity types that it knows; the detail lists both.
+            - `urn:funcd:problem:invalid`: A statement of spec.cedar does not name exactly one action that funcd knows, or names an entity of a type that funcd does not know. Name exactly one action that funcd knows, such as kv::read, and only entity types that it knows; when the detail names an unknown action or entity type, it lists the ones that funcd knows.
             - `urn:funcd:problem:invalid`: A statement of spec.cedar names an entity of another namespace: its id does not begin with the Policy's namespace and a slash. Name only entities of the Policy's namespace, or apply the Policy in the namespace of the entities it names.
           x-funcd-cases:
             - type: urn:funcd:problem:invalid
@@ -13598,7 +13598,7 @@ paths:
               fix: Correct the text where the detail says it breaks, and keep at least one permit or forbid statement.
             - type: urn:funcd:problem:invalid
               when: A statement of spec.cedar does not name exactly one action that funcd knows, or names an entity of a type that funcd does not know.
-              fix: Name one action that funcd knows, such as kv::read, and only entity types that it knows; the detail lists both.
+              fix: Name exactly one action that funcd knows, such as kv::read, and only entity types that it knows; when the detail names an unknown action or entity type, it lists the ones that funcd knows.
             - type: urn:funcd:problem:invalid
               when: "A statement of spec.cedar names an entity of another namespace: its id does not begin with the Policy's namespace and a slash."
               fix: Name only entities of the Policy's namespace, or apply the Policy in the namespace of the entities it names.
@@ -13970,14 +13970,14 @@ paths:
                 $ref: "#/components/schemas/FaultError"
           description: |-
             - `urn:funcd:problem:conflict`: The ResourceGroup has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the ResourceGroup again, apply the change to it, and send it with its new resourceVersion.
-            - `urn:funcd:problem:conflict`: The ResourceGroup still has members: objects of the namespace whose metadata.resourceGroup names it and that no other object owns. Delete the members first, or delete the ResourceGroup with force=true, which deletes them.
+            - `urn:funcd:problem:conflict`: The ResourceGroup still has members: objects of the namespace, other than ResourceGroups, whose metadata.resourceGroup names it and that no other object controls. Delete the members first, or delete the ResourceGroup with force=true, which deletes them.
             - `urn:funcd:problem:conflict`: With force=true, funcd refuses the delete of a member, such as a Function that a Function outside the group links to; the detail gives that refusal. Do what the refusal asks, then delete again; the members deleted already stay deleted.
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
               when: The ResourceGroup has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
               fix: Read the ResourceGroup again, apply the change to it, and send it with its new resourceVersion.
             - type: urn:funcd:problem:conflict
-              when: "The ResourceGroup still has members: objects of the namespace whose metadata.resourceGroup names it and that no other object owns."
+              when: "The ResourceGroup still has members: objects of the namespace, other than ResourceGroups, whose metadata.resourceGroup names it and that no other object controls."
               fix: Delete the members first, or delete the ResourceGroup with force=true, which deletes them.
             - type: urn:funcd:problem:conflict
               when: With force=true, funcd refuses the delete of a member, such as a Function that a Function outside the group links to; the detail gives that refusal.
@@ -19776,7 +19776,7 @@ paths:
           description: |-
             - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
             - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
-            - `urn:funcd:problem:invalid`: The body's metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `urn:funcd:problem:invalid`: The body sets metadata.namespace, which the detail compares with the path's empty namespace, or its metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Leave metadata.namespace empty, and send the object to its own path, with at most one version.
             - `about:blank`: The body is missing or is not JSON. Send a JSON body.
           x-funcd-cases:
             - type: urn:funcd:problem:invalid
@@ -19786,8 +19786,8 @@ paths:
               when: A field breaks a rule that the schema cannot hold, which the detail names.
               fix: Correct the field that the detail names.
             - type: urn:funcd:problem:invalid
-              when: The body's metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
-              fix: Send the object to its own path, with at most one version.
+              when: The body sets metadata.namespace, which the detail compares with the path's empty namespace, or its metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Leave metadata.namespace empty, and send the object to its own path, with at most one version.
             - type: about:blank
               when: The body is missing or is not JSON.
               fix: Send a JSON body.
