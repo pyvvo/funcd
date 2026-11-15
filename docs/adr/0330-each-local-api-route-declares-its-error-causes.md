@@ -1,6 +1,7 @@
 # ADR-0330: Each local API route declares the error causes it answers, and one interceptor writes and checks them
 
-- **Status**: Proposed (2026-11-15), after three rounds of an independent judge (a subagent), whose findings are folded
+- **Status**: Proposed (2026-11-15), after three rounds of an independent judge (a subagent), whose findings are
+  folded; then `KnownCause` (the decider's word) and the clarifications of an inventory of every local API endpoint
 - **Date**: 2026-11-15
 - **Deciders**: green-0-rabbit
 - **Tags**: api, docs, errors
@@ -54,14 +55,17 @@ ADR-0329 left them out of the HTTP API reference. What a method surfaces also di
 
 ## Scope
 
-In: `fault.Cause`; the causes of the described endpoints and their raising sites; every endpoint of the local API, the
+In: `fault.KnownCause`; the causes of the described endpoints and their raising sites; every endpoint of the local API, the
 four facets' routes, `invoke`, `health` and `fetch`; the interceptor; `kindref`'s table of methods; each method's error
 rows, in both languages; the guard; the rollout list.
 
 Out:
 - The HTTP API, which ADR-0329 covers.
 - Answers that the local API passes through unchanged: the target's reply to `ctx.invoke` and `ctx.fetch`, whose
-  gateway answers are ADR-0329's `invokeFunction` rows, and health's dependency report, a 503 that is not a problem.
+  gateway answers are ADR-0329's `invokeFunction` rows and which the shims cannot tell from the local API's own, and
+  health's dependency report, a 503 that is not a problem.
+- Answers given before any endpoint: the mux's and net/http's own 301, 307, 404, 405 and 431, for a request that no
+  endpoint serves, and the 404 of a facet whose provider is absent.
 - `ctx.lake`'s errors, which are the Lake proxy's, and the shims' own throws, such as a bad argument.
 - Any change of status, body or header, and any change to the shims or their `api.json`.
 - A static check of the causes that a route can reach on paths no test runs (see Open questions).
@@ -80,7 +84,7 @@ Out:
 - **Cases written inline at each route.** The same literal repeats on every route that answers it, and nothing ties
   it to the code that raises the error. The decider asked for each cause to be defined once (2026-11-15).
 - **A cause wrapped with `%w`, the plain sentinel idiom.** `fault.Error`'s text includes the error it wraps, and a 4xx
-  problem's `detail` carries the whole text (`problem.go`, `detailOf`), so the wire would change. A `Cause` field that
+  problem's `detail` carries the whole text (`problem.go`, `detailOf`), so the wire would change. A `KnownCause` field that
   is not printed, with an `Is` method, keeps the idiom (`errors.Is`) and the detail.
 - **Kinds extracted by a static call graph.** Through an interface such as the local API's `KV`, the graph follows
   every implementation, so it lists causes that no real path returns. It stays an open question for untested paths.
@@ -89,20 +93,27 @@ Out:
 
 ## Decision
 
-1. **A cause is a sentinel.** `api/fault` gains `Cause`: an immutable error value with a name, a kind, when it happens
-   and what the caller does, made only by `NewCause` and defined once, as `io.EOF` or `fs.ErrNotExist` are. The failing
+1. **A cause is a sentinel.** `api/fault` gains `KnownCause`: an immutable error value with a name, a kind, when it happens
+   and what the caller does, made only by `NewKnownCause` and defined once, as `io.EOF` or `fs.ErrNotExist` are. The failing
    code raises its error from it, with `Errorf`, or `Wrapf` around a lower error: a `*fault.Error` of the cause's kind
-   whose new `Cause` field holds it. `(*Error).Is` matches that field, so `errors.Is` finds the cause through any
-   wrapping, and `fault.CauseOf` returns the first cause in a chain, as `KindOf` returns the kind. The field is not
+   whose new `KnownCause` field holds it. `(*Error).Is` matches that field, so `errors.Is` finds the known cause through any
+   wrapping, and `fault.KnownCauseOf` returns the outermost known cause in a chain, as `KindOf` returns the outermost
+   kind. A wrap that gives a generic error its meaning names the cause there, as the store's "not found" means the
+   Function, a bound Secret or the written Secret only where it is wrapped. A site that can fail in two ways picks its
+   cause at run time, by kind (a disk-full write is 507, another write failure 500) or by meaning (a read or a write
+   deny). The field is not
    printed, so the problem's `detail` is the text it is today. `fault.go`'s comments call `Err` the wrapped error, and
    `LogCause` keeps its meaning.
 2. **Where a cause lives.** In the lowest package that both its raiser and the endpoints that answer it import: the
    KV service's causes in `internal/kvstore`, the lowest package that `internal/services/kv` and
    `internal/workernode/local` share; the quota's in `internal/quota`; a cause that only the local API raises, such as a
-   missing key's 404, its two 412s and `readBody`'s, in `local`.
+   missing key's 404, its two 412s and `readBody`'s, in `local`. Each client keeps its own binding causes (KV answers
+   a missing store with 403, Blob a missing bucket with 404); the body, quota and floor causes are shared by every
+   client. An existing sentinel such as `local.ErrEngineNotReady` becomes a known cause, and `errors.Is` keeps matching it.
 3. **One interceptor.** Each endpoint registers through `handle`, or, when its dispatch bypasses the mux as fetch's
    does (ADR-0243 Decision 6), is wrapped by `wrap`. The handler returns its error before it writes any status, and the
-   interceptor answers a non-nil one through `fault.WriteProblem`. Every `fault.WriteProblem` call of the package goes
+   interceptor answers a non-nil one through `fault.WriteProblem`; headers that the handler set first stay on the
+   answer, as a 412's `ETag` does. Every `fault.WriteProblem` call of the package goes
    through it, except the pool's member refusal (`manager.go`), which answers before any endpoint is chosen.
 4. **Declared causes.** A described endpoint lists the causes it answers; an endpoint lists the same value as every
    other that answers it, such as `kvstore.ErrNoBinding` on each KV route. Nil marks an endpoint not yet described; an
@@ -115,7 +126,9 @@ Out:
    kind of every error the interceptor answers. `pkg/funcd`'s `TestMain` adds the described endpoints to ADR-0329's
    comparison: an undeclared cause, an error with none, or a kind that is not its cause's always fails; a declared cause that no test got fails on a
    full run that passed, as `checksAll` decides. Only `pkg/funcd`'s tests run the real facades; `local`'s own fakes
-   prove the interceptor, not a declaration. A scan of the module refuses a call of `SetErrorRecorderForTest`
+   prove the interceptor, not a declaration. A cause that only a raw request can provoke, such as a repeated `If-Match`
+   line, is proven by a raw request to the socket and shows under no method; one that only a store raises, such as the
+   `file://` store's key rules, by a test on that store; one that no request can reach is not declared. A scan of the module refuses a call of `SetErrorRecorderForTest`
    from a file that is not a test.
 8. **Docs.** `local.Endpoints` builds the four facets over nil ports and the built-in endpoints on a recorder, to
    which `handle` passes its causes through a type assertion, so `facetMux` (ADR-0310) is unchanged; fetch's causes
@@ -149,45 +162,45 @@ test and the CI call drop it.
 ```go
 // package fault (additions; no existing signature changes)
 
-// Cause is one named reason for an error, made only by NewCause; it is an error, so errors.Is can find it.
-type Cause struct{ /* unexported, immutable: name, kind, when, fix */ }
+// KnownCause is one named reason for an error, made only by NewKnownCause; it is an error, so errors.Is can find it.
+type KnownCause struct{ /* unexported, immutable: name, kind, when, fix */ }
 
-// NewCause names its cause "<package>.<name>", e.g. "kvstore.value-over-cap"; when and fix are one sentence each.
-func NewCause(k Kind, name, when, fix string) *Cause
-func (c *Cause) Name() string
-func (c *Cause) Kind() Kind
-func (c *Cause) When() string
-func (c *Cause) Fix() string
-func (c *Cause) Error() string                                       // its name
-func (c *Cause) Errorf(op, format string, a ...any) *Error           // an Error of c's kind whose Cause is c
-func (c *Cause) Wrapf(err error, op, format string, a ...any) *Error // the same, around a lower error
-func CauseOf(err error) *Cause                                       // the first cause in err's chain, or nil
+// NewKnownCause names its known cause "<package>.<name>", e.g. "kvstore.value-over-cap"; when and fix are one sentence each.
+func NewKnownCause(k Kind, name, when, fix string) *KnownCause
+func (c *KnownCause) Name() string
+func (c *KnownCause) Kind() Kind
+func (c *KnownCause) When() string
+func (c *KnownCause) Fix() string
+func (c *KnownCause) Error() string                                       // its name
+func (c *KnownCause) Errorf(op, format string, a ...any) *Error           // an Error of c's kind whose KnownCause is c
+func (c *KnownCause) Wrapf(err error, op, format string, a ...any) *Error // the same, around a lower error
+func KnownCauseOf(err error) *KnownCause                                       // the first cause in err's chain, or nil
 
-// Error gains Cause *Cause, which Error() does not print, and
-func (e *Error) Is(target error) bool // true when target is e.Cause
+// Error gains KnownCause *KnownCause, which Error() does not print, and
+func (e *Error) Is(target error) bool // true when target is e.KnownCause
 ```
 
 ```go
 // package local
-func handle(mux facetMux, logger *slog.Logger, pattern string, causes []*fault.Cause,
+func handle(mux facetMux, logger *slog.Logger, pattern string, causes []*fault.KnownCause,
 	h func(http.ResponseWriter, *http.Request) error)
-func wrap(logger *slog.Logger, pattern string, causes []*fault.Cause,
+func wrap(logger *slog.Logger, pattern string, causes []*fault.KnownCause,
 	h func(http.ResponseWriter, *http.Request) error) http.HandlerFunc
 
 type Endpoint struct {
 	Pattern string         // e.g. "PUT /kv/{binding}/{key...}", or "/fetch/" for fetch
-	Causes  []*fault.Cause // nil: not yet described
+	Causes  []*fault.KnownCause // nil: not yet described
 }
 
 func Endpoints() []Endpoint // the four facets' over nil ports, then invoke, health and fetch
-func SetErrorRecorderForTest(record func(pattern string, cause *fault.Cause, kind fault.Kind))
+func SetErrorRecorderForTest(record func(pattern string, cause *fault.KnownCause, kind fault.Kind))
 ```
 
 ```go
 // package kindref
 type methodEndpoint struct {
 	Endpoint string         // a pattern of local.Endpoints, or "" for a method that calls no endpoint
-	Except   []*fault.Cause // the endpoint's causes that the method does not surface
+	Except   []*fault.KnownCause // the endpoint's causes that the method does not surface
 }
 
 // methods maps a language ("TypeScript", "Python") and a method ("kv.put", "kv.put_if_absent") to its endpoint.
@@ -202,7 +215,8 @@ var methods map[string]map[string]methodEndpoint //nolint:gochecknoglobals // an
 
 ## Implementation plan
 
-1. `api/fault`: `Cause`, `NewCause`, `Errorf`, the `Cause` field and `Is`; `TestScenarioCauseKeepsTheDetail`.
+1. `api/fault`: `KnownCause`, `NewKnownCause`, `Errorf`, `Wrapf`, `KnownCauseOf`, the `KnownCause` field and `Is`,
+   and `Err`'s comments reworded to "wrapped error"; `TestScenarioCauseKeepsTheDetail`.
 2. `internal/kvstore`, `internal/quota` and `local`: the KV causes; `internal/services/kv` (`kv.go`, `resolver.go`),
    `internal/quota` (`quota.go`), `local/kv.go` and `local/local.go` (`readBody`) raise them. The drivers on these
    paths stay bare: they raise only internal wraps, or conditions that `local` rules out first.
