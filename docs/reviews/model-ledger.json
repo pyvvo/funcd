@@ -14128,5 +14128,20 @@
     "dod_total": 12,
     "report": "docs/reviews/fix-status-observed-generation-claude-opus-5-5.md",
     "notes": "self-review by the fixer, not independent (the decider's rule: no review agents); no findings (0 model, 0 issue, 0 adr, 0 env): the five kinds' tests fail on main at status.observedGeneration and pass with the fix, 16 overlay mutants caught, a funcdctl dev probe shows the field absent on main and at 1 then 2 on the branch"
+  },
+  {
+    "date": "2026-11-15",
+    "adr": "0329",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 3,
+    "dod_passed": 14,
+    "dod_total": 16,
+    "report": "docs/reviews/adr-0329-implementation-claude-opus-5-5.md",
+    "notes": "pass; the Implemented stamp waits for the decider. 3 Minors (model): invokeFunction's 401 fix cannot help when server.auth.edge is off; answers.go links SpecAPI into the daemon (+608,864 bytes, a second global); the HTTP API section's first sentence claims every operation. Routed (adr): Decision 2 cites ADR-0147 for a 429 that no external call gets (a DoD item impossible as written); the function-call-documented scenario asks for an ADR on the page, which Decision 7 refuses; Decision 2's 503 list misses the cases of ADR-0290, ADR-0161, ADR-0169, ADR-0028 and ADR-0044. Routed (elsewhere): the cluster-scoped shared cases are proven by the first cluster kind's PR. DoD 14/16: just ci runs in the gate."
   }
 ]
