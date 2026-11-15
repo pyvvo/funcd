@@ -6925,6 +6925,7 @@ paths:
             - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
             - `about:blank`: The body is missing or is not JSON. Send a JSON body.
             - `urn:funcd:problem:invalid`: A Function, a Lake or a Workflow's image step of the App binds a Secret that spec.secrets does not declare. Declare the Secret in spec.secrets, or remove it from the bindings.
+            - `urn:funcd:problem:invalid`: A ref entry names an object that the App of this name controls, such as a part that an earlier spec declared by name. Declare it by name instead; to keep a store as a ref, apply the App with the store's deletion set to retain first.
             - `urn:funcd:problem:invalid`: The App's spec.requires would close a cycle among the namespace's Apps, such as an App that requires itself. Remove a requirement of the cycle.
             - `urn:funcd:problem:invalid`: A part breaks a rule that a write of its kind is held to, such as a Function's link to a Function that neither the App nor the namespace holds; the detail names the part's entry, such as spec.functions[0]. Correct that entry as the detail says.
           x-funcd-cases:
@@ -6940,6 +6941,9 @@ paths:
             - type: urn:funcd:problem:invalid
               when: A Function, a Lake or a Workflow's image step of the App binds a Secret that spec.secrets does not declare.
               fix: Declare the Secret in spec.secrets, or remove it from the bindings.
+            - type: urn:funcd:problem:invalid
+              when: A ref entry names an object that the App of this name controls, such as a part that an earlier spec declared by name.
+              fix: Declare it by name instead; to keep a store as a ref, apply the App with the store's deletion set to retain first.
             - type: urn:funcd:problem:invalid
               when: The App's spec.requires would close a cycle among the namespace's Apps, such as an App that requires itself.
               fix: Remove a requirement of the cycle.
@@ -7275,9 +7279,9 @@ paths:
             - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
             - `about:blank`: The body is missing or is not JSON. Send a JSON body.
             - `urn:funcd:problem:invalid`: A Function, a Lake or a Workflow's image step of the App binds a Secret that spec.secrets does not declare. Declare the Secret in spec.secrets, or remove it from the bindings.
+            - `urn:funcd:problem:invalid`: A ref entry names an object that the App of this name controls, such as a part that an earlier spec declared by name. Declare it by name instead; to keep a store as a ref, apply the App with the store's deletion set to retain first.
             - `urn:funcd:problem:invalid`: The App's spec.requires would close a cycle among the namespace's Apps, such as an App that requires itself. Remove a requirement of the cycle.
             - `urn:funcd:problem:invalid`: A part breaks a rule that a write of its kind is held to, such as a Function's link to a Function that neither the App nor the namespace holds; the detail names the part's entry, such as spec.functions[0]. Correct that entry as the detail says.
-            - `urn:funcd:problem:invalid`: A ref entry names an object that the App controls, such as a part that an earlier spec declared by name. Declare it by name again; to keep a store as a ref, apply it with deletion: retain first.
           x-funcd-cases:
             - type: urn:funcd:problem:invalid
               when: The If-Match header is not one strong entity-tag, such as "42", or *.
@@ -7295,14 +7299,14 @@ paths:
               when: A Function, a Lake or a Workflow's image step of the App binds a Secret that spec.secrets does not declare.
               fix: Declare the Secret in spec.secrets, or remove it from the bindings.
             - type: urn:funcd:problem:invalid
+              when: A ref entry names an object that the App of this name controls, such as a part that an earlier spec declared by name.
+              fix: Declare it by name instead; to keep a store as a ref, apply the App with the store's deletion set to retain first.
+            - type: urn:funcd:problem:invalid
               when: The App's spec.requires would close a cycle among the namespace's Apps, such as an App that requires itself.
               fix: Remove a requirement of the cycle.
             - type: urn:funcd:problem:invalid
               when: A part breaks a rule that a write of its kind is held to, such as a Function's link to a Function that neither the App nor the namespace holds; the detail names the part's entry, such as spec.functions[0].
               fix: Correct that entry as the detail says.
-            - type: urn:funcd:problem:invalid
-              when: A ref entry names an object that the App controls, such as a part that an earlier spec declared by name.
-              fix: "Declare it by name again; to keep a store as a ref, apply it with deletion: retain first."
         "401":
           content:
             application/problem+json:
