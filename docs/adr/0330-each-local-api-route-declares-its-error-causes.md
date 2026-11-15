@@ -1,6 +1,6 @@
 # ADR-0330: Each local API route declares the error causes it answers, and one interceptor writes and checks them
 
-- **Status**: Accepted (2026-11-15), on the decider's go, after three rounds of an independent judge (a subagent);
+- **Status**: Reviewing (2026-11-15, implemented); Accepted (2026-11-15), on the decider's go, after three rounds of an independent judge (a subagent);
   the decider chose `KnownCause`, confirmed the drafter's defaults (Decisions 5 and 6, the two-sided guard) and the
   method table, and asked that each service's causes be proven by one parametrized test over its own matrix
 - **Date**: 2026-11-15
