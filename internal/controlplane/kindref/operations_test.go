@@ -1,11 +1,8 @@
 package kindref
 
 import (
-	"errors"
-	"flag"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -18,11 +15,6 @@ import (
 
 	"github.com/pyvvo/funcd/internal/controlplane"
 )
-
-//nolint:gochecknoglobals // the -update flag of this package's tests
-var update = flag.Bool("update", false, "rewrite testdata/undescribed-operations.txt from the API document")
-
-const operationsList = "testdata/undescribed-operations.txt"
 
 // section is the part of page under the heading, up to the next heading of the same level or higher.
 func section(t *testing.T, page, heading string) string {
@@ -147,21 +139,12 @@ func TestScenarioFunctionCallDocumented(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rec.Code, "the control plane does not route the call")
 }
 
-// TestEveryOperationIsDescribed holds every operation to a summary and its answers, but those that
-// testdata/undescribed-operations.txt lists; the list only shrinks (ADR-0329 Decision 5). go test -run
-// TestEveryOperationIsDescribed -update rewrites it. A described operation's cases each have a problem type or a body,
-// a when and a fix, and it lists no default; no description names an ADR (Decision 7).
+// TestEveryOperationIsDescribed holds every operation to a summary and its answers (ADR-0329 Decision 5). A described
+// operation's cases each have a problem type or a body, a when and a fix, and it lists no default; no description names
+// an ADR (Decision 7).
 func TestEveryOperationIsDescribed(t *testing.T) {
 	doc := controlplane.SpecAPI().OpenAPI()
-	got := UndescribedOperations(doc)
-	if *update {
-		require.NoError(t, os.WriteFile(operationsList, []byte(strings.Join(got, "\n")+"\n"), 0o644))
-		return
-	}
-	b, err := os.ReadFile(operationsList)
-	require.NoError(t, err)
-	listed := slices.DeleteFunc(strings.Split(strings.TrimSpace(string(b)), "\n"), func(s string) bool { return s == "" })
-	require.NoError(t, checkOperations(got, listed))
+	require.Empty(t, UndescribedOperations(doc), "operations with no summary or answers, which need controlplane.Describe")
 	require.Empty(t, adrNamed(doc), "a description is written for users and names no ADR")
 	for _, o := range operationsOf(doc) {
 		if !o.described() {
@@ -179,24 +162,6 @@ func TestEveryOperationIsDescribed(t *testing.T) {
 			}
 		}
 	}
-}
-
-// checkOperations fails on an undescribed operation that the list does not hold, and on a listed one that is described
-// or gone: the list only shrinks.
-func checkOperations(got, listed []string) error {
-	var problems []string
-	if missing := slices.DeleteFunc(slices.Clone(got), func(id string) bool { return slices.Contains(listed, id) }); len(missing) > 0 {
-		problems = append(problems, "operations with no summary or answers, which need controlplane.Describe: "+
-			strings.Join(missing, ", "))
-	}
-	if stale := slices.DeleteFunc(slices.Clone(listed), func(id string) bool { return slices.Contains(got, id) }); len(stale) > 0 {
-		problems = append(problems, "listed operations that are described or gone, to remove from "+operationsList+": "+
-			strings.Join(stale, ", "))
-	}
-	if len(problems) == 0 {
-		return nil
-	}
-	return errors.New(strings.Join(problems, "; "))
 }
 
 var adrName = regexp.MustCompile(`\bADR-\d{4}\b`)
@@ -254,12 +219,6 @@ func testDoc() *huma.OpenAPI {
 func TestScenarioUndocumentedOperationRefused(t *testing.T) {
 	got := UndescribedOperations(testDoc())
 	require.Equal(t, []string{"createThing", "listThings"}, got, "the Omitted kind's and the described one are not listed")
-	err := checkOperations(got, nil)
-	require.ErrorContains(t, err, "createThing")
-	require.ErrorContains(t, err, "listThings")
-	require.NoError(t, checkOperations(got, []string{"createThing", "listThings"}), "the list holds them")
-	require.ErrorContains(t, checkOperations(got, []string{"createThing", "getThing", "listThings"}), "getThing",
-		"a described operation leaves the list")
 }
 
 // scenario: no-adr-in-description
