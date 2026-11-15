@@ -14673,7 +14673,8 @@ paths:
             - `urn:funcd:problem:conflict`: The SQLDatabase has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the SQLDatabase again, apply the change to it, and send it with its new resourceVersion.
             - `urn:funcd:problem:conflict`: A Function's spec.bindings.sql still names the database. Remove that binding from the Function first.
             - `urn:funcd:problem:conflict`: The database still holds a table. Drop its tables first.
-            - `urn:funcd:problem:conflict`: funcd cannot ask the database's engine whether it holds a table: the engine does not answer, or it is not Ready and the database has data. Retry once the SQLDatabase is Ready.
+            - `urn:funcd:problem:conflict`: The database's engine is not Ready and the database has data, so funcd cannot check whether it holds a table. Retry once the SQLDatabase is Ready and its engine answers.
+            - `urn:funcd:problem:conflict`: The database's engine does not answer, so funcd cannot check whether it holds a table. Retry once the SQLDatabase is Ready and its engine answers.
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
               when: The SQLDatabase has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
@@ -14685,8 +14686,11 @@ paths:
               when: The database still holds a table.
               fix: Drop its tables first.
             - type: urn:funcd:problem:conflict
-              when: "funcd cannot ask the database's engine whether it holds a table: the engine does not answer, or it is not Ready and the database has data."
-              fix: Retry once the SQLDatabase is Ready.
+              when: The database's engine is not Ready and the database has data, so funcd cannot check whether it holds a table.
+              fix: Retry once the SQLDatabase is Ready and its engine answers.
+            - type: urn:funcd:problem:conflict
+              when: The database's engine does not answer, so funcd cannot check whether it holds a table.
+              fix: Retry once the SQLDatabase is Ready and its engine answers.
         "422":
           content:
             application/problem+json:

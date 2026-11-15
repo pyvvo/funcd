@@ -161,17 +161,18 @@ func TestBucketAnswersMatrix(t *testing.T) {
 	runMatrix(t, rows)
 }
 
-// sqlFixtures is a SQL engine runtime for the SQL feature's answers: the engine of the database tables is Ready at
-// engine, and every other engine stays Pending. List names the databases that withData holds, as data on disk.
+// sqlFixtures is a SQL engine runtime for the SQL feature's answers: the engine of each database that ready names is
+// Ready at its address, and every other engine stays Pending. List names the databases that withData holds, as data
+// on disk.
 type sqlFixtures struct {
-	engine   string
+	ready    map[v1.ObjectName]string
 	mu       sync.Mutex
 	withData []provider.ProviderRef
 }
 
 func (s *sqlFixtures) Converge(_ context.Context, spec provider.ProviderSpec) (provider.ProviderStatus, error) {
-	if spec.Ref.Name == "tables" && s.engine != "" {
-		return provider.ProviderStatus{Running: 1, Ready: true, Address: s.engine}, nil
+	if addr, ok := s.ready[spec.Ref.Name]; ok {
+		return provider.ProviderStatus{Running: 1, Ready: true, Address: addr}, nil
 	}
 	return provider.ProviderStatus{Reason: "Starting"}, nil
 }
@@ -209,12 +210,25 @@ func tablesEngine(t *testing.T) string {
 	return strings.TrimPrefix(srv.URL, "http://")
 }
 
+// silentEngine starts an engine that closes each connection with no answer, and returns its address.
+func silentEngine(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+			_ = conn.Close()
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return strings.TrimPrefix(srv.URL, "http://")
+}
+
 // The answers of the SQL feature's operations, one row per case of each.
 func TestSQLAnswersMatrix(t *testing.T) {
 	t.Parallel()
-	engines := &sqlFixtures{engine: tablesEngine(t)}
+	engines := &sqlFixtures{ready: map[v1.ObjectName]string{"tables": tablesEngine(t), "silent": silentEngine(t)}}
 	e := newAnswerEnv(t, funcd.WithSQLProviderRuntime(engines))
-	for _, d := range []*v1.SQLDatabase{sqlFixture("db"), sqlFixture("bound"), sqlFixture("tables"), sqlFixture("pending")} {
+	for _, d := range []*v1.SQLDatabase{sqlFixture("db"), sqlFixture("bound"), sqlFixture("tables"), sqlFixture("silent"),
+		sqlFixture("pending")} {
 		create(t, e.c, e.api, d)
 	}
 	engines.keepData("pending")
@@ -229,8 +243,10 @@ func TestSQLAnswersMatrix(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return statusOf(e.c, http.MethodGet, e.api+dbs+"/owned", answersDev) == http.StatusOK
 	}, 10*time.Second, 20*time.Millisecond, "the Function maker makes the SQLDatabase owned")
-	require.Eventually(t, func() bool { return phaseAt(e.c, e.api, dbs+"/tables") == v1.PhaseReady },
-		10*time.Second, 20*time.Millisecond, "the engine of tables is Ready")
+	for _, name := range []string{"tables", "silent"} {
+		require.Eventually(t, func() bool { return phaseAt(e.c, e.api, dbs+"/"+name) == v1.PhaseReady },
+			10*time.Second, 20*time.Millisecond, "the engine of %s is Ready", name)
+	}
 	capped := newAnswerEnv(t, funcd.WithSQLDatabaseQuota(1), funcd.WithSQLProviderRuntime(&sqlFixtures{}))
 	create(t, capped.c, capped.api, sqlFixture("first"))
 
@@ -254,9 +270,12 @@ func TestSQLAnswersMatrix(t *testing.T) {
 			{op: "deleteSQLDatabase", when: "still holds a table", on: e, ask: ask{what: "a database that holds a table",
 				method: http.MethodDelete, path: dbs + "/tables", token: answersDev,
 				detail: `SQLDatabase "tables" still holds tables`}},
-			{op: "deleteSQLDatabase", when: "it is not Ready and the database has data", on: e, ask: ask{
+			{op: "deleteSQLDatabase", when: "is not Ready and the database has data", on: e, ask: ask{
 				what: "a database with data whose engine is not Ready", method: http.MethodDelete, path: dbs + "/pending",
-				token: answersDev, detail: "retry once its engine is Ready"}},
+				token: answersDev, detail: "the engine of default/pending is not Ready, so its data cannot be checked"}},
+			{op: "deleteSQLDatabase", when: "does not answer", on: e, ask: ask{what: "a database whose engine does not answer",
+				method: http.MethodDelete, path: dbs + "/silent", token: answersDev,
+				detail: "the database's engine does not answer"}},
 		},
 	)
 	runMatrix(t, rows)
