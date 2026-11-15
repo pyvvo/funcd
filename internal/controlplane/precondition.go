@@ -14,7 +14,7 @@ const preconditionOp = "controlplane.precondition"
 // IfMatchParams is embedded in every PUT and DELETE input (ADR-0210 Decision 1). It is exported because huma skips
 // unexported embedded fields.
 type IfMatchParams struct {
-	IfMatch string `header:"If-Match" doc:"one strong entity-tag \"<resourceVersion>\" or *; the write is conditional on it (ADR-0210)"`
+	IfMatch string `header:"If-Match" doc:"One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."`
 	rv      string
 }
 

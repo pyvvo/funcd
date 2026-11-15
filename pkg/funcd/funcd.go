@@ -210,6 +210,8 @@ type config struct {
 
 	// data plane (ADR-0033): the function-invocation listener address.
 	dataPlaneAddr string
+	// gatewayReadTimeout replaces serverReadTimeout on the data-plane listener; only a test sets it (#90).
+	gatewayReadTimeout time.Duration
 	// baseDomain is server.baseDomain (ADR-0240); "" ⇒ "localhost".
 	baseDomain string
 
@@ -1131,7 +1133,8 @@ func (p *Platform) buildControlPlane() error {
 	// ErrorLog sends net/http's own errors (TLS handshake, accept, recovered panic) through the configured
 	// logger; left nil they go to the stdlib log package, bypassing the log format (#454).
 	httpErrorLog := slog.NewLogLogger(p.logger.Handler(), slog.LevelWarn)
-	p.httpServer = &http.Server{Handler: handler, ReadHeaderTimeout: serverReadHeaderTimeout, ReadTimeout: serverReadTimeout, ErrorLog: httpErrorLog}
+	p.httpServer = &http.Server{Handler: recordControlPlane(handler), ReadHeaderTimeout: serverReadHeaderTimeout,
+		ReadTimeout: serverReadTimeout, ErrorLog: httpErrorLog}
 
 	ln, err := net.Listen("tcp", c.listenAddr)
 	if err != nil {
@@ -1171,7 +1174,8 @@ func (p *Platform) buildControlPlane() error {
 	// ReadTimeout bounds the whole request read (headers + body), so a client that stops sending its
 	// body cannot hold an ADR-0112 in-flight slot indefinitely (issue #90). net/http clears the
 	// deadline once the body is read, so it does not cut a long-running handler.
-	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: serverReadHeaderTimeout, ReadTimeout: serverReadTimeout, ErrorLog: httpErrorLog}
+	p.dataPlaneServer = &http.Server{Handler: recordGateway(dpHandler), ReadHeaderTimeout: serverReadHeaderTimeout,
+		ReadTimeout: cmp.Or(c.gatewayReadTimeout, serverReadTimeout), ErrorLog: httpErrorLog}
 	dln, err := net.Listen("tcp", c.dataPlaneAddr)
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "bind data-plane listener on %s", c.dataPlaneAddr)

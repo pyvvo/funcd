@@ -47,20 +47,20 @@ func RegisterRoutes(api huma.API, h Handlers) {
 
 // namespacedGet is input for get-by-name on a namespaced resource.
 type namespacedGet struct {
-	Namespace v1.NamespaceName `path:"namespace"`
-	Name      v1.ObjectName    `path:"name"`
+	Namespace v1.NamespaceName `path:"namespace" doc:"The object's namespace."`
+	Name      v1.ObjectName    `path:"name" doc:"The object's name."`
 }
 
 // namespacedDelete is input for delete on a namespaced resource.
 type namespacedDelete struct {
 	IfMatchParams
-	Namespace v1.NamespaceName `path:"namespace"`
-	Name      v1.ObjectName    `path:"name"`
+	Namespace v1.NamespaceName `path:"namespace" doc:"The object's namespace."`
+	Name      v1.ObjectName    `path:"name" doc:"The object's name."`
 }
 
 // namespacedList is input for list in a namespace.
 type namespacedList struct {
-	Namespace v1.NamespaceName `path:"namespace"`
+	Namespace v1.NamespaceName `path:"namespace" doc:"The namespace whose objects the answer lists."`
 }
 
 // clusterScopedGet is input for get-by-name on a cluster-scoped resource.
@@ -163,7 +163,7 @@ type deleteResourceGroupInput struct {
 	IfMatchParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Name      v1.ObjectName    `path:"name"`
-	Force     bool             `query:"force" doc:"delete the members first; their protections apply (ADR-0170)"`
+	Force     bool             `query:"force" doc:"Delete the members first; each member's protections still apply."`
 }
 type resourceGroupOutput struct {
 	Body v1.ResourceGroup

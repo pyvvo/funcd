@@ -2232,6 +2232,23 @@ components:
           description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
           type: object
       type: object
+    ContractViolation:
+      additionalProperties: false
+      properties:
+        details:
+          description: Each value that breaks the contract, with where it is and why.
+          items:
+            $ref: "#/components/schemas/Detail"
+          type:
+            - array
+            - "null"
+        error:
+          description: "What broke the contract: the event data or the handler's result."
+          type: string
+      required:
+        - error
+        - details
+      type: object
     DeadLetter:
       additionalProperties: false
       properties:
@@ -2319,6 +2336,19 @@ components:
         - name
         - source
         - event
+      type: object
+    Detail:
+      additionalProperties: false
+      properties:
+        message:
+          description: Why the value breaks the contract, for people to read.
+          type: string
+        path:
+          description: The value's place, as an RFC 6901 JSON Pointer; empty is the whole document.
+          type: string
+      required:
+        - path
+        - message
       type: object
     EdgeAuth:
       additionalProperties: false
@@ -3453,6 +3483,7 @@ components:
       additionalProperties: false
       properties:
         workflow:
+          description: The Workflow that becomes the store's owner. Its spec.kv declares the store.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6262,6 +6293,16 @@ components:
       required:
         - name
       type: object
+  securitySchemes:
+    apiKey:
+      description: A credential of funcd's config, sent in the X-Api-Key header.
+      in: header
+      name: X-Api-Key
+      type: apiKey
+    bearer:
+      description: "A credential of funcd's config, sent as Authorization: Bearer followed by its token."
+      scheme: bearer
+      type: http
 info:
   description: funcd control-plane API — code-first via huma. Generated from typed Go operations; not hand-authored.
   title: funcd API
@@ -6293,12 +6334,12 @@ paths:
     post:
       operationId: createGateway
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
       requestBody:
         content:
@@ -6325,11 +6366,11 @@ paths:
     delete:
       operationId: deleteGateway
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
         - in: path
           name: name
@@ -6379,18 +6420,18 @@ paths:
     put:
       operationId: replaceGateway
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
         - in: path
           name: name
@@ -6484,12 +6525,12 @@ paths:
     post:
       operationId: createNamespace
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
       requestBody:
         content:
@@ -6516,10 +6557,12 @@ paths:
     get:
       operationId: listAppRevisions
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6547,18 +6590,22 @@ paths:
     get:
       operationId: getAppRevision
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6582,10 +6629,12 @@ paths:
     get:
       operationId: listApps
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6612,17 +6661,19 @@ paths:
     post:
       operationId: createApp
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6652,24 +6703,28 @@ paths:
     delete:
       operationId: deleteApp
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6688,18 +6743,22 @@ paths:
     get:
       operationId: getApp
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6722,31 +6781,35 @@ paths:
     put:
       operationId: replaceApp
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6807,10 +6870,12 @@ paths:
     get:
       operationId: listBackups
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6837,17 +6902,19 @@ paths:
     post:
       operationId: createBackup
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6877,24 +6944,28 @@ paths:
     delete:
       operationId: deleteBackup
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6913,18 +6984,22 @@ paths:
     get:
       operationId: getBackup
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6947,31 +7022,35 @@ paths:
     put:
       operationId: replaceBackup
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7001,10 +7080,12 @@ paths:
     get:
       operationId: listBackupSchedules
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7031,17 +7112,19 @@ paths:
     post:
       operationId: createBackupSchedule
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7071,24 +7154,28 @@ paths:
     delete:
       operationId: deleteBackupSchedule
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7107,18 +7194,22 @@ paths:
     get:
       operationId: getBackupSchedule
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7141,31 +7232,35 @@ paths:
     put:
       operationId: replaceBackupSchedule
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7195,10 +7290,12 @@ paths:
     get:
       operationId: listBuckets
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7225,17 +7322,19 @@ paths:
     post:
       operationId: createBucket
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7265,24 +7364,28 @@ paths:
     delete:
       operationId: deleteBucket
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7301,18 +7404,22 @@ paths:
     get:
       operationId: getBucket
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7335,31 +7442,35 @@ paths:
     put:
       operationId: replaceBucket
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7389,10 +7500,12 @@ paths:
     get:
       operationId: listConfigMaps
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7419,17 +7532,19 @@ paths:
     post:
       operationId: createConfigMap
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7459,24 +7574,28 @@ paths:
     delete:
       operationId: deleteConfigMap
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7495,18 +7614,22 @@ paths:
     get:
       operationId: getConfigMap
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7529,31 +7652,35 @@ paths:
     put:
       operationId: replaceConfigMap
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7697,10 +7824,12 @@ paths:
     get:
       operationId: listEgressPolicies
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7727,17 +7856,19 @@ paths:
     post:
       operationId: createEgressPolicy
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7767,24 +7898,28 @@ paths:
     delete:
       operationId: deleteEgressPolicy
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7803,18 +7938,22 @@ paths:
     get:
       operationId: getEgressPolicy
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7837,31 +7976,35 @@ paths:
     put:
       operationId: replaceEgressPolicy
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7891,10 +8034,12 @@ paths:
     get:
       operationId: listEventSources
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7921,17 +8066,19 @@ paths:
     post:
       operationId: createEventSource
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7961,24 +8108,28 @@ paths:
     delete:
       operationId: deleteEventSource
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -7997,18 +8148,22 @@ paths:
     get:
       operationId: getEventSource
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8031,31 +8186,35 @@ paths:
     put:
       operationId: replaceEventSource
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8085,10 +8244,12 @@ paths:
     get:
       operationId: listFunctions
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8115,12 +8276,12 @@ paths:
     post:
       operationId: createFunction
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
         - in: path
           name: namespace
@@ -8155,24 +8316,28 @@ paths:
     delete:
       operationId: deleteFunction
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8191,18 +8356,22 @@ paths:
     get:
       operationId: getFunction
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8225,18 +8394,18 @@ paths:
     put:
       operationId: replaceFunction
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
         - in: path
           name: namespace
@@ -8336,10 +8505,12 @@ paths:
     get:
       operationId: listGrants
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8366,17 +8537,19 @@ paths:
     post:
       operationId: createGrant
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8406,24 +8579,28 @@ paths:
     delete:
       operationId: deleteGrant
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8442,18 +8619,22 @@ paths:
     get:
       operationId: getGrant
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8476,31 +8657,35 @@ paths:
     put:
       operationId: replaceGrant
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8530,10 +8715,12 @@ paths:
     get:
       operationId: listIdentities
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8560,17 +8747,19 @@ paths:
     post:
       operationId: createIdentity
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8600,24 +8789,28 @@ paths:
     delete:
       operationId: deleteIdentity
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8636,18 +8829,22 @@ paths:
     get:
       operationId: getIdentity
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8670,31 +8867,35 @@ paths:
     put:
       operationId: replaceIdentity
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8724,10 +8925,12 @@ paths:
     get:
       operationId: listInvocations
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8754,17 +8957,19 @@ paths:
     post:
       operationId: createInvocation
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8794,24 +8999,28 @@ paths:
     delete:
       operationId: deleteInvocation
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8830,18 +9039,22 @@ paths:
     get:
       operationId: getInvocation
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8864,31 +9077,35 @@ paths:
     put:
       operationId: replaceInvocation
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8918,10 +9135,12 @@ paths:
     get:
       operationId: listKVStores
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8937,28 +9156,58 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list KVStores in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list KVStores in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the KVStores of a namespace
       tags:
         - KVStore
     post:
       operationId: createKVStore
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -8976,36 +9225,134 @@ paths:
               schema:
                 $ref: "#/components/schemas/KVStore"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: The namespace already holds the most KVStores that kvstore.maxStoresPerNamespace allows. Delete a KVStore that the namespace no longer needs, or ask the operator to raise the cap.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: The namespace already holds the most KVStores that kvstore.maxStoresPerNamespace allows.
+              fix: Delete a KVStore that the namespace no longer needs, or ask the operator to raise the cap.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create a KVStore in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create a KVStore in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: A KVStore of that name already exists in the namespace. Choose another name, or replace the existing KVStore."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: A KVStore of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing KVStore.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create a KVStore
       tags:
         - KVStore
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}:
     delete:
       operationId: deleteKVStore
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9013,29 +9360,105 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete a KVStore in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete a KVStore in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No KVStore of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No KVStore of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:conflict`: The KVStore has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the KVStore again, apply the change to it, and send it with its new resourceVersion.
+            - `urn:funcd:problem:conflict`: A Function's spec.bindings.kv still names the store. Remove that binding from the Function first.
+            - `urn:funcd:problem:conflict`: The store still holds keys. Delete its keys first.
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The KVStore has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the KVStore again, apply the change to it, and send it with its new resourceVersion.
+            - type: urn:funcd:problem:conflict
+              when: A Function's spec.bindings.kv still names the store.
+              fix: Remove that binding from the Function first.
+            - type: urn:funcd:problem:conflict
+              when: The store still holds keys.
+              fix: Delete its keys first.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete a KVStore
       tags:
         - KVStore
     get:
       operationId: getKVStore
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9047,42 +9470,84 @@ paths:
               schema:
                 $ref: "#/components/schemas/KVStore"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read a KVStore in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read a KVStore in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No KVStore of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No KVStore of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a KVStore
       tags:
         - KVStore
     put:
       operationId: replaceKVStore
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9100,30 +9565,151 @@ paths:
               schema:
                 $ref: "#/components/schemas/KVStore"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace a KVStore in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace a KVStore in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No KVStore of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No KVStore of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:conflict`: The KVStore has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the KVStore again, apply the change to it, and send it with its new resourceVersion.
+            - `urn:funcd:problem:conflict`: The Function, Workflow or App that made the KVStore still exists, and owns it. Change the KVStore through that owner, or delete the owner first.
+            - `urn:funcd:problem:conflict`: The spec drops a table that a Function's spec.bindings.kv still names. Remove that binding from the Function first.
+            - `urn:funcd:problem:conflict`: The spec adds back a table that was dropped, and funcd has not yet deleted the dropped table's data. Retry after a few seconds.
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The KVStore has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the KVStore again, apply the change to it, and send it with its new resourceVersion.
+            - type: urn:funcd:problem:conflict
+              when: The Function, Workflow or App that made the KVStore still exists, and owns it.
+              fix: Change the KVStore through that owner, or delete the owner first.
+            - type: urn:funcd:problem:conflict
+              when: The spec drops a table that a Function's spec.bindings.kv still names.
+              fix: Remove that binding from the Function first.
+            - type: urn:funcd:problem:conflict
+              when: The spec adds back a table that was dropped, and funcd has not yet deleted the dropped table's data.
+              fix: Retry after a few seconds.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace a KVStore
       tags:
         - KVStore
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}/handover:
     post:
       operationId: handoverKVStore
       parameters:
-        - in: path
+        - description: The store's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The store's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The store's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The store's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9141,22 +9727,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/KVStore"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`about:blank`: The body is missing or is not JSON. Send a JSON body."
+          x-funcd-cases:
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to update and delete KVStores and read Workflows in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to update and delete KVStores and read Workflows in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No KVStore or no Workflow of those names exists in the namespace. Check the names and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No KVStore or no Workflow of those names exists in the namespace.
+              fix: Check the names and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:conflict`: The Workflow does not declare the store in its spec.kv. Declare the store in the Workflow's spec.kv, then retry.
+            - `urn:funcd:problem:conflict`: The Function, Workflow or App that made the KVStore still exists, and owns it. Change the KVStore through that owner, or delete the owner first.
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Workflow does not declare the store in its spec.kv.
+              fix: Declare the store in the Workflow's spec.kv, then retry.
+            - type: urn:funcd:problem:conflict
+              when: The Function, Workflow or App that made the KVStore still exists, and owns it.
+              fix: Change the KVStore through that owner, or delete the owner first.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Hand a kept KVStore over to a Workflow
       tags:
         - KVStore
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes:
     get:
       operationId: listLakes
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9183,17 +9863,19 @@ paths:
     post:
       operationId: createLake
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9223,24 +9905,28 @@ paths:
     delete:
       operationId: deleteLake
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9259,18 +9945,22 @@ paths:
     get:
       operationId: getLake
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9293,31 +9983,35 @@ paths:
     put:
       operationId: replaceLake
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9347,10 +10041,12 @@ paths:
     get:
       operationId: listPolicies
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9377,17 +10073,19 @@ paths:
     post:
       operationId: createPolicy
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9417,24 +10115,28 @@ paths:
     delete:
       operationId: deletePolicy
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9453,18 +10155,22 @@ paths:
     get:
       operationId: getPolicy
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9487,31 +10193,35 @@ paths:
     put:
       operationId: replacePolicy
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9541,10 +10251,12 @@ paths:
     get:
       operationId: listResourceGroups
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9571,12 +10283,12 @@ paths:
     post:
       operationId: createResourceGroup
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
         - in: path
           name: namespace
@@ -9611,11 +10323,11 @@ paths:
     delete:
       operationId: deleteResourceGroup
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
         - in: path
           name: namespace
@@ -9633,12 +10345,12 @@ paths:
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - description: delete the members first; their protections apply (ADR-0170)
+        - description: Delete the members first; each member's protections still apply.
           explode: false
           in: query
           name: force
           schema:
-            description: delete the members first; their protections apply (ADR-0170)
+            description: Delete the members first; each member's protections still apply.
             type: boolean
       responses:
         "204":
@@ -9654,18 +10366,22 @@ paths:
     get:
       operationId: getResourceGroup
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9688,18 +10404,18 @@ paths:
     put:
       operationId: replaceResourceGroup
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
         - in: path
           name: namespace
@@ -9742,10 +10458,12 @@ paths:
     get:
       operationId: listRestores
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9772,17 +10490,19 @@ paths:
     post:
       operationId: createRestore
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9812,24 +10532,28 @@ paths:
     delete:
       operationId: deleteRestore
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9848,18 +10572,22 @@ paths:
     get:
       operationId: getRestore
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9882,31 +10610,35 @@ paths:
     put:
       operationId: replaceRestore
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9936,10 +10668,12 @@ paths:
     get:
       operationId: listRevisions
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -9967,18 +10701,22 @@ paths:
     get:
       operationId: getRevision
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10002,10 +10740,12 @@ paths:
     get:
       operationId: listRoles
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10032,17 +10772,19 @@ paths:
     post:
       operationId: createRole
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10072,24 +10814,28 @@ paths:
     delete:
       operationId: deleteRole
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10108,18 +10854,22 @@ paths:
     get:
       operationId: getRole
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10142,31 +10892,35 @@ paths:
     put:
       operationId: replaceRole
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10196,10 +10950,12 @@ paths:
     get:
       operationId: listRolesAssignments
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10226,17 +10982,19 @@ paths:
     post:
       operationId: createRolesAssignment
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10266,24 +11024,28 @@ paths:
     delete:
       operationId: deleteRolesAssignment
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10302,18 +11064,22 @@ paths:
     get:
       operationId: getRolesAssignment
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10336,31 +11102,35 @@ paths:
     put:
       operationId: replaceRolesAssignment
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10390,10 +11160,12 @@ paths:
     get:
       operationId: listRoutes
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10420,12 +11192,12 @@ paths:
     post:
       operationId: createRoute
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
         - in: path
           name: namespace
@@ -10460,24 +11232,28 @@ paths:
     delete:
       operationId: deleteRoute
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10496,18 +11272,22 @@ paths:
     get:
       operationId: getRoute
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10530,18 +11310,18 @@ paths:
     put:
       operationId: replaceRoute
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
         - in: path
           name: namespace
@@ -10584,10 +11364,12 @@ paths:
     get:
       operationId: listSecrets
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10614,17 +11396,19 @@ paths:
     post:
       operationId: createSecret
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10654,24 +11438,28 @@ paths:
     delete:
       operationId: deleteSecret
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10690,18 +11478,22 @@ paths:
     get:
       operationId: getSecret
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10724,31 +11516,35 @@ paths:
     put:
       operationId: replaceSecret
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10778,10 +11574,12 @@ paths:
     get:
       operationId: listSensors
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10808,17 +11606,19 @@ paths:
     post:
       operationId: createSensor
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10848,24 +11648,28 @@ paths:
     delete:
       operationId: deleteSensor
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10884,18 +11688,22 @@ paths:
     get:
       operationId: getSensor
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10918,31 +11726,35 @@ paths:
     put:
       operationId: replaceSensor
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -10972,10 +11784,12 @@ paths:
     get:
       operationId: listServices
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11002,17 +11816,19 @@ paths:
     post:
       operationId: createService
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11042,24 +11858,28 @@ paths:
     delete:
       operationId: deleteService
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11078,18 +11898,22 @@ paths:
     get:
       operationId: getService
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11112,31 +11936,35 @@ paths:
     put:
       operationId: replaceService
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11166,10 +11994,12 @@ paths:
     get:
       operationId: listSites
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11196,17 +12026,19 @@ paths:
     post:
       operationId: createSite
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11236,24 +12068,28 @@ paths:
     delete:
       operationId: deleteSite
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11272,18 +12108,22 @@ paths:
     get:
       operationId: getSite
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11306,31 +12146,35 @@ paths:
     put:
       operationId: replaceSite
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11360,10 +12204,12 @@ paths:
     get:
       operationId: listSQLDatabases
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11390,17 +12236,19 @@ paths:
     post:
       operationId: createSQLDatabase
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11430,24 +12278,28 @@ paths:
     delete:
       operationId: deleteSQLDatabase
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11466,18 +12318,22 @@ paths:
     get:
       operationId: getSQLDatabase
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11500,31 +12356,35 @@ paths:
     put:
       operationId: replaceSQLDatabase
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11593,10 +12453,12 @@ paths:
     get:
       operationId: listWorkflowRuns
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11623,17 +12485,19 @@ paths:
     post:
       operationId: createWorkflowRun
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11663,24 +12527,28 @@ paths:
     delete:
       operationId: deleteWorkflowRun
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11699,18 +12567,22 @@ paths:
     get:
       operationId: getWorkflowRun
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11733,31 +12605,35 @@ paths:
     put:
       operationId: replaceWorkflowRun
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11851,10 +12727,12 @@ paths:
     get:
       operationId: listWorkflows
       parameters:
-        - in: path
+        - description: The namespace whose objects the answer lists.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The namespace whose objects the answer lists.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11881,17 +12759,19 @@ paths:
     post:
       operationId: createWorkflow
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11921,24 +12801,28 @@ paths:
     delete:
       operationId: deleteWorkflow
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11957,18 +12841,22 @@ paths:
     get:
       operationId: getWorkflow
       parameters:
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -11991,31 +12879,35 @@ paths:
     put:
       operationId: replaceWorkflow
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -12045,11 +12937,11 @@ paths:
     delete:
       operationId: deleteNamespace
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
         - in: path
           name: name
@@ -12099,18 +12991,18 @@ paths:
     put:
       operationId: replaceNamespace
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
         - in: path
           name: name
@@ -12204,12 +13096,12 @@ paths:
     post:
       operationId: createRuntimeClass
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
       requestBody:
         content:
@@ -12236,11 +13128,11 @@ paths:
     delete:
       operationId: deleteRuntimeClass
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
         - in: path
           name: name
@@ -12290,18 +13182,18 @@ paths:
     put:
       operationId: replaceRuntimeClass
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
         - in: path
           name: name
@@ -12357,12 +13249,12 @@ paths:
     post:
       operationId: createWorkerNode
       parameters:
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
       requestBody:
         content:
@@ -12389,11 +13281,11 @@ paths:
     delete:
       operationId: deleteWorkerNode
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
         - in: path
           name: name
@@ -12443,18 +13335,18 @@ paths:
     put:
       operationId: replaceWorkerNode
       parameters:
-        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
           in: header
           name: If-Match
           schema:
-            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - description: admit the write and store nothing (ADR-0220)
+        - description: Admit the write and store nothing.
           explode: false
           in: query
           name: dryRun
           schema:
-            description: admit the write and store nothing (ADR-0220)
+            description: Admit the write and store nothing.
             type: boolean
         - in: path
           name: name
@@ -12485,3 +13377,168 @@ paths:
           description: Error
       tags:
         - WorkerNode
+  /function/{name}:
+    post:
+      description: A call needs a credential when the Function's spec.ingress.auth.mode, else its namespace's spec.edgeDefaults.auth.mode, is authenticated; else it needs none.
+      operationId: invokeFunction
+      parameters:
+        - description: The Function's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The Function's namespace, when the Host header names none, as shop.localhost names shop; without either, default.
+          in: header
+          name: X-Funcd-Namespace
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema: {}
+        description: The call's input, any JSON value, which the handler gets as its event's data. A CloudEvent, an object with specversion or data, passes as it is.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: {}
+          description: The handler's result.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:invalid`: The body did not arrive within the gateway's read timeout. Send the whole request at once, without pausing."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The body did not arrive within the gateway's read timeout.
+              fix: Send the whole request at once, without pausing.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:unauthorized`: The namespace's stance asks for a credential, and the call carries none, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+            - `urn:funcd:problem:unauthorized`: The namespace's stance asks for a credential while server.auth.edge is off, so funcd checks none and refuses the call, whatever credential it carries. Ask funcd's operator to set server.auth.edge to true.
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The namespace's stance asks for a credential, and the call carries none, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+            - type: urn:funcd:problem:unauthorized
+              when: The namespace's stance asks for a credential while server.auth.edge is off, so funcd checks none and refuses the call, whatever credential it carries.
+              fix: Ask funcd's operator to set server.auth.edge to true.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to call Functions in the namespace. Use a credential of the namespace, such as its developer's."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to call Functions in the namespace.
+              fix: Use a credential of the namespace, such as its developer's.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: The namespace holds no Function of that name that answers at its own address: it does not exist, its ingress is off, or its ingress names a host or a path of its own. Check the name and the namespace, or call the Function at the address that its ingress names."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: "The namespace holds no Function of that name that answers at its own address: it does not exist, its ingress is off, or its ingress names a host or a path of its own."
+              fix: Check the name and the namespace, or call the Function at the address that its ingress names.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB, the most that funcd reads to build the call's event. Send a smaller body, or pass large data by reference, such as a Bucket key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB, the most that funcd reads to build the call's event.
+              fix: Send a smaller body, or pass large data by reference, such as a Bucket key.
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContractViolation"
+          description: "`ContractViolation`: The event data does not match the Function's input contract; nothing reached its worker. Correct the values that details names."
+          x-funcd-cases:
+            - body: ContractViolation
+              when: The event data does not match the Function's input contract; nothing reached its worker.
+              fix: Correct the values that details names.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:resource-exhausted`: The call is over the rate that server.limits sets. Retry after the seconds that the Retry-After header gives."
+          x-funcd-cases:
+            - type: urn:funcd:problem:resource-exhausted
+              when: The call is over the rate that server.limits sets.
+              fix: Retry after the seconds that the Retry-After header gives.
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContractViolation"
+          description: "`ContractViolation`: The handler's result does not match the Function's output contract, so funcd sends this instead. Correct the handler, or its output contract."
+          x-funcd-cases:
+            - body: ContractViolation
+              when: The handler's result does not match the Function's output contract, so funcd sends this instead.
+              fix: Correct the handler, or its output contract.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:unavailable`: The gateway already serves as many calls at once as server.limits.maxInFlight allows. Retry the call later.
+            - `urn:funcd:problem:unavailable`: The worker failed during the call, before its answer. funcd does not retry the call. Retry it, if the handler may run twice.
+            - `urn:funcd:problem:unavailable`: funcd could not read the namespace's settings, so it does not know how to serve the call. Retry the call later.
+            - `urn:funcd:problem:unavailable`: funcd cannot read the Function's contract. Retry the call later.
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The gateway already serves as many calls at once as server.limits.maxInFlight allows.
+              fix: Retry the call later.
+            - type: urn:funcd:problem:unavailable
+              when: The worker failed during the call, before its answer. funcd does not retry the call.
+              fix: Retry it, if the handler may run twice.
+            - type: urn:funcd:problem:unavailable
+              when: funcd could not read the namespace's settings, so it does not know how to serve the call.
+              fix: Retry the call later.
+            - type: urn:funcd:problem:unavailable
+              when: funcd cannot read the Function's contract.
+              fix: Retry the call later.
+        "504":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:deadline-exceeded`: The worker did not start its answer within the call's deadline: the Function's spec.timeout, else invoke.defaultTimeout. Make the handler answer sooner, or raise its spec.timeout."
+          x-funcd-cases:
+            - type: urn:funcd:problem:deadline-exceeded
+              when: "The worker did not start its answer within the call's deadline: the Function's spec.timeout, else invoke.defaultTimeout."
+              fix: Make the handler answer sooner, or raise its spec.timeout.
+      security:
+        - {}
+        - bearer: []
+        - apiKey: []
+      servers:
+        - description: funcd's gateway, which serves the calls of Functions.
+          url: "{gateway}"
+          variables:
+            gateway:
+              default: http://127.0.0.1:8081
+              description: The address that server.dataPlaneAddr sets. Its default takes a free port, so set a fixed one, such as 127.0.0.1:8081.
+      summary: Call a Function
+      tags:
+        - Function

@@ -3,6 +3,7 @@ package funcd
 import (
 	"net"
 	"testing"
+	"time"
 )
 
 // FreeLoopbackAddr hands the S3 gateway's port reservation to the external tests.
@@ -29,4 +30,21 @@ func StartWithS3Gateway(t *testing.T, reserve func(*testing.T) string,
 // the ADR-0147 quota race runs at a small cap.
 func WithBucketQuotaForTest(maxPerNamespace int) Option {
 	return func(c *config) error { c.bucketMaxPerNamespace = maxPerNamespace; return nil }
+}
+
+// WithGatewayReadTimeoutForTest sets the data-plane listener's read timeout, which has no public option, so a slow
+// body answers its 400 (#90) within a test.
+func WithGatewayReadTimeoutForTest(d time.Duration) Option {
+	return func(c *config) error { c.gatewayReadTimeout = d; return nil }
+}
+
+// SetAnswerRecorderForTest is the test binary's hook of ADR-0329 Decision 4: every platform New builds from then on
+// reports each answer of its control plane and its gateway to record, by operation ID and status. nil stops it. A
+// server never sets it.
+func SetAnswerRecorderForTest(record func(operationID string, status int)) {
+	if record == nil {
+		answerRecorder.Store(nil)
+		return
+	}
+	answerRecorder.Store(&record)
 }

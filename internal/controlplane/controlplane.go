@@ -250,7 +250,7 @@ func NewAPI(r chi.Router, h Handlers) huma.API {
 				Description: "funcd control-plane API — code-first via huma. " +
 					"Generated from typed Go operations; not hand-authored.",
 			},
-			Components:     &huma.Components{Schemas: newInlineRegistry()},
+			Components:     &huma.Components{Schemas: newInlineRegistry(), SecuritySchemes: securitySchemes()},
 			OnAddOperation: []huma.AddOpFunc{rejectUnknownQuery},
 		},
 		DocsPath:    "/docs",

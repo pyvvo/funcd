@@ -102,15 +102,26 @@ var namedPatterns = map[string]string{
 
 // Render returns the generated pages by path relative to docs/guide: each feature's spec.md and CommonPage.
 func Render(doc *huma.OpenAPI) (map[string][]byte, error) {
-	pages, _, err := render(doc.Components.Schemas.Map(), Features)
+	pages, _, err := render(documentOf(doc), Features)
 	return pages, err
 }
 
 // Undescribed returns, sorted, the schema path ("FunctionSpec.handler") of every field that Render shows with no
 // description.
 func Undescribed(doc *huma.OpenAPI) []string {
-	_, fields, _ := render(doc.Components.Schemas.Map(), Features)
+	_, fields, _ := render(documentOf(doc), Features)
 	return undescribed(fields)
+}
+
+// document is what the pages show of the OpenAPI document: its schemas, its operations and its security schemes.
+type document struct {
+	schemas map[string]*huma.Schema
+	ops     []operation
+	schemes map[string]*huma.SecurityScheme
+}
+
+func documentOf(doc *huma.OpenAPI) document {
+	return document{schemas: doc.Components.Schemas.Map(), ops: operationsOf(doc), schemes: doc.Components.SecuritySchemes}
 }
 
 func undescribed(fields map[string]string) []string {
@@ -125,7 +136,8 @@ func undescribed(fields map[string]string) []string {
 }
 
 // render writes every page and returns, by schema path, the description of each field the pages show.
-func render(schemas map[string]*huma.Schema, features []Feature) (map[string][]byte, map[string]string, error) {
+func render(d document, features []Feature) (map[string][]byte, map[string]string, error) {
+	schemas := d.schemas
 	fields := map[string]string{}
 	pages := map[string][]byte{}
 	r := &renderer{schemas: schemas, fields: fields, anchors: map[string]string{}}
@@ -143,7 +155,7 @@ func render(schemas map[string]*huma.Schema, features []Feature) (map[string][]b
 	}
 	pages[CommonPage] = page(append(lines, r.lines...))
 	for _, f := range features {
-		body, err := featurePage(schemas, fields, f)
+		body, err := featurePage(d, fields, f)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -152,7 +164,8 @@ func render(schemas map[string]*huma.Schema, features []Feature) (map[string][]b
 	return pages, fields, nil
 }
 
-func featurePage(schemas map[string]*huma.Schema, fields map[string]string, f Feature) ([]byte, error) {
+func featurePage(d document, fields map[string]string, f Feature) ([]byte, error) {
+	schemas := d.schemas
 	up := strings.Repeat("../", strings.Count(f.Path, "/")+1)
 	r := &renderer{schemas: schemas, fields: fields, anchors: map[string]string{}, common: up + "common-definitions.md"}
 	names := make([]string, len(f.Kinds))
@@ -212,6 +225,9 @@ func featurePage(schemas map[string]*huma.Schema, fields map[string]string, f Fe
 			return nil, err
 		}
 		r.lines = append(r.lines, section...)
+	}
+	if err := r.httpSection(d, f); err != nil {
+		return nil, err
 	}
 	return page(append(lines, r.lines...)), nil
 }
@@ -352,7 +368,7 @@ func (r *renderer) section(title string, level int, s *huma.Schema, path, owner 
 	r.lines = append(r.lines, "", strings.Repeat("#", level)+" "+title, "")
 	r.lines = append(r.lines, rows...)
 	for _, c := range nested {
-		r.section("`"+c.path+"`", 3, c.schema, c.path, c.owner)
+		r.section("`"+c.path+"`", max(level, 3), c.schema, c.path, c.owner)
 	}
 }
 

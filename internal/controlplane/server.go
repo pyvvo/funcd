@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -107,5 +108,47 @@ func NewServer(d Deps) (http.Handler, error) {
 		RegisterVolumes(api, d.Volumes, d.Authorizer)
 	}
 	logger.Info("control-plane API server constructed", "component", "controlplane")
-	return r, nil
+	return &server{Router: r, doc: api.OpenAPI()}, nil
+}
+
+// server is the handler NewServer builds: its router, and the document of the operations that it registered.
+type server struct {
+	chi.Router
+	doc *huma.OpenAPI
+}
+
+// OperationOf returns the ID of the operation that h, a handler NewServer built, registered at r's method and path:
+// the route its router matches, named by its own API document. It is "" for a request that no operation matches,
+// such as GET /docs, and for a handler NewServer did not build. pkg/funcd's tests record each answer under it
+// (ADR-0329 Decision 4).
+func OperationOf(h http.Handler, r *http.Request) string {
+	s, ok := h.(*server)
+	if !ok {
+		return ""
+	}
+	path := r.URL.RawPath
+	if path == "" {
+		path = r.URL.Path
+	}
+	item := s.doc.Paths[s.Find(chi.NewRouteContext(), r.Method, path)]
+	if item == nil {
+		return ""
+	}
+	var op *huma.Operation
+	switch r.Method {
+	case http.MethodGet:
+		op = item.Get
+	case http.MethodPost:
+		op = item.Post
+	case http.MethodPut:
+		op = item.Put
+	case http.MethodPatch:
+		op = item.Patch
+	case http.MethodDelete:
+		op = item.Delete
+	}
+	if op == nil {
+		return ""
+	}
+	return op.OperationID
 }

@@ -13,7 +13,7 @@ import (
 // DryRunParams is embedded in every create and replace input of a writable kind (ADR-0220 Decision 1). It is exported
 // because huma skips unexported embedded fields.
 type DryRunParams struct {
-	DryRun bool `query:"dryRun" doc:"admit the write and store nothing (ADR-0220)"`
+	DryRun bool `query:"dryRun" doc:"Admit the write and store nothing."`
 }
 
 // AppPlanner plans the rollout of an App write (ADR-0220 Decision 5); internal/app implements it, so the control plane

@@ -3,9 +3,11 @@ package controlplane
 import (
 	"context"
 	"net/http"
+	"slices"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
@@ -91,13 +93,36 @@ func registerKVStore(api huma.API, h Handlers) {
 		kind: "KVStore", kinds: "KVStores", path: "kvstores",
 		list: h.ListKVStores, create: h.CreateKVStore, get: h.GetKVStore,
 		replace: h.ReplaceKVStore, remove: h.DeleteKVStore,
+		cases: &kindCases{
+			create: []ErrorCase{problem(fault.Invalid,
+				"The namespace already holds the most KVStores that kvstore.maxStoresPerNamespace allows.",
+				"Delete a KVStore that the namespace no longer needs, or ask the operator to raise the cap.")},
+			replace: []ErrorCase{madeByLiveOwner("KVStore"),
+				problem(fault.Conflict, "The spec drops a table that a Function's spec.bindings.kv still names.",
+					"Remove that binding from the Function first."),
+				problem(fault.Conflict, "The spec adds back a table that was dropped, and funcd has not yet "+
+					"deleted the dropped table's data.", "Retry after a few seconds.")},
+			remove: []ErrorCase{
+				problem(fault.Conflict, "A Function's spec.bindings.kv still names the store.",
+					"Remove that binding from the Function first."),
+				problem(fault.Conflict, "The store still holds keys.", "Delete its keys first.")},
+		},
 	})
-	huma.Register(api, huma.Operation{
+	kv := verbCases{kind: "KVStore", kinds: "KVStores", namespaced: true}
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "handoverKVStore", Method: http.MethodPost,
 		Path: "/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}/handover", Tags: []string{"KVStore"},
-	}, func(ctx context.Context, in *struct {
-		Namespace v1.NamespaceName `path:"namespace"`
-		Name      v1.ObjectName    `path:"name"`
+	}, "Hand a kept KVStore over to a Workflow", slices.Concat([]ErrorCase{unauthorized(),
+		forbidden("update and delete KVStores and read Workflows in the namespace"),
+		problem(fault.NotFound, "No KVStore or no Workflow of those names exists in the namespace.",
+			"Check the names and the namespace."),
+		badPath(kv.path()), badQuery(),
+		problem(fault.Conflict, "The Workflow does not declare the store in its spec.kv.",
+			"Declare the store in the Workflow's spec.kv, then retry."),
+		madeByLiveOwner("KVStore")}, bodyCases())...,
+	), func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace" doc:"The store's namespace."`
+		Name      v1.ObjectName    `path:"name" doc:"The store's name."`
 		Body      KVStoreHandover
 	}) (*bodyOutput[v1.KVStore], error) {
 		return respond(h.HandoverKVStore(ctx, in.Namespace, in.Name, in.Body.Workflow))
@@ -106,7 +131,14 @@ func registerKVStore(api huma.API, h Handlers) {
 
 // KVStoreHandover is the handover request body: the Workflow that becomes the store's owner.
 type KVStoreHandover struct {
-	Workflow v1.ObjectName `json:"workflow"`
+	Workflow v1.ObjectName `json:"workflow" doc:"The Workflow that becomes the store's owner. Its spec.kv declares the store."`
+}
+
+// madeByLiveOwner is the 409 of a write to a store that a Function, a Workflow or an App made and that still exists
+// (refuseLiveMarked).
+func madeByLiveOwner(kind string) ErrorCase {
+	return problem(fault.Conflict, "The Function, Workflow or App that made the "+kind+" still exists, and owns it.",
+		"Change the "+kind+" through that owner, or delete the owner first.")
 }
 
 // ===== Bucket (namespaced) — ADR-0080 =====
@@ -279,19 +311,20 @@ type crudRoutes[T crudKind] struct {
 	get               func(context.Context, v1.NamespaceName, v1.ObjectName) (T, error)
 	replace           func(context.Context, v1.NamespaceName, v1.ObjectName, T) (T, error)
 	remove            func(context.Context, v1.NamespaceName, v1.ObjectName, string) error
+	cases             *kindCases // nil until the kind's operations are described (ADR-0329)
 }
 
 type namespacedBodyInput[T crudKind] struct {
 	DryRunParams
-	Namespace v1.NamespaceName `path:"namespace"`
+	Namespace v1.NamespaceName `path:"namespace" doc:"The object's namespace."`
 	Body      T
 }
 
 type namespacedNameBodyInput[T crudKind] struct {
 	IfMatchParams
 	DryRunParams
-	Namespace v1.NamespaceName `path:"namespace"`
-	Name      v1.ObjectName    `path:"name"`
+	Namespace v1.NamespaceName `path:"namespace" doc:"The object's namespace."`
+	Name      v1.ObjectName    `path:"name" doc:"The object's name."`
 	Body      T
 }
 
@@ -307,35 +340,33 @@ func respond[T crudKind](v T, err error) (*bodyOutput[T], error) {
 }
 
 func registerNamespacedCRUD[T crudKind, PT objectPtr[T]](api huma.API, r crudRoutes[T]) {
-	base, item, tags := registerNamespacedRead(api, r)
-	huma.Register(api, huma.Operation{OperationID: "create" + r.kind, Method: http.MethodPost, Path: base, Tags: tags},
+	ops := registerNamespacedRead(api, r)
+	huma.Register(api, ops.create,
 		func(ctx context.Context, in *namespacedBodyInput[T]) (*bodyOutput[T], error) {
 			if err := matchPathNamespace(in.Namespace, PT(&in.Body).GetObjectMeta()); err != nil {
 				return nil, wrapFaultError(err)
 			}
 			return respond(r.create(withDryRun(ctx, in.DryRun), in.Body))
 		})
-	huma.Register(api, huma.Operation{OperationID: "replace" + r.kind, Method: http.MethodPut, Path: item, Tags: tags},
+	huma.Register(api, ops.replace,
 		func(ctx context.Context, in *namespacedNameBodyInput[T]) (*bodyOutput[T], error) {
 			if err := withReplaceVersion(in.IfMatchParams, PT(&in.Body).GetObjectMeta()); err != nil {
 				return nil, wrapFaultError(err)
 			}
 			return respond(r.replace(withDryRun(ctx, in.DryRun), in.Namespace, in.Name, in.Body))
 		})
-	huma.Register(api, huma.Operation{OperationID: "delete" + r.kind, Method: http.MethodDelete, Path: item, Tags: tags},
+	huma.Register(api, ops.remove,
 		func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
 			return nil, wrapFaultError(r.remove(ctx, in.Namespace, in.Name, in.rv))
 		})
 }
 
-// registerNamespacedRead registers r's list and get only, and returns the collection path, the item path and the
-// tags. A read-only kind (ADR-0172 Decision 2, ADR-0200 Decision 2) stops here: its POST, PUT and DELETE answer 405
-// with Allow: GET.
-func registerNamespacedRead[T crudKind](api huma.API, r crudRoutes[T]) (base, item string, tags []string) {
-	base = "/apis/funcd.io/v1alpha1/namespaces/{namespace}/" + r.path
-	item = base + "/{name}"
-	tags = []string{r.kind}
-	huma.Register(api, huma.Operation{OperationID: "list" + r.kinds, Method: http.MethodGet, Path: base, Tags: tags},
+// registerNamespacedRead registers r's list and get only, and returns all five of its operations. A read-only kind
+// (ADR-0172 Decision 2, ADR-0200 Decision 2) stops here: its POST, PUT and DELETE answer 405 with Allow: GET.
+func registerNamespacedRead[T crudKind](api huma.API, r crudRoutes[T]) restOperations {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/" + r.path
+	ops := restOperationsOf(r.kind, r.kinds, base, base+"/{name}", true, r.cases)
+	huma.Register(api, ops.list,
 		func(ctx context.Context, in *namespacedList) (*listOutput[T], error) {
 			items, err := r.list(ctx, in.Namespace)
 			if err != nil {
@@ -343,11 +374,11 @@ func registerNamespacedRead[T crudKind](api huma.API, r crudRoutes[T]) (base, it
 			}
 			return &listOutput[T]{Body: items}, nil
 		})
-	huma.Register(api, huma.Operation{OperationID: "get" + r.kind, Method: http.MethodGet, Path: item, Tags: tags},
+	huma.Register(api, ops.get,
 		func(ctx context.Context, in *namespacedGet) (*bodyOutput[T], error) {
 			return respond(r.get(ctx, in.Namespace, in.Name))
 		})
-	return base, item, tags
+	return ops
 }
 
 // clusterRoutes is the REST surface of one cluster-scoped kind under /apis/funcd.io/v1alpha1/<path>, registered by
@@ -359,6 +390,7 @@ type clusterRoutes[T crudKind] struct {
 	get               func(context.Context, v1.ObjectName) (T, error)
 	replace           func(context.Context, v1.ObjectName, T) (T, error)
 	remove            func(context.Context, v1.ObjectName, string) error
+	cases             *kindCases // nil until the kind's operations are described (ADR-0329)
 }
 
 type clusterBodyInput[T crudKind] struct {
@@ -375,8 +407,8 @@ type clusterNameBodyInput[T crudKind] struct {
 
 func registerClusterCRUD[T crudKind, PT objectPtr[T]](api huma.API, r clusterRoutes[T]) {
 	base := "/apis/funcd.io/v1alpha1/" + r.path
-	item, tags := base+"/{name}", []string{r.kind}
-	huma.Register(api, huma.Operation{OperationID: "list" + r.kinds, Method: http.MethodGet, Path: base, Tags: tags},
+	ops := restOperationsOf(r.kind, r.kinds, base, base+"/{name}", false, r.cases)
+	huma.Register(api, ops.list,
 		func(ctx context.Context, _ *struct{}) (*listOutput[T], error) {
 			items, err := r.list(ctx)
 			if err != nil {
@@ -384,22 +416,22 @@ func registerClusterCRUD[T crudKind, PT objectPtr[T]](api huma.API, r clusterRou
 			}
 			return &listOutput[T]{Body: items}, nil
 		})
-	huma.Register(api, huma.Operation{OperationID: "create" + r.kind, Method: http.MethodPost, Path: base, Tags: tags},
+	huma.Register(api, ops.create,
 		func(ctx context.Context, in *clusterBodyInput[T]) (*bodyOutput[T], error) {
 			return respond(r.create(withDryRun(ctx, in.DryRun), in.Body))
 		})
-	huma.Register(api, huma.Operation{OperationID: "get" + r.kind, Method: http.MethodGet, Path: item, Tags: tags},
+	huma.Register(api, ops.get,
 		func(ctx context.Context, in *clusterScopedGet) (*bodyOutput[T], error) {
 			return respond(r.get(ctx, in.Name))
 		})
-	huma.Register(api, huma.Operation{OperationID: "replace" + r.kind, Method: http.MethodPut, Path: item, Tags: tags},
+	huma.Register(api, ops.replace,
 		func(ctx context.Context, in *clusterNameBodyInput[T]) (*bodyOutput[T], error) {
 			if err := withReplaceVersion(in.IfMatchParams, PT(&in.Body).GetObjectMeta()); err != nil {
 				return nil, wrapFaultError(err)
 			}
 			return respond(r.replace(withDryRun(ctx, in.DryRun), in.Name, in.Body))
 		})
-	huma.Register(api, huma.Operation{OperationID: "delete" + r.kind, Method: http.MethodDelete, Path: item, Tags: tags},
+	huma.Register(api, ops.remove,
 		func(ctx context.Context, in *clusterScopedDelete) (*struct{}, error) {
 			return nil, wrapFaultError(r.remove(ctx, in.Name, in.rv))
 		})
