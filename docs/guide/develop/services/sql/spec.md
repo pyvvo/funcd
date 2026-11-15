@@ -75,9 +75,9 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `query` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the database. | Change or remove the Policy that forbids sql::read on the database. |
 | `query` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
 | `query` | 413 | `urn:funcd:problem:payload-too-large` | The engine's answer to the call is larger than funcd reads for one call. | Read fewer rows or columns in one call, as with LIMIT. |
-| `query` | 503 | `urn:funcd:problem:unavailable` | The database that the binding names does not exist, or its engine is not Ready yet. | Create the SQLDatabase, or wait until it is Ready, then retry. |
+| `query` | 503 | `urn:funcd:problem:unavailable` | The database's engine is not Ready yet; a query also gets this answer when the database that its binding names does not exist. | Wait until the SQLDatabase is Ready, then retry; create it if it does not exist. |
 | `query` | 503 | `urn:funcd:problem:unavailable` | The database's engine does not answer, its answer broke off, or it answered with an error. | Retry the call; if it keeps failing, read the SQLDatabase's status and funcd's log. |
-| `query` | 503 | `urn:funcd:problem:unavailable` | The call ran past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
+| `query` | 503 | `urn:funcd:problem:unavailable` | The database's engine did not answer in time, as when a statement runs past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
 | `queryValues` | 400 | `urn:funcd:problem:invalid` | A statement is not a list whose first item is its SQL text, or that text is empty. | Send each statement as ["SQL", params...], with its SQL text. |
 | `queryValues` | 400 | `urn:funcd:problem:invalid` | A parameter of a statement is a list or an object, other than the one object of its named parameters. | Pass each parameter as a string, a number, a boolean or null. |
 | `queryValues` | 400 | `urn:funcd:problem:invalid` | The database refused a statement, as when its SQL is not valid, it breaks a constraint or a query writes; an execute then applies none of its statements. | Correct the statement that the detail names, with the database's error. |
@@ -86,9 +86,9 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `queryValues` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the database. | Change or remove the Policy that forbids sql::read on the database. |
 | `queryValues` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
 | `queryValues` | 413 | `urn:funcd:problem:payload-too-large` | The engine's answer to the call is larger than funcd reads for one call. | Read fewer rows or columns in one call, as with LIMIT. |
-| `queryValues` | 503 | `urn:funcd:problem:unavailable` | The database that the binding names does not exist, or its engine is not Ready yet. | Create the SQLDatabase, or wait until it is Ready, then retry. |
+| `queryValues` | 503 | `urn:funcd:problem:unavailable` | The database's engine is not Ready yet; a query also gets this answer when the database that its binding names does not exist. | Wait until the SQLDatabase is Ready, then retry; create it if it does not exist. |
 | `queryValues` | 503 | `urn:funcd:problem:unavailable` | The database's engine does not answer, its answer broke off, or it answered with an error. | Retry the call; if it keeps failing, read the SQLDatabase's status and funcd's log. |
-| `queryValues` | 503 | `urn:funcd:problem:unavailable` | The call ran past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
+| `queryValues` | 503 | `urn:funcd:problem:unavailable` | The database's engine did not answer in time, as when a statement runs past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
 | `execute` | 400 | `urn:funcd:problem:invalid` | The call holds no statement. | Send at least one statement. |
 | `execute` | 400 | `urn:funcd:problem:invalid` | A statement is not a list whose first item is its SQL text, or that text is empty. | Send each statement as ["SQL", params...], with its SQL text. |
 | `execute` | 400 | `urn:funcd:problem:invalid` | A parameter of a statement is a list or an object, other than the one object of its named parameters. | Pass each parameter as a string, a number, a boolean or null. |
@@ -96,13 +96,13 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `execute` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no database. | Call from a Function that exists; a deleted Function's worker stops. |
 | `execute` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.sql has no entry for the alias. | Add the binding to spec.bindings.sql, or call an alias that the Function binds. |
 | `execute` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the database. | Change or remove the Policy that forbids sql::read on the database. |
-| `execute` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the database, no RolesAssignment makes it a writer, or a Policy forbids the write. | Execute from the database's owner, or grant the Function sql::write with a RolesAssignment, such as the SQL Data Writer role. |
+| `execute` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the database, no RolesAssignment makes it a writer, a Policy forbids the write, or the database that the binding names does not exist. | Execute from the database's owner, or grant the Function sql::write with a RolesAssignment, such as the SQL Data Writer role; create the database if it does not exist. |
 | `execute` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
 | `execute` | 413 | `urn:funcd:problem:payload-too-large` | The call holds more than 500 statements. | Send at most 500 statements in one call. |
 | `execute` | 413 | `urn:funcd:problem:payload-too-large` | The engine's answer to the call is larger than funcd reads for one call. | Read fewer rows or columns in one call, as with LIMIT. |
-| `execute` | 503 | `urn:funcd:problem:unavailable` | The database that the binding names does not exist, or its engine is not Ready yet. | Create the SQLDatabase, or wait until it is Ready, then retry. |
+| `execute` | 503 | `urn:funcd:problem:unavailable` | The database's engine is not Ready yet; a query also gets this answer when the database that its binding names does not exist. | Wait until the SQLDatabase is Ready, then retry; create it if it does not exist. |
 | `execute` | 503 | `urn:funcd:problem:unavailable` | The database's engine does not answer, its answer broke off, or it answered with an error. | Retry the call; if it keeps failing, read the SQLDatabase's status and funcd's log. |
-| `execute` | 503 | `urn:funcd:problem:unavailable` | The call ran past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
+| `execute` | 503 | `urn:funcd:problem:unavailable` | The database's engine did not answer in time, as when a statement runs past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
 | `execute` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `execute` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
 | `execute` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
@@ -132,9 +132,9 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `query` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the database. | Change or remove the Policy that forbids sql::read on the database. |
 | `query` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
 | `query` | 413 | `urn:funcd:problem:payload-too-large` | The engine's answer to the call is larger than funcd reads for one call. | Read fewer rows or columns in one call, as with LIMIT. |
-| `query` | 503 | `urn:funcd:problem:unavailable` | The database that the binding names does not exist, or its engine is not Ready yet. | Create the SQLDatabase, or wait until it is Ready, then retry. |
+| `query` | 503 | `urn:funcd:problem:unavailable` | The database's engine is not Ready yet; a query also gets this answer when the database that its binding names does not exist. | Wait until the SQLDatabase is Ready, then retry; create it if it does not exist. |
 | `query` | 503 | `urn:funcd:problem:unavailable` | The database's engine does not answer, its answer broke off, or it answered with an error. | Retry the call; if it keeps failing, read the SQLDatabase's status and funcd's log. |
-| `query` | 503 | `urn:funcd:problem:unavailable` | The call ran past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
+| `query` | 503 | `urn:funcd:problem:unavailable` | The database's engine did not answer in time, as when a statement runs past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
 | `query_values` | 400 | `urn:funcd:problem:invalid` | The body is not a JSON object whose statements field is a list, as when a parameter is a float NaN or infinity, which JSON cannot hold. | Pass such a float as null or as a string, and send &#123;"statements": [...]&#125; with one ["SQL", params...] list for each statement. |
 | `query_values` | 400 | `urn:funcd:problem:invalid` | A statement is not a list whose first item is its SQL text, or that text is empty. | Send each statement as ["SQL", params...], with its SQL text. |
 | `query_values` | 400 | `urn:funcd:problem:invalid` | A parameter of a statement is a list or an object, other than the one object of its named parameters. | Pass each parameter as a string, a number, a boolean or null. |
@@ -144,9 +144,9 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `query_values` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the database. | Change or remove the Policy that forbids sql::read on the database. |
 | `query_values` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
 | `query_values` | 413 | `urn:funcd:problem:payload-too-large` | The engine's answer to the call is larger than funcd reads for one call. | Read fewer rows or columns in one call, as with LIMIT. |
-| `query_values` | 503 | `urn:funcd:problem:unavailable` | The database that the binding names does not exist, or its engine is not Ready yet. | Create the SQLDatabase, or wait until it is Ready, then retry. |
+| `query_values` | 503 | `urn:funcd:problem:unavailable` | The database's engine is not Ready yet; a query also gets this answer when the database that its binding names does not exist. | Wait until the SQLDatabase is Ready, then retry; create it if it does not exist. |
 | `query_values` | 503 | `urn:funcd:problem:unavailable` | The database's engine does not answer, its answer broke off, or it answered with an error. | Retry the call; if it keeps failing, read the SQLDatabase's status and funcd's log. |
-| `query_values` | 503 | `urn:funcd:problem:unavailable` | The call ran past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
+| `query_values` | 503 | `urn:funcd:problem:unavailable` | The database's engine did not answer in time, as when a statement runs past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
 | `execute` | 400 | `urn:funcd:problem:invalid` | The body is not a JSON object whose statements field is a list, as when a parameter is a float NaN or infinity, which JSON cannot hold. | Pass such a float as null or as a string, and send &#123;"statements": [...]&#125; with one ["SQL", params...] list for each statement. |
 | `execute` | 400 | `urn:funcd:problem:invalid` | The call holds no statement. | Send at least one statement. |
 | `execute` | 400 | `urn:funcd:problem:invalid` | A statement is not a list whose first item is its SQL text, or that text is empty. | Send each statement as ["SQL", params...], with its SQL text. |
@@ -155,13 +155,13 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `execute` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no database. | Call from a Function that exists; a deleted Function's worker stops. |
 | `execute` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.sql has no entry for the alias. | Add the binding to spec.bindings.sql, or call an alias that the Function binds. |
 | `execute` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read the database. | Change or remove the Policy that forbids sql::read on the database. |
-| `execute` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the database, no RolesAssignment makes it a writer, or a Policy forbids the write. | Execute from the database's owner, or grant the Function sql::write with a RolesAssignment, such as the SQL Data Writer role. |
+| `execute` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the database, no RolesAssignment makes it a writer, a Policy forbids the write, or the database that the binding names does not exist. | Execute from the database's owner, or grant the Function sql::write with a RolesAssignment, such as the SQL Data Writer role; create the database if it does not exist. |
 | `execute` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
 | `execute` | 413 | `urn:funcd:problem:payload-too-large` | The call holds more than 500 statements. | Send at most 500 statements in one call. |
 | `execute` | 413 | `urn:funcd:problem:payload-too-large` | The engine's answer to the call is larger than funcd reads for one call. | Read fewer rows or columns in one call, as with LIMIT. |
-| `execute` | 503 | `urn:funcd:problem:unavailable` | The database that the binding names does not exist, or its engine is not Ready yet. | Create the SQLDatabase, or wait until it is Ready, then retry. |
+| `execute` | 503 | `urn:funcd:problem:unavailable` | The database's engine is not Ready yet; a query also gets this answer when the database that its binding names does not exist. | Wait until the SQLDatabase is Ready, then retry; create it if it does not exist. |
 | `execute` | 503 | `urn:funcd:problem:unavailable` | The database's engine does not answer, its answer broke off, or it answered with an error. | Retry the call; if it keeps failing, read the SQLDatabase's status and funcd's log. |
-| `execute` | 503 | `urn:funcd:problem:unavailable` | The call ran past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
+| `execute` | 503 | `urn:funcd:problem:unavailable` | The database's engine did not answer in time, as when a statement runs past sql.callTimeout. | Make the statements faster, or raise sql.callTimeout. |
 | `execute` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `execute` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
 | `execute` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
