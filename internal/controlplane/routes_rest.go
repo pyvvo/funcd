@@ -331,6 +331,16 @@ func policyWrites() []ErrorCase {
 	}
 }
 
+// ===== Route (namespaced) =====
+
+func registerRoute(api huma.API, h Handlers) {
+	registerNamespacedCRUD(api, crudRoutes[v1.Route]{
+		kind: "Route", kinds: "Routes", path: "routes",
+		list: h.ListRoutes, create: h.CreateRoute, get: h.GetRoute, replace: h.ReplaceRoute, remove: h.DeleteRoute,
+		cases: &kindCases{},
+	})
+}
+
 // ===== EgressPolicy (namespaced) =====
 
 func registerEgressPolicy(api huma.API, h Handlers) {

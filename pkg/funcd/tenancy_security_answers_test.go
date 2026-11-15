@@ -276,14 +276,30 @@ func egressPolicy(name v1.ObjectName, rules ...v1.EgressRule) *v1.EgressPolicy {
 		Spec:       v1.EgressPolicySpec{Rules: append([]v1.EgressRule{}, rules...)}}
 }
 
-// The answers of the Networking feature's EgressPolicy operations, one row per case of each.
+// route is Route name of default, whose one rule, at path on devices.example.com, calls the Function devices-api.
+func route(name v1.ObjectName, path string) *v1.Route {
+	return &v1.Route{TypeMeta: v1.TypeMeta{APIVersion: v1.KindRoute.GVK().APIVersion(), Kind: v1.KindRoute},
+		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1"},
+		Spec: v1.RouteSpec{Host: "devices.example.com",
+			Rules: []v1.RouteRule{{Path: path, Backend: v1.RouteBackend{Function: "devices-api"}}}}}
+}
+
+// The answers of the Networking feature's operations, one row per case of each: Route and EgressPolicy.
 func TestNetworkingAnswersMatrix(t *testing.T) {
 	t.Parallel()
 	e := newAnswerEnv(t)
 	https := v1.EgressRule{To: v1.EgressTo{Domains: []string{"*.example.com"}}, Ports: []int{443}}
-	egress := kindFixture{kind: "EgressPolicy", kinds: "EgressPolicies", path: "egresspolicies", name: "egress",
-		json: jsonOf(t, egressPolicy("egress", https)), broken: jsonOf(t, egressPolicy("egress")),
-		detail: "spec.rules must list at least one rule"}
-	postFixture(t, e, egress)
-	runMatrix(t, egress.sharedRows(e))
+	fixtures := []kindFixture{
+		{kind: "Route", kinds: "Routes", path: "routes", name: "devices", json: jsonOf(t, route("devices", "/")),
+			broken: jsonOf(t, route("devices", "devices")), detail: `spec.rules[0].path "devices" must begin with '/'`},
+		{kind: "EgressPolicy", kinds: "EgressPolicies", path: "egresspolicies", name: "egress",
+			json: jsonOf(t, egressPolicy("egress", https)), broken: jsonOf(t, egressPolicy("egress")),
+			detail: "spec.rules must list at least one rule"},
+	}
+	var rows []answerRow
+	for _, k := range fixtures {
+		postFixture(t, e, k)
+		rows = append(rows, k.sharedRows(e)...)
+	}
+	runMatrix(t, rows)
 }
