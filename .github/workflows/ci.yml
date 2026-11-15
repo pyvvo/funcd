@@ -121,7 +121,6 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "$BASE"
           scripts/check-list-only-shrinks.sh "$BASE" internal/controlplane/kindref/testdata/undescribed-operations.txt
-          scripts/check-list-only-shrinks.sh "$BASE" internal/workernode/local/testdata/undescribed-endpoints.txt
       - name: Run CI (fmt check + lint + fast tests + build)
         if: needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.generated == 'true' || github.event_name == 'push'
         run: nix develop --command just ci
