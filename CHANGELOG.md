@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.2](https://github.com/pyvvo/funcd/compare/v0.44.1...v0.44.2) (2026-11-14)
+
+
+### Bug Fixes
+
+* **status:** Route, EventSource, Sensor, Workflow and Lake fill status.observedGeneration ([#1466](https://github.com/pyvvo/funcd/issues/1466)) ([e0532d8](https://github.com/pyvvo/funcd/commit/e0532d805a4d147ca188354563a255eeaefe7ceb))
+
 ## [0.44.1](https://github.com/pyvvo/funcd/compare/v0.44.0...v0.44.1) (2026-11-14)
 
 
