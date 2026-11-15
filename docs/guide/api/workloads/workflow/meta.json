@@ -1,0 +1,10 @@
+{
+  "title": "Workflow",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

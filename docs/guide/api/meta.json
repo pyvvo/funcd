@@ -6,6 +6,9 @@
   "pages": [
     "index",
     "workloads",
-    "services"
+    "services",
+    "security-and-networking",
+    "tenancy-and-limits",
+    "disaster-recovery"
   ]
 }

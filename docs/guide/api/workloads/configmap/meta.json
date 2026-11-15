@@ -1,0 +1,10 @@
+{
+  "title": "ConfigMap",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

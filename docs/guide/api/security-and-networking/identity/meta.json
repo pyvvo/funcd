@@ -1,0 +1,10 @@
+{
+  "title": "Identity",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

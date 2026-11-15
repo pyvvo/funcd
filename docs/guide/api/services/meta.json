@@ -2,6 +2,13 @@
   "title": "Services",
   "icon": "Database",
   "pages": [
-    "kvstore"
+    "kvstore",
+    "bucket",
+    "sqldatabase",
+    "lake",
+    "secret",
+    "eventsource",
+    "sensor",
+    "deadletter"
   ]
 }

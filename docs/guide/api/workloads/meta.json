@@ -4,6 +4,12 @@
   "pages": [
     "function",
     "revision",
-    "invocation"
+    "invocation",
+    "app",
+    "apprevision",
+    "site",
+    "workflow",
+    "workflowrun",
+    "configmap"
   ]
 }

@@ -1,0 +1,11 @@
+{
+  "title": "Disaster recovery",
+  "icon": "LifeBuoy",
+  "pages": [
+    "backup",
+    "backupschedule",
+    "restore",
+    "hold",
+    "platformbackup"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "title": "BackupSchedule",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

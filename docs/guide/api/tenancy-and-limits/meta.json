@@ -1,0 +1,8 @@
+{
+  "title": "Tenancy and limits",
+  "icon": "Gauge",
+  "pages": [
+    "namespace",
+    "resourcegroup"
+  ]
+}

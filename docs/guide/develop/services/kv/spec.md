@@ -116,7 +116,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `put` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `put` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `put` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `putIfAbsent` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
 | `putIfAbsent` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
 | `putIfAbsent` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
@@ -129,7 +129,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `putIfAbsent` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `putIfAbsent` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `putIfAbsent` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `putIfAbsent` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `putIfAbsent` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `compareAndSet` | 400 | `urn:funcd:problem:invalid` | The version is empty or holds a space, a quote or a control character, so If-Match is not one strong entity-tag. | Pass the version that a read or a write of the key returned. |
 | `compareAndSet` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
 | `compareAndSet` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
@@ -143,7 +143,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `compareAndSet` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `compareAndSet` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `compareAndSet` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `compareAndSet` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `compareAndSet` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `del` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
 | `del` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
 | `del` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |
@@ -227,7 +227,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `put` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `put` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `put` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `put` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `put_if_absent` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
 | `put_if_absent` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
 | `put_if_absent` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
@@ -240,7 +240,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `put_if_absent` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `put_if_absent` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `put_if_absent` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `put_if_absent` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `put_if_absent` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `compare_and_set` | 400 | `urn:funcd:problem:invalid` | The version is empty or holds a space, a quote or a control character, so If-Match is not one strong entity-tag. | Pass the version that a read or a write of the key returned. |
 | `compare_and_set` | 400 | `urn:funcd:problem:invalid` | The ttl is not a whole number of seconds from 1 to 9223372036. | Send a ttl in that range. |
 | `compare_and_set` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
@@ -254,7 +254,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `compare_and_set` | 503 | `urn:funcd:problem:unavailable` | The KV driver that funcd runs with offers no versioned reads or conditional writes. | Run funcd with a KV driver that offers them, as its memory and Badger drivers do. |
 | `compare_and_set` | 503 | `urn:funcd:problem:unavailable` | funcd could not read the store's quota or measure what the store holds. | Retry the write. |
 | `compare_and_set` | 507 | `urn:funcd:problem:insufficient-storage` | funcd's data filesystem is below storage.minFreeSize, or the write would take it there. | Free space on the data filesystem, then retry; reads and deletes still work. |
-| `compare_and_set` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what its store holds past spec.quota. | Delete data to make room, or raise the store's spec.quota. |
+| `compare_and_set` | 507 | `urn:funcd:problem:insufficient-storage` | The write would take what a store or a prefix of a Bucket holds past its quota; the detail names which one. | Delete data to make room, or raise that quota: the store's spec.quota, or the quota of the prefix in its Bucket's spec.prefixes. |
 | `delete` | 403 | `urn:funcd:problem:forbidden` | The calling Function no longer exists, so it binds no table. | Call from a Function that exists; a deleted Function's worker stops. |
 | `delete` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.kv has no entry for the alias. | Add the binding to spec.bindings.kv, or call an alias that the Function binds. |
 | `delete` | 403 | `urn:funcd:problem:forbidden` | The binding names a KVStore that does not exist. | Create the KVStore, or bind one that exists. |

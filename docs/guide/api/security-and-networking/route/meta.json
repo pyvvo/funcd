@@ -1,0 +1,10 @@
+{
+  "title": "Route",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}
