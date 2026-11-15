@@ -14143,5 +14143,20 @@
     "dod_total": 16,
     "report": "docs/reviews/adr-0329-implementation-claude-opus-5-5.md",
     "notes": "pass; the Implemented stamp waits for the decider. 3 Minors (model): invokeFunction's 401 fix cannot help when server.auth.edge is off; answers.go links SpecAPI into the daemon (+608,864 bytes, a second global); the HTTP API section's first sentence claims every operation. Routed (adr): Decision 2 cites ADR-0147 for a 429 that no external call gets (a DoD item impossible as written); the function-call-documented scenario asks for an ADR on the page, which Decision 7 refuses; Decision 2's 503 list misses the cases of ADR-0290, ADR-0161, ADR-0169, ADR-0028 and ADR-0044. Routed (elsewhere): the cluster-scoped shared cases are proven by the first cluster kind's PR. DoD 14/16: just ci runs in the gate. Round 2 (a158b0b0): the 3 Minors closed, with no finding open; just ci exit 0. The decider's ruling of 2026-11-15 settles the routed items: the 429 and the scenario's ADR stand as built, and the five 503 cases go to the Function feature's rollout PR. Implemented 2026-11-15."
+  },
+  {
+    "date": "2026-11-15",
+    "adr": "0329",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 16,
+    "dod_total": 17,
+    "report": "docs/reviews/adr-0329-rollout-function-claude-opus-5-5.md",
+    "notes": "The Function rollout of ADR-0329 (e5497f4d) passes. 1 Minor (model): invokeFunction's cases sit in three tests, so runMatrix leaves it out of the one-row-per-case check, and an untested 503 case passes the full suite. No wire change: the spec diff and a probe of 36 requests on both commits agree. The new 503 rows passed 20 runs under -race. Routed: the ADR-0044 heap 503, which the TS shim writes (pool.ts:370) and no non-e2e test can prove (adr, the decider); the shim's 400 and 500 (the decider); the matrix's file (the decider). DoD 16/17."
   }
 ]
