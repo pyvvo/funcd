@@ -6396,10 +6396,12 @@ paths:
           schema:
             description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6418,10 +6420,12 @@ paths:
     get:
       operationId: getGateway
       parameters:
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6457,10 +6461,12 @@ paths:
           schema:
             description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -6538,12 +6544,30 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role does not allow it to list Namespaces. Use an admin's credential."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role does not allow it to list Namespaces.
+              fix: Use an admin's credential.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the Namespaces
       tags:
         - Namespace
     post:
@@ -6569,12 +6593,94 @@ paths:
               schema:
                 $ref: "#/components/schemas/Namespace"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role does not allow it to create a Namespace. Use an admin's credential."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role does not allow it to create a Namespace.
+              fix: Use an admin's credential.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: A Namespace of that name already exists. Choose another name, or replace the existing Namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: A Namespace of that name already exists.
+              fix: Choose another name, or replace the existing Namespace.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create a Namespace
       tags:
         - Namespace
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/apprevisions:
@@ -8769,12 +8875,40 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list EgressPolicies in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list EgressPolicies in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the EgressPolicies of a namespace
       tags:
         - EgressPolicy
     post:
@@ -8810,12 +8944,102 @@ paths:
               schema:
                 $ref: "#/components/schemas/EgressPolicy"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create an EgressPolicy in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create an EgressPolicy in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: An EgressPolicy of that name already exists in the namespace. Choose another name, or replace the existing EgressPolicy."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: An EgressPolicy of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing EgressPolicy.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create an EgressPolicy
       tags:
         - EgressPolicy
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/egresspolicies/{name}:
@@ -8851,12 +9075,75 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete an EgressPolicy in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete an EgressPolicy in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No EgressPolicy of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No EgressPolicy of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The EgressPolicy has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the EgressPolicy again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The EgressPolicy has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the EgressPolicy again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete an EgressPolicy
       tags:
         - EgressPolicy
     get:
@@ -8889,12 +9176,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/EgressPolicy"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read an EgressPolicy in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read an EgressPolicy in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No EgressPolicy of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No EgressPolicy of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read an EgressPolicy
       tags:
         - EgressPolicy
     put:
@@ -8946,12 +9271,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/EgressPolicy"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace an EgressPolicy in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace an EgressPolicy in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No EgressPolicy of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No EgressPolicy of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The EgressPolicy has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the EgressPolicy again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The EgressPolicy has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the EgressPolicy again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace an EgressPolicy
       tags:
         - EgressPolicy
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/eventsources:
@@ -10427,12 +10856,40 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list Identities in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list Identities in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the Identities of a namespace
       tags:
         - Identity
     post:
@@ -10468,12 +10925,102 @@ paths:
               schema:
                 $ref: "#/components/schemas/Identity"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create an Identity in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create an Identity in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: An Identity of that name already exists in the namespace. Choose another name, or replace the existing Identity."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: An Identity of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing Identity.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create an Identity
       tags:
         - Identity
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/identities/{name}:
@@ -10509,12 +11056,75 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete an Identity in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete an Identity in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Identity of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Identity of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Identity has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Identity again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Identity has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Identity again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete an Identity
       tags:
         - Identity
     get:
@@ -10547,12 +11157,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/Identity"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read an Identity in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read an Identity in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Identity of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Identity of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read an Identity
       tags:
         - Identity
     put:
@@ -10604,12 +11252,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/Identity"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace an Identity in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace an Identity in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Identity of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Identity of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Identity has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Identity again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Identity has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Identity again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace an Identity
       tags:
         - Identity
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/invocations:
@@ -12407,12 +13159,40 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list Policies in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list Policies in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the Policies of a namespace
       tags:
         - Policy
     post:
@@ -12448,12 +13228,114 @@ paths:
               schema:
                 $ref: "#/components/schemas/Policy"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: The text in spec.cedar does not parse as Cedar, or holds no statement. Correct the text where the detail says it breaks, and keep at least one permit or forbid statement.
+            - `urn:funcd:problem:invalid`: A statement of spec.cedar does not name exactly one action that funcd knows, or names an entity of a type that funcd does not know. Name one action that funcd knows, such as kv::read, and only entity types that it knows; the detail lists both.
+            - `urn:funcd:problem:invalid`: A statement of spec.cedar names an entity of another namespace: its id does not begin with the Policy's namespace and a slash. Name only entities of the Policy's namespace, or apply the Policy in the namespace of the entities it names.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: The text in spec.cedar does not parse as Cedar, or holds no statement.
+              fix: Correct the text where the detail says it breaks, and keep at least one permit or forbid statement.
+            - type: urn:funcd:problem:invalid
+              when: A statement of spec.cedar does not name exactly one action that funcd knows, or names an entity of a type that funcd does not know.
+              fix: Name one action that funcd knows, such as kv::read, and only entity types that it knows; the detail lists both.
+            - type: urn:funcd:problem:invalid
+              when: "A statement of spec.cedar names an entity of another namespace: its id does not begin with the Policy's namespace and a slash."
+              fix: Name only entities of the Policy's namespace, or apply the Policy in the namespace of the entities it names.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create a Policy in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create a Policy in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: A Policy of that name already exists in the namespace. Choose another name, or replace the existing Policy."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: A Policy of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing Policy.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create a Policy
       tags:
         - Policy
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/policies/{name}:
@@ -12489,12 +13371,75 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete a Policy in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete a Policy in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Policy of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Policy of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Policy has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Policy again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Policy has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Policy again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete a Policy
       tags:
         - Policy
     get:
@@ -12527,12 +13472,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/Policy"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read a Policy in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read a Policy in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Policy of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Policy of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a Policy
       tags:
         - Policy
     put:
@@ -12584,12 +13567,128 @@ paths:
               schema:
                 $ref: "#/components/schemas/Policy"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: The text in spec.cedar does not parse as Cedar, or holds no statement. Correct the text where the detail says it breaks, and keep at least one permit or forbid statement.
+            - `urn:funcd:problem:invalid`: A statement of spec.cedar does not name exactly one action that funcd knows, or names an entity of a type that funcd does not know. Name one action that funcd knows, such as kv::read, and only entity types that it knows; the detail lists both.
+            - `urn:funcd:problem:invalid`: A statement of spec.cedar names an entity of another namespace: its id does not begin with the Policy's namespace and a slash. Name only entities of the Policy's namespace, or apply the Policy in the namespace of the entities it names.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: The text in spec.cedar does not parse as Cedar, or holds no statement.
+              fix: Correct the text where the detail says it breaks, and keep at least one permit or forbid statement.
+            - type: urn:funcd:problem:invalid
+              when: A statement of spec.cedar does not name exactly one action that funcd knows, or names an entity of a type that funcd does not know.
+              fix: Name one action that funcd knows, such as kv::read, and only entity types that it knows; the detail lists both.
+            - type: urn:funcd:problem:invalid
+              when: "A statement of spec.cedar names an entity of another namespace: its id does not begin with the Policy's namespace and a slash."
+              fix: Name only entities of the Policy's namespace, or apply the Policy in the namespace of the entities it names.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace a Policy in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace a Policy in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Policy of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Policy of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Policy has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Policy again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Policy has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Policy again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace a Policy
       tags:
         - Policy
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups:
@@ -12617,12 +13716,40 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list ResourceGroups in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list ResourceGroups in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the ResourceGroups of a namespace
       tags:
         - ResourceGroup
     post:
@@ -12635,10 +13762,12 @@ paths:
           schema:
             description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -12656,12 +13785,102 @@ paths:
               schema:
                 $ref: "#/components/schemas/ResourceGroup"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create a ResourceGroup in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create a ResourceGroup in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: A ResourceGroup of that name already exists in the namespace. Choose another name, or replace the existing ResourceGroup."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: A ResourceGroup of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing ResourceGroup.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create a ResourceGroup
       tags:
         - ResourceGroup
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups/{name}:
@@ -12674,18 +13893,22 @@ paths:
           schema:
             description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -12700,12 +13923,88 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete a ResourceGroup in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete a ResourceGroup in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No ResourceGroup of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No ResourceGroup of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:conflict`: The ResourceGroup has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the ResourceGroup again, apply the change to it, and send it with its new resourceVersion.
+            - `urn:funcd:problem:conflict`: The ResourceGroup still has members: objects of the namespace whose metadata.resourceGroup names it and that no other object owns. Delete the members first, or delete the ResourceGroup with force=true, which deletes them.
+            - `urn:funcd:problem:conflict`: With force=true, funcd refuses the delete of a member, such as a Function that a Function outside the group links to; the detail gives that refusal. Do what the refusal asks, then delete again; the members deleted already stay deleted.
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The ResourceGroup has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the ResourceGroup again, apply the change to it, and send it with its new resourceVersion.
+            - type: urn:funcd:problem:conflict
+              when: "The ResourceGroup still has members: objects of the namespace whose metadata.resourceGroup names it and that no other object owns."
+              fix: Delete the members first, or delete the ResourceGroup with force=true, which deletes them.
+            - type: urn:funcd:problem:conflict
+              when: With force=true, funcd refuses the delete of a member, such as a Function that a Function outside the group links to; the detail gives that refusal.
+              fix: Do what the refusal asks, then delete again; the members deleted already stay deleted.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The force parameter is neither true nor false. Send force=true, or leave it out.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The force parameter is neither true nor false.
+              fix: Send force=true, or leave it out.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete a ResourceGroup
       tags:
         - ResourceGroup
     get:
@@ -12738,12 +14037,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/ResourceGroup"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read a ResourceGroup in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read a ResourceGroup in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No ResourceGroup of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No ResourceGroup of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a ResourceGroup
       tags:
         - ResourceGroup
     put:
@@ -12762,18 +14099,22 @@ paths:
           schema:
             description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's namespace.
+          in: path
           name: namespace
           required: true
           schema:
+            description: The object's namespace.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -12791,12 +14132,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/ResourceGroup"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace a ResourceGroup in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace a ResourceGroup in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No ResourceGroup of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No ResourceGroup of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The ResourceGroup has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the ResourceGroup again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The ResourceGroup has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the ResourceGroup again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace a ResourceGroup
       tags:
         - ResourceGroup
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/restores:
@@ -13172,12 +14617,40 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list Roles in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list Roles in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the Roles of a namespace
       tags:
         - Role
     post:
@@ -13213,12 +14686,102 @@ paths:
               schema:
                 $ref: "#/components/schemas/Role"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create a Role in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create a Role in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: A Role of that name already exists in the namespace. Choose another name, or replace the existing Role."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: A Role of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing Role.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create a Role
       tags:
         - Role
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/roles/{name}:
@@ -13254,12 +14817,75 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete a Role in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete a Role in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Role of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Role of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Role has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Role again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Role has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Role again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete a Role
       tags:
         - Role
     get:
@@ -13292,12 +14918,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/Role"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read a Role in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read a Role in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Role of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Role of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a Role
       tags:
         - Role
     put:
@@ -13349,12 +15013,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/Role"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace a Role in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace a Role in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Role of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Role of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Role has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Role again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Role has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Role again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace a Role
       tags:
         - Role
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/rolesassignments:
@@ -13382,12 +15150,40 @@ paths:
                   - array
                   - "null"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list RolesAssignments in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list RolesAssignments in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the RolesAssignments of a namespace
       tags:
         - RolesAssignment
     post:
@@ -13423,12 +15219,102 @@ paths:
               schema:
                 $ref: "#/components/schemas/RolesAssignment"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create a RolesAssignment in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create a RolesAssignment in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: A RolesAssignment of that name already exists in the namespace. Choose another name, or replace the existing RolesAssignment."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: A RolesAssignment of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing RolesAssignment.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create a RolesAssignment
       tags:
         - RolesAssignment
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/rolesassignments/{name}:
@@ -13464,12 +15350,75 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete a RolesAssignment in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete a RolesAssignment in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No RolesAssignment of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No RolesAssignment of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The RolesAssignment has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the RolesAssignment again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The RolesAssignment has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the RolesAssignment again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete a RolesAssignment
       tags:
         - RolesAssignment
     get:
@@ -13502,12 +15451,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/RolesAssignment"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read a RolesAssignment in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read a RolesAssignment in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No RolesAssignment of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No RolesAssignment of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a RolesAssignment
       tags:
         - RolesAssignment
     put:
@@ -13559,12 +15546,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/RolesAssignment"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace a RolesAssignment in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace a RolesAssignment in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No RolesAssignment of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No RolesAssignment of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The RolesAssignment has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the RolesAssignment again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The RolesAssignment has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the RolesAssignment again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace a RolesAssignment
       tags:
         - RolesAssignment
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/routes:
@@ -17159,10 +19250,12 @@ paths:
           schema:
             description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -17170,21 +19263,86 @@ paths:
       responses:
         "204":
           description: No Content
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role does not allow it to delete a Namespace. Use an admin's credential."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role does not allow it to delete a Namespace.
+              fix: Use an admin's credential.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Namespace of that name exists. Check the name."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Namespace of that name exists.
+              fix: Check the name.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Namespace has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Namespace again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Namespace has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Namespace again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete a Namespace
       tags:
         - Namespace
     get:
       operationId: getNamespace
       parameters:
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -17196,12 +19354,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/Namespace"
           description: OK
-        default:
+        "401":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role does not allow it to read a Namespace. Use an admin's credential."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role does not allow it to read a Namespace.
+              fix: Use an admin's credential.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Namespace of that name exists. Check the name."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Namespace of that name exists.
+              fix: Check the name.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a Namespace
       tags:
         - Namespace
     put:
@@ -17220,10 +19416,12 @@ paths:
           schema:
             description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -17241,12 +19439,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/Namespace"
           description: OK
-        default:
+        "400":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: Error
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role does not allow it to replace a Namespace. Use an admin's credential."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role does not allow it to replace a Namespace.
+              fix: Use an admin's credential.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Namespace of that name exists. Check the name."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Namespace of that name exists.
+              fix: Check the name.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Namespace has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Namespace again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Namespace has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Namespace again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives, such as body.spec.tables.
+          x-funcd-cases:
+            - type: about:blank
+              when: The name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives, such as body.spec.tables.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace a Namespace
       tags:
         - Namespace
   /apis/funcd.io/v1alpha1/platformbackup:
@@ -17350,10 +19652,12 @@ paths:
           schema:
             description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -17372,10 +19676,12 @@ paths:
     get:
       operationId: getRuntimeClass
       parameters:
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -17411,10 +19717,12 @@ paths:
           schema:
             description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -17503,10 +19811,12 @@ paths:
           schema:
             description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
             type: string
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -17525,10 +19835,12 @@ paths:
     get:
       operationId: getWorkerNode
       parameters:
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -17564,10 +19876,12 @@ paths:
           schema:
             description: Admit the write and store nothing.
             type: boolean
-        - in: path
+        - description: The object's name.
+          in: path
           name: name
           required: true
           schema:
+            description: The object's name.
             maxLength: 63
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$

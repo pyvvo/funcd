@@ -162,7 +162,7 @@ func TestScenarioUnlistedAnswerFails(t *testing.T) {
 	got := provenAnswers(t, doc)
 	require.NoError(t, compareAnswers(doc, got, true))
 	got[answer{"replaceKVStore", http.StatusTeapot}] = true
-	got[answer{"listNamespaces", http.StatusTeapot}] = true // no described operation: nothing to compare
+	got[answer{"listThings", http.StatusTeapot}] = true // no described operation: nothing to compare
 	for _, full := range []bool{true, false} {
 		err := compareAnswers(doc, got, full)
 		require.EqualError(t, err, "replaceKVStore answered 418 I'm a teapot, which it does not list")

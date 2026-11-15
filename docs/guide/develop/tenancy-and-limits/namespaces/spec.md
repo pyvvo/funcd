@@ -64,3 +64,259 @@ This page lists the spec and status fields of Namespace and ResourceGroup, each 
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
+
+## HTTP API
+
+Each described operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
+
+| Authentication | How a call sends it |
+| --- | --- |
+| `bearer` | A credential of funcd's config, sent as Authorization: Bearer followed by its token. |
+| `apiKey` | A credential of funcd's config, sent in the X-Api-Key header. |
+
+### List the Namespaces
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces` | `listNamespaces` | `bearer` or `apiKey` |
+
+Answer: array of [`Namespace`](#namespace).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to list Namespaces. | Use an admin's credential. |
+
+### Create a Namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces` | `createNamespace` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Namespace`](#namespace), required. Answer: [`Namespace`](#namespace).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to create a Namespace. | Use an admin's credential. |
+| 409 | `urn:funcd:problem:conflict` | A Namespace of that name already exists. | Choose another name, or replace the existing Namespace. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Read a Namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{name}` | `getNamespace` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`Namespace`](#namespace).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to read a Namespace. | Use an admin's credential. |
+| 404 | `urn:funcd:problem:not-found` | No Namespace of that name exists. | Check the name. |
+| 422 | `about:blank` | The name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Replace a Namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{name}` | `replaceNamespace` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`Namespace`](#namespace), required. Answer: [`Namespace`](#namespace).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to replace a Namespace. | Use an admin's credential. |
+| 404 | `urn:funcd:problem:not-found` | No Namespace of that name exists. | Check the name. |
+| 409 | `urn:funcd:problem:conflict` | The Namespace has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Namespace again, apply the change to it, and send it with its new resourceVersion. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Delete a Namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{name}` | `deleteNamespace` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role does not allow it to delete a Namespace. | Use an admin's credential. |
+| 404 | `urn:funcd:problem:not-found` | No Namespace of that name exists. | Check the name. |
+| 409 | `urn:funcd:problem:conflict` | The Namespace has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the Namespace again, apply the change to it, and send it with its new resourceVersion. |
+| 422 | `about:blank` | The name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+
+### List the ResourceGroups of a namespace
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups` | `listResourceGroups` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The namespace whose objects the answer lists. |
+
+Answer: array of [`ResourceGroup`](#resourcegroup).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to list ResourceGroups in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Create a ResourceGroup
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups` | `createResourceGroup` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`ResourceGroup`](#resourcegroup), required. Answer: [`ResourceGroup`](#resourcegroup).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace is not the namespace of the path. | Send the object to the path of its own namespace. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to create a ResourceGroup in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 409 | `urn:funcd:problem:conflict` | A ResourceGroup of that name already exists in the namespace. | Choose another name, or replace the existing ResourceGroup. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The namespace in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Read a ResourceGroup
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups/{name}` | `getResourceGroup` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+
+Answer: [`ResourceGroup`](#resourcegroup).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to read a ResourceGroup in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No ResourceGroup of that name exists in the namespace. | Check the name and the namespace. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+
+### Replace a ResourceGroup
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups/{name}` | `replaceResourceGroup` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `dryRun` | query | boolean | Admit the write and store nothing. |
+
+Body: [`ResourceGroup`](#resourcegroup), required. Answer: [`ResourceGroup`](#resourcegroup).
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | OK |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 400 | `urn:funcd:problem:invalid` | A field breaks a rule that the schema cannot hold, which the detail names. | Correct the field that the detail names. |
+| 400 | `urn:funcd:problem:invalid` | The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. | Send the object to its own path, with at most one version. |
+| 400 | `about:blank` | The body is missing or is not JSON. | Send a JSON body. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to replace a ResourceGroup in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No ResourceGroup of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The ResourceGroup has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the ResourceGroup again, apply the change to it, and send it with its new resourceVersion. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB. | Send a smaller body. |
+| 415 | `about:blank` | The Content-Type of the body is not JSON. | Send the body as application/json. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The dryRun parameter is neither true nor false. | Send dryRun=true, or leave it out. |
+| 422 | `about:blank` | The body breaks the schema: a field that it does not know, of the wrong type or past its limits. | Correct the field at the location that the detail gives, such as body.spec.tables. |
+
+### Delete a ResourceGroup
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups/{name}` | `deleteResourceGroup` | `bearer` or `apiKey` |
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `namespace` | path | string, required, a DNS-1123 label | The object's namespace. |
+| `name` | path | string, required, a DNS-1123 label | The object's name. |
+| `If-Match` | header | string | One strong entity-tag, the quoted resourceVersion, or \*: the write is conditional on it. |
+| `force` | query | boolean | Delete the members first; each member's protections still apply. |
+
+Answer: none.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 204 |  | No Content |  |
+| 400 | `urn:funcd:problem:invalid` | The If-Match header is not one strong entity-tag, such as "42", or \*. | Send one If-Match line with the quoted resourceVersion, or \*. |
+| 401 | `urn:funcd:problem:unauthorized` | The request carries no bearer token or API key, or one that funcd does not know. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to delete a ResourceGroup in the namespace. | Use a credential whose role allows it, such as a developer of the namespace or an admin. |
+| 404 | `urn:funcd:problem:not-found` | No ResourceGroup of that name exists in the namespace. | Check the name and the namespace. |
+| 409 | `urn:funcd:problem:conflict` | The ResourceGroup has changed since the resourceVersion that If-Match or metadata.resourceVersion names. | Read the ResourceGroup again, apply the change to it, and send it with its new resourceVersion. |
+| 409 | `urn:funcd:problem:conflict` | The ResourceGroup still has members: objects of the namespace whose metadata.resourceGroup names it and that no other object owns. | Delete the members first, or delete the ResourceGroup with force=true, which deletes them. |
+| 409 | `urn:funcd:problem:conflict` | With force=true, funcd refuses the delete of a member, such as a Function that a Function outside the group links to; the detail gives that refusal. | Do what the refusal asks, then delete again; the members deleted already stay deleted. |
+| 422 | `about:blank` | The namespace or the name in the path is not a DNS-1123 label. | Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit. |
+| 422 | `about:blank` | The query holds a parameter that the operation does not take. | Send only the parameters that the operation lists. |
+| 422 | `about:blank` | The force parameter is neither true nor false. | Send force=true, or leave it out. |
