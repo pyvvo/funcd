@@ -4,10 +4,12 @@ import (
 	"fmt"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // The known causes that only the local API raises (ADR-0330 Decision 2): a missing key, a condition that does not
-// hold, readBody's, and the KV routes' headers and ttl.
+// hold, readBody's, the KV routes' headers and ttl, a presigned URL's method and expiry, and the Secret routes' missing
+// key and body.
 var (
 	ErrKeyNotFound = fault.NewKnownCause(fault.NotFound, "local.key-not-found",
 		"The key does not exist, or it expired.",
@@ -45,4 +47,17 @@ var (
 	ErrIfMatchMalformed = fault.NewKnownCause(fault.Invalid, "local.if-match-malformed",
 		"The version is empty or holds a space, a quote or a control character, so If-Match is not one strong entity-tag.",
 		"Pass the version that a read or a write of the key returned.")
+	ErrSignMethodInvalid = fault.NewKnownCause(fault.Invalid, "local.sign-method-invalid",
+		"The method of the presigned URL is not GET, PUT or DELETE.",
+		"Sign GET, PUT or DELETE.")
+	ErrSignExpiryInvalid = fault.NewKnownCause(fault.Invalid, "local.sign-expiry-invalid",
+		fmt.Sprintf("The expiry of the presigned URL is not a duration such as 10m or 1h30m in whole seconds from %s to %s.",
+			v1.Duration(minSignExpiry), v1.Duration(maxSignExpiry)),
+		"Send an expiry in that range, or none for 15 minutes.")
+	ErrSecretKeyNotFound = fault.NewKnownCause(fault.NotFound, "local.secret-key-not-found",
+		"No Secret that the Function binds holds the key, or the key starts with FUNCD_.",
+		"Add the key to a Secret that the Function binds, or handle its absence.")
+	ErrSecretBodyInvalid = fault.NewKnownCause(fault.Invalid, "local.secret-body-invalid",
+		`The body of the write is not {"value": "<text>"}, as when the value is not a string.`,
+		"Write the value as a string.")
 )

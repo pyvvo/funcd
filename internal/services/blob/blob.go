@@ -84,7 +84,7 @@ func blobKey(prefix, object string) string {
 // action (s3::read | s3::write) on the bound BlobPrefix (a KindBucket resource with the prefix as its
 // sub-resource Path). The principal is the connection-scoped caller Function, whose spec.bindings.blob the
 // capability materializes as its blobBindings — so an unbound alias (or a non-owner write) is denied. A
-// deny maps to fault.Forbidden.
+// deny maps to fault.Forbidden, raised from the read or the write deny's known cause (ADR-0330).
 func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, action auth.Action, b Binding) error {
 	const op = "services.blob.authorize"
 	principal := &auth.EntityRef{Type: v1.KindFunction, Namespace: ns, Name: fn}
@@ -98,7 +98,11 @@ func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.Objec
 		return fault.Wrapf(err, fault.KindOf(err), op, "authorize %s on prefix %q/%q", action, b.Bucket, b.Prefix)
 	}
 	if !dec.Allowed {
-		return fault.Forbiddenf(op, "function %q is not authorized to %s prefix %q (bucket %q): %s", fn, action, b.Prefix, b.Bucket, dec.Reason)
+		deny := blob.ErrWriteDenied
+		if action == auth.ActionS3Read {
+			deny = blob.ErrReadDenied
+		}
+		return deny.Errorf(op, "function %q is not authorized to %s prefix %q (bucket %q): %s", fn, action, b.Prefix, b.Bucket, dec.Reason)
 	}
 	return nil
 }
@@ -116,7 +120,7 @@ func (f *Facade) resolveAuth(ctx context.Context, ns v1.NamespaceName, fn v1.Obj
 	}
 	sub, err := f.bucketFor(ns, string(b.Bucket))
 	if fault.KindOf(err) == fault.NotFound {
-		return Binding{}, nil, fault.NotFoundf(op, "binding %q references missing bucket %q", alias, b.Bucket)
+		return Binding{}, nil, blob.ErrBucketMissing.Errorf(op, "binding %q references missing bucket %q", alias, b.Bucket)
 	}
 	if err != nil {
 		return Binding{}, nil, fault.Wrapf(err, fault.KindOf(err), op, "look up bucket %q of binding %q", b.Bucket, alias)

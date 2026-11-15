@@ -108,7 +108,7 @@ func (q *quotedBucket) subjects(key string) []quota.Subject {
 
 func (q *quotedBucket) SignedURL(ctx context.Context, key string, opts SignOptions) (string, error) {
 	if opts.Method == SignPut && (q.capped("") || q.capped(prefixOf(key))) {
-		return "", fault.Forbiddenf("blob.Quoted.SignedURL", "a presigned PUT for %q cannot enforce the quota of %s", key, q.subject)
+		return "", ErrSignPutCapped.Errorf("blob.Quoted.SignedURL", "a presigned PUT for %q cannot enforce the quota of %s", key, q.subject)
 	}
 	return q.Bucket.SignedURL(ctx, key, opts)
 }

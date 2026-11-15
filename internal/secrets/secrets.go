@@ -73,6 +73,9 @@ func (r *Resolver) ResolveEnv(ctx context.Context, id auth.Identity, ns v1.Names
 			}
 		}
 		obj, gerr := r.store.Get(ctx, v1.KindSecret.GVK(), ns, v1.ObjectName(name))
+		if fault.KindOf(gerr) == fault.NotFound {
+			return nil, ErrSecretMissing.Wrapf(gerr, op, "get secret %q", name)
+		}
 		if gerr != nil {
 			return nil, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get secret %q", name)
 		}
@@ -81,7 +84,7 @@ func (r *Resolver) ResolveEnv(ctx context.Context, id auth.Identity, ns v1.Names
 			return nil, fault.Internalf(op, "object %s/%s is not a Secret", ns, name)
 		}
 		if k, p := EnvDataProblem(sec.Spec.Data); p != "" {
-			return nil, fault.Invalidf(op, "secret %q key %q %s; env delivery cannot carry binary data (base64-encode it)", name, k, p)
+			return nil, ErrValueNotText.Errorf(op, "secret %q key %q %s; env delivery cannot carry binary data (base64-encode it)", name, k, p)
 		}
 		for k, v := range sec.Spec.Data {
 			env[k] = string(v)
@@ -95,7 +98,8 @@ func (r *Resolver) authorizeRead(ctx context.Context, op string, id auth.Identit
 	return r.authorize(ctx, op, id, ns, name, auth.ActionSecretRead, auth.VerbGet, "read")
 }
 
-// authorize asks action on Secret name as id's workload principal; a deny is fault.Forbidden naming what was denied.
+// authorize asks action on Secret name as id's workload principal; a deny is fault.Forbidden naming what was denied,
+// raised from the read or the write deny's known cause (ADR-0330).
 func (r *Resolver) authorize(ctx context.Context, op string, id auth.Identity, ns v1.NamespaceName, name string, action auth.Action, verb auth.Verb, what string) error {
 	dec, err := r.authz.Authorize(ctx, auth.Request{Identity: id, Verb: verb, Kind: v1.KindSecret, Namespace: ns,
 		Action: action, Resource: &auth.EntityRef{Type: v1.KindSecret, Namespace: ns, Name: v1.ObjectName(name)}})
@@ -103,7 +107,11 @@ func (r *Resolver) authorize(ctx context.Context, op string, id auth.Identity, n
 		return fault.Wrapf(err, fault.Internal, op, "authorize")
 	}
 	if !dec.Allowed {
-		return fault.Forbiddenf(op, "%s secret %q in %q denied: %s", what, name, ns, dec.Reason)
+		deny := ErrWriteDenied
+		if action == auth.ActionSecretRead {
+			deny = ErrReadDenied
+		}
+		return deny.Errorf(op, "%s secret %q in %q denied: %s", what, name, ns, dec.Reason)
 	}
 	return nil
 }
