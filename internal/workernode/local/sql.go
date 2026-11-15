@@ -3,12 +3,13 @@ package local
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/quota"
 )
 
 // The SQL request bounds (ADR-0233 Decision 3).
@@ -23,9 +24,6 @@ const (
 	DependencySQL        = "sql"
 	ReasonEngineNotReady = "EngineNotReady"
 )
-
-// ErrEngineNotReady marks a SQL call or check whose database has no Ready engine.
-var ErrEngineNotReady = errors.New("the database's engine is not ready")
 
 // SQL is the function-facing SQL port the local API routes to; the services/sql.Facade satisfies it. As for KV, the
 // caller's namespace and function come from the sandbox's fixed Ref, never from the request (ADR-0233).
@@ -71,19 +69,29 @@ func SQLFacet(s SQL) Facet {
 
 // registerSQL adds POST /sql/{binding}/query and POST /sql/{binding}/execute, routed to s with the sandbox's fixed
 // namespace and function. Errors are RFC 9457: an unknown alias or a denial 403, a failed statement 400, an engine
-// that is not Ready 503, an oversized body or answer 413.
+// that is not Ready 503, an oversized body or answer 413, and a write the quota or the free-space floor refuses 507,
+// each endpoint with the known causes it declares (ADR-0330).
 func registerSQL(mux facetMux, caller Ref, s SQL, logger *slog.Logger) {
 	ns, fn := caller.Namespace, caller.Function
-	handle(mux, logger, "POST /sql/{binding}/query", nil, serveSQL(logger, caller, "query",
+	handle(mux, logger, "POST /sql/{binding}/query", sqlCauses(), serveSQL(logger, caller, "query",
 		func(r *http.Request, stmts []json.RawMessage) (queryResponse, error) {
 			res, err := s.Query(r.Context(), ns, fn, r.PathValue("binding"), stmts)
 			return queryResponse{res}, err
 		}))
-	handle(mux, logger, "POST /sql/{binding}/execute", nil, serveSQL(logger, caller, "execute",
+	handle(mux, logger, "POST /sql/{binding}/execute", slices.Concat(sqlCauses(), []*fault.KnownCause{ErrSQLWriteDenied,
+		quota.ErrFloorReached, quota.ErrExceeded, quota.ErrUnreadable}), serveSQL(logger, caller, "execute",
 		func(r *http.Request, stmts []json.RawMessage) (execResponse, error) {
 			res, err := s.Execute(r.Context(), ns, fn, r.PathValue("binding"), stmts)
 			return execResponse{res}, err
 		}))
+}
+
+// sqlCauses are the causes that both SQL endpoints answer: the body's, the binding's, the read's and the engine's.
+func sqlCauses() []*fault.KnownCause {
+	return []*fault.KnownCause{ErrBodyTooLarge, ErrBodyUnreadable, ErrSQLBodyMalformed, ErrSQLNoStatements,
+		ErrSQLTooManyStatements, ErrSQLStatementMalformed, ErrSQLParameterNotScalar, ErrSQLCallerMissing, ErrSQLNoBinding,
+		ErrSQLReadDenied, ErrEngineNotReady, ErrSQLEngineUnavailable, ErrSQLTimeout, ErrSQLAnswerTooLarge,
+		ErrSQLStatementFailed}
 }
 
 // serveSQL is the handler of one SQL verb: it reads and bounds the statements, runs them, and writes the results or
@@ -115,11 +123,12 @@ func readStatements(w http.ResponseWriter, r *http.Request, op string) ([]json.R
 	var req sqlRequest
 	switch uerr := json.Unmarshal(body, &req); {
 	case uerr != nil:
-		return nil, fault.Invalidf(op, "the body is not {\"statements\": [...]}: %v", uerr)
+		return nil, ErrSQLBodyMalformed.Errorf(op, "the body is not {\"statements\": [...]}: %v", uerr)
 	case len(req.Statements) == 0:
-		return nil, fault.Invalidf(op, "no statements")
+		return nil, ErrSQLNoStatements.Errorf(op, "no statements")
 	case len(req.Statements) > MaxSQLStatements:
-		return nil, fault.PayloadTooLargef(op, "%d statements exceed the limit of %d", len(req.Statements), MaxSQLStatements)
+		return nil, ErrSQLTooManyStatements.Errorf(op, "%d statements exceed the limit of %d", len(req.Statements),
+			MaxSQLStatements)
 	}
 	return req.Statements, nil
 }

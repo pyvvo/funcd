@@ -1,4 +1,1 @@
-/fetch/
-POST /invoke/{alias}
-POST /sql/{binding}/execute
-POST /sql/{binding}/query
+

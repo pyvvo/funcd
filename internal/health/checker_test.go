@@ -3,6 +3,7 @@ package health_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -292,7 +293,8 @@ func TestCheckerSQL(t *testing.T) {
 	require.Nil(t, check.Check(context.Background(), caller))
 	require.Equal(t, []string{"app"}, sql.calls)
 
-	sql.errs["app"] = fault.Wrapf(local.ErrEngineNotReady, fault.Unavailable, "sql.CheckRead", "the engine of SQLDatabase %q is not Ready", "todo-db")
+	sql.errs["app"] = local.ErrEngineNotReady.Wrapf(errors.New("the database's engine is not ready"), "sql.CheckRead",
+		"the engine of SQLDatabase %q is not Ready", "todo-db")
 	f.pdp.asked = nil
 	require.Equal(t, &local.DependencyReport{Kind: "sql", Binding: "app", Reason: "EngineNotReady",
 		Message: `the engine of SQLDatabase "todo-db" is not Ready: the database's engine is not ready`}, check.Check(context.Background(), caller))
