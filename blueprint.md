@@ -952,7 +952,7 @@ so every name here is a placeholder.
 
 ### Go best practices baked in
 
-> The source-code rulebook is **[ADR-0002](docs/adr/0002-source-code-conventions-and-patterns.md)** — constructor patterns, the `api/fault` error kernel + problem+json mapping, typed enums/IDs (no `any`-leakage), context-first, no globals, `slog`-only, the depguard import graph, and the no-mocks rule. The bullets below are the summary; the ADR is authoritative.
+> The source-code rulebook is **[ADR-0002](docs/adr/0002-source-code-conventions-and-patterns.md)** — constructor patterns, the `api/fault` error kernel + problem+json mapping (each error that the worker node's local API answers carries a `fault.KnownCause`, defined once and declared by its route, [ADR-0330](docs/adr/0330-each-local-api-route-declares-its-error-causes.md)), typed enums/IDs (no `any`-leakage), context-first, no globals, `slog`-only, the depguard import graph, and the no-mocks rule. The bullets below are the summary; the ADR is authoritative.
 
 - **Single module**, generated code committed; CI re-runs codegen and fails on diff (`git diff --exit-code`).
 - **Codegen tools pinned** in `go.mod` via the `tool` directive (buf) — reproducible generation, no "works on my machine". The API is **code-first via huma** (Go types → generated OpenAPI 3.1, served + committed; chi router; `api/fault` problem+json). The typed Go client is deferred to P-R/F18 — **[ADR-0005](docs/adr/0005-api-surface-code-first-huma.md)** (supersedes ADR-0004).
