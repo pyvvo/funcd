@@ -3,6 +3,10 @@
 A lightweight, modular, single-binary serverless platform for Linux — faasd-like,
 Kubernetes-inspired internals, designed for the agent era.
 
+**Docs: <https://pyvvo.github.io/funcd/>**: install funcdctl, run a first Function, and the guide to every kind. Agents
+read [llms.txt](https://pyvvo.github.io/funcd/llms.txt), or install the
+[funcd skill](https://github.com/pyvvo/funcd-skills).
+
 - **[blueprint.md](blueprint.md)** — the platform blueprint: purpose, components,
   architecture, resource model, repository structure. The single architectural reference.
 - **`docs/feat/`** — feature-version documents: the initial need and the high-level
