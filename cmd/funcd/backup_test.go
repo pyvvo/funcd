@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/auth/rbac"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
@@ -24,6 +26,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
 	"github.com/pyvvo/funcd/internal/platform/config"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/pkg/sdk"
@@ -114,6 +117,25 @@ func TestScenarioBackupOffByDefault(t *testing.T) {
 		require.Empty(t, entries, "nothing touches the target")
 		require.False(t, platformBackupStatus(t, r).Enabled)
 	})
+}
+
+// With no backup, the platform backup status answers its zero status even on a held platform: held false, and
+// interval and rpo 0s, as its fields' descriptions say. The hold status is the one that reads held: true.
+func TestBackupStatusOfAHeldPlatformWithoutBackup(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	n := newNode(t, nil, "")
+	require.NoError(t, hold.Write(n.dataDir, hold.Marker{Reason: "restore", Since: v1.NewTimestamp(time.Now())}))
+	c, _ := n.start(t)
+	ev, err := c.HoldStatus(ctx)
+	require.NoError(t, err)
+	require.True(t, ev.Held)
+	bs, err := c.PlatformBackup(ctx)
+	require.NoError(t, err)
+	require.False(t, bs.Enabled)
+	require.False(t, bs.Held)
+	require.Zero(t, bs.Interval)
+	require.Zero(t, bs.RPO)
 }
 
 // scenario: impossible-settings-refused — objectives.rpo 30m with interval 1h, or retention 2/0/0 with interval 3h:
