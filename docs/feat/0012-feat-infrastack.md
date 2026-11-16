@@ -40,7 +40,7 @@ document shows every part of the design.
 F139 comes first: a Job needs a runtime, and its runtimes are plugins. F137 builds on it, and F138 and F140 build on
 F137. F143 is independent of the Jobs. F142 builds on F139 and F140, and F141 on F137, F138, F142 and F143. F144
 builds on F141, and F145 on F141 and F144. F138 also needs F147, F148 and F149 from FEAT-0008, and F151 from
-FEAT-0007 builds on F140. F146 and F150 are ideas, not built in this epoch.
+FEAT-0007 builds on F140. F257 builds on F137. F146 and F150 are ideas, not built in this epoch.
 
 ```mermaid
 flowchart TB
@@ -61,6 +61,7 @@ flowchart TB
     F141 --> F144["F144 Stack outputs for Functions"]
     F141 --> F145["F145 Stacks in Apps"]
     F144 --> F145
+    F137 --> F257["F257 A Function starts a Job run"]
 ```
 
 ### This epoch
@@ -76,7 +77,8 @@ flowchart TB
 | F143 | **Infrastructure programs as artifacts**: a developer pushes a Pulumi program as an OCI artifact, with its provider plugins pinned in a lock file. funcdctl builds a YAML program, and the funcd-typescript toolchain builds a TypeScript one. The artifact carries its config schema, readable without pulling the program, so `funcdctl apply` and the platform refuse a wrong config before any run starts. **Why**: a run must download nothing, every input must be pinned so a run can be reproduced, and a typo must fail before it reaches the cloud. | [ADR-0031](../adr/0031-oci-artifact-distribution-oras.md) (OCI artifacts) · [ADR-0059](../adr/0059-contract-as-oci-metadata.md) (a contract readable from the manifest) · [ADR-0144](../adr/0144-bundling-in-the-language-toolchains.md) (bundling in the language toolchains) · [ADR-0218](../adr/0218-app-template-images-lock-and-push.md) (pinned images and `app.lock`) | — | idea |
 | F144 | **Stack outputs for Functions**: a stack's outputs reach Functions as a ConfigMap and a Secret that the stack owns, and a secret output never appears in a status or a log. `funcdctl infra outputs` shows them. **Why**: an app uses what its infrastructure created, such as a queue's URL or an access key, and nobody should copy those values by hand. | F141 · [ADR-0093](../adr/0093-function-configmap-consumption.md) (ConfigMap consumption) · [ADR-0057](../adr/0057-secret-injection-last-mile.md) (secret injection) | — | idea |
 | F145 | **Stacks in Apps**: an App declares its stacks next to its other parts. It counts a stack by what is applied, so a waiting approval never holds or fails its rollout, and a part that needs a stack's outputs waits for them. Its post-hooks run once its stacks are applied; its pre-hooks never wait for a stack. A dropped stack is destroyed only through an approved run, when its entry says so. **Why**: an App is the unit an owner installs, upgrades and removes, so its infrastructure must move with it, and a person's approval must never become an upgrade timeout. As for SQL (FEAT-0011/F130), the App section lives with the capability it declares. | F141 · F144 · [ADR-0199](../adr/0199-app-resource.md) (the App) · [ADR-0200](../adr/0200-app-revisions.md) (revisions) · [ADR-0213](../adr/0213-app-config-and-secret-declarations.md) (declared Secrets) · [ADR-0214](../adr/0214-app-hooks.md) (hooks) | — | idea |
-| F146 | **OpenTofu engine**: a second plugin runs OpenTofu programs on the same `InfraStack` kind. The design keeps it for later, so it is not built in this epoch; OpenTofu is under MPL-2.0, which needs the decider's approval. **Why**: teams with Terraform code would reuse it, as Pulumi teams reuse theirs. | F139 · F141 | — | idea |
+| F146 | **OpenTofu engine**: a second plugin runs OpenTofu programs on the same `InfraStack` kind. The design keeps it for later, so it is not built in this epoch; OpenTofu is under MPL-2.0, which needs the decider's approval. **Why**: teams with Terraform code would reuse it, as Pulumi teams reuse theirs, and a platform team could create funcd worker nodes from its OpenTofu programs (FEAT-0002/F253). | F139 · F141 | — | idea |
+| F257 | **A Function starts a Job run**: a Function's bindings name a Job it may start, and its code starts a run and gets the run's name back without waiting for it. The run checks the same rights as a person's `funcdctl job run`. **Why**: work such as provisioning a node (FEAT-0002/F253) or a backfill can start from an event or a schedule that a Function handles, not only from a person. | F137 · [ADR-0064](../adr/0064-fn-to-fn-rpc-links.md) (links, the shape a Function's call binding takes) | — | idea |
 
 ### In other epochs, needed here
 
