@@ -5,29 +5,17 @@ description: Declare a Lake over a Bucket prefix, bind it to a Function, and cre
 
 ## Usage
 
-A Lake is a SQL database whose tables a Function creates and queries with SQL, and whose data files funcd keeps in a
-Bucket. A Function queries a Lake that it binds through the Lake's gateway. See
-[how a Lake works](../../../platform/services/lake.md) for the concept.
+A [Lake](../../../platform/services/lake.md) is a SQL database whose data files funcd keeps in a Bucket. A Function
+that binds it creates and queries its tables with SQL through the Lake's gateway.
 
-The lake-quack example, in Python only, creates a table in a Lake and reads it back. Its Function, `lake-reader`,
-takes a SQL statement, runs it on the Lake, and returns the rows of the result.
-
-Install Git, curl and the [dev build of funcdctl](../../../get-started/install.md); the dev build includes the DuckDB
-engine that serves a Lake under `funcdctl dev`. Put Python 3.12 or later on the `PATH` as `python3`, with its standard
-`venv` module. The steps install the Python package `duckdb` from PyPI, so they need access to it.
-
-`funcdctl dev` starts a local platform, applies the resource files of one folder, and prints the URL of each Function,
-on the port that `--gport` sets. It runs the Function from its code in the folder, `src/main.py`, not from the
-manifest's `image`, the bundle that `funcdctl push` writes for a platform to run. It uses the `python3` that it finds
-first on the `PATH`, unless the environment variable `FUNCD_PYTHON` names another interpreter. It serves the Lake with
-its own DuckDB engine, a process on the local computer, and keeps the Lake's data in memory and in a temporary folder,
-so the table is lost when it stops; [Run it locally](#run-it-locally) explains how to keep it.
+The Python example lake-quack runs the SQL of each call on a Lake and returns the rows. Install Git, curl and the
+[dev build of funcdctl](../../../get-started/install.md), which includes the DuckDB engine that serves a Lake, and
+Python 3.12 or later as `python3`, with `venv`. The steps install the `duckdb` package from PyPI. Under `funcdctl dev`,
+the Lake's data is lost at stop, unless [`--persist`](#run-it-locally) keeps it.
 
 ### Python
 
-Clone the repository, create a virtual environment in its root folder, install the `duckdb` package in it, and start
-the example with the environment's `python3` first on the `PATH`. The engine of `funcdctl dev` runs DuckDB 2.0.0, so
-the steps install the same version of the package:
+The engine runs DuckDB 2.0.0, so install the same version of the package:
 
 ```console
 $ git clone https://github.com/pyvvo/funcd-python
@@ -37,8 +25,7 @@ $ .venv/bin/pip install duckdb==2.0.0
 $ PATH="$PWD/.venv/bin:$PATH" funcdctl dev examples/lake-quack --gport 8080
 ```
 
-The banner lists the service `lake` under SERVICES, with the Lake's name after `serves:`, and the Function's URL under
-FUNCTIONS. In another terminal, create the table `readings` in the Lake, then read it back:
+Once the banner lists the service `lake`, create a table from another terminal and read it back:
 
 ```console
 $ curl -s -X POST -H 'content-type: application/json' -d '{"sql":"CREATE TABLE lakehouse.readings AS SELECT * FROM (VALUES (1, 19), (2, 21)) AS t(sensor, celsius)"}' http://127.0.0.1:8080/function/lake-reader
@@ -47,101 +34,54 @@ $ curl -s -X POST -H 'content-type: application/json' -d '{"sql":"SELECT sensor,
 {"rows":[[1,19],[2,21]]}
 ```
 
-The first response holds the number of rows that the statement wrote, and the second holds the table's rows, each as a
-list of its columns' values: the Lake keeps the table between the two calls.
+Name a Lake's tables `lakehouse.<table>`, the catalog's name in every Lake: a table without that prefix lives in the
+engine's memory and is lost when it stops. Press Ctrl-C in the first terminal to stop.
 
-The engine attaches the Lake's catalog under the name `lakehouse`, which is the same for every Lake, so a statement
-names a table of the Lake as `lakehouse.<table>`. That name has nothing to do with the example's Bucket, which happens
-to be called `lakehouse` too. A table named without that prefix is created in the engine's own memory, outside the
-Lake, and is lost when the engine stops.
-
-Press Ctrl-C in the first terminal to stop the example.
-
-The example's folder holds four resource files, which `funcdctl dev` applies:
-
-- `secret.yaml` defines the Secret `lake-quack-token`. Its key `QUACK_TOKEN` holds the token that the Lake's engine
-  accepts; on a platform, the engine does not start without it. The Lake's gateway puts that token in place of the
-  caller's own token once it allows the caller, so no caller holds it.
-- `configmap.yaml` defines the ConfigMap `lake-engine-config`, which sets the engine's memory limit and its number of
-  threads with the keys `DUCKDB_MEMORY_LIMIT` and `DUCKDB_THREADS`. The engine of `funcdctl dev` does not apply them,
-  as [Run it locally](#run-it-locally) says.
-- `lake.yaml` defines the Lake `lake`. It declares the Bucket `lakehouse` by `name` under `spec.buckets`, so funcd
-  creates the Bucket, and the Lake becomes the owner of the Bucket's prefix `gold`. It declares the ConfigMap by `ref`
-  and the Secret by `name`, with the key that the engine reads, and binds all three under
-  [`spec.bindings`](spec.md#lakespecbindings). [`spec.location`](spec.md#lakespeclocation) names the prefix that
-  holds the Lake's files: the Lake must bind that prefix under `spec.bindings.blob`, and must own it. `spec.ingress`
-  exposes the Lake to clients outside funcd, as [Access](#access) explains; the first example does not use it.
-- `consumer.yaml` defines the Function `lake-reader`. It declares the Lake by `ref` under
-  [`spec.lakes`](../../workloads/function/spec.md#functionspeclakes), and binds it under
-  [`spec.bindings.lake`](../../workloads/function/spec.md#functionspecbindingslake) with the alias `lake`. The binding
-  lets the Function query the Lake, and funcd starts the Function's worker only once the Lake is `Ready`.
-
-`funcdctl dev` skips the folder's `funcdconfig.yaml`, a configuration of the funcd server that the example uses on a
-platform.
-
-The Lake `lake`, in `lake.yaml`, without the file's opening comment
-([the complete file](https://github.com/pyvvo/funcd-python/blob/main/examples/lake-quack/lake.yaml)):
+The Lake, in `lake.yaml` ([complete file](https://github.com/pyvvo/funcd-python/blob/main/examples/lake-quack/lake.yaml)),
+declares the Bucket `lakehouse` by `name`, so funcd creates it and the Lake owns its prefix `gold`.
+[`spec.location`](spec.md#lakespeclocation) names that prefix, which the Lake must bind and own. It also binds a
+ConfigMap of engine settings and the Secret `lake-quack-token`, whose `QUACK_TOKEN` the engine needs on a platform; the
+gateway puts that token in place of an allowed caller's, so no caller holds it:
 
 ::include[../../../../../_repos/funcd-python/examples/lake-quack/lake.yaml#lake]
 
-The Function `lake-reader`, in `consumer.yaml`, without the file's opening comment
-([the complete file](https://github.com/pyvvo/funcd-python/blob/main/examples/lake-quack/consumer.yaml)):
+The Function, in `consumer.yaml`
+([complete file](https://github.com/pyvvo/funcd-python/blob/main/examples/lake-quack/consumer.yaml)), declares the Lake
+under [`spec.lakes`](../../workloads/function/spec.md#functionspeclakes) and binds it under
+[`spec.bindings.lake`](../../workloads/function/spec.md#functionspecbindingslake); funcd starts its worker once the Lake
+is `Ready`:
 
 ::include[../../../../../_repos/funcd-python/examples/lake-quack/consumer.yaml#manifest]
 
-For each Lake binding, funcd gives the Function's worker two environment variables, named after the alias:
-`FUNCD_LAKE_LAKE_URL` holds the address of the Lake's gateway, and `FUNCD_LAKE_LAKE_TOKEN` holds a token of the
-Function's own, which the gateway checks. A Python handler receives its context as its first argument, named `context`
-in the example, and [`context.lake.get("lake")`](spec.md#handler-api) returns the same two values, as `url` and
-`token`. The handler opens a DuckDB database in memory, loads DuckDB's `quack` extension, and runs the call's SQL on
-the Lake with `quack_query`, which sends the statement and the token to the gateway and returns the rows.
-
-The handler needs the `duckdb` package. On a platform, the Function's bundle carries it, with the `quack` extension.
-Under `funcdctl dev`, the virtual environment holds it, and `funcdctl dev` points the handler at the extensions of its
-engine through `DUCKDB_EXTENSION_DIRECTORY`.
-
-In this excerpt of `src/main.py`
-([the complete file](https://github.com/pyvvo/funcd-python/blob/main/examples/lake-quack/src/main.py)), `FuncInput`
-and `FuncOutput` describe the call's data and its response, and `_quack_uri` adds the `quack://` scheme to the
-gateway's address:
+The worker gets the gateway's address and a token of its own in `FUNCD_LAKE_<ALIAS>_URL` and
+`FUNCD_LAKE_<ALIAS>_TOKEN`, which [`context.lake.get("lake")`](spec.md#handler-api) also returns. The handler sends the
+SQL through DuckDB's `quack` extension; on a platform the Function's bundle carries `duckdb` with it, and under
+`funcdctl dev` the virtual environment does. An excerpt of
+[`src/main.py`](https://github.com/pyvvo/funcd-python/blob/main/examples/lake-quack/src/main.py):
 
 ::include[../../../../../_repos/funcd-python/examples/lake-quack/src/main.py#handler]
 
-A statement that the engine cannot run raises an error in the handler. The example's handler does not catch it, so
-the call to the Function fails, and its response holds the engine's message.
+A statement that the engine rejects raises an error; uncaught, it fails the call with the engine's message.
 
 ## Access
 
-A Function needs no role assignment to query the Lakes that it binds (`lake::query`). Each entry of
-`spec.bindings.lake` lets the Function query that Lake, and a binding can name only a Lake that the Function declares
-under `spec.lakes`. The Lake's gateway checks the caller when a session opens: it finds the caller from the token that
-the session's first request carries, refuses a caller from another namespace, and asks Cedar whether the caller may
-perform `lake::query` on the Lake. It forwards the later requests of the session to the engine without a new check.
-The [Security](../../../platform/security-and-networking/security.md) page explains where funcd asks Cedar.
-
-Cedar decides for the Lake as a whole, not for its tables or its statements: a caller that may query a Lake can run
-any statement that the engine accepts, a statement that writes included, as the first example does.
-
-Any other caller needs a role, or a permit in a Policy that an operator writes. A client outside funcd queries a Lake
-as an [Identity](../../security-and-networking/security/spec.md#identityspec), with the token that funcd writes into
-the Identity's Secret under the key `lakeToken`. It reaches the Lake's gateway through the edge, at the address that
-the Lake's [`spec.ingress`](spec.md#lakespecingress) exposes: `/lake/<name>` by default, or `/` when `host` is set,
-and only while `enabled` is `true`. The smallest built-in role that allows a query is `Lake Query Reader`. Its scope
-has the kind `Lake` and the Lake's name, or the kind `Namespace` for every Lake of the namespace. This RolesAssignment
-gives the Identity `analyst` the role on the Lake `lake` of the first example:
+- A Function queries the Lakes that it binds (`lake::query`) with no role; a binding names only a Lake that the
+  Function declares.
+- The gateway checks a caller when a session opens: it reads the caller's token, refuses another namespace, and asks
+  Cedar for `lake::query`. It passes the session's later requests to the engine without a new check.
+- Cedar decides for the whole Lake: an allowed caller can run any statement, writes included.
+- A client outside funcd queries as an [Identity](../../security-and-networking/security/spec.md#identityspec), with the
+  token in its Secret's `lakeToken`, through the edge at the address of
+  [`spec.ingress`](spec.md#lakespecingress), `/lake/<name>` by default or `/` with a `host`, while `enabled` is `true`.
+  It needs a role:
+  [`Lake Query Reader`](../../security-and-networking/security/spec.md#rolesassignmentspecassignmentsroleref) or
+  `Lake Contributor`, scoped to a `Lake` or the `Namespace`. `Reader`, `Contributor` and `Owner` do not cover a Lake.
 
 ::include[../../../../../api/types/v1alpha1/examples/lake/reader-role.yaml#rolesassignment]
 
-The built-in role `Lake Contributor` allows the same action, `lake::query`, and a Role that an operator defines can
-grant it too. The built-in roles `Reader`, `Contributor` and `Owner` cover Bucket and KV data only, not a Lake. The
-Security reference [lists the built-in
-roles](../../security-and-networking/security/spec.md#rolesassignmentspecassignmentsroleref) and [explains how
-assignments pair each role with a scope](../../security-and-networking/security/spec.md#rolesassignmentspecassignments).
-
-funcd applies the binding rule as a built-in policy in every namespace, so nothing needs to be written or installed.
-A [Policy](../../security-and-networking/security/index.md#write-a-policy) that an operator writes applies beside it:
-it can permit a caller, and a `forbid` statement in it denies a caller that a binding allows. In Cedar, the built-in
-policy reads:
+funcd applies the binding rule as a built-in policy in every namespace. An operator's
+[Policy](../../security-and-networking/security/index.md#write-a-policy) can permit a caller, and its `forbid` denies
+even a bound one:
 
 ```cedar title="Built-in Lake policy"
 @id("lake-query-binding")
@@ -149,76 +89,50 @@ permit(principal, action == Action::"lake::query", resource)
   when { principal has lakeBindings && principal.lakeBindings.contains(resource) };
 ```
 
-When Cedar denies the caller, the gateway answers the session's first request with the HTTP status 403, and the
-engine never sees that request. In the first example's handler, such a query raises an error that reads
-`IO Error: Failed to send message: Forbidden`. Bind the Lake, or give the caller a role, as above.
+A denied session's first request gets 403 and never reaches the engine; in the example's handler, it raises
+`IO Error: Failed to send message: Forbidden`.
 
-The Lake's engine has an identity of its own, the Lake. It reads the Bucket prefixes that the Lake binds under
-`spec.bindings.blob`, and writes only a prefix that the Lake owns. funcd reads each Secret that the Lake binds as the
-Lake, so a Policy that forbids that read holds the Lake in `Pending`, with the reason `BindingResolveFailed`.
+The Lake's engine acts as the Lake: it reads the prefixes that the Lake binds, and writes only the one that it owns.
+funcd reads the Lake's Secrets as the Lake, so a Policy that forbids that read holds the Lake in `Pending` with
+`BindingResolveFailed`.
 
 ## Limits and quotas
 
-- A Lake has no quota of its own. Its files count toward the quota of the prefix that `spec.location` names, and of
-  its Bucket, as the [Bucket](../bucket/index.md#limits-and-quotas) page describes. A statement that needs a new file
-  past that quota fails. Queries, drops and catalog saves go on, because the catalog is kept outside the Bucket.
-- The catalog can grow to `lake.catalogMaxSize` in funcd's configuration: 256 MiB by default, or
-  `s3gateway.maxUploadBytes` when that is smaller. A save past that size fails, and the Lake shows the condition
-  `CatalogSaved` with the status `False`, as [Status](#status) explains.
-- [`spec.resources`](spec.md#lakespecresources) caps the engine's CPU and memory, on a platform whose runtime is
-  containerd.
-- A ConfigMap or a Secret that the Lake binds sets DuckDB's own limits with three keys: `DUCKDB_MEMORY_LIMIT`,
-  `DUCKDB_THREADS` and `DUCKDB_MAX_TEMP_DIRECTORY_SIZE`, the size that the engine may spill to disk. funcd leaves out
-  `DUCKDB_EXTENSION_DIRECTORY`, and the engine refuses any other key that starts with `DUCKDB_`, as [Status](#status)
-  describes.
-- On a platform, each running engine gets a scratch area on the filesystem of funcd's data directory, for a copy of
-  its catalog and for its spills. Its size is `lake.scratchSize`, which defaults to 1 GiB, or to twice
-  `lake.catalogMaxSize` plus 512 MiB when that is larger. A Lake whose scratch does not fit stays `Pending`, with the
-  reason `ScratchSpaceLacking`.
-
-[funcd's configuration](../../running-funcd/spec.md#funcdconfigyaml) describes the `lake.` settings, and the Lake's
-[Spec](spec.md) tab gives the range of each field.
+- A Lake's files count toward the quota of its location's prefix and Bucket; a statement that needs a new file past it
+  fails, while queries, drops and catalog saves go on.
+- The catalog grows up to [`lake.catalogMaxSize`](../../running-funcd/spec.md#funcdconfigyaml), 256 MiB by default or
+  `s3gateway.maxUploadBytes` if smaller; a save past it fails and sets `CatalogSaved` to `False`.
+- [`spec.resources`](spec.md#lakespecresources) caps the engine's CPU and memory on containerd. A bound ConfigMap or
+  Secret sets `DUCKDB_MEMORY_LIMIT`, `DUCKDB_THREADS` and `DUCKDB_MAX_TEMP_DIRECTORY_SIZE`; the engine refuses any
+  other `DUCKDB_` key.
+- On a platform, each engine gets a scratch area of `lake.scratchSize`, by default 1 GiB or twice
+  `lake.catalogMaxSize` plus 512 MiB, whichever is larger; when it does not fit, the Lake waits with
+  `ScratchSpaceLacking`.
 
 ## Data storage
 
-A Lake keeps its tables in two parts:
+A Lake keeps its tables in Parquet files under its location's prefix, and its catalog in a DuckDB file of funcd's
+catalog store, outside every Bucket, where no listing shows it and no quota counts it. DuckLake keeps the rows of a
+small write in the catalog, as in the example. Both live in funcd's [blob store](../bucket/index.md#data-storage), and
+the engine reaches the files through the S3 gateway. A Lake located where an earlier one was, on a prefix that it owns,
+finds its files and catalog.
 
-- Its files, Parquet files that the engine writes, are objects under the prefix that `spec.location` names.
-- Its catalog, which records the tables and their files, is a DuckDB file. funcd keeps it in its catalog store, outside
-  every Bucket, under the same location: a listing of the Bucket does not show it, and the prefix's quota does not
-  count it.
+The engine saves its copy of the catalog to the store:
 
-DuckLake, the table format that the engine uses, keeps the rows of a small write in the catalog instead of a file, as
-it does with the two rows of the first example. Such rows count toward `lake.catalogMaxSize`, not toward the prefix's
-quota.
+- By default, each answer waits for a save that covers it, so an answered statement survives a crash; the wait grows
+  with the catalog.
+- With `lake.saveInterval`, from 500ms to 1h, answers come at once and saves at that interval; a crash can lose the
+  statements committed in one interval and during the two saves around it.
 
-funcd keeps both parts in its blob store, with the objects of the Buckets, so the Bucket page's
-[Data storage](../bucket/index.md#data-storage) says where they are and whether they survive a restart. A Lake located
-where an earlier Lake was, on a prefix that it owns, finds that Lake's files and catalog. The engine reads and writes
-the files through funcd's S3 gateway, which the operator turns on with `s3gateway.enabled: true`.
-
-The engine works on a copy of the catalog, and saves the copy to the catalog store:
-
-- When `lake.saveInterval` is not set, the default, each answer waits until a save covers the statements committed
-  before it. A statement whose answer arrived therefore survives a crash of the engine. A save copies and uploads the
-  whole catalog, so the wait grows with the catalog.
-- When `lake.saveInterval` is set, from 500ms to 1h, the engine answers at once and saves at that interval. A crash can
-  then lose the statements committed in one interval and during the two saves around it.
-
-While saves fail, each answer that waits for a save fails, and so does each request after the unsaved statement,
-until a save succeeds.
-
-A Backup copies a Lake as a member of its own, its files and its catalog together. A BackupSchedule names the Lake
-under `scope.lakes`, and one that names the Lake's Bucket copies the Lake too, as a separate member. The
-[Disaster recovery](../../../platform/disaster-recovery.md) page explains backups and restores, and its
-[Spec](../../disaster-recovery/spec.md#backupschedulespecscope) tab describes the scope.
+While saves fail, the answers that wait for one fail, and so does each later request, until a save succeeds. A Backup
+copies a Lake, files and catalog together; a BackupSchedule names it under
+[`scope.lakes`](../../disaster-recovery/spec.md#backupschedulespecscope).
 
 ## Status
 
-`funcdctl get lake lake -n default -o json` prints the phase and the conditions of the first example's Lake under
-`status`, and `funcdctl get function lake-reader -n default -o json` those of its Function. With `funcdctl dev`, add
-the `--server` and `--token` flags that its banner prints. A Lake's `status.endpoint` holds the address of its gateway
-while it is `Ready`.
+`funcdctl get lake lake -n default -o json` and `funcdctl get function lake-reader -n default -o json` print the
+status; with `funcdctl dev`, add the `--server` and `--token` flags of its banner. While `Ready`, `status.endpoint`
+holds the gateway's address.
 
 | Phase or condition | Reason | Meaning |
 | --- | --- | --- |
@@ -241,36 +155,24 @@ while it is `Ready`.
 
 ## Changes and deletion
 
-- On a platform, funcd replaces the Lake's engine when a setting that the engine starts with changes:
-  `spec.location`, `spec.resources`, or a value that the engine gets from the ConfigMaps and Secrets that the Lake
-  binds. funcd sees a changed value of a ConfigMap or a Secret within `runtime.supervisionPeriod`, 10 seconds by
-  default. It also replaces the engine for a new S3 key pair, between 80% and 90% of `s3gateway.keyRotationPeriod`,
-  24 hours by default. A change to `spec.ingress`, to a quota or to a `deletion` setting keeps the running engine.
-- During a replacement, the old engine lets the running queries end for up to 5 seconds while it goes on saving,
-  cancels the queries that still run, and saves its catalog a last time. Until the new engine answers, the Lake is
-  `Pending` with the reason `EngineNotReady`, and its gateway refuses each request. Once the Lake is `Ready`, send a
-  refused query or a cancelled read again. Before you send a cancelled write again, check whether it applied: the last
-  save can keep a write whose answer never arrived.
-- funcd does not refuse to delete a Lake that holds tables or that a Function binds. The Lake's engine stops. A
-  Function that binds the Lake keeps its worker, its `RevisionReady` condition gets the reason `LakeNotReady`, and
-  the gateway refuses its queries. While a Function binds the Lake, its gateway keeps the address, so a Lake applied
-  again under the same name serves the Function at the same address.
-- A Function can also declare a Lake by `name` under `spec.lakes`, in place of a `ref`. funcd then creates the Lake
-  with the Function, and deletes it with the Function.
+- On a platform, funcd replaces the engine when `spec.location`, `spec.resources` or a value from a bound ConfigMap or
+  Secret changes, seen within `runtime.supervisionPeriod`, and for a new S3 key pair, between 80% and 90% of
+  `s3gateway.keyRotationPeriod`. Other changes keep the engine.
+- During a replacement, running queries get up to 5 seconds, the rest are cancelled, and the catalog is saved; the
+  Lake is `Pending` and its gateway refuses requests. Once it is `Ready`, send a refused query or a cancelled read
+  again, but check first whether a cancelled write applied.
+- Deleting a Lake is not refused, even with tables. Its engine stops, and the Functions that bind it keep their worker
+  with `LakeNotReady` on `RevisionReady`; a Lake applied again under the same name serves them at the same address.
+- A Function that declares a Lake by `name` creates and deletes it with itself.
 
-The `deletion` setting of the Lake's entry under `spec.buckets` decides what happens to a Bucket that the Lake declares
-by `name`:
+For a Bucket that the Lake declares by `name`, the entry's `deletion` decides:
 
-- With `retain`, the default, the Bucket stays, with the Lake's files and its catalog. To use them again, apply a Lake
-  of the same name at the same location, which declares the Bucket by `ref`. The owner of the prefix is the Lake's
-  name, so a Lake of another name waits in `Pending` with the reason `PrefixNotOwned`. A Lake of the same name that
-  declares the Bucket by `name` waits with the reason `StoreNotOwned`, since the Bucket still belongs to the deleted
-  Lake. funcd refuses a request to delete the Bucket, or to remove the prefix from it, while the prefix holds objects
-  or a Lake's catalog. Through the S3 gateway, that catalog is the object `<bucket>/<prefix>/_ducklake/catalog.db` of
-  the S3 bucket `funcd.lake-catalogs`, such as `lakehouse/gold/_ducklake/catalog.db`. Once no Lake is located there, a
-  principal that may write the prefix can delete that object.
-- With `delete`, funcd deletes the Bucket after the Lake, with its objects and the catalog of each Lake located on its
-  prefixes.
+- `retain`, the default, keeps the Bucket, the files and the catalog. Reuse them with a Lake of the same name at the
+  same location that declares the Bucket by `ref`; another name waits with `PrefixNotOwned`, and a `name` declaration
+  with `StoreNotOwned`. funcd refuses to delete the Bucket or the prefix while it holds objects or a catalog, the S3
+  object `<bucket>/<prefix>/_ducklake/catalog.db` of `funcd.lake-catalogs`, which a writer of the prefix can delete
+  once no Lake is there.
+- `delete` deletes the Bucket after the Lake, with its objects and catalogs.
 
 ## CLI errors
 
@@ -283,29 +185,17 @@ by `name`:
 
 ## Run it locally
 
-`funcdctl dev` serves each Lake of its folder with the DuckDB engine that the release dev build of funcdctl contains,
-which it starts as a process of the local user. A funcdctl built from source without that engine leaves each Lake
-`Pending`, with the reason `LakeEngineNotBundled`, and logs
-`lake engine not embedded in this dev build — lake unavailable`: install the
-[dev build of funcdctl](../../../get-started/install.md) instead.
+`funcdctl dev` serves each Lake with the DuckDB engine of the release dev build, as a local process. A funcdctl built
+from source without it leaves each Lake `Pending` with `LakeEngineNotBundled`. Its engine differs from a platform's:
 
-That engine differs from a platform's engine:
+- It keeps the catalog in a local file and answers each statement at once, without waiting for a save.
+- It applies none of the `DUCKDB_` keys.
+- It does not confine queries, which can reach the local computer's files, and runs with no sandbox or limits.
 
-- It writes the Lake's files through the S3 gateway of `funcdctl dev`, into the Lake's prefix, and keeps the catalog in
-  a local file. It answers each statement at once, without waiting for a save.
-- It applies none of the `DUCKDB_` keys, so the first example's engine runs with DuckDB's default memory limit and
-  number of threads, not with the ConfigMap's.
-- It does not confine queries: a query can reach the files of the local computer, which a platform's engine refuses.
-  It runs without a sandbox and without a limit on its CPU or memory.
-
-The catalog's file is in a temporary folder, so the Lake's tables are lost when `funcdctl dev` stops. With
-`--persist`, `funcdctl dev` keeps each Lake's catalog in the `lake` folder of `.funcd-dev` in the current folder, or of
-the folder that `--persist-to` names, and the Lake's files with the blob data there. The next run with `--persist`
-finds the tables again. Deleting that folder after `funcdctl dev` stops clears all the state that the local platform
-stored: its resources and its KV, blob, SQL, lake and volume data. The [reference of
-`funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags.
+The catalog is lost at stop. With [`--persist`](../../tools/funcdctl/spec.md#funcdctl-dev), it is kept in
+`.funcd-dev/lake` and the files with the blob data, so the next run finds the tables.
 
 ## Examples
 
-- [lake-quack in Python](https://github.com/pyvvo/funcd-python/tree/main/examples/lake-quack): a Lake that keeps its
-  files in a Bucket that it declares, and a Function that runs SQL on it.
+- [lake-quack in Python](https://github.com/pyvvo/funcd-python/tree/main/examples/lake-quack): a Lake over a Bucket
+  that it declares, and a Function that runs SQL on it.

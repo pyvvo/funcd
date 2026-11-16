@@ -24,10 +24,13 @@ paths:
   access, waits, expected results, retry steps and relevant data-loss behavior. It also keeps every condition and
   qualifier: a deadline still says that only its expiry fails the call, a wait says what it waits for, and words such
   as only, can, unless and if keep their scope, so that an option never reads as a restriction.
-- A rewrite keeps every useful concept and task of the page it replaces, so that a human or an LLM still learns how
-  to use the feature: check its coverage concept by concept against the earlier page, not by word count or
-  unchanged commands. A concept leaves Usage only as part of a full reference catalogue, which goes to the API
-  Reference.
+- A rewrite keeps every useful concept and task of the page it replaces. Record where each remains or the exact
+  Spec or API Reference section that explains it now, and read that destination. Check coverage rather than word
+  count or unchanged commands. Keep the short explanation when no reference explains the fact.
+- Assume knowledge of the programming language. Keep language names in the tabs, and remove prose that teaches
+  ordinary imports, types, promises, awaiting a call or reading a field. Explain the funcd-specific choice or
+  consequence, and link method contracts to Spec. In a wording-only rewrite, preserve existing example code,
+  complete manifests, imports, types, commands, outputs and language tabs. Shorten the surrounding prose.
 - In Develop Usage pages, keep Status in a table of phases or conditions, reasons and meanings. Keep local CLI
   errors in a table with the message or cause and the action to take. Comprehensive operation, request/response
   and error catalogues belong to the separate API Reference, generated from authoritative schemas and operation
@@ -35,10 +38,11 @@ paths:
   server-validation failures remain API errors when a CLI prints them.
 - State a default together with its exceptions, and keep both the same wherever the page mentions them.
 - Give every "only", "exactly one" or "never" its scope, such as the same key or the same version.
-- Label an excerpt as an excerpt, explain each name it uses but does not define, and link the complete file beside
-  it.
-- Show the code that explains the current task. When a file also holds unrelated operations, include a tested region
-  for the task and link the complete file, instead of making the reader scan the whole file.
+- Label an excerpt and link its complete file. Explain an omitted alias or setting only when the task depends on
+  it and its meaning is not clear from the example. Do not add a prose glossary for ordinary variables, input/output
+  types or language syntax.
+- For a new example, choose tested code for the task. A tested region can leave unrelated operations in the linked
+  complete file. In a wording-only rewrite, preserve the existing included code rather than choosing a shorter region.
 - Use conventional technical terms: a method returns a value, a response contains a field, a caller has
   permission. Repeat the name of an operation or a setting when a pronoun could refer to more than one.
 - Keep what a field does apart from what its reference page documents: a field such as `roleRef` names one role, and
@@ -63,3 +67,9 @@ paths:
   them or starts fresh, so that it never clones into a clone or reuses a stopped process.
 - Diagrams are `.drawio.svg` files in `docs/guide/assets/`, linked with a relative path. A diagram never repeats a path
   that another diagram already shows.
+- In Develop Usage, avoid a file-by-file inventory when the complete manifests and linked example already show
+  those files. State a necessary dependency or relationship once where the reader needs it.
+- Introduce an example with a short label, such as "The Sensor, in `drop-sensor.yaml`:". The example shows its own
+  names, values and output; keep only what it cannot show, such as a wait, a rule or a consequence.
+- Do not say what the Spec, the Platform pages or the API Reference cover. Put the link on the term where the page
+  uses it, such as a field, a setting, a command or a role.
