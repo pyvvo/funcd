@@ -5,42 +5,28 @@ description: Give a Function settings that are not secret through a ConfigMap, a
 
 ## Usage
 
-A ConfigMap holds settings that are not secret, such as a mode or a log level, as keys with string values. Each
-[worker](../../../platform/workloads/index.md#runtime) of a Function that binds a ConfigMap, a process that runs the
-Function's code, gets the ConfigMap's keys as environment variables when it starts. See
-[how workloads use their configuration](../../../platform/workloads/configuration.md) for the concept.
+A [ConfigMap](../../../platform/workloads/configuration.md) holds settings that are not secret as string keys. Each
+[worker](../../../platform/workloads/index.md#runtime) of a Function that binds it gets its keys as environment
+variables when it starts. A Function declares a ConfigMap under
+[`spec.configMaps`](../function/spec.md#functionspecconfigmaps) and binds it under
+[`spec.bindings.config`](../function/spec.md#functionspecbindings); a binding names only a ConfigMap that its Function,
+or its App, declares.
 
-The env-echo example returns one setting from a ConfigMap and two values from a Secret, a resource that holds values
-that must stay private. A call returns `"config":"prod"`, the value that the ConfigMap sets for the key `APP_MODE`.
-
-Install the [dev build of funcdctl](../../../get-started/install.md), Git and curl, and put Node.js on the `PATH`.
-
-The Function declares the ConfigMap by `ref` under [`spec.configMaps`](../function/spec.md#functionspecconfigmaps),
-since the ConfigMap is a separate resource, and binds it under
-[`spec.bindings.config`](../function/spec.md#functionspecbindings). A binding can name only a ConfigMap that its
-Function declares, or, for a Function of an App, one that the App declares. The [Spec](spec.md) tab describes a
-ConfigMap's `data`.
-
-`funcdctl dev` starts a local platform, runs the resource files of one folder on it, and prints the URL of each
-Function, on the port that `--gport` sets. It runs the Function from its build in the folder, `env-echo.mjs`, which
-the repository already holds, not from the manifest's `image`, the bundle that `funcdctl push` writes for a platform
-to run. The folder's two Route files and its funcd server configuration are not used here, and `funcdctl dev` ignores
-the server configuration.
+Install the [dev build of funcdctl](../../../get-started/install.md), Git and curl, and put Node.js on the `PATH`. The
+env-echo example returns one ConfigMap setting and two Secret values.
 
 ### TypeScript
 
-The ConfigMap `app-config` sets `APP_MODE` to `prod` and `SHARED` to `from-config`:
+The ConfigMap, in `configmap.yaml`:
 
 ::include[../../../../../_repos/funcd-typescript/examples/env-echo/configmap.yaml]
 
-The Function `env-echo` declares and binds the ConfigMap `app-config`. It also declares the Secret
-[`app-secret`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/env-echo/secret.yaml), which holds
-`API_KEY` and `SHARED`, under `spec.secrets` with the keys that its code reads, and binds it under
-`spec.bindings.secret`:
+The Function, in `function.yaml`, also binds the Secret
+[`app-secret`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/env-echo/secret.yaml):
 
 ::include[../../../../../_repos/funcd-typescript/examples/env-echo/function.yaml]
 
-Clone the repository and start the example from its root folder:
+Start the example:
 
 ```console
 $ git clone https://github.com/pyvvo/funcd-typescript
@@ -48,88 +34,65 @@ $ cd funcd-typescript
 $ funcdctl dev examples/env-echo --gport 8080
 ```
 
-In another terminal, call the Function. It takes no input, so the request has no body:
+In another terminal, call it:
 
 ```console
 $ curl -s -X POST http://127.0.0.1:8080/function/env-echo
 {"config":"prod","secret":"s3cr3t","shared":"from-secret"}
 ```
 
-The handler reads `APP_MODE` from its environment as `process.env.APP_MODE`, and reads `API_KEY` and `SHARED` through
+The handler reads `APP_MODE` from its environment, and the Secret through
 [`ctx.secret`](../../services/secrets/index.md):
 
 ::include[../../../../../_repos/funcd-typescript/examples/env-echo/src/main.ts]
 
-`config` is the ConfigMap's `APP_MODE`, and `secret` is the Secret's `API_KEY`. `shared` is the Secret's `SHARED`,
-`from-secret`: the ConfigMap's `SHARED` does not reach the environment, because the bound Secret also holds that key.
-
-Press Ctrl-C in the first terminal to stop the example.
+`shared` comes from the Secret: a key that a bound Secret also holds does not reach the environment. Press Ctrl-C in
+the first terminal to stop.
 
 ## Choose a ConfigMap's keys
 
-Each key of a ConfigMap is the name of an environment variable: ASCII letters, digits and `_`, not starting with a
-digit. `funcdctl apply` refuses a ConfigMap with any other key. A worker gets every key of the ConfigMaps that its
-Function binds, with three exceptions:
+A key is an environment variable name: ASCII letters, digits and `_`, not starting with a digit. A worker gets every
+key of its bound ConfigMaps, except:
 
-- A key that starts with `FUNCD_` is left out, because funcd reserves that prefix for the variables that it sets
-  itself. funcd logs a warning for each key that it leaves out this way.
-- A key that a bound Secret also holds is left out. The handler reads the Secret's value through `ctx.secret`
-  instead, as the first example does with `SHARED`.
-- While funcd's [S3 gateway](../../services/bucket/index.md) runs, a Function that binds a Bucket gets the
-  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` that funcd issues it, in place of a ConfigMap's values for these
-  two keys.
+- a key that starts with `FUNCD_`, which funcd reserves, with a warning in its log;
+- a key that a bound Secret also holds, which the handler reads through `ctx.secret`;
+- `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` of a Function that binds a Bucket while the
+  [S3 gateway](../../services/bucket/index.md) runs, which funcd sets itself.
 
 ## Read a setting through ctx.config
 
-A handler can read its settings through `ctx.config`, the configuration client of the context that every handler
-receives, instead of reading its environment. `ctx.config.get(key)` returns the key's value when a bound ConfigMap
-holds the key and no exception of [Choose a ConfigMap's keys](#choose-a-configmaps-keys) leaves it out. For any other
-key, such as `PATH`, it returns `undefined` in TypeScript and `None` in Python. `ctx.config.list()` returns the keys
-that `get` returns a value for, sorted.
-
-Both methods read the worker's environment and do not call funcd, so in TypeScript `get` returns the value itself,
-not a Promise as `ctx.secret.get` does. The [Spec](spec.md#handler-api) tab lists both methods in each language.
+[`ctx.config.get(key)`](spec.md#handler-api) returns a key that a bound ConfigMap delivers, and `undefined` or `None`
+for any other key, such as `PATH`; `ctx.config.list()` returns those keys, sorted. Both read the worker's environment,
+so in TypeScript `get` returns the value itself, not a Promise.
 
 ## Define the settings in the Function
 
-A Function can define a ConfigMap of its own under `spec.configMaps`: an entry with a `name` of at most 52 characters
-and its `data`, in place of a `ref`. The Function `billing` defines and binds the ConfigMap `billing-settings`, so its
-workers get `CURRENCY` set to `EUR` and `INVOICE_DAY` set to `1`:
+An entry of `spec.configMaps` with a `name` of at most 52 characters and its `data` defines a ConfigMap of the
+Function's own:
 
 ::include[../../../../../api/types/v1alpha1/examples/configuration/defined.yaml]
 
-funcd creates that ConfigMap before the Function's first worker starts, under the name `<name>-<hash>`, where the hash
-comes from the data, such as `billing-settings-<hash>`. The stored Function's `spec.bindings.config` shows that hashed
-name. The ConfigMap belongs to the Function, and funcd deletes it with the Function.
-
-Two Functions that define a ConfigMap with the same `name` and the same `data` would share one stored name. funcd
-creates that ConfigMap for the first Function only. The second one waits in `Pending`, with the reason
-`StoreNotOwned` and a message such as
-`spec.configMaps[0]: ConfigMap "billing-settings-<hash>" exists and is not this Function's; bind it with ref`. To share
-settings, define them in a ConfigMap of their own, as the next section shows.
+funcd creates it as `<name>-<hash>`, the hash of its data, before the first worker starts, and deletes it with the
+Function. Two Functions that define the same `name` and `data` would share that name: the second waits in `Pending`
+with `StoreNotOwned`. Share settings through a ConfigMap of their own instead.
 
 ## Share settings between Functions
 
-Several Functions can bind the same ConfigMap: each one declares it by `ref` under `spec.configMaps`, as env-echo
-does, and binds it under `spec.bindings.config`. This ConfigMap holds two settings that the Functions of an
-application share:
+Several Functions declare the same ConfigMap by `ref` and bind it:
 
 ::include[../../../../../api/types/v1alpha1/examples/configuration/configmap.yaml#configmap]
 
 ## Override a shared setting
 
-When two ConfigMaps that a Function binds hold the same key, the worker gets the value of the ConfigMap listed later in
-`spec.bindings.config`, within the exceptions of [Choose a ConfigMap's keys](#choose-a-configmaps-keys). The Function
-`report` binds the shared ConfigMap first and a ConfigMap of its own second, so its workers get `LOG_LEVEL` set to
-`debug` and `TIMEZONE` set to `Europe/Paris`:
+When two bound ConfigMaps hold the same key, the one listed later in `spec.bindings.config` wins:
 
 ::include[../../../../../api/types/v1alpha1/examples/configuration/configmap.yaml#function]
 
 ## Status
 
-A ConfigMap has no status. A Function reports a problem with a ConfigMap that it binds or defines in its phase and its
-conditions: `Ready`, and `RevisionReady` for its latest revision. `funcdctl get function env-echo -n default -o json`
-prints them under `status`; with `funcdctl dev`, add the `--server` and `--token` flags that its banner prints.
+A ConfigMap has no status; the Function that binds or defines it reports a problem.
+`funcdctl get function env-echo -n default -o json` prints it; with `funcdctl dev`, add the `--server` and `--token`
+flags of its banner.
 
 | Phase or condition | Reason | Meaning |
 | --- | --- | --- |
@@ -140,19 +103,13 @@ prints them under `status`; with `funcdctl dev`, add the `--server` and `--token
 
 ## Changes and deletion
 
-- A worker reads its settings when it starts and keeps them until it stops. A change to a ConfigMap that a Function
-  names by `ref` therefore restarts nothing: only a worker that starts after the change gets the new values, such as
-  a worker of the new [revision](../function/index.md#changes-and-deletion) that funcd starts when the Function's spec
-  changes.
-- A change to the data of a ConfigMap that the Function defines is a change to the Function's spec. funcd creates the
-  ConfigMap again under a new `<name>-<hash>` name and starts a new revision, whose workers start with the new values.
-  Once the Function is `Ready` again, funcd deletes the old ConfigMap, unless another resource still names it.
-- funcd does not refuse the deletion of a ConfigMap that a Function binds, and the deletion changes nothing at once:
-  the Function stays `Ready`, and its running workers keep their values. funcd finds the ConfigMap missing when the
-  Function next needs a new worker, such as when a worker stops or the spec changes, or, for a Function that shares
-  its workers through [`spec.pooling`](../function/spec.md#functionspecpooling), at the Function's next check. It then
-  starts no new worker until the ConfigMap exists again, as [Status](#status) describes.
-- Deleting a Function deletes the ConfigMaps that it defines. A ConfigMap that it names by `ref` stays.
+- A worker keeps the settings that it started with, so a changed ConfigMap reaches only workers that start later,
+  such as those of a [new revision](../function/index.md#changes-and-deletion).
+- Changing a defined ConfigMap changes the Function's spec: funcd creates it under a new hash and starts a new
+  revision, then deletes the old ConfigMap unless another resource names it.
+- Deleting a bound ConfigMap changes nothing at once. funcd notices when the Function next needs a worker, and then
+  starts none until the ConfigMap exists again.
+- Deleting a Function deletes the ConfigMaps that it defines, not those that it names by `ref`.
 
 ## CLI errors
 
@@ -165,14 +122,11 @@ prints them under `status`; with `funcdctl dev`, add the `--server` and `--token
 
 ## Run it locally
 
-`funcdctl dev` applies each ConfigMap file of the folder when it starts, and applies a file again when the file
-changes. It keeps one worker of each Function running, and that worker keeps the values that it started with, so it
-does not see an edit of a ConfigMap that the Function names by `ref`: stop `funcdctl dev` and start it again to load
-the edited values. A ConfigMap that the Function defines needs no restart, because a change to its data starts a new
-revision at once. When a ConfigMap's file is removed, `funcdctl dev` deletes the ConfigMap, and the Function keeps
-serving, as [Changes and deletion](#changes-and-deletion) describes.
+`funcdctl dev` applies a ConfigMap file when it starts and when the file changes, but a running worker keeps its
+values: restart `funcdctl dev` after editing a ConfigMap named by `ref`. A defined ConfigMap needs no restart, since its
+change starts a new revision.
 
 ## Examples
 
-- [env-echo in TypeScript](https://github.com/pyvvo/funcd-typescript/tree/main/examples/env-echo): a Function that
-  returns one setting from a ConfigMap and two values from a Secret.
+- [env-echo in TypeScript](https://github.com/pyvvo/funcd-typescript/tree/main/examples/env-echo): one setting from a
+  ConfigMap and two values from a Secret.
