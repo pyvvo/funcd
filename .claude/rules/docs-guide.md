@@ -67,6 +67,9 @@ paths:
   them or starts fresh, so that it never clones into a clone or reuses a stopped process.
 - Diagrams are `.drawio.svg` files in `docs/guide/assets/`, linked with a relative path. A diagram never repeats a path
   that another diagram already shows.
-
 - In Develop Usage, avoid a file-by-file inventory when the complete manifests and linked example already show
   those files. State a necessary dependency or relationship once where the reader needs it.
+- Introduce an example with a short label, such as "The Sensor, in `drop-sensor.yaml`:". The example shows its own
+  names, values and output; keep only what it cannot show, such as a wait, a rule or a consequence.
+- Do not say what the Spec, the Platform pages or the API Reference cover. Put the link on the term where the page
+  uses it, such as a field, a setting, a command or a role.
