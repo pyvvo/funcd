@@ -1,14 +1,14 @@
 ---
 name: develop-page
-description: Write or update one page of the Developer chapter of funcd's user guide, under docs/guide/develop, to the shared template — the hand-written Usage tab (index.md) with tested, included examples, beside the generated Spec tab (spec.md). Use for "write the Function page", "bring the Bucket page to the template", "develop page for SQL", or the rollout of the Develop chapter. It writes prose and examples, checks every fact in the code, and stops on any conflict between sources.
+description: Write or rewrite funcd Develop Usage pages with the service and workload pilots, complete tested examples, language tabs, and generated Spec links.
 ---
 
 # develop-page
 
-One feature page of the Developer chapter, written to one shape so a person or an agent finds the same things in the
-same place. Site (`docs/guide/develop/workloads/site/index.md`) is the approved concise example: read it before
-writing another. Its length is an example, not a word limit. For the roles and Cedar policy of a service, also
-read the Access section of KV (`docs/guide/develop/services/kv/index.md`).
+Write one feature page around its reader's tasks. Read the [pilot notes](references/usage-pilot.md) first. Secrets
+(`docs/guide/develop/services/secrets/index.md`) is the service pilot; Site
+(`docs/guide/develop/workloads/site/index.md`) is the workload pilot. Use the relevant page as a worked example,
+not a word limit. KV's Access section (`docs/guide/develop/services/kv/index.md`) also shows the service access pattern.
 
 ## What is generated, what is written
 
@@ -41,10 +41,36 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
   example is the tool's own command, run as the page documents it; it needs no example manifest and no push. Its page
   tests (`cmd/funcd`, and `cmd/funcdctl` with `-tags dev`) check it, not the template test.
 
+## Wording-only rewrites
+
+Shorten the prose around the examples. Preserve the existing tested includes and the code they show, including
+imports, types, manifests, commands and expected outputs. Keep each example inside its original language tab.
+Do not replace a complete example with an excerpt or a link during this pass.
+
+Assume the reader knows the language. Language names belong in the tabs. Explain funcd-specific requirements and
+consequences; link method contracts to Spec instead of narrating the code. Keep necessary setup, directories,
+access, waits, recovery and behavior that a reader cannot infer safely.
+
+Record where every useful concept remains or the precise reference that explains it now. A useful concept affects
+setup, correct behavior, access, state or recovery. This does not require keeping every description of a helper's
+implementation. Read each reference destination: a generic Spec link does not preserve a fact that Spec does not
+explain. Avoid adding copies of an example already shown; link to the existing example instead.
+
+Keep the baseline built Markdown, then compare the rewritten built copy before presenting the preview:
+
+```sh
+python3 .claude/skills/develop-page/scripts/check_examples.py before-expanded.md after-expanded.md
+```
+
+A missing, changed or moved example or tab fails this check. It does not check prose correctness; the critic still
+reviews coverage and qualifiers. Use the normal site build for the preview and the Markdown, including its native
+tabs and syntax highlighting. Keep runtime verification separate from content and rendering checks.
+
 ## Steps
 
 1. **Read** `template.yaml` (beside this file), the rules in `.claude/rules/` whose `paths` cover `docs/guide/`, the
-   Site page and the pages of the feature's group. Read KV's Access section when the feature uses roles or Cedar.
+   relevant pilot, the current page and its Spec and Platform pages. Reuse this context for related pages; reread
+   the pilot when it changes. Read KV's Access section when the feature uses roles or Cedar.
 2. **Gather**, and rank the sources when they disagree: the code on origin/main (the code path, not its comments),
    its tests, the behavior registry's rows (`docs/behavior/`), Implemented ADRs, then the Platform page. The feature's
    kinds and fields are on its Spec page; its handler API is in the shims' `api.json`; `scripts/lanes.yaml` names the

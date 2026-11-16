@@ -12,7 +12,8 @@ first:
     service or a workload, a resource manifest such as a namespace or a grant applied to a running platform, the
     tool itself for a tool, and funcd --config for the server's configuration. Each language that has a lane example
     gets its own "### TypeScript" or "### Python" section after the text both languages share, and the two sections
-    perform the same task. Keep only explanation needed for the task; link reference detail. Brevity must preserve
+    perform the same task. A wording-only rewrite preserves the existing complete example code and tabs; shorten
+    the prose around them. Assume knowledge of the language and link method contracts to Spec. Brevity must preserve
     complete English, required setup, access, waits, verification, recovery and data-loss behavior.
   example:
     service: a handler that uses the service, its manifest, the command that runs it, a call, and the answer that shows the result
@@ -30,7 +31,8 @@ optional:
     holds: >-
       Only for a feature whose calls an authorizer checks. First what a Function gets by itself from its declaration,
       binding or ownership, each with its Cedar action, linking the Security page; then, when a role exists and is
-      needed, the smallest built-in role, its scope and a tested RolesAssignment, included as YAML; then the policy
+      needed, the smallest built-in role, its scope and a tested RolesAssignment, included as YAML or linked to its
+      complete example already shown on the page; then the policy
       that funcd supplies, quoted in a cedar block titled for what it is, such as "Built-in KV policy"; then the scope
       rules and a denial that a reader may meet. The automatic part says what a Function can do in ordinary words; the
       policy's internal names stay in its block. A feature with no role or no policy leaves that part out.
