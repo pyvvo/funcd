@@ -39,6 +39,7 @@ type ServerConfig struct {
 	Calls     *Calls
 	Keys      *NamespaceKeys
 	Logger    *slog.Logger
+	Version   string // the control plane's release (decision 12)
 	Now       func() time.Time
 }
 
@@ -123,7 +124,7 @@ func nodeOf(ctx context.Context) v1.ObjectName {
 
 // authNode admits a node by the certificate it joined with: verified against the CA, and still the one its WorkerNode
 // names, so a new join or a deleted WorkerNode ends the old certificate. A node speaking a node API version this control
-// plane does not serve gets 426 (decision 12).
+// plane does not serve gets 426, and one on a newer release than the control plane's 409 (decision 12).
 func (s *Server) authNode(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		api, err := strconv.Atoi(r.Header.Get(HeaderAPIVersion))
@@ -134,6 +135,11 @@ func (s *Server) authNode(next http.Handler) http.Handler {
 		}
 		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
 			http.Error(w, "a node certificate is required", http.StatusUnauthorized)
+			return
+		}
+		if release := r.Header.Get(HeaderVersion); newerRelease(release, s.cfg.Version) {
+			http.Error(w, "this node runs funcd "+release+", newer than the control plane's "+s.cfg.Version+
+				": upgrade the control plane first", http.StatusConflict)
 			return
 		}
 		leaf := r.TLS.PeerCertificates[0]
@@ -200,6 +206,11 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.cfg.Liveness.Ready(tok.Node) {
 		writeFault(w, fault.Conflictf(op, "a running node holds the name %s", tok.Node))
+		return
+	}
+	if newerRelease(in.Version, s.cfg.Version) {
+		writeFault(w, fault.Conflictf(op, "this node runs funcd %s, newer than the control plane's %s: upgrade the control plane first",
+			in.Version, s.cfg.Version))
 		return
 	}
 	now := s.cfg.Now()
@@ -270,7 +281,7 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		writeFault(w, err)
 		return
 	}
-	out := Snapshot{Rev: head, Objects: []store.Change{}}
+	out := Snapshot{Rev: head, Timeline: s.cl.Timeline(), Objects: []store.Change{}}
 	add := func(obj v1.Object) error {
 		raw, err := json.Marshal(obj)
 		if err != nil {
@@ -340,12 +351,17 @@ func waitOf(r *http.Request) time.Duration {
 
 // feed answers GET …/feed?since=&wait= (decision 3): the node's records after since, or none once wait passes. A node
 // gets every Namespace record, so it sees placements come and go, and the records of the namespaces placed on it, but
-// not the ones it wrote itself. A since older than the change log is 410: the node starts again from a snapshot.
+// not the ones it wrote itself. A since older than the change log, or of another timeline of the metastore (one restored
+// from a backup since), is 410: the node starts again from a snapshot.
 func (s *Server) feed(w http.ResponseWriter, r *http.Request) {
 	ctx, node := r.Context(), nodeOf(r.Context())
 	since, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
 	if err != nil {
 		http.Error(w, "since must be a revision", http.StatusBadRequest)
+		return
+	}
+	if r.URL.Query().Get("timeline") != s.cl.Timeline() {
+		http.Error(w, "the revision is of another timeline of the metastore, which was restored since", http.StatusGone)
 		return
 	}
 	keep := func(c store.Change) bool {

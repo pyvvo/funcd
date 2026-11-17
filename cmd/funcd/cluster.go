@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -75,6 +78,49 @@ func (r role) secretsKey(cfg config.Config) (config.Config, error) {
 	}
 	cfg.Secrets.EncryptionKeyFile = path
 	return cfg, nil
+}
+
+// nodeBackups puts a worker node's backups under nodes/<name>/ of backup.target and of kvstore.backup.target (FEAT-0002
+// F251): each node backs up its own stores, so the nodes and the control plane share one target without fencing each
+// other.
+func (r role) nodeBackups(cfg config.Config) (config.Config, error) {
+	if r != roleNode || cfg.Backup.Target == "" && cfg.Kvstore.Backup.Target == "" {
+		return cfg, nil
+	}
+	name, err := agent.JoinedName(cfg.Cluster.DataDir)
+	if err != nil {
+		return cfg, err
+	}
+	for _, t := range []*string{&cfg.Backup.Target, &cfg.Kvstore.Backup.Target} {
+		if *t != "" {
+			*t = nodeTarget(*t, name)
+		}
+	}
+	return cfg, nil
+}
+
+// nodeTarget is target's nodes/<node>/ part: the prefix parameter of an s3:// target, a subdirectory of a file:// one.
+// Any other target is left for backup.Open to refuse.
+func nodeTarget(target string, node v1.ObjectName) string {
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	switch u.Scheme {
+	case "s3":
+		q := u.Query()
+		prefix := q.Get("prefix")
+		if prefix != "" && !strings.HasSuffix(prefix, "/") {
+			prefix += "/"
+		}
+		q.Set("prefix", prefix+"nodes/"+string(node)+"/")
+		u.RawQuery = q.Encode()
+	case "file":
+		u.Path = path.Join(u.Path, "nodes", string(node))
+	default:
+		return target
+	}
+	return u.String()
 }
 
 // servesNodes reports whether the role serves the node API, so its store keeps the change log the nodes follow.

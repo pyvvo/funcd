@@ -8,6 +8,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/platform/version"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -27,6 +28,8 @@ type Config struct {
 	LocalNode  v1.ObjectName // the control plane's own node
 	LocalRuns  bool          // false on a control plane alone (funcd server), which runs no namespace
 	Master     []byte        // the control plane's master secret, the root of the namespace keys; nil ⇒ none
+	Version    string        // the control plane's release, which no node may be newer than; "" ⇒ this binary's
+	NodeFields FieldVersions // the spec fields a newer node API brings; nil ⇒ this release's
 	Now        func() time.Time
 }
 
@@ -54,6 +57,12 @@ func New(cfg Config) (*Cluster, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.Version == "" {
+		cfg.Version = version.Get().Version
+	}
+	if cfg.NodeFields == nil {
+		cfg.NodeFields = nodeFields()
+	}
 	ca, err := LoadOrCreateCA(cfg.Dir, cfg.Now())
 	if err != nil {
 		return nil, err
@@ -65,7 +74,7 @@ func New(cfg Config) (*Cluster, error) {
 		keys = NewNamespaceKeys(cfg.Store, cfg.Master)
 	}
 	c.server, err = NewServer(ServerConfig{Store: cfg.Store, CA: ca, Placement: c.placement, Liveness: c.liveness,
-		Calls: c.calls, Keys: keys, Logger: cfg.Logger, Now: cfg.Now}, cfg.ListenAddr, cfg.Hosts)
+		Calls: c.calls, Keys: keys, Logger: cfg.Logger, Version: cfg.Version, Now: cfg.Now}, cfg.ListenAddr, cfg.Hosts)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +113,8 @@ func (c *Cluster) RunLogs(local RunLogReader) RunLogReader {
 // Admissions are the multi-node checks of the control plane's write path.
 func (c *Cluster) Admissions() []admission.Admission {
 	return []admission.Admission{namespaceNode{st: c.cfg.Store, local: c.cfg.LocalNode}, workerNodeInUse{st: c.cfg.Store},
-		hostOnOneNode{st: c.cfg.Store, placement: c.placement}}
+		hostOnOneNode{st: c.cfg.Store, placement: c.placement},
+		nodeTooOld{st: c.cfg.Store, placement: c.placement, fields: c.cfg.NodeFields}}
 }
 
 // MintJoinToken mints a one-time join token for the declared WorkerNode node, valid for ttl (0 ⇒ an hour), and keeps
