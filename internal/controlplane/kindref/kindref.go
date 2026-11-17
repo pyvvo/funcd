@@ -54,11 +54,11 @@ var Features = []Feature{
 	{"disaster-recovery", []v1.Kind{v1.KindBackup, v1.KindBackupSchedule, v1.KindRestore}},
 }
 
-// Omitted kinds get no Spec: pyvvo/funcd#1438 removes the first four, and RuntimeClass gets its fields and its first
-// reader with FEAT-0012 F139.
+// Omitted kinds get no Spec: pyvvo/funcd#1438 removes the first four, RuntimeClass gets its fields and its first
+// reader with FEAT-0012 F139, and APIToken gets its page with its ADR (FEAT-0002 F248).
 //
 //nolint:gochecknoglobals // an immutable lookup table, the ADR's contract
-var Omitted = []v1.Kind{v1.KindService, v1.KindGrant, v1.KindGateway, v1.KindWorkerNode, v1.KindRuntimeClass}
+var Omitted = []v1.Kind{v1.KindService, v1.KindGrant, v1.KindGateway, v1.KindWorkerNode, v1.KindAPIToken, v1.KindRuntimeClass}
 
 // Marker is the first front-matter line of every page Render writes; specgen deletes a page that carries it and that
 // Render no longer returns.

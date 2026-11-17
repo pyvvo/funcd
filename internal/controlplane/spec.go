@@ -25,6 +25,7 @@ func SpecAPI() huma.API {
 	RegisterStubPlatformBackup(api)  // ADR-0205: the platform backup status route
 	RegisterStubHold(api)            // ADR-0206: the hold status and release routes
 	RegisterStubJoinToken(api)       // FEAT-0002: a worker node's join token
+	RegisterStubAPIToken(api)        // FEAT-0002 F248: an API token kept as a hash
 	addInvokeFunction(api.OpenAPI()) // ADR-0329 Decision 2: the gateway's call of a Function
 	return api
 }

@@ -303,6 +303,7 @@ func (a *Agent) syncAll(ctx context.Context) error {
 	for ns := range placed {
 		a.prune(ctx, ns, seen)
 	}
+	a.pruneTokens(ctx, seen)
 	a.saveCursor(snap.Timeline, snap.Rev)
 	a.log.InfoContext(ctx, "node agent: synced from a snapshot", "rev", snap.Rev, "objects", len(snap.Objects), "namespaces", len(placed))
 	return nil
@@ -393,6 +394,25 @@ func (a *Agent) removeNamespace(ctx context.Context, ns v1.NamespaceName) {
 	a.log.InfoContext(ctx, "node agent: namespace left this node", "namespace", ns)
 }
 
+// pruneTokens deletes the API tokens the control plane no longer holds (F248), so a token revoked while the node was
+// behind stops working on it too.
+func (a *Agent) pruneTokens(ctx context.Context, keep map[string]bool) {
+	res, err := a.cfg.Store.List(ctx, v1.KindAPIToken.GVK(), store.ListOptions{})
+	if err != nil {
+		a.log.WarnContext(ctx, "node agent: list the API tokens", "error", err)
+		return
+	}
+	for _, obj := range res.Items {
+		name := obj.GetObjectMeta().Name
+		if keep[key(v1.KindAPIToken, "", name)] {
+			continue
+		}
+		if err := a.cfg.Store.Delete(ctx, v1.KindAPIToken.GVK(), "", name, ""); err != nil && fault.KindOf(err) != fault.NotFound {
+			a.log.WarnContext(ctx, "node agent: remove an API token", "name", name, "error", err)
+		}
+	}
+}
+
 // prune deletes the local objects of ns the control plane does not hold (not in keep). The node's own children stay:
 // its reconcilers own them.
 func (a *Agent) prune(ctx context.Context, ns v1.NamespaceName, keep map[string]bool) {
@@ -444,9 +464,11 @@ func (a *Agent) upsert(ctx context.Context, c store.Change) error {
 		if err != nil {
 			return err
 		}
-		next, err := keepStatus(obj, cur)
-		if err != nil {
-			return err
+		next := obj
+		if c.Kind != v1.KindAPIToken { // an API token's status is the control plane's: its hash and expiry
+			if next, err = keepStatus(obj, cur); err != nil {
+				return err
+			}
 		}
 		next.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion
 		if _, err = a.cfg.Store.Update(ctx, next); fault.KindOf(err) != fault.Conflict {
