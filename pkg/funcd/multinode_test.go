@@ -256,3 +256,74 @@ func TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
 	defer cpWorkers.mu.Unlock()
 	require.Empty(t, cpWorkers.insts, "the control plane starts no worker for a namespace placed on a node")
 }
+
+// TestAWriteThatNeedsAnOfflineNodeIsRefusedAtOnce writes into a namespace whose worker node never joined: each write
+// whose check reads the node's state answers 503 at once, and the others go through (FEAT-0002 F250).
+func TestAWriteThatNeedsAnOfflineNodeIsRefusedAtOnce(t *testing.T) {
+	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))),
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true}))
+	base := "http://" + cp.Addr()
+	c := answersClient()
+	const api = "/apis/funcd.io/v1alpha1"
+	const e1 = api + "/namespaces/e1"
+	meta := func(kind, name string) string {
+		return `"apiVersion":"funcd.io/v1alpha1","kind":"` + kind + `","metadata":{"name":"` + name + `","namespace":"e1","resourceGroup":"rg1"}`
+	}
+	const fnSpec = `"spec":{"runtime":"nodejs22","handler":"handle","image":"file:///nonexistent/api.mjs"`
+	const volumes = `,"volumes":[{"name":"scratch","type":"emptyDir","size":"1Mi"}]`
+	for _, a := range []ask{
+		{what: "declare the node", method: http.MethodPost, path: api + "/workernodes", token: clusterAdmin,
+			body: `{"apiVersion":"funcd.io/v1alpha1","kind":"WorkerNode","metadata":{"name":"vm1"}}`, status: http.StatusOK},
+		{what: "place e1 on it", method: http.MethodPost, path: api + "/namespaces", token: clusterAdmin,
+			body: `{"apiVersion":"funcd.io/v1alpha1","kind":"Namespace","metadata":{"name":"e1"},"spec":{"node":"vm1"}}`, status: http.StatusOK},
+		{what: "a store needs no node to be made", method: http.MethodPost, path: e1 + "/kvstores", token: clusterAdmin,
+			body: `{` + meta("KVStore", "kv1") + `,"spec":{}}`, status: http.StatusOK},
+		{what: "but its delete checks its keys on the node", method: http.MethodDelete, path: e1 + "/kvstores/kv1", token: clusterAdmin,
+			status: http.StatusServiceUnavailable, detail: "is offline"},
+		{what: "a Bucket", method: http.MethodPost, path: e1 + "/buckets", token: clusterAdmin,
+			body: `{` + meta("Bucket", "b1") + `,"spec":{"prefixes":[{"name":"raw"}]}}`, status: http.StatusOK},
+		{what: "its delete", method: http.MethodDelete, path: e1 + "/buckets/b1", token: clusterAdmin, status: http.StatusServiceUnavailable, detail: "is offline"},
+		{what: "a SQLDatabase", method: http.MethodPost, path: e1 + "/sqldatabases", token: clusterAdmin,
+			body: `{` + meta("SQLDatabase", "db1") + `,"spec":{}}`, status: http.StatusOK},
+		{what: "its delete", method: http.MethodDelete, path: e1 + "/sqldatabases/db1", token: clusterAdmin, status: http.StatusServiceUnavailable, detail: "is offline"},
+		{what: "a Function with no volume needs nothing of the node", method: http.MethodPost, path: e1 + "/functions", token: clusterAdmin,
+			body: `{` + meta("Function", "api") + `,` + fnSpec + `}}`, status: http.StatusOK},
+		{what: "one with a volume is booked on the node", method: http.MethodPost, path: e1 + "/functions", token: clusterAdmin,
+			body: `{` + meta("Function", "worker") + `,` + fnSpec + volumes + `}}`, status: http.StatusServiceUnavailable, detail: "is offline"},
+		{what: "and so is a replace that adds one", method: http.MethodPut, path: e1 + "/functions/api", token: clusterAdmin,
+			body: `{` + meta("Function", "api") + `,` + fnSpec + volumes + `}}`, status: http.StatusServiceUnavailable, detail: "is offline"},
+		{what: "an in-place Restore is checked on the node", method: http.MethodPost, path: e1 + "/restores", token: clusterAdmin,
+			body: `{` + meta("Restore", "r1") + `,"spec":{"backup":"nightly","source":{"credentialsSecret":"creds","identitySecret":"age"},` +
+				`"members":[{"kind":"KVStore","name":"kv1","inPlace":true}]}}`, status: http.StatusServiceUnavailable, detail: "is offline"},
+	} {
+		a.run(t, c, base)
+	}
+}
+
+// asCluster makes an answers platform a control plane that worker nodes join, on loopback (FEAT-0002).
+func asCluster(t *testing.T) funcd.Option {
+	return funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true})
+}
+
+// placeOnOfflineNode places namespace e1 of e, an asCluster platform, on worker node vm1, which never joins: a write
+// whose check reads the node's state answers 503 there (FEAT-0002 F250).
+func placeOnOfflineNode(t *testing.T, e *answerEnv) {
+	t.Helper()
+	ask{what: "declare the node", method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/workernodes", token: answersAdmin,
+		body: `{"apiVersion":"funcd.io/v1alpha1","kind":"WorkerNode","metadata":{"name":"vm1"}}`, status: http.StatusOK}.run(t, e.c, e.api)
+	ns := namespace("e1")
+	ns.Spec.Node = "vm1"
+	create(t, e.c, e.api, ns)
+}
+
+// offlineRow is op's row for the case of a worker node that is offline, on a platform that placeOnOfflineNode set up.
+func offlineRow(op string, e *answerEnv, setup func(*testing.T, *answerEnv), a ask) answerRow {
+	a.token, a.detail = answersAdmin, "is offline"
+	return answerRow{op: op, when: "worker node that is offline", on: e, setup: setup, ask: a}
+}
+
+// withVolume is fn with a volume, which its node books.
+func withVolume(fn *v1.Function) *v1.Function {
+	fn.Spec.Volumes = []v1.VolumeEntry{{Name: "scratch", Type: v1.VolumeEmptyDir, Size: "1Mi"}}
+	return fn
+}
