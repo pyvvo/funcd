@@ -484,6 +484,22 @@ func (d dbCheck) Admit(_ context.Context, req admission.Request) (v1.Object, err
 	return req.Object, nil
 }
 
+// volCheck is a Function volume booking that answers as told.
+type volCheck struct{ refuse bool }
+
+func (volCheck) Name() string           { return "function-volumes" }
+func (volCheck) Phase() admission.Phase { return admission.Validating }
+func (volCheck) Handles(gvk v1.GroupVersionKind, op admission.Operation) bool {
+	return gvk.Kind == v1.KindFunction && op == admission.Create
+}
+
+func (c volCheck) Admit(_ context.Context, req admission.Request) (v1.Object, error) {
+	if c.refuse {
+		return nil, fault.Conflictf("admission.function-volumes", "the node has no room for the volume")
+	}
+	return req.Object, nil
+}
+
 func TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState(t *testing.T) {
 	ctx := context.Background()
 	r := startCP(t)
@@ -493,7 +509,7 @@ func TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState(t *testing.T) {
 	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
 	require.NoError(t, err)
 	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
-		Commands: multinode.Commands{Admissions: []admission.Admission{dbCheck{refuse: true}}}})
+		Commands: multinode.Commands{Admissions: []admission.Admission{dbCheck{refuse: true}, volCheck{refuse: true}}}})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -516,6 +532,16 @@ func TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState(t *testing.T) {
 	})
 	require.ErrorContains(t, del("e1"), "holds tables")
 	require.NoError(t, del("here"), "a namespace the control plane runs gets its own check")
+
+	book := r.cluster.Forward([]admission.Admission{volCheck{}})[0]
+	create := func(volumes ...v1.VolumeEntry) error {
+		fn := &v1.Function{TypeMeta: meta(v1.KindFunction)}
+		fn.Name, fn.Namespace, fn.Spec.Volumes = "api", "e1", volumes
+		_, err := book.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindFunction.GVK(), Object: fn})
+		return err
+	}
+	require.NoError(t, create(), "a Function with no volume needs nothing of the node")
+	require.Equal(t, fault.Conflict, fault.KindOf(create(v1.VolumeEntry{Name: "data"})), "one with a volume is booked on the node")
 }
 
 func TestANodeReportsItsBackupInItsWorkerNode(t *testing.T) {
