@@ -1160,6 +1160,9 @@ func (p *Platform) buildControlPlane() error {
 		if p.eventing.sensorReconciler != nil {
 			cmds.Replayer = p.eventing.sensorReconciler
 		}
+		if c.backupRunner != nil {
+			cmds.Backup = nodeBackup(c.backupRunner)
+		}
 		p.agent.SetCommands(cmds)
 	}
 	if p.cluster != nil {

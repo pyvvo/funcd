@@ -4135,6 +4135,31 @@ components:
             - Terminating
           type: string
       type: object
+    NodeBackup:
+      additionalProperties: false
+      properties:
+        held:
+          description: "True while the node is held: its backups wait for the release."
+          type: boolean
+        lastFailure:
+          description: Why the node's last run failed since the node started; a run that succeeds clears it.
+          type: string
+        lastSuccessTime:
+          description: When the node's newest complete generation was written.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        nextRunTime:
+          description: When the node's next run is due.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        rpoRisk:
+          description: True when no verified generation of the node is newer than its backup.objectives.rpo.
+          type: boolean
+      type: object
     NodeCertificate:
       additionalProperties: false
       properties:
@@ -5901,6 +5926,9 @@ components:
     WorkerNodeStatus:
       additionalProperties: false
       properties:
+        backup:
+          $ref: "#/components/schemas/NodeBackup"
+          description: The backup of the node's own stores, as the node last reported it; absent while the node runs no backup.
         certificate:
           $ref: "#/components/schemas/NodeCertificate"
           description: The node certificate that the control plane issued when the node joined.

@@ -57,6 +57,8 @@ type Agent struct {
 	mine     map[v1.NamespaceName]bool
 	keys     map[v1.NamespaceName]multinode.NamespaceKey
 	pushed   map[string]string
+	// backupSent is the backup status the control plane holds, as last sent
+	backupSent string
 }
 
 // New loads the node's identity from cfg.Dir.

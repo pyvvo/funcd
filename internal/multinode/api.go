@@ -35,6 +35,7 @@ const (
 	PathObjects  = "/node/v1/objects"
 	PathCalls    = "/node/v1/calls"
 	PathKeys     = "/node/v1/keys"
+	PathBackup   = "/node/v1/backup"
 )
 
 // JoinRequest is a node's join: its one-time token and a CSR for its node certificate.

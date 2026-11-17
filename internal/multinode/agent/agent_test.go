@@ -517,3 +517,31 @@ func TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState(t *testing.T) {
 	require.ErrorContains(t, del("e1"), "holds tables")
 	require.NoError(t, del("here"), "a namespace the control plane runs gets its own check")
 }
+
+func TestANodeReportsItsBackupInItsWorkerNode(t *testing.T) {
+	ctx := context.Background()
+	r := startCP(t)
+	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	require.NoError(t, err)
+	last := v1.NewTimestamp(time.Date(2026, 11, 17, 3, 0, 0, 0, time.UTC))
+	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+		Commands: multinode.Commands{Backup: func(context.Context) (v1.NodeBackup, error) {
+			return v1.NodeBackup{LastSuccessTime: &last, RPORisk: true}, nil
+		}}})
+	require.NoError(t, err)
+	actx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { _ = a.Run(actx); close(done) }()
+	defer func() { stop(); <-done }()
+	eventually(t, "the WorkerNode shows the node's backup", func() bool {
+		obj, err := r.cp.Get(ctx, v1.KindWorkerNode.GVK(), "", "vm1")
+		if err != nil {
+			return false
+		}
+		b := obj.(*v1.WorkerNode).Status.Backup
+		return b != nil && b.RPORisk && b.LastSuccessTime != nil && time.Time(*b.LastSuccessTime).Equal(time.Time(last))
+	})
+}

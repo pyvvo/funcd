@@ -34,6 +34,8 @@ type Commands struct {
 	Apps        AppRetrier
 	Volumes     VolumeDeleter
 	Admissions  []admission.Admission // the node-state checks before a write (NodeState)
+	// Backup reports the node's platform backup (F251); nil ⇒ the node runs none.
+	Backup func(ctx context.Context) (v1.NodeBackup, error)
 }
 
 // DeadLetterRouter is the dead-letter store the API reads, lists and discards with: a namespace that a worker node runs
