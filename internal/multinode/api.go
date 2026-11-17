@@ -7,6 +7,7 @@ package multinode
 import (
 	"encoding/json"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/store"
@@ -80,8 +81,14 @@ type ObjectWrite struct {
 
 // The node call kinds (FEAT-0002 decision 9).
 const (
-	CallLogs    = "logs"
-	CallRunLogs = "runLogs"
+	CallLogs              = "logs"
+	CallRunLogs           = "runLogs"
+	CallDeadLetters       = "deadLetters"
+	CallDeadLetter        = "deadLetter"
+	CallDiscardDeadLetter = "discardDeadLetter"
+	CallReplayDeadLetter  = "replayDeadLetter"
+	CallAppRetry          = "appRetry"
+	CallVolumeDelete      = "volumeDelete"
 )
 
 // Call is one node call the control plane queued for a node.
@@ -90,13 +97,18 @@ type Call struct {
 	Kind      string           `json:"kind"`
 	Namespace v1.NamespaceName `json:"namespace"`
 	Run       v1.ObjectName    `json:"run,omitempty"`
+	Name      string           `json:"name,omitempty"`   // a dead letter's ID, an App's or a Function's name
+	Volume    v1.ObjectName    `json:"volume,omitempty"` // a Function's volume
 	Query     logread.Query    `json:"query"`
 }
 
-// Answer is a node's answer to a Call: the log lines, or the error it met.
+// Answer is a node's answer to a Call: the log lines or the body of a command, or the error it met and its kind, so
+// the control plane answers as the node's own API would.
 type Answer struct {
-	Lines []logread.Line `json:"lines"`
-	Error string         `json:"error,omitempty"`
+	Lines []logread.Line  `json:"lines"`
+	Body  json.RawMessage `json:"body,omitempty"`
+	Error string          `json:"error,omitempty"`
+	Fault fault.Kind      `json:"fault,omitempty"`
 }
 
 // NamespaceKey is a namespace's master for the credentials derived on its node (FEAT-0002 decision 8), at Version.

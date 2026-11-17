@@ -1,9 +1,11 @@
 package multinode
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"sync"
 	"time"
 
@@ -89,7 +91,7 @@ func (c *Calls) Do(ctx context.Context, node v1.ObjectName, call Call) (Answer, 
 	select {
 	case a := <-p.done:
 		if a.Error != "" {
-			return Answer{}, fault.Unavailablef(op, "worker node %s answered: %s", node, a.Error)
+			return Answer{}, fault.Wrapf(errors.New(a.Error), cmp.Or(a.Fault, fault.Unavailable), op, "worker node %s answered: %s", node, a.Error)
 		}
 		return a, nil
 	case <-t.C:

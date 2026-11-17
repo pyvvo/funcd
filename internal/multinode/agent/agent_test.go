@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	dlmemory "github.com/pyvvo/funcd/internal/eventing/deadletter/memory"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/multinode"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
@@ -346,4 +349,76 @@ func TestANodeOnANewerReleaseThanTheControlPlaneIsRefused(t *testing.T) {
 	require.ErrorContains(t, err, "newer than the control plane's v0.40.0")
 	_, err = agent.Join(ctx, r.server(), token, t.TempDir(), "v0.39.2", "linux/arm64")
 	require.NoError(t, err, "an older node joins")
+}
+
+// fakeCommands records the node commands a node ran.
+type fakeCommands struct {
+	mu  sync.Mutex
+	ran []string
+}
+
+func (f *fakeCommands) record(s string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ran = append(f.ran, s)
+	return nil
+}
+
+func (f *fakeCommands) Replay(_ context.Context, ns v1.NamespaceName, id string) error {
+	return f.record("replay " + string(ns) + "/" + id)
+}
+
+func (f *fakeCommands) Retry(_ context.Context, ns v1.NamespaceName, app v1.ObjectName) error {
+	return f.record("retry " + string(ns) + "/" + string(app))
+}
+
+func (f *fakeCommands) DeleteVolume(_ context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) error {
+	return f.record("delete volume " + string(ns) + "/" + string(fn) + "/" + string(name))
+}
+
+func TestTheNodeCommandsRunOnTheNodeThatRunsTheNamespace(t *testing.T) {
+	ctx := context.Background()
+	r := startCP(t)
+	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	require.NoError(t, err)
+	letters, f := dlmemory.New(), &fakeCommands{}
+	require.NoError(t, letters.Put(ctx, deadletter.DeadLetter{ID: "01JDL", Namespace: "e1", Sensor: "s", Action: "a"}))
+	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+		Commands: multinode.Commands{DeadLetters: letters, Replayer: f, Apps: f, Volumes: f}})
+	require.NoError(t, err)
+	actx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { _ = a.Run(actx); close(done) }()
+	defer func() { stop(); <-done }()
+	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+	ns.Name, ns.Spec.Node = "e1", "vm1"
+	_, err = r.cp.Create(ctx, ns)
+	require.NoError(t, err)
+
+	dl := r.cluster.DeadLetters(nil)
+	eventually(t, "the control plane lists e1's dead letters on vm1", func() bool {
+		got, err := dl.List(ctx, "e1")
+		return err == nil && len(got) == 1 && got[0].ID == "01JDL"
+	})
+	got, err := dl.Get(ctx, "e1", "01JDL")
+	require.NoError(t, err)
+	require.Equal(t, v1.ObjectName("s"), got.Sensor)
+	_, err = dl.Get(ctx, "e1", "missing")
+	require.Equal(t, fault.NotFound, fault.KindOf(err), "the node's not-found stays a not-found")
+	require.NoError(t, dl.Delete(ctx, "e1", "01JDL"))
+	left, err := letters.List(ctx, "e1")
+	require.NoError(t, err)
+	require.Empty(t, left, "the discard ran on the node")
+	require.NoError(t, r.cluster.Replayer(nil).Replay(ctx, "e1", "01JDM"))
+	require.NoError(t, r.cluster.AppRetrier(nil).Retry(ctx, "e1", "shop"))
+	require.NoError(t, r.cluster.Volumes(nil).DeleteVolume(ctx, "e1", "fn", "data"))
+	f.mu.Lock()
+	require.Equal(t, []string{"replay e1/01JDM", "retry e1/shop", "delete volume e1/fn/data"}, f.ran)
+	f.mu.Unlock()
+
+	_, err = dl.List(ctx, "elsewhere")
+	require.Equal(t, fault.Unavailable, fault.KindOf(err), "a namespace this control plane runs has no dead letters here")
 }

@@ -38,6 +38,7 @@ type Config struct {
 	Logger   *slog.Logger
 	Logs     multinode.LogReader    // the node's local log reads, which answer the log calls
 	RunLogs  multinode.RunLogReader // the node's local run-log reads
+	Commands multinode.Commands     // the node's local parts that answer the other node commands
 	Version  string
 	Platform string
 }
@@ -92,6 +93,10 @@ func (a *Agent) Name() v1.ObjectName { return a.id.name }
 func (a *Agent) SetLogs(logs multinode.LogReader, runLogs multinode.RunLogReader) {
 	a.cfg.Logs, a.cfg.RunLogs = logs, runLogs
 }
+
+// SetCommands gives the agent the node's local parts that answer the other node commands (F250), once the node's
+// platform built them.
+func (a *Agent) SetCommands(c multinode.Commands) { a.cfg.Commands = c }
 
 // Run follows, reports and answers until ctx ends.
 func (a *Agent) Run(ctx context.Context) error {
