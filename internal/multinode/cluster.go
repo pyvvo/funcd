@@ -8,6 +8,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/platform/version"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -109,6 +110,28 @@ func (c *Cluster) Logs(local LogReader) LogReader {
 func (c *Cluster) RunLogs(local RunLogReader) RunLogReader {
 	return RunLogRouter{router: router{placement: c.placement, calls: c.calls}, local: local}
 }
+
+// DeadLetters routes the API's dead-letter reads and discards to the node that runs their namespace.
+func (c *Cluster) DeadLetters(local deadletter.Store) deadletter.Store {
+	return DeadLetterRouter{router: c.router(), Store: local}
+}
+
+// Replayer routes a dead letter's replay to the node that runs its namespace.
+func (c *Cluster) Replayer(local Replayer) Replayer {
+	return ReplayRouter{router: c.router(), local: local}
+}
+
+// AppRetrier routes an App's retry to the node that runs its namespace.
+func (c *Cluster) AppRetrier(local AppRetrier) AppRetrier {
+	return AppRetryRouter{router: c.router(), local: local}
+}
+
+// Volumes routes a retained volume's delete to the node that holds it.
+func (c *Cluster) Volumes(local VolumeDeleter) VolumeDeleter {
+	return VolumeRouter{router: c.router(), local: local}
+}
+
+func (c *Cluster) router() router { return router{placement: c.placement, calls: c.calls} }
 
 // Admissions are the multi-node checks of the control plane's write path.
 func (c *Cluster) Admissions() []admission.Admission {

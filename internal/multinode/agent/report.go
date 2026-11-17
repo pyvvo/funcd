@@ -9,6 +9,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/multinode"
 	"github.com/pyvvo/funcd/internal/store"
@@ -189,26 +190,57 @@ func (a *Agent) serveCalls(ctx context.Context) {
 }
 
 func (a *Agent) answer(ctx context.Context, c multinode.Call) {
-	var (
-		lines []logread.Line
-		err   error
-	)
-	switch {
-	case c.Kind == multinode.CallLogs && a.cfg.Logs != nil:
-		lines, err = a.cfg.Logs.Read(ctx, c.Query)
-	case c.Kind == multinode.CallRunLogs && a.cfg.RunLogs != nil:
-		lines, err = a.cfg.RunLogs.RunLogs(ctx, c.Namespace, c.Run, c.Query)
-	default:
-		err = fault.Unavailablef("agent.answer", "this node does not answer %s calls", c.Kind)
+	var ans multinode.Answer
+	var err error
+	if !a.isMine(c.Namespace) {
+		err = fault.Forbiddenf("agent.answer", "namespace %s does not run on this node", c.Namespace)
+	} else {
+		ans, err = a.run(ctx, c)
 	}
-	ans := multinode.Answer{Lines: lines}
 	if ans.Lines == nil {
 		ans.Lines = []logread.Line{}
 	}
 	if err != nil {
-		ans.Error = err.Error()
+		ans.Error, ans.Fault = err.Error(), fault.KindOf(err)
 	}
 	if _, perr := a.do(ctx, http.MethodPost, multinode.PathCalls+"/"+url.PathEscape(c.ID), ans, nil); perr != nil {
 		a.log.WarnContext(ctx, "node agent: answer a call", "call", c.ID, "error", perr)
 	}
+}
+
+// run runs call c on the node's local parts.
+func (a *Agent) run(ctx context.Context, c multinode.Call) (multinode.Answer, error) {
+	var ans multinode.Answer
+	var err error
+	cmd := a.cfg.Commands
+	body := func(v any) { //nolint:forbidigo // the JSON body of a command's answer
+		if err == nil {
+			ans.Body, err = json.Marshal(v)
+		}
+	}
+	switch {
+	case c.Kind == multinode.CallLogs && a.cfg.Logs != nil:
+		ans.Lines, err = a.cfg.Logs.Read(ctx, c.Query)
+	case c.Kind == multinode.CallRunLogs && a.cfg.RunLogs != nil:
+		ans.Lines, err = a.cfg.RunLogs.RunLogs(ctx, c.Namespace, c.Run, c.Query)
+	case c.Kind == multinode.CallDeadLetters && cmd.DeadLetters != nil:
+		var dls []deadletter.DeadLetter
+		dls, err = cmd.DeadLetters.List(ctx, c.Namespace)
+		body(dls)
+	case c.Kind == multinode.CallDeadLetter && cmd.DeadLetters != nil:
+		var dl deadletter.DeadLetter
+		dl, err = cmd.DeadLetters.Get(ctx, c.Namespace, c.Name)
+		body(dl)
+	case c.Kind == multinode.CallDiscardDeadLetter && cmd.DeadLetters != nil:
+		err = cmd.DeadLetters.Delete(ctx, c.Namespace, c.Name)
+	case c.Kind == multinode.CallReplayDeadLetter && cmd.Replayer != nil:
+		err = cmd.Replayer.Replay(ctx, c.Namespace, c.Name)
+	case c.Kind == multinode.CallAppRetry && cmd.Apps != nil:
+		err = cmd.Apps.Retry(ctx, c.Namespace, v1.ObjectName(c.Name))
+	case c.Kind == multinode.CallVolumeDelete && cmd.Volumes != nil:
+		err = cmd.Volumes.DeleteVolume(ctx, c.Namespace, v1.ObjectName(c.Name), c.Volume)
+	default:
+		err = fault.Unavailablef("agent.answer", "this node does not answer %s calls", c.Kind)
+	}
+	return ans, err
 }

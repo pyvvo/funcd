@@ -1297,12 +1297,24 @@ func (p *Platform) buildControlPlane() error {
 	}
 	// FEAT-0002 decision 9: a log read of a namespace a worker node runs goes through that node's call queue.
 	var joinTokens controlplane.JoinTokenMinter
-	if p.cluster != nil {
-		logReader, runLogQuerier = p.cluster.Logs(logReader), p.cluster.RunLogs(runLogQuerier)
-		joinTokens = p.cluster
-	}
+	// F250: so do the other commands that act on a node's state.
+	deadLetters := p.eventing.deadLetters
+	var replayer controlplane.Replayer = p.eventing.sensorReconciler
+	var appRetrier controlplane.AppRetrier = appReconciler
+	volumes := p.volumeDeleter()
 	if p.agent != nil {
 		p.agent.SetLogs(logReader, runLogQuerier)
+		cmds := multinode.Commands{DeadLetters: deadLetters, Apps: appReconciler, Volumes: volumes}
+		if p.eventing.sensorReconciler != nil {
+			cmds.Replayer = p.eventing.sensorReconciler
+		}
+		p.agent.SetCommands(cmds)
+	}
+	if p.cluster != nil {
+		logReader, runLogQuerier = p.cluster.Logs(logReader), p.cluster.RunLogs(runLogQuerier)
+		deadLetters, replayer = p.cluster.DeadLetters(deadLetters), p.cluster.Replayer(replayer)
+		appRetrier, volumes = p.cluster.AppRetrier(appRetrier), p.cluster.Volumes(volumes)
+		joinTokens = p.cluster
 	}
 	// ADR-0205: the platform backup cuts the event store, the metastore and the run state.
 	var backupStatus controlplane.BackupStatuser
@@ -1324,12 +1336,12 @@ func (p *Platform) buildControlPlane() error {
 		Logger:      p.logger,
 		Logs:        logReader,
 		RunLogs:     runLogQuerier,
-		DeadLetters: p.eventing.deadLetters,      // ADR-0118: the DLQ read + replay/discard surface
-		Replayer:    p.eventing.sensorReconciler, // ADR-0118: the imperative replay seam (one synchronous attempt)
-		Collector:   p.collector,                 // ADR-0170: a forced ResourceGroup delete collects the members' children
-		AppRetrier:  appReconciler,               // ADR-0214: retry an App's failed hook
-		Planner:     app.NewPlanner(c.store),     // ADR-0220: a dry-run App write's plan
-		Volumes:     p.volumeDeleter(),           // ADR-0262: delete a retained Function volume
+		DeadLetters: deadLetters,             // ADR-0118: the DLQ read + replay/discard surface
+		Replayer:    replayer,                // ADR-0118: the imperative replay seam (one synchronous attempt)
+		Collector:   p.collector,             // ADR-0170: a forced ResourceGroup delete collects the members' children
+		AppRetrier:  appRetrier,              // ADR-0214: retry an App's failed hook
+		Planner:     app.NewPlanner(c.store), // ADR-0220: a dry-run App write's plan
+		Volumes:     volumes,                 // ADR-0262: delete a retained Function volume
 		Hold: controlplane.NewHoldService(controlplane.HoldDeps{ // ADR-0206: the hold's evidence and release
 			Hold: c.hold, Store: c.store, DeadLetters: p.eventing.deadLetters, Platform: holdPlatform{p},
 		}),
