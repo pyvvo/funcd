@@ -2,6 +2,11 @@ package agent_test
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -39,12 +44,15 @@ type rig struct {
 	cancelCP context.CancelFunc
 }
 
+// cpMaster is the control plane's master secret, which every namespace's master derives from.
+const cpMaster = "0123456789abcdef0123456789abcdef"
+
 // startCP runs a control plane with the node API on loopback, and declares WorkerNode vm1.
 func startCP(t *testing.T) rig {
 	t.Helper()
 	cp := store.New(memory.New(), store.WithChangeLog(0))
 	cluster, err := multinode.New(multinode.Config{Store: cp, Dir: t.TempDir(), ListenAddr: "127.0.0.1:0",
-		LocalNode: "local", LocalRuns: true, Master: []byte("0123456789abcdef0123456789abcdef")})
+		LocalNode: "local", LocalRuns: true, Master: []byte(cpMaster)})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -75,9 +83,7 @@ func TestANodeJoinsFollowsItsNamespaceAndReportsBack(t *testing.T) {
 	_, err = agent.Join(ctx, r.server(), token, t.TempDir(), "test", "linux/arm64")
 	require.ErrorContains(t, err, "no join token waiting", "a token works once")
 
-	keys := make(chan multinode.NamespaceKey, 4)
-	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
-		Keys: func(k multinode.NamespaceKey) { keys <- k }})
+	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -97,9 +103,10 @@ func TestANodeJoinsFollowsItsNamespaceAndReportsBack(t *testing.T) {
 	}
 	eventually(t, "the ConfigMap of the placed namespace reaches the node", func() bool { return nodeHas("e1", "1") })
 	require.False(t, nodeHas("other", "1"), "a namespace placed on no node stays off the node")
-	k := <-keys
-	require.Equal(t, v1.NamespaceName("e1"), k.Namespace)
-	require.Len(t, k.Key, 32)
+	eventually(t, "the node holds the namespace's master", func() bool {
+		_, err := a.NamespaceMaster("e1")
+		return err == nil
+	})
 
 	cur, err := r.cp.Get(ctx, v1.KindConfigMap.GVK(), "e1", "probe")
 	require.NoError(t, err)
@@ -220,4 +227,63 @@ func TestANodeResumesFromItsSavedRevision(t *testing.T) {
 		}
 		return true
 	})
+}
+
+func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {
+	ctx := context.Background()
+	r := startCP(t)
+	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	require.NoError(t, err)
+	run := func() (*agent.Agent, func()) {
+		a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+		require.NoError(t, err)
+		actx, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { _ = a.Run(actx); close(done) }()
+		return a, func() { stop(); <-done }
+	}
+	a, stop := run()
+	for _, name := range []v1.ObjectName{"e1", "e2", "other"} {
+		ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+		ns.Name = name
+		if name != "other" {
+			ns.Spec.Node = "vm1"
+		}
+		_, err = r.cp.Create(ctx, ns)
+		require.NoError(t, err)
+	}
+	eventually(t, "the node holds the masters of e1 and e2", func() bool {
+		_, e1 := a.NamespaceMaster("e1")
+		_, e2 := a.NamespaceMaster("e2")
+		return e1 == nil && e2 == nil
+	})
+	m1, err := a.NamespaceMaster("e1")
+	require.NoError(t, err)
+	m2, err := a.NamespaceMaster("e2")
+	require.NoError(t, err)
+	require.NotEqual(t, m1, m2, "each namespace has its own master")
+	obj, err := r.cp.Get(ctx, v1.KindNamespace.GVK(), "", "e1")
+	require.NoError(t, err)
+	mac := hmac.New(sha256.New, []byte(cpMaster))
+	mac.Write([]byte("funcd-namespace-key/v1/" + string(obj.GetObjectMeta().UID)))
+	require.Equal(t, mac.Sum(nil), m1, "a namespace's master derives from the platform's and the namespace's UID")
+	_, err = a.NamespaceMaster("other")
+	require.Error(t, err, "a namespace on no node has no master on this one")
+	stop()
+
+	a, stop = run()
+	defer stop()
+	kept, err := a.NamespaceMaster("e1")
+	require.NoError(t, err)
+	require.Equal(t, m1, kept, "the master is kept on disk, so a restart needs no control plane")
+	require.NoError(t, r.cp.Delete(ctx, v1.KindNamespace.GVK(), "", "e2", ""))
+	eventually(t, "the master of a namespace that left the node goes", func() bool {
+		_, err := a.NamespaceMaster("e2")
+		return err != nil
+	})
+	_, err = os.Stat(filepath.Join(dir, "keys", "e2.json"))
+	require.ErrorIs(t, err, fs.ErrNotExist)
 }

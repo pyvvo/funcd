@@ -78,6 +78,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/quota"
@@ -825,6 +826,11 @@ func (p *Platform) buildControlPlane() error {
 			return fault.Wrapf(merr, fault.KindOf(merr), op, "load node master secret")
 		}
 	}
+	// FEAT-0002 decision 8: a worker node derives each namespace's credentials from that namespace's own master.
+	var masters nsmaster.Source
+	if p.agent != nil {
+		masters = p.agent.NamespaceMaster
+	}
 	// FEAT-0002: a control plane that worker nodes join leaves each namespace placed on one to it.
 	var skip func(v1.NamespaceName) bool
 	if c.cluster != nil {
@@ -896,14 +902,15 @@ func (p *Platform) buildControlPlane() error {
 	if err := p.kv.build(kvDeps{authz: cedarPDP, quota: p.checker, prober: p.prober, ctrl: ctrl}); err != nil {
 		return err
 	}
-	if err := p.blob.build(blobDeps{authz: cedarPDP, quota: p.checker, master: master, prober: p.prober, ctrl: ctrl}); err != nil {
+	if err := p.blob.build(blobDeps{authz: cedarPDP, quota: p.checker, master: master, masters: masters,
+		prober: p.prober, ctrl: ctrl}); err != nil {
 		return err
 	}
-	if err := p.sql.build(sqlDeps{authz: cedarPDP, quota: p.checker, master: master, ctrl: ctrl, fanout: fanout,
+	if err := p.sql.build(sqlDeps{authz: cedarPDP, quota: p.checker, master: master, masters: masters, ctrl: ctrl, fanout: fanout,
 		events: es, engineLine: p.exec.keepDevEngineLine}); err != nil {
 		return err
 	}
-	if err := p.lake.build(lakeDeps{authz: cedarPDP, master: master, floor: p.floor, secrets: p.secrets.resolver,
+	if err := p.lake.build(lakeDeps{authz: cedarPDP, master: master, masters: masters, floor: p.floor, secrets: p.secrets.resolver,
 		routes: edgeAgg, s3: p.blob.injection, ctrl: ctrl, engineLine: p.exec.keepDevEngineLine}); err != nil {
 		return err
 	}
@@ -982,6 +989,7 @@ func (p *Platform) buildControlPlane() error {
 		S3Gateway:            p.blob.injection,
 		LakeMaster:           master, // ADR-0137: per-function lake token derivation (same master as S3)
 		AddonProxy:           p.addon.proxyFor(),
+		NamespaceMasters:     masters,
 		LakeExtensionDir:     c.lakeExtensionDir,
 		LakeProxies:          p.lake.proxy,
 		Secrets:              p.secrets.resolver,

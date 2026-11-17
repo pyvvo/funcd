@@ -14,6 +14,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/services"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -31,12 +32,14 @@ const engineTimeout = "query timeout"
 
 // FacadeDeps configures the SQL facade, the PEP of every context.sql call (ADR-0233 Decision 4).
 type FacadeDeps struct {
-	Resolver    Resolver
-	Authorizer  auth.Authorizer
-	Engines     *Engines
-	Master      []byte
-	HTTPClient  *http.Client  // nil ⇒ a node client bounded by CallTimeout
-	CallTimeout time.Duration // 0 ⇒ DefaultCallTimeout
+	Resolver   Resolver
+	Authorizer auth.Authorizer
+	Engines    *Engines
+	Master     []byte
+	// NamespaceMasters, when set, gives each namespace's own master (FEAT-0002 decision 8); nil derives from Master.
+	NamespaceMasters nsmaster.Source
+	HTTPClient       *http.Client  // nil ⇒ a node client bounded by CallTimeout
+	CallTimeout      time.Duration // 0 ⇒ DefaultCallTimeout
 	// Quota decides each Execute against its database's quota (ADR-0292); nil is quota.None.
 	Quota  quota.Checker
 	Logger *slog.Logger
@@ -147,7 +150,12 @@ func (f *Facade) run(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef
 	ctx, cancel := context.WithTimeout(ctx, f.d.CallTimeout)
 	defer cancel()
 	query.Set("db_timeout", f.d.CallTimeout.String())
-	res, err := call(ctx, f.d.HTTPClient, addr, EnginePassword(f.d.Master, ns, db), path, query, stmts)
+	pw, err := enginePasswordOf(f.d.Master, f.d.NamespaceMasters, ns, db)
+	if err != nil {
+		settle(false)
+		return nil, err
+	}
+	res, err := call(ctx, f.d.HTTPClient, addr, pw, path, query, stmts)
 	settle(err == nil)
 	if err != nil {
 		if fault.KindOf(err) == fault.Internal {
@@ -182,7 +190,11 @@ func (f *Facade) Usage(ctx context.Context, ns v1.NamespaceName, db v1.ObjectNam
 	ctx, cancel := context.WithTimeout(ctx, f.d.CallTimeout)
 	defer cancel()
 	stmt, _ := json.Marshal([]string{usageSQL})
-	res, err := call(ctx, f.d.HTTPClient, addr, EnginePassword(f.d.Master, ns, db), "/db/query", url.Values{}, []json.RawMessage{stmt})
+	pw, err := enginePasswordOf(f.d.Master, f.d.NamespaceMasters, ns, db)
+	if err != nil {
+		return 0, err
+	}
+	res, err := call(ctx, f.d.HTTPClient, addr, pw, "/db/query", url.Values{}, []json.RawMessage{stmt})
 	if err != nil {
 		return 0, err
 	}

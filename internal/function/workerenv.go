@@ -261,8 +261,14 @@ func (h s3Hook) own(w workload) (map[string]string, func() map[string]string, *g
 		return nil, nil, nil
 	}
 	kind, ns, name := w.kind(), string(w.meta().Namespace), string(w.meta().Name)
+	if _, _, err := h.r.s3Gateway.Derive(kind, ns, name); err != nil {
+		return nil, nil, h.r.namespaceKeyMissing(err)
+	}
 	return nil, func() map[string]string {
-		access, secret := h.r.s3Gateway.Derive(kind, ns, name)
+		access, secret, err := h.r.s3Gateway.Derive(kind, ns, name)
+		if err != nil {
+			return nil // the namespace's master left between the gate and the start: the worker gets no pair
+		}
 		return map[string]string{"AWS_ACCESS_KEY_ID": access, "AWS_SECRET_ACCESS_KEY": secret}
 	}, nil
 }
@@ -297,7 +303,11 @@ func (h lakeHook) own(w workload) (map[string]string, func() map[string]string, 
 		return nil, nil, nil
 	}
 	ns, name := w.meta().Namespace, w.meta().Name
-	token, err := lakegw.DeriveLakeToken(h.r.lakeMaster, ns, w.kind(), name)
+	master, err := h.r.namespaceMasters.Of(h.r.lakeMaster, ns)
+	if err != nil {
+		return nil, nil, h.r.namespaceKeyMissing(err)
+	}
+	token, err := lakegw.DeriveLakeToken(master, ns, w.kind(), name)
 	if err != nil {
 		return nil, nil, lakeResolveFailed(fault.Wrapf(err, fault.KindOf(err), "function.lakeHook.own", "derive lake token for %s/%s", ns, name))
 	}
@@ -306,6 +316,14 @@ func (h lakeHook) own(w workload) (map[string]string, func() map[string]string, 
 		env["FUNCD_LAKE_"+strings.ToUpper(c.Alias)+"_TOKEN"] = token
 	}
 	return env, nil, nil
+}
+
+// reasonNamespaceKeyMissing holds a Function while its worker node lacks its namespace's master (FEAT-0002 decision 8):
+// its S3 pair and lake token come from that master, which the control plane sends to the node.
+const reasonNamespaceKeyMissing = "NamespaceKeyMissing"
+
+func (r *Reconciler) namespaceKeyMissing(err error) *gateFailure {
+	return &gateFailure{reason: reasonNamespaceKeyMissing, message: err.Error(), readyMessage: err.Error(), phase: v1.PhasePending, requeue: r.referentPoll}
 }
 
 // lakeResolveFailed fails fn closed on a Lake binding that cannot be resolved.

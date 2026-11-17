@@ -25,6 +25,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -113,15 +114,22 @@ type LakeKeys interface {
 // macKeys is the production LakeKeys (ADR-0137): a node master (for the per-function JWT verify) plus
 // the metastore (for the per-Identity token's two-Get lookup). A nil store ⇒ Function-only resolution.
 type macKeys struct {
-	master []byte
-	store  store.Store
+	master     []byte
+	namespaces nsmaster.Source // FEAT-0002 decision 8: each namespace's own master on a worker node; nil ⇒ master
+	store      store.Store
 }
 
 var _ LakeKeys = (*macKeys)(nil)
 
 // NewLakeKeys builds the production LakeKeys over the node master and the metastore.
 func NewLakeKeys(master []byte, s store.Store) LakeKeys {
-	return &macKeys{master: master, store: s}
+	return NewNamespaceLakeKeys(master, nil, s)
+}
+
+// NewNamespaceLakeKeys is NewLakeKeys where namespaces, when set, gives each namespace's own master (FEAT-0002 decision
+// 8): a token verifies only under the master of the namespace it names.
+func NewNamespaceLakeKeys(master []byte, namespaces nsmaster.Source, s store.Store) LakeKeys {
+	return &macKeys{master: master, namespaces: namespaces, store: s}
 }
 
 // PrincipalFor implements LakeKeys. Verify-JWT ⇒ Function or Job; else owner lookup ⇒ Identity; else deny.
@@ -146,8 +154,16 @@ func (k *macKeys) workloadFor(token string) (auth.EntityRef, bool) {
 	if err != nil {
 		return auth.EntityRef{}, false
 	}
+	var named workloadClaims
+	if err := parsed.UnsafeClaimsWithoutVerification(&named); err != nil { // only to pick the master; Claims verifies
+		return auth.EntityRef{}, false
+	}
+	master, err := k.namespaces.Of(k.master, v1.NamespaceName(named.NS))
+	if err != nil {
+		return auth.EntityRef{}, false
+	}
 	var c workloadClaims
-	if err := parsed.Claims(hs256Key(k.master), &c); err != nil { // verifies the HMAC signature with the master
+	if err := parsed.Claims(hs256Key(master), &c); err != nil { // verifies the HMAC signature with the master
 		return auth.EntityRef{}, false
 	}
 	kind := v1.Kind(c.Kind)

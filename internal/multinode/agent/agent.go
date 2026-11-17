@@ -37,7 +37,6 @@ type Config struct {
 	Logger   *slog.Logger
 	Logs     multinode.LogReader    // the node's local log reads, which answer the log calls
 	RunLogs  multinode.RunLogReader // the node's local run-log reads
-	Keys     func(multinode.NamespaceKey)
 	Version  string
 	Platform string
 }
@@ -52,6 +51,7 @@ type Agent struct {
 	mu     sync.Mutex
 	cursor uint64
 	mine   map[v1.NamespaceName]bool
+	keys   map[v1.NamespaceName]multinode.NamespaceKey
 	pushed map[string]string
 }
 
@@ -64,11 +64,15 @@ func New(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	keys, err := loadKeys(cfg.Dir)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
 	a := &Agent{cfg: cfg, id: id, log: cfg.Logger.With("component", "node-agent", "node", id.name),
-		mine: map[v1.NamespaceName]bool{}, pushed: map[string]string{}}
+		mine: map[v1.NamespaceName]bool{}, keys: keys, pushed: map[string]string{}}
 	if b, err := os.ReadFile(filepath.Join(cfg.Dir, cursorFile)); err == nil { //nolint:gosec // the node's own directory
 		a.cursor, _ = strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
 	}
@@ -215,6 +219,7 @@ func (a *Agent) follow(ctx context.Context) {
 		for _, c := range feed.Changes {
 			a.apply(ctx, c)
 		}
+		a.fetchMissingKeys(ctx)
 		if feed.Rev > a.cursor {
 			a.saveCursor(feed.Rev)
 		}
@@ -254,6 +259,12 @@ func (a *Agent) syncAll(ctx context.Context) error {
 	for ns := range gone {
 		a.removeNamespace(ctx, ns)
 	}
+	// A namespace's master comes before its objects, whose credentials derive from it (decision 8).
+	for ns := range placed {
+		if err := a.fetchKey(ctx, ns); err != nil {
+			a.log.WarnContext(ctx, "node agent: fetch a namespace's master", "namespace", ns, "error", err)
+		}
+	}
 	for _, c := range snap.Objects {
 		seen[key(c.Kind, c.Namespace, c.Name)] = true
 		if err := a.upsert(ctx, c); err != nil {
@@ -262,7 +273,6 @@ func (a *Agent) syncAll(ctx context.Context) error {
 	}
 	for ns := range placed {
 		a.prune(ctx, ns, seen)
-		a.fetchKey(ctx, ns)
 	}
 	a.saveCursor(snap.Rev)
 	a.log.InfoContext(ctx, "node agent: synced from a snapshot", "rev", snap.Rev, "objects", len(snap.Objects), "namespaces", len(placed))
@@ -277,25 +287,14 @@ func (a *Agent) syncNamespace(ctx context.Context, ns v1.NamespaceName) {
 		a.log.WarnContext(ctx, "node agent: snapshot of a newly placed namespace", "namespace", ns, "error", err)
 		return
 	}
+	if err := a.fetchKey(ctx, ns); err != nil {
+		a.log.WarnContext(ctx, "node agent: fetch a namespace's master", "namespace", ns, "error", err)
+	}
 	for _, c := range snap.Objects {
 		if err := a.upsert(ctx, c); err != nil {
 			a.log.WarnContext(ctx, "node agent: apply from the snapshot", "kind", c.Kind, "name", c.Name, "error", err)
 		}
 	}
-	a.fetchKey(ctx, ns)
-}
-
-// fetchKey hands namespace ns's key to the node's platform (decision 8).
-func (a *Agent) fetchKey(ctx context.Context, ns v1.NamespaceName) {
-	if a.cfg.Keys == nil {
-		return
-	}
-	var k multinode.NamespaceKey
-	if _, err := a.do(ctx, http.MethodGet, multinode.PathKeys+"?namespace="+url.QueryEscape(string(ns)), nil, &k); err != nil {
-		a.log.WarnContext(ctx, "node agent: fetch the namespace's key", "namespace", ns, "error", err)
-		return
-	}
-	a.cfg.Keys(k)
 }
 
 // apply applies one feed record to the local copy.
@@ -360,6 +359,7 @@ func (a *Agent) removeNamespace(ctx context.Context, ns v1.NamespaceName) {
 	if err := a.cfg.Store.Delete(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns), ""); err != nil && fault.KindOf(err) != fault.NotFound {
 		a.log.WarnContext(ctx, "node agent: remove a Namespace", "namespace", ns, "error", err)
 	}
+	a.dropKey(ctx, ns)
 	a.log.InfoContext(ctx, "node agent: namespace left this node", "namespace", ns)
 }
 

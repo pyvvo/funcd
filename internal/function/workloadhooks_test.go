@@ -19,8 +19,8 @@ import (
 
 // withS3Gateway enables the S3 gateway, issuing each Function a key pair named after it.
 func withS3Gateway(d *function.Deps) {
-	d.S3Gateway = function.S3GatewayInjection{Enabled: true, ListenAddr: "127.0.0.1:9000", Derive: func(_ v1.Kind, _, name string) (string, string) {
-		return "AK-" + name, "SK-" + name
+	d.S3Gateway = function.S3GatewayInjection{Enabled: true, ListenAddr: "127.0.0.1:9000", Derive: func(_ v1.Kind, _, name string) (string, string, error) {
+		return "AK-" + name, "SK-" + name, nil
 	}}
 }
 
