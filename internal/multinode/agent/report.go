@@ -92,9 +92,10 @@ func (a *Agent) push(ctx context.Context, typ store.EventType, obj v1.Object) {
 	}
 	kind := obj.GroupVersionKind().Kind
 	k := key(kind, m.Namespace, m.Name)
+	whole := multinode.WrittenBack(kind, len(m.OwnerReferences) > 0)
 	if typ == store.Deleted {
 		a.forget(k)
-		if len(m.OwnerReferences) > 0 {
+		if whole {
 			q := url.Values{"kind": {string(kind)}, "namespace": {string(m.Namespace)}, "name": {string(m.Name)}}
 			if _, err := a.do(ctx, http.MethodDelete, multinode.PathObjects+"?"+q.Encode(), nil, nil); err != nil {
 				a.log.WarnContext(ctx, "node agent: delete a child", "kind", kind, "name", m.Name, "error", err)
@@ -110,7 +111,7 @@ func (a *Agent) push(ctx context.Context, typ store.EventType, obj v1.Object) {
 	if json.Unmarshal(raw, &fields) != nil {
 		return
 	}
-	if len(m.OwnerReferences) > 0 {
+	if whole {
 		fp := fingerprint(fields)
 		if a.wasPushed(k, fp) {
 			return

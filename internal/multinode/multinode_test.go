@@ -223,3 +223,15 @@ func TestASpecFieldANodeIsTooOldForIsRefused(t *testing.T) {
 	require.True(t, newerRelease("v0.41.0", "v0.40.0"))
 	require.False(t, newerRelease("v0.41.0", "dev"), "a release that does not order passes")
 }
+
+func TestANodeWritesBackOnlyTheKindsItsReconcilersMake(t *testing.T) {
+	for _, k := range []v1.Kind{v1.KindRevision, v1.KindFunction, v1.KindKVStore, v1.KindRoute, v1.KindSecret, v1.KindInvocation} {
+		require.True(t, WrittenBack(k, true), "an owned %s", k)
+	}
+	for _, k := range []v1.Kind{v1.KindPolicy, v1.KindRole, v1.KindRolesAssignment, v1.KindIdentity, v1.KindEgressPolicy, v1.KindApp} {
+		require.False(t, WrittenBack(k, true), "no %s, even owned", k)
+	}
+	require.True(t, WrittenBack(v1.KindWorkflowRun, false), "a WorkflowRun a Sensor fires")
+	require.True(t, WrittenBack(v1.KindBackup, false), "a Backup record a sync finds")
+	require.False(t, WrittenBack(v1.KindConfigMap, false), "a person's ConfigMap")
+}

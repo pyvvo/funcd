@@ -1,12 +1,18 @@
 package agent_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -570,4 +576,65 @@ func TestANodeReportsItsBackupInItsWorkerNode(t *testing.T) {
 		b := obj.(*v1.WorkerNode).Status.Backup
 		return b != nil && b.RPORisk && b.LastSuccessTime != nil && time.Time(*b.LastSuccessTime).Equal(time.Time(last))
 	})
+}
+
+func TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers(t *testing.T) {
+	ctx := context.Background()
+	r := startCP(t)
+	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	require.NoError(t, err)
+	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+	require.NoError(t, err)
+	actx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { _ = a.Run(actx); close(done) }()
+	defer func() { stop(); <-done }()
+	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+	ns.Name, ns.Spec.Node = "e1", "vm1"
+	_, err = r.cp.Create(ctx, ns)
+	require.NoError(t, err)
+	eventually(t, "the node runs e1", func() bool {
+		_, err := r.node.Get(ctx, v1.KindNamespace.GVK(), "", "e1")
+		return err == nil
+	})
+
+	run := &v1.WorkflowRun{TypeMeta: meta(v1.KindWorkflowRun)}
+	run.Name, run.Namespace, run.ResourceGroup, run.Spec.Workflow = "fired-1", "e1", "rg1", "orders"
+	_, err = r.node.Create(ctx, run)
+	require.NoError(t, err)
+	eventually(t, "a WorkflowRun the node fired reaches the control plane", func() bool {
+		_, err := r.cp.Get(ctx, v1.KindWorkflowRun.GVK(), "e1", "fired-1")
+		return err == nil
+	})
+
+	// The node API itself refuses a Policy, even one that names an owner.
+	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "node.crt"), filepath.Join(dir, "node.key"))
+	require.NoError(t, err)
+	caPEM, err := os.ReadFile(filepath.Join(dir, "ca.crt"))
+	require.NoError(t, err)
+	roots := x509.NewCertPool()
+	require.True(t, roots.AppendCertsFromPEM(caPEM))
+	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert},
+		RootCAs: roots, MinVersion: tls.VersionTLS13}}}
+	pol := &v1.Policy{TypeMeta: meta(v1.KindPolicy)}
+	pol.Name, pol.Namespace, pol.ResourceGroup = "grant-all", "e1", "rg1"
+	pol.Spec.Cedar = "permit(principal, action, resource);"
+	pol.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Name: "api"}, UID: "x"}}
+	raw, err := json.Marshal(pol)
+	require.NoError(t, err)
+	body, err := json.Marshal(multinode.ObjectWrite{Kind: v1.KindPolicy, Object: raw})
+	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, r.server()+multinode.PathObjects, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set(multinode.HeaderAPIVersion, strconv.Itoa(multinode.APIVersion))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := hc.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	_, err = r.cp.Get(ctx, v1.KindPolicy.GVK(), "e1", "grant-all")
+	require.Equal(t, fault.NotFound, fault.KindOf(err))
 }
