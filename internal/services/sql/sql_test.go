@@ -493,7 +493,9 @@ func TestEngineFencedToChangeFeed(t *testing.T) {
 	st := store.New(memory.New())
 	r, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{
 		Store: st, Provider: rt, Engines: sqlsvc.NewEngines(), Master: []byte(masterKey), Hold: gate{false},
-		ChangeFeedURL: func(v1.NamespaceName, v1.ObjectName) string { return "http://10.63.0.1:41234/v1/changes/tok" },
+		ChangeFeedURL: func(v1.NamespaceName, v1.ObjectName) (string, error) {
+			return "http://10.63.0.1:41234/v1/changes/tok", nil
+		},
 	})
 	require.NoError(t, err)
 	create(t, st, "")

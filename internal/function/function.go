@@ -39,6 +39,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/pooling"
 	"github.com/pyvvo/funcd/internal/revhold"
 	"github.com/pyvvo/funcd/internal/runtime"
@@ -169,6 +170,9 @@ type Deps struct {
 	// SAME master the S3 gateway derives keypairs from (loaded once at the compose root). nil/empty ⇒ a
 	// still-derivable but unverifiable token (the proxy holds the real master); the master is never logged.
 	LakeMaster []byte
+	// NamespaceMasters, when set, gives each namespace's own master for its lake tokens (FEAT-0002 decision 8, on a
+	// worker node); nil derives them from LakeMaster.
+	NamespaceMasters nsmaster.Source
 
 	// LakeProxies reports the lake listeners bound in this daemon run (ADR-0137, ADR-0162): a consumer is
 	// injected its lake's bound listener URL, and waits while none is bound. nil ⇒ the lake's status.endpoint,
@@ -245,7 +249,7 @@ type S3GatewayInjection struct {
 	Endpoint string
 	// Derive returns the deterministic per-(kind, ns, name) SigV4 keypair (s3gateway.DeriveKeypair,
 	// bound to the node master secret; ADR-0175). Required when Enabled.
-	Derive func(kind v1.Kind, ns, name string) (access, secret string)
+	Derive func(kind v1.Kind, ns, name string) (access, secret string, err error)
 	// Period is the key pairs' rotation period and RenewalAge the age at which an identity's worker is replaced
 	// (ADR-0270); a zero Period means fixed pairs and no renewal.
 	Period     time.Duration
@@ -312,7 +316,8 @@ type Reconciler struct {
 
 	// lakeMaster is the node master the per-function lake token is derived from (ADR-0137);
 	// nil/empty ⇒ lake injection derives a token the proxy cannot verify. Never logged.
-	lakeMaster []byte
+	lakeMaster       []byte
+	namespaceMasters nsmaster.Source
 
 	// lakeProxies reports the lake listeners bound in this daemon run (ADR-0137, ADR-0162); nil ⇒ status.endpoint.
 	lakeProxies LakeProxies
@@ -526,6 +531,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		invokeSockets:     d.InvokeSockets,
 		s3Gateway:         d.S3Gateway,
 		lakeMaster:        d.LakeMaster,
+		namespaceMasters:  d.NamespaceMasters,
 		lakeExtensionDir:  d.LakeExtensionDir,
 		lakeProxies:       d.LakeProxies,
 		assigner:          pooling.NewAssigner(),

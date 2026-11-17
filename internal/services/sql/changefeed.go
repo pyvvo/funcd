@@ -22,6 +22,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -52,13 +53,15 @@ type Watermarks interface {
 
 // FeedDeps configures the change feed; Store, Publisher, Watermarks and Master are required.
 type FeedDeps struct {
-	Store         store.Store
-	Publisher     eventing.Publisher
-	Watermarks    Watermarks
-	Master        []byte
-	Hold          hold.Gate          // nil ⇒ never held
-	NamespaceHold hold.NamespaceGate // nil ⇒ no namespace held
-	Logger        *slog.Logger
+	Store      store.Store
+	Publisher  eventing.Publisher
+	Watermarks Watermarks
+	Master     []byte
+	// NamespaceMasters, when set, gives each namespace's own master (FEAT-0002 decision 8); nil derives from Master.
+	NamespaceMasters nsmaster.Source
+	Hold             hold.Gate          // nil ⇒ never held
+	NamespaceHold    hold.NamespaceGate // nil ⇒ no namespace held
+	Logger           *slog.Logger
 }
 
 // Feed receives the changes every engine posts and turns those an EventSource names into named CloudEvents
@@ -112,9 +115,13 @@ func NewFeed(d FeedDeps) (*Feed, error) {
 }
 
 // URL is the endpoint a database's engine posts its changes to, on host:port.
-func (f *Feed) URL(host string, port int) func(ns v1.NamespaceName, name v1.ObjectName) string {
-	return func(ns v1.NamespaceName, name v1.ObjectName) string {
-		return fmt.Sprintf("http://%s/v1/changes/%s", net.JoinHostPort(host, fmt.Sprint(port)), ChangeToken(f.d.Master, ns, name))
+func (f *Feed) URL(host string, port int) func(ns v1.NamespaceName, name v1.ObjectName) (string, error) {
+	return func(ns v1.NamespaceName, name v1.ObjectName) (string, error) {
+		master, err := f.d.NamespaceMasters.Of(f.d.Master, ns)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("http://%s/v1/changes/%s", net.JoinHostPort(host, fmt.Sprint(port)), ChangeToken(master, ns, name)), nil
 	}
 }
 
@@ -255,7 +262,11 @@ func (f *Feed) database(ctx context.Context, token string) (*v1.SQLDatabase, err
 	var found *v1.SQLDatabase
 	for _, o := range l.Items {
 		db, ok := o.(*v1.SQLDatabase)
-		if ok && hmac.Equal([]byte(ChangeToken(f.d.Master, db.Namespace, db.Name)), []byte(token)) {
+		if !ok {
+			continue
+		}
+		master, merr := f.d.NamespaceMasters.Of(f.d.Master, db.Namespace)
+		if merr == nil && hmac.Equal([]byte(ChangeToken(master, db.Namespace, db.Name)), []byte(token)) {
 			found = db
 		}
 	}

@@ -162,6 +162,9 @@ func serveAs(parent context.Context, configPath string, memoryFlag *bool, out io
 		return err
 	}
 	cfg = r.prepare(cfg)
+	if cfg, err = r.secretsKey(cfg); err != nil {
+		return err
+	}
 	// ADR-0314 Decision 3: a config mistake, refused before the data directory, so it never counts as a start (ADR-0207).
 	if err := checkBuiltInTokenBind(cfg); err != nil {
 		return err

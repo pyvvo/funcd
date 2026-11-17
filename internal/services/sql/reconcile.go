@@ -17,6 +17,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/store"
@@ -48,16 +49,18 @@ const (
 
 // ReconcilerDeps configures the SQLDatabase reconciler (ADR-0232).
 type ReconcilerDeps struct {
-	Store             store.Store
-	Provider          provider.Runtime // OwnerKind SQLDatabase; must implement provider.Volumes
-	Engines           *Engines
-	Master            []byte
+	Store    store.Store
+	Provider provider.Runtime // OwnerKind SQLDatabase; must implement provider.Volumes
+	Engines  *Engines
+	Master   []byte
+	// NamespaceMasters, when set, gives each namespace's own master (FEAT-0002 decision 8); nil derives from Master.
+	NamespaceMasters  nsmaster.Source
 	ImageFor          func(runtime string) string
 	Hold              hold.Gate // nil ⇒ never held
 	Logger            *slog.Logger
 	SupervisionPeriod time.Duration
 	// ChangeFeedURL is the endpoint each engine posts its changes to (ADR-0235 Decision 1); nil ⇒ no change feed.
-	ChangeFeedURL func(ns v1.NamespaceName, name v1.ObjectName) string
+	ChangeFeedURL func(ns v1.NamespaceName, name v1.ObjectName) (string, error)
 	// Watermarks are the change feed's, dropped with a deleted database; nil ⇒ none.
 	Watermarks Watermarks
 	// DurableStorage is engine storage that outlives a daemon start: only then does a missing directory mean lost
@@ -119,12 +122,13 @@ func (r *Reconciler) Engines() *Engines { return r.d.Engines }
 
 // Backups copies and loads databases over this reconciler's engines, for workload backups (ADR-0234).
 func (r *Reconciler) Backups() Backups {
-	return Backups{Engines: r.d.Engines, Master: r.d.Master, Client: r.backupClient}
+	return Backups{Engines: r.d.Engines, Master: r.d.Master, NamespaceMasters: r.d.NamespaceMasters, Client: r.backupClient}
 }
 
 // Prober answers the deletion protection over this reconciler's engines and storage.
 func (r *Reconciler) Prober() Prober {
-	return Prober{Engines: r.d.Engines, Master: r.d.Master, Volumes: r.volumes, Client: r.probeClient}
+	return Prober{Engines: r.d.Engines, Master: r.d.Master, NamespaceMasters: r.d.NamespaceMasters, Volumes: r.volumes,
+		Client: r.probeClient}
 }
 
 func (r *Reconciler) held() bool { return r.d.Hold != nil && r.d.Hold.Held() }
@@ -152,7 +156,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// A changed bound reaches the engine through a new container: the provider runtime replaces an engine of another
 	// spec (#1195), so a change the engine never reads, its quota, keeps it running (ADR-0292, refining ADR-0232
 	// Decision 2).
-	st, cerr := r.d.Provider.Converge(ctx, r.engineSpec(db))
+	spec, serr := r.engineSpec(db)
+	if serr != nil {
+		return controller.Result{}, serr
+	}
+	st, cerr := r.d.Provider.Converge(ctx, spec)
 	if cerr != nil {
 		r.log.WarnContext(ctx, "sql engine converge failed", "database", string(req.Namespace)+"/"+string(req.Name), "err", cerr)
 		st = provider.ProviderStatus{Reason: ReasonEngineConvergeFailed}
@@ -339,17 +347,25 @@ func (r *Reconciler) MapFunction(ctx context.Context, obj v1.Object) []controlle
 }
 
 // engineSpec is the engine of db (ADR-0232 Decisions 2 to 5).
-func (r *Reconciler) engineSpec(db *v1.SQLDatabase) provider.ProviderSpec {
+func (r *Reconciler) engineSpec(db *v1.SQLDatabase) (provider.ProviderSpec, error) {
 	res := provider.ResourceSpec{CPU: db.Spec.Resources.CPU, Memory: db.Spec.Resources.Memory}
 	if res.Memory == "" {
 		res.Memory = defaultMemory
 	}
+	pw, err := enginePasswordOf(r.d.Master, r.d.NamespaceMasters, db.Namespace, db.Name)
+	if err != nil {
+		return provider.ProviderSpec{}, err
+	}
 	env := map[string]string{
 		"FUNCD_SQL_NODE_ID":  string(db.Name),
-		"FUNCD_SQL_PASSWORD": EnginePassword(r.d.Master, db.Namespace, db.Name),
+		"FUNCD_SQL_PASSWORD": pw,
 	}
 	if r.d.ChangeFeedURL != nil {
-		env["FUNCD_SQL_CDC_ENDPOINT"] = r.d.ChangeFeedURL(db.Namespace, db.Name)
+		cdc, err := r.d.ChangeFeedURL(db.Namespace, db.Name)
+		if err != nil {
+			return provider.ProviderSpec{}, err
+		}
+		env["FUNCD_SQL_CDC_ENDPOINT"] = cdc
 	}
 	// The engine reaches only its change feed (ADR-0269). The feed's URL is funcd's own address, so EgressTo fails
 	// only on a bug, and then the fence stays empty.
@@ -369,7 +385,7 @@ func (r *Reconciler) engineSpec(db *v1.SQLDatabase) provider.ProviderSpec {
 		Storage:   &provider.StorageSpec{Path: dataPath, UID: engineUID, GID: engineUID},
 
 		EgressOnly: fence,
-	}
+	}, nil
 }
 
 // deleted tears a deleted database's engine down and reclaims its directory unless the platform is held.
@@ -461,8 +477,10 @@ func (r *Reconciler) Quarantine() quarantine.Store { return r.volumes.Quarantine
 type Prober struct {
 	Engines *Engines
 	Master  []byte
-	Volumes provider.Volumes
-	Client  *http.Client // nil ⇒ a node client with a 5 s timeout
+	// NamespaceMasters, when set, gives each namespace's own master (FEAT-0002 decision 8); nil derives from Master.
+	NamespaceMasters nsmaster.Source
+	Volumes          provider.Volumes
+	Client           *http.Client // nil ⇒ a node client with a 5 s timeout
 }
 
 const userTablesQuery = "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
@@ -489,7 +507,11 @@ func (p Prober) HasTables(ctx context.Context, ns v1.NamespaceName, name v1.Obje
 		client = httpx.NodeClient(engineProbeTimeout)
 	}
 	stmt, _ := json.Marshal(userTablesQuery)
-	res, err := call(ctx, client, addr, EnginePassword(p.Master, ns, name), "/db/query", url.Values{}, []json.RawMessage{stmt})
+	pw, err := enginePasswordOf(p.Master, p.NamespaceMasters, ns, name)
+	if err != nil {
+		return false, err
+	}
+	res, err := call(ctx, client, addr, pw, "/db/query", url.Values{}, []json.RawMessage{stmt})
 	if err != nil {
 		return false, err
 	}

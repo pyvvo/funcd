@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -13,6 +17,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
 	"github.com/pyvvo/funcd/internal/platform/config"
+	"github.com/pyvvo/funcd/internal/platform/durable"
 	"github.com/pyvvo/funcd/internal/platform/stopsignal"
 	"github.com/pyvvo/funcd/internal/platform/version"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -39,6 +44,37 @@ func (r role) prepare(cfg config.Config) config.Config {
 		cfg.Cluster.ListenAddr = defaultClusterAddr
 	}
 	return cfg
+}
+
+// nodeSecretsKey is the key file a worker node encrypts its Secrets with when its config names none (FEAT-0002 decision
+// 8). Losing it loses nothing: the control plane holds every Secret, and a new node takes them again.
+const nodeSecretsKey = "secrets.key"
+
+// secretsKey gives a worker node its own Secrets key under cluster.dataDir when secrets.encryptionKeyFile is unset, so
+// the Secrets it pulls stay encrypted at rest.
+func (r role) secretsKey(cfg config.Config) (config.Config, error) {
+	if r != roleNode || cfg.Secrets.EncryptionKeyFile != "" {
+		return cfg, nil
+	}
+	path := filepath.Join(cfg.Cluster.DataDir, nodeSecretsKey)
+	_, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return cfg, fmt.Errorf("generate the node's Secrets key: %w", err)
+		}
+		if err := (durable.Disk{}).MkdirAll(cfg.Cluster.DataDir, 0o700); err != nil {
+			return cfg, fmt.Errorf("create %s: %w", cfg.Cluster.DataDir, err)
+		}
+		if err := (durable.Disk{}).WriteFile(cfg.Cluster.DataDir, nodeSecretsKey, key, 0o600); err != nil {
+			return cfg, fmt.Errorf("write the node's Secrets key: %w", err)
+		}
+	case err != nil:
+		return cfg, fmt.Errorf("read the node's Secrets key: %w", err)
+	}
+	cfg.Secrets.EncryptionKeyFile = path
+	return cfg, nil
 }
 
 // servesNodes reports whether the role serves the node API, so its store keeps the change log the nodes follow.
