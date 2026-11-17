@@ -6,6 +6,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 )
 
@@ -32,6 +33,7 @@ type Commands struct {
 	Replayer    Replayer
 	Apps        AppRetrier
 	Volumes     VolumeDeleter
+	Admissions  []admission.Admission // the node-state checks before a write (NodeState)
 }
 
 // DeadLetterRouter is the dead-letter store the API reads, lists and discards with: a namespace that a worker node runs

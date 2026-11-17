@@ -1097,7 +1097,7 @@ func (p *Platform) buildControlPlane() error {
 	partAdmissions := func(r admission.StoreReader) []admission.Admission {
 		// ADR-0064 fn-to-fn link rules on the write path, then each store provider's resource rules.
 		links := []admission.Admission{admission.NewLinkValidityAdmission(r), admission.NewLinkDeletionProtectionAdmission(r)}
-		return append(append(links, p.providerAdmissions(r)...),
+		all := append(append(links, p.providerAdmissions(r)...),
 			// ADR-0086/0091 lake blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
 			// (ADR-0121): the Lake / Function reconcilers wait for the referent (Waiting condition).
 			// ADR-0139 Site: spec.bindings.blob[0].prefix is immutable on Update (the prefix permanently holds the site's bundles).
@@ -1127,6 +1127,10 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewBackupTTLAdmission(r),
 			admission.NewRestoreInPlaceAdmission(c.authorizer, r, c.hold),
 		)
+		if p.cluster != nil { // FEAT-0002 F250: a node runs the checks that read its own state
+			all = p.cluster.Forward(all)
+		}
+		return all
 	}
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
@@ -1151,7 +1155,8 @@ func (p *Platform) buildControlPlane() error {
 	volumes := p.volumeDeleter()
 	if p.agent != nil {
 		p.agent.SetLogs(logReader, runLogQuerier)
-		cmds := multinode.Commands{DeadLetters: deadLetters, Apps: appReconciler, Volumes: volumes}
+		cmds := multinode.Commands{DeadLetters: deadLetters, Apps: appReconciler, Volumes: volumes,
+			Admissions: multinode.NodeState(partAdmissions(storeReader{c.store}))}
 		if p.eventing.sensorReconciler != nil {
 			cmds.Replayer = p.eventing.sensorReconciler
 		}
