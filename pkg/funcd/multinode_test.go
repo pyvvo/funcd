@@ -100,6 +100,15 @@ func TestAWorkerNodeRunsTheNamespacePlacedOnIt(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode, "a worker node's own API answers reads only")
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, "http://"+node.Addr()+"/apis/funcd.io/v1alpha1/hold/release",
+		strings.NewReader(`{}`))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+clusterAdmin)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.NotEqual(t, http.StatusMethodNotAllowed, resp.StatusCode, "but the node's own hold is released on the node")
 
 	cur, err := admin.Get(ctx, v1.KindWorkerNode, "", "vm1")
 	require.NoError(t, err)

@@ -10,12 +10,20 @@ import (
 	"github.com/pyvvo/funcd/internal/snapshot"
 )
 
-// readOnly answers only the reads of a worker node's own API (FEAT-0002): a node's namespaces are written on the
-// control plane, and a write here would be undone by the next change the node follows.
+// The writes a worker node's own API answers: the release of the node's own hold and the return of its quarantine
+// (ADR-0206), which act on the node alone, as on one host, and which a node restored from its backup needs.
+const (
+	holdReleasePath      = "/apis/funcd.io/v1alpha1/hold/release"
+	quarantineReturnPath = "/apis/funcd.io/v1alpha1/quarantine/return"
+)
+
+// readOnly answers only the reads of a worker node's own API (FEAT-0002), and its hold actions: a node's namespaces are
+// written on the control plane, and a write here would be undone by the next change the node follows.
 func readOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet, http.MethodHead, http.MethodOptions:
+		hold := r.Method == http.MethodPost && (r.URL.Path == holdReleasePath || r.URL.Path == quarantineReturnPath)
+		switch {
+		case hold, r.Method == http.MethodGet, r.Method == http.MethodHead, r.Method == http.MethodOptions:
 			next.ServeHTTP(w, r)
 		default:
 			http.Error(w, "this is a worker node: its namespaces are written on the control plane", http.StatusMethodNotAllowed)
