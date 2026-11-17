@@ -12,6 +12,7 @@ import (
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/multinode"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -242,6 +243,20 @@ func (a *Agent) run(ctx context.Context, c multinode.Call) (multinode.Answer, er
 		err = cmd.Apps.Retry(ctx, c.Namespace, v1.ObjectName(c.Name))
 	case c.Kind == multinode.CallVolumeDelete && cmd.Volumes != nil:
 		err = cmd.Volumes.DeleteVolume(ctx, c.Namespace, v1.ObjectName(c.Name), c.Volume)
+	case c.Kind == multinode.CallReleaseNamespaces && cmd.Hold != nil:
+		var nss []v1.NamespaceName
+		if err = json.Unmarshal(c.Body, &nss); err == nil {
+			err = a.releaseNamespaces(ctx, nss)
+		}
+	case c.Kind == multinode.CallReturnQuarantined && cmd.Hold != nil:
+		var q hold.QuarantineReturn
+		if err = json.Unmarshal(c.Body, &q); err == nil {
+			if !a.isMine(q.Namespace) {
+				err = fault.Forbiddenf("agent.answer", "namespace %s does not run on this node", q.Namespace)
+			} else {
+				err = cmd.Hold.ReturnQuarantined(ctx, q)
+			}
+		}
 	case c.Kind == multinode.CallAdmit:
 		var obj v1.Object
 		if obj, err = a.admit(ctx, c); err == nil && obj != nil {
@@ -293,4 +308,14 @@ func (a *Agent) reportBackup(ctx context.Context) {
 		return
 	}
 	a.backupSent = string(b)
+}
+
+// releaseNamespaces releases the holds of nss, which must all run on this node.
+func (a *Agent) releaseNamespaces(ctx context.Context, nss []v1.NamespaceName) error {
+	for _, ns := range nss {
+		if !a.isMine(ns) {
+			return fault.Forbiddenf("agent.answer", "namespace %s does not run on this node", ns)
+		}
+	}
+	return a.cfg.Commands.Hold.ReleaseNamespaces(ctx, nss)
 }

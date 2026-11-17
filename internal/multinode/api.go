@@ -91,6 +91,8 @@ const (
 	CallAppRetry          = "appRetry"
 	CallVolumeDelete      = "volumeDelete"
 	CallAdmit             = "admit"
+	CallReleaseNamespaces = "releaseNamespaces"
+	CallReturnQuarantined = "returnQuarantined"
 )
 
 // Call is one node call the control plane queued for a node.

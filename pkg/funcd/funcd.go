@@ -1153,10 +1153,14 @@ func (p *Platform) buildControlPlane() error {
 	var replayer controlplane.Replayer = p.eventing.sensorReconciler
 	var appRetrier controlplane.AppRetrier = appReconciler
 	volumes := p.volumeDeleter()
+	holdSvc := controlplane.NewHoldService(controlplane.HoldDeps{ // ADR-0206: the hold's evidence and release
+		Hold: c.hold, Store: c.store, DeadLetters: p.eventing.deadLetters, Platform: holdPlatform{p},
+	})
+	var holder controlplane.Holder = holdSvc
 	if p.agent != nil {
 		p.agent.SetLogs(logReader, runLogQuerier)
 		cmds := multinode.Commands{DeadLetters: deadLetters, Apps: appReconciler, Volumes: volumes,
-			Admissions: multinode.NodeState(partAdmissions(storeReader{c.store}))}
+			Admissions: multinode.NodeState(partAdmissions(storeReader{c.store})), Hold: holdSvc}
 		if p.eventing.sensorReconciler != nil {
 			cmds.Replayer = p.eventing.sensorReconciler
 		}
@@ -1169,6 +1173,7 @@ func (p *Platform) buildControlPlane() error {
 		logReader, runLogQuerier = p.cluster.Logs(logReader), p.cluster.RunLogs(runLogQuerier)
 		deadLetters, replayer = p.cluster.DeadLetters(deadLetters), p.cluster.Replayer(replayer)
 		appRetrier, volumes = p.cluster.AppRetrier(appRetrier), p.cluster.Volumes(volumes)
+		holder = p.cluster.Hold(holdSvc)
 		joinTokens = p.cluster
 		admissions = append(admissions, p.cluster.Admissions()...)
 	}
@@ -1198,9 +1203,7 @@ func (p *Platform) buildControlPlane() error {
 		AppRetrier:  appRetrier,              // ADR-0214: retry an App's failed hook
 		Planner:     app.NewPlanner(c.store), // ADR-0220: a dry-run App write's plan
 		Volumes:     volumes,                 // ADR-0262: delete a retained Function volume
-		Hold: controlplane.NewHoldService(controlplane.HoldDeps{ // ADR-0206: the hold's evidence and release
-			Hold: c.hold, Store: c.store, DeadLetters: p.eventing.deadLetters, Platform: holdPlatform{p},
-		}),
+		Hold:        holder,                  // ADR-0206: the hold's evidence and release
 		// ADR-0219: app-requires runs after app-parts.
 		Admissions: admissions,
 		JoinTokens: joinTokens,
