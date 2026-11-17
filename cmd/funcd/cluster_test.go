@@ -42,3 +42,26 @@ func TestAWorkerNodeKeepsItsSecretsEncryptedWithAKeyOfItsOwn(t *testing.T) {
 	_, err = os.Stat(all.Cluster.DataDir)
 	require.True(t, os.IsNotExist(err))
 }
+
+func TestAWorkerNodeBacksUpUnderItsOwnPrefix(t *testing.T) {
+	require.Equal(t, "s3://backups?prefix=nodes%2Fvm1%2F&region=eu-west-1", nodeTarget("s3://backups?region=eu-west-1", "vm1"))
+	require.Equal(t, "s3://backups?prefix=funcd%2Fnodes%2Fvm1%2F", nodeTarget("s3://backups?prefix=funcd", "vm1"))
+	require.Equal(t, "file:///srv/backup/nodes/vm1", nodeTarget("file:///srv/backup", "vm1"))
+	require.Equal(t, "ftp://nowhere", nodeTarget("ftp://nowhere", "vm1"), "backup.Open refuses another scheme")
+
+	var cfg config.Config
+	cfg.Cluster.DataDir = t.TempDir()
+	cfg.Backup.Target = "file:///srv/backup"
+	_, err := roleNode.nodeBackups(cfg)
+	require.ErrorContains(t, err, "has not joined")
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Cluster.DataDir, "name"), []byte("vm1\n"), 0o600))
+	cfg.Kvstore.Backup.Target = "s3://kv"
+	got, err := roleNode.nodeBackups(cfg)
+	require.NoError(t, err)
+	require.Equal(t, "file:///srv/backup/nodes/vm1", got.Backup.Target)
+	require.Equal(t, "s3://kv?prefix=nodes%2Fvm1%2F", got.Kvstore.Backup.Target)
+
+	same, err := roleServer.nodeBackups(cfg)
+	require.NoError(t, err)
+	require.Equal(t, cfg.Backup.Target, same.Backup.Target, "the control plane keeps the target's root")
+}

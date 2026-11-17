@@ -53,8 +53,9 @@ type JoinResponse struct {
 // Snapshot is every object of a node's namespaces at Rev, the Namespace objects included; a node follows the feed after
 // Rev. Objects a node owns (children, with ownerReferences) are left out: the node holds them already.
 type Snapshot struct {
-	Rev     uint64         `json:"rev"`
-	Objects []store.Change `json:"objects"`
+	Rev      uint64         `json:"rev"`
+	Timeline string         `json:"timeline"`
+	Objects  []store.Change `json:"objects"`
 }
 
 // Feed is a long poll's answer: the node's records after the asked revision, and the revision to resume after.

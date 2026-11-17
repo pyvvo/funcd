@@ -149,6 +149,15 @@ func verifyChain(raw [][]byte, caDER []byte, host string) error {
 	return err
 }
 
+// JoinedName is the name this node joined under, from its cluster directory dir.
+func JoinedName(dir string) (v1.ObjectName, error) {
+	b, err := os.ReadFile(filepath.Join(dir, nameFile)) //nolint:gosec // the node's own cluster directory
+	if err != nil {
+		return "", fault.Wrapf(err, fault.Invalid, "agent.JoinedName", "this node has not joined (read %s); run funcd node join", nameFile)
+	}
+	return v1.ObjectName(strings.TrimSpace(string(b))), nil
+}
+
 // identity is what a joined node reads back from its cluster directory.
 type identity struct {
 	name   v1.ObjectName

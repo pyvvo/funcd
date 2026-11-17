@@ -187,3 +187,39 @@ func TestAHostBelongsToOneNode(t *testing.T) {
 	require.NoError(t, admit(route("c", "r", "other.example.com")))
 	require.NoError(t, admit(route("c", "r", "")), "the namespace host is the node's own")
 }
+
+func TestASpecFieldANodeIsTooOldForIsRefused(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(memory.New())
+	for _, n := range []*v1.Namespace{namespace("old", "vm1"), namespace("new", "vm2"), namespace("waiting", "vm3"), namespace("here", "")} {
+		_, err := st.Create(ctx, n)
+		require.NoError(t, err)
+	}
+	for name, api := range map[string]int{"vm1": 1, "vm2": 2, "vm3": 0} {
+		wn := workerNode(name)
+		wn.Status.NodeAPIVersion = api
+		_, err := st.Create(ctx, wn)
+		require.NoError(t, err)
+	}
+	a := nodeTooOld{st: st, placement: NewPlacement(st, "local", true),
+		fields: FieldVersions{v1.KindConfigMap: {"spec.data.retry": 2}}}
+	require.True(t, a.Handles(v1.KindConfigMap.GVK(), admission.Update))
+	require.False(t, a.Handles(v1.KindSecret.GVK(), admission.Update), "a kind with no newer field is not checked")
+	admit := func(ns, key string) error {
+		c := &v1.ConfigMap{TypeMeta: tm(v1.KindConfigMap)}
+		c.Name, c.Namespace, c.ResourceGroup = "c", v1.NamespaceName(ns), "rg1"
+		c.Spec.Data = map[string]string{key: "1"}
+		_, err := a.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindConfigMap.GVK(), Object: c})
+		return err
+	}
+	err := admit("old", "retry")
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, "worker node vm1 speaks node API version 1, and spec.data.retry needs version 2")
+	require.NoError(t, admit("old", "other"), "a field every version runs")
+	require.NoError(t, admit("new", "retry"), "a node that speaks the version")
+	require.NoError(t, admit("waiting", "retry"), "a node that has not joined has no known version")
+	require.NoError(t, admit("here", "retry"), "the control plane's own node runs its own release")
+	require.False(t, newerRelease("v0.39.0", "v0.40.0"))
+	require.True(t, newerRelease("v0.41.0", "v0.40.0"))
+	require.False(t, newerRelease("v0.41.0", "dev"), "a release that does not order passes")
+}

@@ -92,6 +92,7 @@ import (
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
 	rolessvc "github.com/pyvvo/funcd/internal/services/roles"
 	"github.com/pyvvo/funcd/internal/site"
+	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/volume"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -1151,7 +1152,11 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0205: the platform backup cuts the event store, the metastore and the run state.
 	var backupStatus controlplane.BackupStatuser
 	if c.backupRunner != nil {
-		if err := c.backupRunner.Bind(runner.Inputs{Events: p.eventStore, Meta: c.store, Runs: runs, Parent: c.backupParent}); err != nil {
+		var meta snapshot.Source = c.store
+		if p.agent != nil {
+			meta = withoutSecrets{c.store}
+		}
+		if err := c.backupRunner.Bind(runner.Inputs{Events: p.eventStore, Meta: meta, Runs: runs, Parent: c.backupParent}); err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "bind the platform backup")
 		}
 		backupStatus = c.backupRunner

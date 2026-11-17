@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,11 +49,15 @@ type rig struct {
 const cpMaster = "0123456789abcdef0123456789abcdef"
 
 // startCP runs a control plane with the node API on loopback, and declares WorkerNode vm1.
-func startCP(t *testing.T) rig {
+func startCP(t *testing.T, opts ...func(*multinode.Config)) rig {
 	t.Helper()
 	cp := store.New(memory.New(), store.WithChangeLog(0))
-	cluster, err := multinode.New(multinode.Config{Store: cp, Dir: t.TempDir(), ListenAddr: "127.0.0.1:0",
-		LocalNode: "local", LocalRuns: true, Master: []byte(cpMaster)})
+	cfg := multinode.Config{Store: cp, Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalNode: "local", LocalRuns: true,
+		Master: []byte(cpMaster)}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	cluster, err := multinode.New(cfg)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -286,4 +291,59 @@ func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {
 	})
 	_, err = os.Stat(filepath.Join(dir, "keys", "e2.json"))
 	require.ErrorIs(t, err, fs.ErrNotExist)
+}
+
+func TestANodeTakesASnapshotAfterTheControlPlaneIsRestored(t *testing.T) {
+	ctx := context.Background()
+	r := startCP(t)
+	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	require.NoError(t, err)
+	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+	ns.Name, ns.Spec.Node = "e1", "vm1"
+	_, err = r.cp.Create(ctx, ns)
+	require.NoError(t, err)
+	run := func() func() {
+		a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+		require.NoError(t, err)
+		actx, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { _ = a.Run(actx); close(done) }()
+		return func() { stop(); <-done }
+	}
+	stop := run()
+	eventually(t, "the node follows e1", func() bool {
+		_, err := r.node.Get(ctx, v1.KindNamespace.GVK(), "", "e1")
+		return err == nil
+	})
+	stop()
+
+	// A write the change log never holds reaches a node only through a snapshot: one comes when the node's saved
+	// revision is of another timeline of the metastore, as after a restore from a backup.
+	_, err = r.cp.Create(store.WithoutChangeLog(ctx), configMap("e1", "probe", "restored"))
+	require.NoError(t, err)
+	cursor := filepath.Join(dir, "cursor")
+	b, err := os.ReadFile(cursor)
+	require.NoError(t, err)
+	f := strings.Fields(string(b))
+	require.Len(t, f, 2, "the cursor names its timeline and revision")
+	require.NoError(t, os.WriteFile(cursor, []byte("an-older-timeline "+f[1]+"\n"), 0o600))
+	defer run()()
+	eventually(t, "the node takes a new snapshot", func() bool {
+		obj, err := r.node.Get(ctx, v1.KindConfigMap.GVK(), "e1", "probe")
+		return err == nil && obj.(*v1.ConfigMap).Spec.Data["n"] == "restored"
+	})
+}
+
+func TestANodeOnANewerReleaseThanTheControlPlaneIsRefused(t *testing.T) {
+	ctx := context.Background()
+	r := startCP(t, func(c *multinode.Config) { c.Version = "v0.40.0" })
+	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	_, err = agent.Join(ctx, r.server(), token, t.TempDir(), "v0.41.0", "linux/arm64")
+	require.ErrorContains(t, err, "newer than the control plane's v0.40.0")
+	_, err = agent.Join(ctx, r.server(), token, t.TempDir(), "v0.39.2", "linux/arm64")
+	require.NoError(t, err, "an older node joins")
 }

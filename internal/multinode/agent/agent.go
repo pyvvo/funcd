@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -48,11 +49,13 @@ type Agent struct {
 	id  identity
 	log *slog.Logger
 
-	mu     sync.Mutex
-	cursor uint64
-	mine   map[v1.NamespaceName]bool
-	keys   map[v1.NamespaceName]multinode.NamespaceKey
-	pushed map[string]string
+	mu       sync.Mutex
+	cursor   uint64
+	timeline string      // the control plane metastore's timeline the cursor belongs to
+	resync   atomic.Bool // a namespace's snapshot failed: the next poll starts from a whole snapshot
+	mine     map[v1.NamespaceName]bool
+	keys     map[v1.NamespaceName]multinode.NamespaceKey
+	pushed   map[string]string
 }
 
 // New loads the node's identity from cfg.Dir.
@@ -74,7 +77,10 @@ func New(cfg Config) (*Agent, error) {
 	a := &Agent{cfg: cfg, id: id, log: cfg.Logger.With("component", "node-agent", "node", id.name),
 		mine: map[v1.NamespaceName]bool{}, keys: keys, pushed: map[string]string{}}
 	if b, err := os.ReadFile(filepath.Join(cfg.Dir, cursorFile)); err == nil { //nolint:gosec // the node's own directory
-		a.cursor, _ = strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+		if f := strings.Fields(string(b)); len(f) == 2 {
+			a.timeline = f[0]
+			a.cursor, _ = strconv.ParseUint(f[1], 10, 64)
+		}
 	}
 	return a, nil
 }
@@ -182,7 +188,7 @@ func (a *Agent) do(ctx context.Context, method, path string, body, out any) (int
 // follow keeps the local copy: a snapshot first, then the feed from its revision; a revision the change log no longer
 // holds starts again from a snapshot.
 func (a *Agent) follow(ctx context.Context) {
-	backoff, failing, resync := retryMin, false, a.cursor == 0
+	backoff, failing, resync := retryMin, false, a.cursor == 0 || a.timeline == ""
 	fail := func(what string, err error) {
 		if !failing {
 			a.log.WarnContext(ctx, what, "error", err.Error())
@@ -192,7 +198,7 @@ func (a *Agent) follow(ctx context.Context) {
 		backoff = min(backoff*2, retryMax)
 	}
 	for ctx.Err() == nil {
-		if resync {
+		if resync || a.resync.Swap(false) {
 			if err := a.syncAll(ctx); err != nil {
 				fail("node agent: snapshot", err)
 				continue
@@ -200,7 +206,8 @@ func (a *Agent) follow(ctx context.Context) {
 			resync = false
 		}
 		var feed multinode.Feed
-		path := multinode.PathFeed + "?since=" + strconv.FormatUint(a.cursor, 10) + "&wait=" + pollWait.String()
+		path := multinode.PathFeed + "?since=" + strconv.FormatUint(a.cursor, 10) + "&timeline=" + url.QueryEscape(a.timeline) +
+			"&wait=" + pollWait.String()
 		if _, err := a.do(ctx, http.MethodGet, path, nil, &feed); err != nil {
 			if ctx.Err() != nil {
 				return
@@ -220,16 +227,19 @@ func (a *Agent) follow(ctx context.Context) {
 			a.apply(ctx, c)
 		}
 		a.fetchMissingKeys(ctx)
+		if ctx.Err() != nil {
+			return // a change cut short is applied again after the restart
+		}
 		if feed.Rev > a.cursor {
-			a.saveCursor(feed.Rev)
+			a.saveCursor(a.timeline, feed.Rev)
 		}
 	}
 }
 
-func (a *Agent) saveCursor(rev uint64) {
-	a.cursor = rev
+func (a *Agent) saveCursor(timeline string, rev uint64) {
+	a.cursor, a.timeline = rev, timeline
 	tmp := filepath.Join(a.cfg.Dir, cursorFile+".tmp")
-	if err := os.WriteFile(tmp, []byte(strconv.FormatUint(rev, 10)+"\n"), 0o600); err == nil {
+	if err := os.WriteFile(tmp, []byte(timeline+" "+strconv.FormatUint(rev, 10)+"\n"), 0o600); err == nil {
 		_ = os.Rename(tmp, filepath.Join(a.cfg.Dir, cursorFile))
 	}
 }
@@ -259,6 +269,17 @@ func (a *Agent) syncAll(ctx context.Context) error {
 	for ns := range gone {
 		a.removeNamespace(ctx, ns)
 	}
+	a.mu.Lock()
+	var stale []v1.NamespaceName
+	for ns := range a.keys {
+		if !placed[ns] {
+			stale = append(stale, ns)
+		}
+	}
+	a.mu.Unlock()
+	for _, ns := range stale {
+		a.dropKey(ctx, ns)
+	}
 	// A namespace's master comes before its objects, whose credentials derive from it (decision 8).
 	for ns := range placed {
 		if err := a.fetchKey(ctx, ns); err != nil {
@@ -271,10 +292,13 @@ func (a *Agent) syncAll(ctx context.Context) error {
 			a.log.WarnContext(ctx, "node agent: apply from the snapshot", "kind", c.Kind, "namespace", c.Namespace, "name", c.Name, "error", err)
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return err // a snapshot cut short saves no revision, so the next start takes it again
+	}
 	for ns := range placed {
 		a.prune(ctx, ns, seen)
 	}
-	a.saveCursor(snap.Rev)
+	a.saveCursor(snap.Timeline, snap.Rev)
 	a.log.InfoContext(ctx, "node agent: synced from a snapshot", "rev", snap.Rev, "objects", len(snap.Objects), "namespaces", len(placed))
 	return nil
 }
@@ -285,6 +309,7 @@ func (a *Agent) syncNamespace(ctx context.Context, ns v1.NamespaceName) {
 	path := multinode.PathSnapshot + "?namespace=" + url.QueryEscape(string(ns))
 	if _, err := a.do(ctx, http.MethodGet, path, nil, &snap); err != nil {
 		a.log.WarnContext(ctx, "node agent: snapshot of a newly placed namespace", "namespace", ns, "error", err)
+		a.resync.Store(true)
 		return
 	}
 	if err := a.fetchKey(ctx, ns); err != nil {

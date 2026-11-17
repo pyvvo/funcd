@@ -36,11 +36,14 @@ type Change struct {
 
 // ChangeLog reads the change log. Changes returns the records after since that keep accepts, oldest first, at most limit,
 // and the revision to resume after; a since below the compaction floor is fault.PreconditionFailed, and the follower
-// starts again from a snapshot. Head is the store-wide revision. ChangeSignal is closed at the next record.
+// starts again from a snapshot. Head is the store-wide revision. ChangeSignal is closed at the next record. Timeline is
+// the store's timeline (ADR-0202): a store loaded from a backup has a new one, so a revision of another timeline is
+// from before the restore, and its follower starts again from a snapshot too.
 type ChangeLog interface {
 	Changes(ctx context.Context, since uint64, limit int, keep func(Change) bool) ([]Change, uint64, error)
 	Head(ctx context.Context) (uint64, error)
 	ChangeSignal() <-chan struct{}
+	Timeline() string
 }
 
 // WithChangeLog makes the store keep the change log, holding the last retain records; retain <= 0 ⇒ 100 000.
@@ -125,6 +128,8 @@ func (s *store) afterChange(ctx context.Context, rev uint64) {
 		return tx.Put(metaBucket, changeFloorKey, []byte(strconv.FormatUint(floor, 10)))
 	})
 }
+
+func (s *store) Timeline() string { return s.timeline }
 
 func (s *store) Head(ctx context.Context) (uint64, error) {
 	var head uint64
