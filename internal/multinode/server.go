@@ -514,8 +514,9 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 	case !s.placedOn(ctx, m.Namespace, node):
 		writeFault(w, fault.Forbiddenf(op, "namespace %s is not placed on worker node %s", m.Namespace, node))
 		return
-	case len(m.OwnerReferences) == 0:
-		writeFault(w, fault.Forbiddenf(op, "a node writes only the children it owns; %s %s has no owner", in.Kind, m.Name))
+	case !WrittenBack(in.Kind, len(m.OwnerReferences) > 0):
+		writeFault(w, fault.Forbiddenf(op, "a node writes back only the children it owns and the objects it makes; not %s %s",
+			in.Kind, m.Name))
 		return
 	}
 	if err := obj.Validate(); err != nil {
@@ -537,7 +538,7 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 			writeFault(w, err)
 			return
 		}
-		if len(cur.GetObjectMeta().OwnerReferences) == 0 {
+		if !WrittenBack(in.Kind, len(cur.GetObjectMeta().OwnerReferences) > 0) {
 			writeFault(w, fault.Forbiddenf(op, "%s %s was written by a person, not by worker node %s", in.Kind, m.Name, node))
 			return
 		}
@@ -577,7 +578,7 @@ func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
 		writeFault(w, err)
 		return
 	}
-	if len(cur.GetObjectMeta().OwnerReferences) == 0 {
+	if !WrittenBack(kind, len(cur.GetObjectMeta().OwnerReferences) > 0) {
 		writeFault(w, fault.Forbiddenf(op, "%s %s was written by a person, not by worker node %s", kind, name, node))
 		return
 	}
