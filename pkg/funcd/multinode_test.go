@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -190,4 +191,59 @@ func TestAnAPITokenKeptAsAHashWorksUntilItIsMintedAgainOrDeleted(t *testing.T) {
 	_ = resp.Body.Close()
 	require.Less(t, resp.StatusCode, 300)
 	ask{what: "a deleted token ends", method: http.MethodGet, path: mine, token: second, status: http.StatusUnauthorized}.run(t, c, base)
+}
+
+// TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn applies a Function on the control plane, and checks that the
+// node it is placed on runs it, answers its calls on its own data plane and reports it Ready back (FEAT-0002 F241 to
+// F244), while the control plane starts no worker for it.
+func TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
+	ctx := context.Background()
+	cpWorkers, nodeWorkers := newFakeWorkers(), newFakeWorkers()
+	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))), funcd.WithRuntime(cpWorkers),
+		funcd.WithRuntimeShim("node", "shim.mjs"),
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true}))
+	admin, err := sdk.New("http://"+cp.Addr(), sdk.WithToken(clusterAdmin))
+	require.NoError(t, err)
+	wn := &v1.WorkerNode{TypeMeta: tmeta(v1.KindWorkerNode)}
+	wn.Name = "vm1"
+	_, err = admin.Apply(ctx, wn)
+	require.NoError(t, err)
+	ns := &v1.Namespace{TypeMeta: tmeta(v1.KindNamespace)}
+	ns.Name, ns.Spec.Node = "e1", "vm1"
+	_, err = admin.Apply(ctx, ns)
+	require.NoError(t, err)
+	tok, err := admin.MintJoinToken(ctx, "vm1", "")
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
+	require.NoError(t, err)
+	nodeWorkers.serve(t, "echo", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("from vm1")) })
+	node := runPlatform(t, funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: dir, Version: "test"}),
+		funcd.WithRuntime(nodeWorkers), funcd.WithRuntimeShim("node", "shim.mjs"))
+
+	fn := function("echo")
+	fn.Namespace = "e1"
+	fn.Spec.Image = "file://" + filepath.Join(artifact(t, ""), "handler.mjs")
+	fn.Spec.Replicas, fn.Spec.Scaling = 1, v1.Scaling{MinReplicas: 1}
+	_, err = admin.Apply(ctx, fn)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		obj, err := admin.Get(ctx, v1.KindFunction, "e1", "echo")
+		return err == nil && obj.(*v1.Function).Status.Phase == v1.PhaseReady
+	}, 20*time.Second, 50*time.Millisecond, "the control plane reads the Function Ready, as the node reports it")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+node.DataPlaneAddr()+"/function/echo", strings.NewReader(`{}`))
+	require.NoError(t, err)
+	req.Header.Set("X-Funcd-Namespace", "e1")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	require.Equal(t, "from vm1", string(body), "the node's data plane answers the call from the node's worker")
+
+	cpWorkers.mu.Lock()
+	defer cpWorkers.mu.Unlock()
+	require.Empty(t, cpWorkers.insts, "the control plane starts no worker for a namespace placed on a node")
 }
