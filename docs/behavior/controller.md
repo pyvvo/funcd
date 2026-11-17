@@ -70,6 +70,8 @@ in it. New words: Committed, Queued, Processing, Delayed, Idle, Gone.
 | `indexCacheSize` | 32MiB | `internal/store/badger/badger.go` |
 | `memTableSize` | 16MiB | `internal/store/badger/badger.go` |
 | `valueLogFileSize` | 64MiB | `internal/store/badger/badger.go` |
+| `changeCompactInterval` | 1024 | `internal/store/changelog.go` |
+| `defaultChangeRetain` | 100000 | `internal/store/changelog.go` |
 | `loadBatch` | 1024 | `internal/store/memory/memory.go` |
 | `defaultRingCap` | 1024 | `internal/store/store.go` |
 | `watchChanBuf` | 64 | `internal/store/store.go` |

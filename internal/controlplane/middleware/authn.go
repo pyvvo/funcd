@@ -111,3 +111,25 @@ func (s *staticCredentials) Lookup(_ context.Context, token string) (auth.Identi
 	}
 	return found, nil
 }
+
+// ChainCredentials tries each store in turn, and the first that knows the token answers (FEAT-0002 F248: the config's
+// credentials, then the API tokens of the metastore). A store's error other than fault.Unauthorized ends the lookup, and
+// a token no store knows gets the last store's refusal.
+func ChainCredentials(stores ...CredentialStore) CredentialStore { return credentialChain(stores) }
+
+type credentialChain []CredentialStore
+
+func (c credentialChain) Lookup(ctx context.Context, token string) (auth.Identity, error) {
+	var err error = fault.Unauthorizedf("controlplane.authn", "unknown credential")
+	for _, s := range c {
+		id, lerr := s.Lookup(ctx, token)
+		if lerr == nil {
+			return id, nil
+		}
+		if fault.KindOf(lerr) != fault.Unauthorized {
+			return auth.Identity{}, lerr
+		}
+		err = lerr
+	}
+	return auth.Identity{}, err
+}

@@ -1042,3 +1042,42 @@ func WithPacing(p Pacing) Option {
 		return nil
 	}
 }
+
+// ClusterOptions configures the multi-node control plane (FEAT-0002).
+type ClusterOptions struct {
+	Dir        string   // the cluster directory, which holds the CA
+	ListenAddr string   // the node API's address
+	Hosts      []string // the names and addresses the node API's certificate covers
+	LocalRuns  bool     // false on a control plane alone (funcd server), which runs no namespace itself
+}
+
+// WithCluster makes the platform a control plane that worker nodes join (FEAT-0002): it serves the node API on
+// o.ListenAddr, leaves each namespace placed on a worker node to that node, and routes the node calls to it. The store
+// must keep a change log (store.WithChangeLog), which the nodes follow.
+func WithCluster(o ClusterOptions) Option {
+	return func(c *config) error {
+		if o.Dir == "" || o.ListenAddr == "" {
+			return fault.Invalidf("funcd.WithCluster", "a cluster directory and a listen address are required")
+		}
+		c.cluster = &o
+		return nil
+	}
+}
+
+// NodeAgentOptions configures a worker node (FEAT-0002).
+type NodeAgentOptions struct {
+	Dir     string // the node's cluster directory, which holds the identity funcd node join wrote
+	Version string // the funcd release, reported to the control plane
+}
+
+// WithNodeAgent makes the platform a worker node (FEAT-0002): its store becomes a copy of the namespaces placed on it,
+// which it runs and reports back, and its own API answers reads only, since every write goes to the control plane.
+func WithNodeAgent(o NodeAgentOptions) Option {
+	return func(c *config) error {
+		if o.Dir == "" {
+			return fault.Invalidf("funcd.WithNodeAgent", "the node's cluster directory is required")
+		}
+		c.nodeAgent = &o
+		return nil
+	}
+}

@@ -146,8 +146,8 @@ func TestReconcile_lake_uses_provider_runtime(t *testing.T) {
 	seedLakeBucket(t, st) // ADR-0121: reconcile-time bucket-existence gate needs the bound Bucket present
 	prov := &fakeProvider{}
 	r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
-		d.Derive = func(kind v1.Kind, _, name string) (string, string) {
-			return "AKIA-" + string(kind) + "-" + name, "secret-" + name
+		d.Derive = func(kind v1.Kind, _, name string) (string, string, error) {
+			return "AKIA-" + string(kind) + "-" + name, "secret-" + name, nil
 		}
 		d.S3Endpoint = "http://10.63.0.1:9000"
 	})
@@ -339,7 +339,7 @@ func TestEngineEnvOwnKeysWinOverBoundData(t *testing.T) {
 	require.NoError(t, err)
 
 	r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
-		d.Derive = func(v1.Kind, string, string) (string, string) { return "OWN-ACCESS", "own-secret" }
+		d.Derive = func(v1.Kind, string, string) (string, string, error) { return "OWN-ACCESS", "own-secret", nil }
 		d.S3Endpoint = "http://10.63.0.1:9000"
 		d.Secrets = fakeSecrets{env: map[string]string{
 			"AWS_ACCESS_KEY_ID": "BOUND-ACCESS", "AWS_SECRET_ACCESS_KEY": "bound-secret", "QUACK_TOKEN": "tok-1", "HTTPS_PROXY": "http://elsewhere.invalid:3128",
@@ -1319,7 +1319,7 @@ func TestScenarioLakeEngineRenewalAge(t *testing.T) {
 		prov := &fakeProvider{}
 		r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
 			if gateway {
-				d.Derive = func(v1.Kind, string, string) (string, string) { return "AK", "SK" }
+				d.Derive = func(v1.Kind, string, string) (string, string, error) { return "AK", "SK", nil }
 			}
 			d.RenewalAge = func(kind v1.Kind, ns, name string) time.Duration {
 				require.Equal(t, v1.KindLake, kind)

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/pyvvo/funcd/internal/auth/apitoken"
 	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/ownedstore"
 	"io"
@@ -67,11 +68,14 @@ import (
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/lifecycle"
+	"github.com/pyvvo/funcd/internal/multinode"
+	"github.com/pyvvo/funcd/internal/multinode/agent"
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/network/egress"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/quota"
@@ -89,6 +93,7 @@ import (
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
 	rolessvc "github.com/pyvvo/funcd/internal/services/roles"
 	"github.com/pyvvo/funcd/internal/site"
+	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/volume"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -391,6 +396,11 @@ type config struct {
 	// backupParent is the generation a restore loaded (WithBackupParent); nil ⇒ none.
 	backupParent *backup.GenRef
 
+	// cluster makes the platform a control plane that worker nodes join (WithCluster, FEAT-0002); nil ⇒ none.
+	cluster *ClusterOptions
+	// nodeAgent makes the platform a worker node (WithNodeAgent, FEAT-0002); nil ⇒ none.
+	nodeAgent *NodeAgentOptions
+
 	// presetBlob and presetBus are what InMemory opened. WithBlob and WithBus close the one they replace, as nothing else
 	// would: the platform closes only the drivers it ends up with.
 	presetBlob blob.Bucket
@@ -484,10 +494,12 @@ type Platform struct {
 	providers    *provider.Catalog // the platform provider catalog (ADR-0082)
 
 	controller  *controller.Controller
-	collector   *gc.Collector    // ADR-0170: the owner garbage collector, run beside the controller
-	eventFanout *eventing.Fanout // ADR-0108: the named-event publisher the F69 Sensor subscribes to
-	edgeRouter  router.Router    // ADR-0110 (F79): the Route matcher the data-plane front door consults
-	tlsProvider edgetls.Provider // ADR-0111 (F74): the TLS cert provider (nil ⇒ plaintext)
+	collector   *gc.Collector      // ADR-0170: the owner garbage collector, run beside the controller
+	cluster     *multinode.Cluster // FEAT-0002: the node API of a control plane that worker nodes join; nil ⇒ none
+	agent       *agent.Agent       // FEAT-0002: the agent of a worker node; nil ⇒ none
+	eventFanout *eventing.Fanout   // ADR-0108: the named-event publisher the F69 Sensor subscribes to
+	edgeRouter  router.Router      // ADR-0110 (F79): the Route matcher the data-plane front door consults
+	tlsProvider edgetls.Provider   // ADR-0111 (F74): the TLS cert provider (nil ⇒ plaintext)
 	activator   *activator.Activator
 	httpServer  *http.Server
 	listener    net.Listener
@@ -619,6 +631,16 @@ func (p *Platform) buildControlPlane() error {
 		c.dataPlaneAddr = defaultDataPlaneAddr
 	}
 
+	// FEAT-0002: a worker node schedules under its own name, the one it joined under.
+	if c.nodeAgent != nil {
+		a, aerr := agent.New(agent.Config{Dir: c.nodeAgent.Dir, Store: c.store, Logger: p.logger,
+			Version: c.nodeAgent.Version, Platform: string(c.nodePlatform)})
+		if aerr != nil {
+			return fault.Wrapf(aerr, fault.KindOf(aerr), op, "load the worker node's identity")
+		}
+		p.agent, c.localNode = a, a.Name()
+	}
+
 	sched, err := singlenode.New(c.localNode, c.nodePlatform)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build scheduler")
@@ -723,7 +745,26 @@ func (p *Platform) buildControlPlane() error {
 			return fault.Wrapf(merr, fault.KindOf(merr), op, "load node master secret")
 		}
 	}
-	ctrl, err := controller.New(controller.Deps{Store: c.store, Logger: p.logger, RetryBackoffMax: c.pacing.RetryBackoffMax})
+	// FEAT-0002 F248: the API and the edge take the API tokens kept in the metastore too.
+	c.credentials = middleware.ChainCredentials(c.credentials, apitoken.NewCredentials(c.store, nil))
+	// FEAT-0002 decision 8: a worker node derives each namespace's credentials from that namespace's own master.
+	var masters nsmaster.Source
+	if p.agent != nil {
+		masters = p.agent.NamespaceMaster
+	}
+	// FEAT-0002: a control plane that worker nodes join leaves each namespace placed on one to it.
+	var skip func(v1.NamespaceName) bool
+	if c.cluster != nil {
+		cl, cerr := multinode.New(multinode.Config{Store: c.store, Logger: p.logger, Dir: c.cluster.Dir,
+			ListenAddr: c.cluster.ListenAddr, Hosts: c.cluster.Hosts, LocalNode: c.localNode, LocalRuns: c.cluster.LocalRuns,
+			Master: master})
+		if cerr != nil {
+			return fault.Wrapf(cerr, fault.KindOf(cerr), op, "build the node API")
+		}
+		p.cluster, skip = cl, cl.Skip
+	}
+	ctrl, err := controller.New(controller.Deps{Store: c.store, Logger: p.logger, RetryBackoffMax: c.pacing.RetryBackoffMax,
+		Skip: skip})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build controller")
 	}
@@ -778,14 +819,15 @@ func (p *Platform) buildControlPlane() error {
 	if err := p.kv.build(kvDeps{authz: cedarPDP, quota: p.checker, prober: p.prober, ctrl: ctrl}); err != nil {
 		return err
 	}
-	if err := p.blob.build(blobDeps{authz: cedarPDP, quota: p.checker, master: master, prober: p.prober, ctrl: ctrl}); err != nil {
+	if err := p.blob.build(blobDeps{authz: cedarPDP, quota: p.checker, master: master, masters: masters,
+		prober: p.prober, ctrl: ctrl}); err != nil {
 		return err
 	}
-	if err := p.sql.build(sqlDeps{authz: cedarPDP, quota: p.checker, master: master, ctrl: ctrl, fanout: fanout,
+	if err := p.sql.build(sqlDeps{authz: cedarPDP, quota: p.checker, master: master, masters: masters, ctrl: ctrl, fanout: fanout,
 		events: es}); err != nil {
 		return err
 	}
-	if err := p.lake.build(lakeDeps{authz: cedarPDP, master: master, floor: p.floor, secrets: p.secrets.resolver,
+	if err := p.lake.build(lakeDeps{authz: cedarPDP, master: master, masters: masters, floor: p.floor, secrets: p.secrets.resolver,
 		routes: edgeAgg, s3: p.blob.injection, ctrl: ctrl}); err != nil {
 		return err
 	}
@@ -846,6 +888,7 @@ func (p *Platform) buildControlPlane() error {
 		PoolLimit:            c.poolLimit,
 		S3Gateway:            p.blob.injection,
 		LakeMaster:           master, // ADR-0137: per-function lake token derivation (same master as S3)
+		NamespaceMasters:     masters,
 		LakeExtensionDir:     c.lakeExtensionDir,
 		LakeProxies:          p.lake.proxy,
 		Secrets:              p.secrets.resolver,
@@ -878,7 +921,8 @@ func (p *Platform) buildControlPlane() error {
 	}
 	p.activator = act
 
-	if p.collector, err = gc.New(gc.Deps{Store: c.store, Purger: bucketPurger{shared: c.blob}, Interval: c.gcSweepInterval, Logger: p.logger}); err != nil {
+	if p.collector, err = gc.New(gc.Deps{Store: c.store, Purger: bucketPurger{shared: c.blob}, Interval: c.gcSweepInterval,
+		Logger: p.logger, Skip: skip}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build garbage collector")
 	}
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
@@ -1053,7 +1097,7 @@ func (p *Platform) buildControlPlane() error {
 	partAdmissions := func(r admission.StoreReader) []admission.Admission {
 		// ADR-0064 fn-to-fn link rules on the write path, then each store provider's resource rules.
 		links := []admission.Admission{admission.NewLinkValidityAdmission(r), admission.NewLinkDeletionProtectionAdmission(r)}
-		return append(append(links, p.providerAdmissions(r)...),
+		all := append(append(links, p.providerAdmissions(r)...),
 			// ADR-0086/0091 lake blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
 			// (ADR-0121): the Lake / Function reconcilers wait for the referent (Waiting condition).
 			// ADR-0139 Site: spec.bindings.blob[0].prefix is immutable on Update (the prefix permanently holds the site's bundles).
@@ -1083,6 +1127,10 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewBackupTTLAdmission(r),
 			admission.NewRestoreInPlaceAdmission(c.authorizer, r, c.hold),
 		)
+		if p.cluster != nil { // FEAT-0002 F250: a node runs the checks that read its own state
+			all = p.cluster.Forward(all)
+		}
+		return all
 	}
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
@@ -1096,10 +1144,25 @@ func (p *Platform) buildControlPlane() error {
 		logReader = reader
 		runLogQuerier = controlplane.NewWorkflowRunLogQuerier(c.store, runs, reader)
 	}
+	// FEAT-0002 F250: the parts that act on a node's state answer a worker node's calls, and on a control plane each
+	// reaches the node that runs the namespace.
+	holdSvc := controlplane.NewHoldService(controlplane.HoldDeps{ // ADR-0206: the hold's evidence and release
+		Hold: c.hold, Store: c.store, DeadLetters: p.eventing.deadLetters, Platform: holdPlatform{p},
+	})
+	parts := p.routeNodeParts(nodeParts{
+		logs: logReader, runLogs: runLogQuerier, deadLetters: p.eventing.deadLetters, replayer: p.eventing.sensorReconciler,
+		apps: appReconciler, volumes: p.volumeDeleter(), hold: holdSvc,
+		admissions: append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store}),
+			app.NewRequiresAdmission(storeReader{c.store})),
+	}, holdSvc, multinode.NodeState(partAdmissions(storeReader{c.store})))
 	// ADR-0205: the platform backup cuts the event store, the metastore and the run state.
 	var backupStatus controlplane.BackupStatuser
 	if c.backupRunner != nil {
-		if err := c.backupRunner.Bind(runner.Inputs{Events: p.eventStore, Meta: c.store, Runs: runs, Parent: c.backupParent}); err != nil {
+		var meta snapshot.Source = c.store
+		if p.agent != nil {
+			meta = withoutSecrets{c.store}
+		}
+		if err := c.backupRunner.Bind(runner.Inputs{Events: p.eventStore, Meta: meta, Runs: runs, Parent: c.backupParent}); err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "bind the platform backup")
 		}
 		backupStatus = c.backupRunner
@@ -1110,20 +1173,19 @@ func (p *Platform) buildControlPlane() error {
 		Authorizer:  c.authorizer,
 		Credentials: c.credentials,
 		Logger:      p.logger,
-		Logs:        logReader,
-		RunLogs:     runLogQuerier,
-		DeadLetters: p.eventing.deadLetters,      // ADR-0118: the DLQ read + replay/discard surface
-		Replayer:    p.eventing.sensorReconciler, // ADR-0118: the imperative replay seam (one synchronous attempt)
-		Collector:   p.collector,                 // ADR-0170: a forced ResourceGroup delete collects the members' children
-		AppRetrier:  appReconciler,               // ADR-0214: retry an App's failed hook
-		Planner:     app.NewPlanner(c.store),     // ADR-0220: a dry-run App write's plan
-		Volumes:     p.volumeDeleter(),           // ADR-0262: delete a retained Function volume
-		Hold: controlplane.NewHoldService(controlplane.HoldDeps{ // ADR-0206: the hold's evidence and release
-			Hold: c.hold, Store: c.store, DeadLetters: p.eventing.deadLetters, Platform: holdPlatform{p},
-		}),
+		Logs:        parts.logs,
+		RunLogs:     parts.runLogs,
+		DeadLetters: parts.deadLetters,       // ADR-0118: the DLQ read + replay/discard surface
+		Replayer:    parts.replayer,          // ADR-0118: the imperative replay seam (one synchronous attempt)
+		Collector:   p.collector,             // ADR-0170: a forced ResourceGroup delete collects the members' children
+		AppRetrier:  parts.apps,              // ADR-0214: retry an App's failed hook
+		Planner:     app.NewPlanner(c.store), // ADR-0220: a dry-run App write's plan
+		Volumes:     parts.volumes,           // ADR-0262: delete a retained Function volume
+		Hold:        parts.hold,              // ADR-0206: the hold's evidence and release
 		// ADR-0219: app-requires runs after app-parts.
-		Admissions: append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store}),
-			app.NewRequiresAdmission(storeReader{c.store})),
+		Admissions: parts.admissions,
+		JoinTokens: parts.joinTokens,
+		APITokens:  apitoken.NewMinter(c.store, nil),
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build control-plane server")
@@ -1133,6 +1195,9 @@ func (p *Platform) buildControlPlane() error {
 	// ErrorLog sends net/http's own errors (TLS handshake, accept, recovered panic) through the configured
 	// logger; left nil they go to the stdlib log package, bypassing the log format (#454).
 	httpErrorLog := slog.NewLogLogger(p.logger.Handler(), slog.LevelWarn)
+	if p.agent != nil {
+		handler = readOnly(handler)
+	}
 	p.httpServer = &http.Server{Handler: recordControlPlane(handler), ReadHeaderTimeout: serverReadHeaderTimeout,
 		ReadTimeout: serverReadTimeout, ErrorLog: httpErrorLog}
 
@@ -1332,6 +1397,20 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.logger.ErrorContext(ctx, "data-plane server stopped", "error", err)
 		}
 	}()
+	if p.cluster != nil {
+		go func() {
+			if err := p.cluster.Run(ctx); err != nil {
+				p.logger.ErrorContext(ctx, "node API stopped", "error", err)
+			}
+		}()
+	}
+	if p.agent != nil {
+		go func() {
+			if err := p.agent.Run(ctx); err != nil {
+				p.logger.ErrorContext(ctx, "node agent stopped", "error", err)
+			}
+		}()
+	}
 
 	<-ctx.Done()
 
@@ -1365,6 +1444,9 @@ func (p *Platform) closeTimeout() time.Duration {
 // best-effort (joins errors, closing all even if one fails).
 func (p *Platform) Shutdown(ctx context.Context) error {
 	p.shutdownOnce.Do(func() {
+		if p.cluster != nil {
+			_ = p.cluster.Close()
+		}
 		if p.listener != nil {
 			_ = p.listener.Close() // best-effort; may already be closed by httpServer.Shutdown
 		}

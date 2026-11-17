@@ -158,8 +158,8 @@ func TestPoolManifestCarriesMemberEnv(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "pool")
 	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, func(d *function.Deps) {
 		d.PoolManifestDir = dir
-		d.S3Gateway = function.S3GatewayInjection{Enabled: true, ListenAddr: "127.0.0.1:9000", Derive: func(_ v1.Kind, _, name string) (string, string) {
-			return "AK-" + name, "SK-" + name
+		d.S3Gateway = function.S3GatewayInjection{Enabled: true, ListenAddr: "127.0.0.1:9000", Derive: func(_ v1.Kind, _, name string) (string, string, error) {
+			return "AK-" + name, "SK-" + name, nil
 		}}
 	})
 	h.createObj(t, v1.KindBucket, "k", func(o v1.Object) { o.(*v1.Bucket).Spec.Prefixes = []v1.BucketPrefix{{Name: "raw"}} })

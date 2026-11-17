@@ -38,8 +38,8 @@ func (f *fakeRuntime) createdOf(id runtime.InstanceID) time.Time {
 func rotatingKeys(w *int) function.S3GatewayInjection {
 	return function.S3GatewayInjection{
 		Enabled: true, ListenAddr: "127.0.0.1:9000", Period: keyPeriod,
-		Derive: func(_ v1.Kind, _, name string) (string, string) {
-			return "AK-" + name + "-" + strconv.Itoa(*w), "SK-" + name + "-" + strconv.Itoa(*w)
+		Derive: func(_ v1.Kind, _, name string) (string, string, error) {
+			return "AK-" + name + "-" + strconv.Itoa(*w), "SK-" + name + "-" + strconv.Itoa(*w), nil
 		},
 		RenewalAge: func(v1.Kind, string, string) time.Duration { return 20 * time.Hour },
 	}

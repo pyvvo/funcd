@@ -2,7 +2,7 @@
 
 Status words and how to read this: [the index](README.md).
 
-Kinds: Identity, Role, RolesAssignment, Policy, Grant.
+Kinds: Identity, Role, RolesAssignment, Policy, Grant, APIToken.
 
 ```mermaid
 stateDiagram-v2
@@ -31,6 +31,8 @@ scope is refused at apply (ADR-0177 Decision 3). A worker's outbound traffic and
 | A real token or `auth.credentials` | Starts on any address; the built-in dev token then gets 401 | none | 401 `invalid credential` | decided | ADR-0314 Decision 2, `TestScenarioRealCredentialBindsAnywhere` |
 | `funcd.New` with `DevToken` off loopback, or edge auth with it and a data plane off loopback | Refused, as the daemon refuses a start | none | `is off loopback` | decided | ADR-0314 Decisions 5 and 6, `TestScenarioLibraryFollowsTheRule`, `TestScenarioEdgeAuthFollowsTheRule` |
 | A change to `auth.credentials` or a token file | Files are read once at startup, so a change takes effect at the next start | a restart | a new token gets 401 `invalid credential` until then | decided | ADR-0171 Decision 6 and Temporary workarounds |
+| An API token kept as a hash | An admin declares an APIToken (role, namespaces) and mints its token, shown once; funcd keeps a SHA-256 and an expiry. A new mint, a delete or the expiry ends it, with no restart | `defaultTTL` 720h, at most `maxTTL` 8760h | 401 `expired: mint a new one` | decided | decider 2026-11-16, #1485, `TestAnAPITokenWorksUntilItExpiresOrIsMintedAgain` |
+| An API token on a worker node | Every node follows each APIToken's hash and scope, and checks the callers of its own API and edge itself; a token revoked while the node was behind goes at its next snapshot | none | 401 `unknown credential` | decided | decider 2026-11-16, #1485, `TestANodeChecksTheAPITokensOfTheControlPlaneItself` |
 | A token file that group or others can open, or that another user owns | funcd does not start | none | `token file "<path>" has mode 0644, open to group or others: chmod 0600 (or 0400)`, or its owner's uid | decided | ADR-0171 Decision 2, `TestScenarioExposedTokenFileRefusesStart` |
 | A secret file other than a token file that group or others can open, or that another user owns | funcd starts, with one warning per set key | none | `secret file open to other users`, with the key, the path and the rule's text | decided | ADR-0326 Decisions 1 to 3, `TestScenarioExposedSecretFileWarns` |
 | A key whose feature is off, or a group-readable mount such as `root:funcd` at 0640 or a Kubernetes secret volume under `fsGroup` | Warns at each start like any other open file | none | `secret file open to other users` | accepted | ADR-0326 Consequences |
@@ -52,6 +54,9 @@ scope is refused at apply (ADR-0177 Decision 3). A worker's outbound traffic and
 | `auth.credentials` | none | config |
 | `auth.namespaces` | [default] | config |
 | `auth.token` | a built-in dev token | config |
+| `defaultTTL` | 720h | `internal/auth/apitoken/apitoken.go` |
+| `maxTTL` | 8760h | `internal/auth/apitoken/apitoken.go` |
+| `minTTL` | 1s | `internal/auth/apitoken/apitoken.go` |
 
 </details>
 <!-- end of generated values -->

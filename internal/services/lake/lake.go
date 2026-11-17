@@ -82,7 +82,7 @@ type ReconcilerDeps struct {
 	// Derive returns the deterministic per-(kind, ns, name) SigV4 keypair (ADR-0085, ADR-0175), derived
 	// over the Lake identity (KindLake, ns, cs.Name). nil ⇒ no S3 keypair injected.
 	// Same shape the Function reconciler's S3GatewayInjection.Derive carries.
-	Derive func(kind v1.Kind, ns, name string) (access, secret string)
+	Derive func(kind v1.Kind, ns, name string) (access, secret string, err error)
 	// RenewalAge is the engine age at which its worker is replaced for a fresh key pair (ADR-0270); nil or 0 ⇒ never.
 	RenewalAge func(kind v1.Kind, ns, name string) time.Duration
 	// Secrets resolves spec.bindings.secret → env (the Quack token, ADR-0057). nil ⇒ a service declaring
@@ -161,7 +161,7 @@ type Reconciler struct {
 	store        store.Store
 	prov         provider.Runtime
 	logger       *slog.Logger
-	derive       func(kind v1.Kind, ns, name string) (access, secret string)
+	derive       func(kind v1.Kind, ns, name string) (access, secret string, err error)
 	renewalAge   func(kind v1.Kind, ns, name string) time.Duration
 	secrets      SecretResolver
 	developerFor func(ns v1.NamespaceName) auth.Identity

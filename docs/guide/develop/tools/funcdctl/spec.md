@@ -17,6 +17,26 @@ funcd control-plane CLI (kubectl-style)
 | `--server` | string |  | control-plane base URL ($FUNCD_SERVER, else http://localhost:8080) |
 | `--token` | string |  | bearer token for the authenticated control plane ($FUNCD_TOKEN) |
 
+## `funcdctl apitoken`
+
+```text
+funcdctl apitoken
+
+Manage the API tokens kept in the metastore
+```
+
+## `funcdctl apitoken mint`
+
+```text
+funcdctl apitoken mint <name> [flags]
+
+Mint the token of a declared APIToken, for the role and the namespaces its spec names. It prints the token alone, so a script can capture it; funcd keeps only its hash, and the token minted before stops working. An admin action.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--ttl` | string |  | how long the token works, from 1s to 8760h, such as 720h (default 720h) |
+
 ## `funcdctl app`
 
 ```text
@@ -591,6 +611,26 @@ Print a function's logs (tenant-scoped to your identity)
 | `-o`, `--output` | string |  | output format: wide (append source/inv/attrs inline) \| json |
 | `--severity` | string |  | minimum level: trace\|debug\|info\|warn\|error\|fatal |
 | `--since` | string |  | only logs since a duration ago (15m, 1h30m) or an RFC3339 time (2026-10-07T22:00:00Z) |
+
+## `funcdctl node`
+
+```text
+funcdctl node
+
+Manage worker nodes
+```
+
+## `funcdctl node token`
+
+```text
+funcdctl node token <name> [flags]
+
+Mint a one-time join token for a declared WorkerNode, which funcd node join swaps for the node's certificate. It prints the token alone, so a script can capture it; funcd keeps only its hash, and an earlier unused token of the node stops working. An admin action.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--ttl` | string |  | how long the token works, from 1s to 24h, such as 30m (default 1h) |
 
 ## `funcdctl plugin`
 

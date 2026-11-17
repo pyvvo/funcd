@@ -209,8 +209,14 @@ func (h s3Hook) own(fn *v1.Function) (map[string]string, func() map[string]strin
 		return nil, nil, nil
 	}
 	ns, name := string(fn.Namespace), string(fn.Name)
+	if _, _, err := h.r.s3Gateway.Derive(v1.KindFunction, ns, name); err != nil {
+		return nil, nil, h.r.namespaceKeyMissing(err)
+	}
 	return nil, func() map[string]string {
-		access, secret := h.r.s3Gateway.Derive(v1.KindFunction, ns, name)
+		access, secret, err := h.r.s3Gateway.Derive(v1.KindFunction, ns, name)
+		if err != nil {
+			return nil // the namespace's master left between the gate and the start: the worker gets no pair
+		}
 		return map[string]string{"AWS_ACCESS_KEY_ID": access, "AWS_SECRET_ACCESS_KEY": secret}
 	}, nil
 }
@@ -243,7 +249,11 @@ func (h lakeHook) own(fn *v1.Function) (map[string]string, func() map[string]str
 	if len(fn.Spec.Bindings.Lake) == 0 {
 		return nil, nil, nil
 	}
-	token, err := lakegw.DeriveLakeToken(h.r.lakeMaster, fn.Namespace, fn.Name)
+	master, err := h.r.namespaceMasters.Of(h.r.lakeMaster, fn.Namespace)
+	if err != nil {
+		return nil, nil, h.r.namespaceKeyMissing(err)
+	}
+	token, err := lakegw.DeriveLakeToken(master, fn.Namespace, fn.Name)
 	if err != nil {
 		return nil, nil, lakeResolveFailed(fault.Wrapf(err, fault.KindOf(err), "function.lakeHook.own", "derive lake token for %s/%s", fn.Namespace, fn.Name))
 	}
@@ -252,6 +262,14 @@ func (h lakeHook) own(fn *v1.Function) (map[string]string, func() map[string]str
 		env["FUNCD_LAKE_"+strings.ToUpper(c.Alias)+"_TOKEN"] = token
 	}
 	return env, nil, nil
+}
+
+// reasonNamespaceKeyMissing holds a Function while its worker node lacks its namespace's master (FEAT-0002 decision 8):
+// its S3 pair and lake token come from that master, which the control plane sends to the node.
+const reasonNamespaceKeyMissing = "NamespaceKeyMissing"
+
+func (r *Reconciler) namespaceKeyMissing(err error) *gateFailure {
+	return &gateFailure{reason: reasonNamespaceKeyMissing, message: err.Error(), readyMessage: err.Error(), phase: v1.PhasePending, requeue: r.referentPoll}
 }
 
 // lakeResolveFailed fails fn closed on a Lake binding that cannot be resolved.

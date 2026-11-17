@@ -184,7 +184,7 @@ type Config struct {
 	// CredentialsFile (s3:// only) is an AWS shared credentials file whose [default] profile signs every request.
 	// Retention is in hours (hourly), days (daily, verified) and weeks (weekly).
 	Backup struct {
-		Target          string `json:"target,omitempty" env:"FUNCD_BACKUP_TARGET" doc:"Where the platform backup writes its generations: s3://<bucket>?region=<region> for an S3-compatible store, with endpoint and prefix parameters when needed, or file:///<absolute dir>. Empty, or with storage.mode memory, no platform backup runs. Blob's mirror goes here too while blob.target is empty, and so does the KV backup when kvstore.backup.enabled is true and kvstore.backup.target is empty. A target in the blob store's own bucket, or a directory in or around blob.dir, refuses the start. funcd deletes nothing on a target: it logs at start the lifecycle rules to set there."`
+		Target          string `json:"target,omitempty" env:"FUNCD_BACKUP_TARGET" doc:"Where the platform backup writes its generations: s3://<bucket>?region=<region> for an S3-compatible store, with endpoint and prefix parameters when needed, or file:///<absolute dir>. Empty, or with storage.mode memory, no platform backup runs. Blob's mirror goes here too while blob.target is empty, and so does the KV backup when kvstore.backup.enabled is true and kvstore.backup.target is empty. A target in the blob store's own bucket, or a directory in or around blob.dir, refuses the start. funcd deletes nothing on a target: it logs at start the lifecycle rules to set there. A worker node (funcd node) writes under nodes/<name>/ of it, and so does its KV backup."`
 		CredentialsFile string `json:"credentialsFile,omitempty" env:"FUNCD_BACKUP_CREDENTIALS_FILE" doc:"The AWS shared credentials file whose [default] profile signs every request to an s3:// backup.target, from each backup that writes there. A file:// target refuses it. Empty, the default AWS credential chain signs them. Keep the file at mode 0600 or 0400, owned by funcd's user or root: funcd warns at start when group or others can open it, or when another user owns it."`
 		SingleWriter    bool   `json:"singleWriter,omitempty" env:"FUNCD_BACKUP_SINGLE_WRITER" doc:"When true, funcd writes on a target that ignores or refuses a create-if-absent put (If-None-Match: *), on the promise that no other funcd writes there, and warns. When false, every write to such a target fails, since nothing would fence a second writer."`
 		Retention       struct {
@@ -247,7 +247,7 @@ type Config struct {
 		Credentials CredentialList `json:"credentials,omitempty" env:"-" validate:"dive"`
 	} `json:"auth,omitempty"`
 	Secrets struct {
-		EncryptionKeyFile string `json:"encryptionKeyFile,omitempty" env:"FUNCD_SECRETS_ENCRYPTION_KEY_FILE" doc:"The file of the key that encrypts Secret values at rest: exactly 32 raw bytes, an AES-256 key. Empty, the metastore holds Secret values unencrypted, and with storage.mode file funcd warns at start. funcd refuses to start when the key does not match how the stored Secrets were written. Keep the file at mode 0600 or 0400, owned by funcd's user or root: funcd warns at start when group or others can open it, or when another user owns it."`
+		EncryptionKeyFile string `json:"encryptionKeyFile,omitempty" env:"FUNCD_SECRETS_ENCRYPTION_KEY_FILE" doc:"The file of the key that encrypts Secret values at rest: exactly 32 raw bytes, an AES-256 key. Empty, the metastore holds Secret values unencrypted, and with storage.mode file funcd warns at start; on a worker node (funcd node), empty means a key funcd makes under cluster.dataDir. funcd refuses to start when the key does not match how the stored Secrets were written. Keep the file at mode 0600 or 0400, owned by funcd's user or root: funcd warns at start when group or others can open it, or when another user owns it."`
 	} `json:"secrets,omitempty"`
 	Runtime struct {
 		Mode string `json:"mode,omitempty" env:"FUNCD_RUNTIME" validate:"oneof=process containerd" doc:"Where workers run: process, as child processes of funcd under its own OS user with no isolation, for development and tests; or containerd, in containers, on Linux only. Function volumes need containerd. The systemd unit that funcd install writes sets containerd through the variable, which wins over the file."`
@@ -470,6 +470,13 @@ type Config struct {
 		StorageProbeInterval string `json:"storageProbeInterval,omitempty" env:"FUNCD_HEALTH_STORAGE_PROBE_INTERVAL" doc:"How often funcd reads one key of the KV engine and one of the blob store to check that each answers; with an S3 blob.target, each blob read is one request. While a read fails or runs late, every KVStore, or every Bucket, is Degraded with the reason StorageUnreachable. It is a positive duration, more than health.storageProbeTimeout."`
 		StorageProbeTimeout  string `json:"storageProbeTimeout,omitempty" env:"FUNCD_HEALTH_STORAGE_PROBE_TIMEOUT" doc:"How long one storage read may take before it counts as failed; one late read is enough to make the stores Degraded. It is a positive duration, less than health.storageProbeInterval."`
 	} `json:"health,omitempty"`
+	// Cluster is the multi-node setting (FEAT-0002): the node API that worker nodes join on a control plane, and where
+	// a control plane keeps its CA or a worker node its identity.
+	Cluster struct {
+		ListenAddr string   `json:"listenAddr,omitempty" env:"FUNCD_CLUSTER_LISTEN_ADDR" doc:"The address that the node API listens on, where worker nodes join with a one-time token and then follow their namespaces over mTLS. Empty means no node can join funcd; funcd server listens on 0.0.0.0:7443 then. A worker node does not read it."`
+		Hosts      []string `json:"hosts,omitempty" env:"FUNCD_CLUSTER_HOSTS" envSeparator:"," doc:"The host names and addresses that the node API's certificate covers, besides localhost and loopback: the ones the worker nodes dial."`
+		DataDir    string   `json:"dataDir,omitempty" env:"FUNCD_CLUSTER_DATA_DIR" doc:"The directory of the cluster CA on a control plane, or of the identity that funcd node join writes on a worker node. Empty means <storage.dataDir>/cluster."`
+	} `json:"cluster,omitempty"`
 }
 
 // Flags are the top precedence tier (CLI flags with no env). MemoryOnly nil ⇒ --memory not set.
@@ -682,6 +689,9 @@ func Parse(name string, data []byte, flags Flags) (Config, error) {
 	}
 	if c.Eventing.EventStore.DataDir == "" {
 		c.Eventing.EventStore.DataDir = filepath.Join(c.Storage.DataDir, "eventstore")
+	}
+	if c.Cluster.DataDir == "" {
+		c.Cluster.DataDir = filepath.Join(c.Storage.DataDir, "cluster")
 	}
 	// The local blob store (ADR-0208): derived only where it serves, so a set blob.dir stays visible to CheckBlob.
 	switch {

@@ -33,9 +33,9 @@ func newS3Reconciler(t *testing.T, enabled bool) *Reconciler {
 		inj = S3GatewayInjection{
 			Enabled:    true,
 			ListenAddr: s3TestListen,
-			Derive: func(kind v1.Kind, ns, name string) (string, string) {
+			Derive: func(kind v1.Kind, ns, name string) (string, string, error) {
 				kp := s3gateway.DeriveKeypair(s3TestMaster, kind, ns, name)
-				return kp.AccessKey, kp.SecretKey
+				return kp.AccessKey, kp.SecretKey, nil
 			},
 		}
 	}
@@ -86,7 +86,7 @@ func TestScenarioEndpointOverridesBindAddr(t *testing.T) {
 			Enabled:    true,
 			ListenAddr: "127.0.0.1:9000", // bind addr — NOT what a netns'd worker can reach
 			Endpoint:   "http://10.63.0.1:9000",
-			Derive:     func(v1.Kind, string, string) (string, string) { return "a", "s" },
+			Derive:     func(v1.Kind, string, string) (string, string, error) { return "a", "s", nil },
 		},
 	})
 	require.NoError(t, err)

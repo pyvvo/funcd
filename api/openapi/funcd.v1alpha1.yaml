@@ -3,6 +3,63 @@
 
 components:
   schemas:
+    APIToken:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/APITokenSpec"
+        status:
+          $ref: "#/components/schemas/APITokenStatus"
+      required:
+        - metadata
+        - spec
+        - apiVersion
+        - kind
+      type: object
+    APITokenSpec:
+      additionalProperties: false
+      properties:
+        namespaces:
+          description: The namespaces that a developer or a viewer acts in. An admin spans every namespace and takes none.
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        role:
+          description: "The role of the token's caller: admin, developer or viewer, as in auth.credentials."
+          type: string
+      required:
+        - role
+      type: object
+    APITokenStatus:
+      additionalProperties: false
+      properties:
+        expiresAt:
+          description: When the token stops working.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        issuedAt:
+          description: When the token was minted.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        tokenHash:
+          description: The SHA-256 of the minted token's secret part, in hexadecimal; empty until a token is minted.
+          type: string
+      type: object
     Action:
       additionalProperties: false
       properties:
@@ -3989,6 +4046,12 @@ components:
         edgeDefaults:
           $ref: "#/components/schemas/EdgeDefaults"
           description: The namespace's edge defaults, which apply where a Route or a Function's or Site's spec.ingress sets no value of its own.
+        node:
+          description: "The worker node that runs the namespace: its workers, its edge and its stores. It names a WorkerNode, which may be declared before its machine joins; the namespace then waits for it. Empty means the local node of an all-in-one funcd. The node of a namespace that holds objects cannot change."
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
         volumeBudget:
           description: "The most volume space the namespace's Functions may reserve: each local volume's size from apply until the volume is removed, and each worker's emptyDir while the worker exists. Apply refuses a local volume that does not fit (VolumeBudget), and a worker whose emptyDir does not fit is not created. Set volumeBudget or volumeBudgetBytes, not both; neither, or 0, means no budget."
           pattern: ^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$
@@ -4025,6 +4088,54 @@ components:
             - Failed
             - Terminating
           type: string
+      type: object
+    NodeBackup:
+      additionalProperties: false
+      properties:
+        held:
+          description: "True while the node is held: its backups wait for the release."
+          type: boolean
+        lastFailure:
+          description: Why the node's last run failed since the node started; a run that succeeds clears it.
+          type: string
+        lastSuccessTime:
+          description: When the node's newest complete generation was written.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        nextRunTime:
+          description: When the node's next run is due.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        rpoRisk:
+          description: True when no verified generation of the node is newer than its backup.objectives.rpo.
+          type: boolean
+      type: object
+    NodeCertificate:
+      additionalProperties: false
+      properties:
+        issuedAt:
+          description: When the node joined and got the certificate.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        notAfter:
+          description: When the certificate expires.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        serial:
+          description: The certificate's serial number, in hexadecimal. The control plane accepts only this certificate from the node.
+          type: string
+      required:
+        - serial
+        - notAfter
+        - issuedAt
       type: object
     ObjectMeta:
       additionalProperties: false
@@ -4146,6 +4257,22 @@ components:
         - uid
         - kind
         - name
+      type: object
+    PendingJoin:
+      additionalProperties: false
+      properties:
+        expiresAt:
+          description: When the token stops working.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        tokenHash:
+          description: The SHA-256 of the token's secret part, in hexadecimal.
+          type: string
+      required:
+        - tokenHash
+        - expiresAt
       type: object
     PlanPart:
       additionalProperties: false
@@ -5694,6 +5821,29 @@ components:
       required:
         - events
       type: object
+    TokenInputBody:
+      additionalProperties: false
+      properties:
+        ttl:
+          description: How long the token works, as a duration such as 30m. Empty means the route's default.
+          type: string
+      type: object
+    TokenOutputBody:
+      additionalProperties: false
+      properties:
+        expiresAt:
+          description: When the token stops working.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        token:
+          description: The token. funcd keeps only its hash, and shows the token once.
+          type: string
+      required:
+        - token
+        - expiresAt
+      type: object
     VolumeEntry:
       additionalProperties: false
       properties:
@@ -5753,6 +5903,12 @@ components:
     WorkerNodeStatus:
       additionalProperties: false
       properties:
+        backup:
+          $ref: "#/components/schemas/NodeBackup"
+          description: The backup of the node's own stores, as the node last reported it; absent while the node runs no backup.
+        certificate:
+          $ref: "#/components/schemas/NodeCertificate"
+          description: The node certificate that the control plane issued when the node joined.
         conditions:
           description: The conditions that explain the phase.
           items:
@@ -5760,10 +5916,23 @@ components:
           type:
             - array
             - "null"
+        lastSeen:
+          description: When the node last polled the control plane.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        nodeAPIVersion:
+          description: The version of the node API that the node speaks.
+          format: int64
+          type: integer
         observedGeneration:
           description: The generation of the spec that funcd last acted on.
           format: int64
           type: integer
+        pendingJoin:
+          $ref: "#/components/schemas/PendingJoin"
+          description: The one-time join token minted for the node and not used yet, kept as a hash.
         phase:
           description: Where the object is in its lifecycle.
           enum:
@@ -5774,6 +5943,12 @@ components:
             - Degraded
             - Failed
             - Terminating
+          type: string
+        platform:
+          description: The OS and CPU of the node, such as linux/arm64.
+          type: string
+        version:
+          description: The funcd release that the node runs, as it reported it.
           type: string
       type: object
     Workflow:
@@ -6385,6 +6560,249 @@ info:
   version: v1alpha1
 openapi: 3.1.0
 paths:
+  /apis/funcd.io/v1alpha1/apitokens:
+    get:
+      operationId: listAPITokens
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/APIToken"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - APIToken
+    post:
+      operationId: createAPIToken
+      parameters:
+        - description: Admit the write and store nothing.
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: Admit the write and store nothing.
+            type: boolean
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/APIToken"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIToken"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - APIToken
+  /apis/funcd.io/v1alpha1/apitokens/{name}:
+    delete:
+      operationId: deleteAPIToken
+      parameters:
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+          in: header
+          name: If-Match
+          schema:
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - APIToken
+    get:
+      operationId: getAPIToken
+      parameters:
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIToken"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - APIToken
+    put:
+      operationId: replaceAPIToken
+      parameters:
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+          in: header
+          name: If-Match
+          schema:
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+            type: string
+        - description: Admit the write and store nothing.
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: Admit the write and store nothing.
+            type: boolean
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/APIToken"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIToken"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - APIToken
+  /apis/funcd.io/v1alpha1/apitokens/{name}/token:
+    post:
+      description: The token is funcd.<name>.<secret>, for the role and the namespaces of the declared APIToken, and the token minted before stops working. It works 30 days, or for the ttl, from 1s to 8760h.
+      operationId: mintAPIToken
+      parameters:
+        - description: The name of the object that the token is for.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The name of the object that the token is for.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenOutputBody"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:invalid`: The ttl is not a duration from 1s to 8760h. Send a duration such as 720h, or none for 30 days."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The ttl is not a duration from 1s to 8760h.
+              fix: Send a duration such as 720h, or none for 30 days.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to update APITokens. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to update APITokens.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No APIToken of that name exists. Check the name."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No APIToken of that name exists.
+              fix: Check the name.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Mint an API token
+      tags:
+        - APIToken
   /apis/funcd.io/v1alpha1/gateways:
     get:
       operationId: listGateways
@@ -9070,6 +9488,16 @@ paths:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
               fix: Send only the parameters that the operation lists.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -11478,6 +11906,16 @@ paths:
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
               fix: Correct the field at the location that the detail gives.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -11853,6 +12291,16 @@ paths:
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
               fix: Correct the field at the location that the detail gives.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -13547,6 +13995,16 @@ paths:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
               fix: Send only the parameters that the operation lists.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -15791,6 +16249,16 @@ paths:
             - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
               fix: Correct the field at the location that the detail gives.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -20012,6 +20480,16 @@ paths:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
               fix: Send only the parameters that the operation lists.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline, and the write needs a check that reads that node's state.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -22389,6 +22867,90 @@ paths:
               schema:
                 $ref: "#/components/schemas/FaultError"
           description: Error
+      tags:
+        - WorkerNode
+  /apis/funcd.io/v1alpha1/workernodes/{name}/token:
+    post:
+      description: "The token is K10<CA hash>::<node>:<secret>, for one join of the declared WorkerNode: funcd node join swaps it for the node's certificate, and a token minted before and not used stops working. It works an hour, or for the ttl, from 1s to 24h."
+      operationId: mintWorkerNodeJoinToken
+      parameters:
+        - description: The name of the object that the token is for.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The name of the object that the token is for.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenOutputBody"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:invalid`: The ttl is not a duration from 1s to 24h. Send a duration such as 30m, or none for an hour."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The ttl is not a duration from 1s to 24h.
+              fix: Send a duration such as 30m, or none for an hour.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to update WorkerNodes. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to update WorkerNodes.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No WorkerNode of that name exists. Check the name."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No WorkerNode of that name exists.
+              fix: Check the name.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Mint a worker node's join token
       tags:
         - WorkerNode
   /function/{name}:
