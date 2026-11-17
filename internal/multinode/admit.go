@@ -20,13 +20,22 @@ func nodeStateAdmissions() []string {
 }
 
 // needsNode reports whether the check named name reads the node's state for req: the volume booking only for a Function
-// that declares volumes, so a write that needs nothing of the node goes through while the node is away.
+// that declares volumes, and the restore guard only for an in-place Restore, so a write that needs nothing of the node
+// goes through while the node is away.
 func needsNode(name string, req admission.Request) bool {
-	if name != "function-volumes" {
-		return true
+	switch name {
+	case "function-volumes":
+		fn, ok := req.Object.(*v1.Function)
+		return ok && len(fn.Spec.Volumes) > 0
+	case "restore-in-place":
+		obj := req.Object
+		if req.Operation == admission.Delete {
+			obj = req.Old
+		}
+		r, ok := obj.(*v1.Restore)
+		return ok && r.InPlace()
 	}
-	fn, ok := req.Object.(*v1.Function)
-	return ok && len(fn.Spec.Volumes) > 0
+	return true
 }
 
 // NodeState is the node-state checks among as, which a node runs when the control plane asks it.

@@ -120,7 +120,8 @@ func TestDisasterRecoveryAnswersMatrix(t *testing.T) {
 	require.NoError(t, hold.Write(dir, hold.Marker{Reason: hold.ReasonRestore, Since: since}))
 	hd, err := hold.Open(dir)
 	require.NoError(t, err)
-	held := newAnswerEnv(t, funcd.WithHold(hd), funcd.WithBlobStoreURL(drStore))
+	held := newAnswerEnv(t, funcd.WithHold(hd), funcd.WithBlobStoreURL(drStore), asCluster(t))
+	placeOnOfflineNode(t, held)
 	copied := v1.RestoreMember{Kind: v1.KindKVStore, Name: "orders", As: "orders-copy"}
 	inPlace := v1.RestoreMember{Kind: v1.KindKVStore, Name: "orders", InPlace: true}
 	for _, obj := range []v1.Object{drSchedule("nightly"), drBackup("default", "b1"), drRestore("default", "r1", copied),
@@ -315,5 +316,7 @@ func TestDisasterRecoveryAnswersMatrix(t *testing.T) {
 				token: answersAdmin, detail: "list the backup target: the bucket does not exist"}},
 		},
 	)
+	rows = append(rows, offlineRow("createRestore", held, nil, ask{what: "an in-place Restore whose worker node is offline",
+		method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/namespaces/e1/restores", body: jsonOf(t, drRestore("e1", "away", inPlace))}))
 	runMatrix(t, rows)
 }

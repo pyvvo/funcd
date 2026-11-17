@@ -90,6 +90,7 @@ func workloadWrites() []ErrorCase {
 		problem(fault.Conflict, "A local volume does not fit in the namespace's spec.volumeBudget, with the "+
 			"namespace's other volumes.", "Delete the namespace's volumes that are no longer needed, or ask an admin "+
 			"to raise its spec.volumeBudget."),
+		nodeOffline(),
 	}
 }
 
@@ -212,7 +213,7 @@ func registerKVStore(api huma.API, h Handlers) {
 			remove: []ErrorCase{
 				problem(fault.Conflict, "A Function's spec.bindings.kv still names the store.",
 					"Remove that binding from the Function first."),
-				problem(fault.Conflict, "The store still holds keys.", "Delete its keys first.")},
+				problem(fault.Conflict, "The store still holds keys.", "Delete its keys first."), nodeOffline()},
 		},
 	})
 	kv := verbCases{kind: "KVStore", kinds: "KVStores", namespaced: true}
@@ -239,6 +240,14 @@ func registerKVStore(api huma.API, h Handlers) {
 // KVStoreHandover is the handover request body: the Workflow that becomes the store's owner.
 type KVStoreHandover struct {
 	Workflow v1.ObjectName `json:"workflow" doc:"The Workflow that becomes the store's owner. Its spec.kv declares the store."`
+}
+
+// nodeOffline is the 503 of a write whose check reads the state of the worker node that runs the namespace, while that
+// node is offline (FEAT-0002 F250): the control plane refuses it rather than skip the check.
+func nodeOffline() ErrorCase {
+	return problem(fault.Unavailable, "The namespace runs on a worker node that is offline, and the write needs a check "+
+		"that reads that node's state.", "Retry once the node polls the control plane again: funcdctl get workernodes "+
+		"shows it Ready.")
 }
 
 // madeByLiveOwner is the 409 of a write to a store that a Function, a Workflow or an App made and that still exists
@@ -273,7 +282,7 @@ func registerBucket(api huma.API, h Handlers) {
 				problem(fault.Conflict, "A Function's spec.bindings.blob still names the Bucket.",
 					"Remove that binding from the Function first."),
 				problem(fault.Conflict, "A prefix of the Bucket still holds objects.", "Delete the prefix's objects first."),
-				problem(fault.Conflict, "A prefix of the Bucket still holds a Lake's catalog.", catalogFix)},
+				problem(fault.Conflict, "A prefix of the Bucket still holds a Lake's catalog.", catalogFix), nodeOffline()},
 		},
 	})
 }
@@ -314,7 +323,7 @@ func registerSQLDatabase(api huma.API, h Handlers) {
 				problem(fault.Conflict, "The database's engine does not answer, so funcd cannot check whether it "+
 					"holds a table.", engineFix),
 				problem(fault.Conflict, "The database's engine answers with an error, so funcd cannot check whether "+
-					"it holds a table.", engineFix)},
+					"it holds a table.", engineFix), nodeOffline()},
 		},
 	})
 }
@@ -620,6 +629,7 @@ func restoreInPlaceCreates() []ErrorCase {
 		problem(fault.Conflict, "A member sets inPlace, and the namespace is still held by an earlier in-place Restore "+
 			"whose load did not complete.", "Check the namespace's stores, release the hold with funcdctl hold release "+
 			"--namespace, then create the Restore again."),
+		nodeOffline(),
 	}
 }
 
