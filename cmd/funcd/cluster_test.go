@@ -65,3 +65,23 @@ func TestAWorkerNodeBacksUpUnderItsOwnPrefix(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, cfg.Backup.Target, same.Backup.Target, "the control plane keeps the target's root")
 }
+
+func TestAJoinedNodeRestoresFromItsOwnPrefix(t *testing.T) {
+	dir := t.TempDir()
+	cluster := filepath.Join(dir, "cluster")
+	path := filepath.Join(dir, "funcdconfig.yaml")
+	key := filepath.Join(dir, "secrets.key")
+	require.NoError(t, os.WriteFile(key, make([]byte, 32), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("storage:\n  dataDir: "+filepath.Join(dir, "data")+"\n"+
+		"secrets:\n  encryptionKeyFile: "+key+"\n"+
+		"backup:\n  target: file:///srv/backup\n  encryption:\n    none: true\ncluster:\n  dataDir: "+cluster+"\n"), 0o600))
+	f := &restoreFlags{config: path}
+	cfg, err := f.load()
+	require.NoError(t, err)
+	require.Equal(t, "file:///srv/backup", cfg.Backup.Target, "a funcd that never joined reads the target's root")
+	require.NoError(t, os.MkdirAll(cluster, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(cluster, "name"), []byte("vm1\n"), 0o600))
+	cfg, err = f.load()
+	require.NoError(t, err)
+	require.Equal(t, "file:///srv/backup/nodes/vm1", cfg.Backup.Target)
+}

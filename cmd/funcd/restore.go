@@ -26,6 +26,7 @@ import (
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/multinode/agent"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/version"
@@ -50,13 +51,21 @@ func (f *restoreFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.timeline, "timeline", "", "keep only this timeline and those it descends from")
 }
 
-// load locates and loads the config as the daemon does.
+// load locates and loads the config as the daemon does. A worker node that joined restores from its own prefix of the
+// targets, where funcd node writes its backups (FEAT-0002 F251).
 func (f *restoreFlags) load() (config.Config, error) {
 	path, err := config.Locate(f.config)
 	if err != nil {
 		return config.Config{}, err
 	}
-	return config.Load(path, config.Flags{})
+	cfg, err := config.Load(path, config.Flags{})
+	if err != nil {
+		return cfg, err
+	}
+	if _, err := agent.JoinedName(cfg.Cluster.DataDir); err == nil {
+		return roleNode.nodeBackups(cfg)
+	}
+	return cfg, nil
 }
 
 // open loads the config and opens the restore source and identities.
