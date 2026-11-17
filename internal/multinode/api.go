@@ -89,6 +89,7 @@ const (
 	CallReplayDeadLetter  = "replayDeadLetter"
 	CallAppRetry          = "appRetry"
 	CallVolumeDelete      = "volumeDelete"
+	CallAdmit             = "admit"
 )
 
 // Call is one node call the control plane queued for a node.
@@ -99,6 +100,7 @@ type Call struct {
 	Run       v1.ObjectName    `json:"run,omitempty"`
 	Name      string           `json:"name,omitempty"`   // a dead letter's ID, an App's or a Function's name
 	Volume    v1.ObjectName    `json:"volume,omitempty"` // a Function's volume
+	Body      json.RawMessage  `json:"body,omitempty"`   // an admission's request
 	Query     logread.Query    `json:"query"`
 }
 

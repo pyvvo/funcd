@@ -17,6 +17,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	dlmemory "github.com/pyvvo/funcd/internal/eventing/deadletter/memory"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
@@ -465,4 +466,54 @@ func TestANodeChecksTheAPITokensOfTheControlPlaneItself(t *testing.T) {
 		_, err := onNode.Lookup(ctx, secret)
 		return fault.KindOf(err) == fault.Unauthorized
 	})
+}
+
+// dbCheck is a SQLDatabase deletion protection that answers as told.
+type dbCheck struct{ refuse bool }
+
+func (dbCheck) Name() string           { return "sqldatabase-deletion-protection" }
+func (dbCheck) Phase() admission.Phase { return admission.Validating }
+func (dbCheck) Handles(gvk v1.GroupVersionKind, op admission.Operation) bool {
+	return gvk.Kind == v1.KindSQLDatabase && op == admission.Delete
+}
+
+func (d dbCheck) Admit(_ context.Context, req admission.Request) (v1.Object, error) {
+	if d.refuse {
+		return nil, fault.Conflictf("admission.sqldatabase-deletion-protection", "SQLDatabase %s holds tables", req.Object.GetObjectMeta().Name)
+	}
+	return req.Object, nil
+}
+
+func TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState(t *testing.T) {
+	ctx := context.Background()
+	r := startCP(t)
+	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	require.NoError(t, err)
+	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+		Commands: multinode.Commands{Admissions: []admission.Admission{dbCheck{refuse: true}}}})
+	require.NoError(t, err)
+	actx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { _ = a.Run(actx); close(done) }()
+	defer func() { stop(); <-done }()
+	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+	ns.Name, ns.Spec.Node = "e1", "vm1"
+	_, err = r.cp.Create(ctx, ns)
+	require.NoError(t, err)
+
+	check := r.cluster.Forward([]admission.Admission{dbCheck{}})[0]
+	del := func(ns v1.NamespaceName) error {
+		db := &v1.SQLDatabase{TypeMeta: meta(v1.KindSQLDatabase)}
+		db.Name, db.Namespace = "orders", ns
+		_, err := check.Admit(ctx, admission.Request{Operation: admission.Delete, GVK: v1.KindSQLDatabase.GVK(), Object: db})
+		return err
+	}
+	eventually(t, "the node that holds the database refuses its delete", func() bool {
+		return fault.KindOf(del("e1")) == fault.Conflict
+	})
+	require.ErrorContains(t, del("e1"), "holds tables")
+	require.NoError(t, del("here"), "a namespace the control plane runs gets its own check")
 }

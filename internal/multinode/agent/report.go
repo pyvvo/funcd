@@ -239,8 +239,34 @@ func (a *Agent) run(ctx context.Context, c multinode.Call) (multinode.Answer, er
 		err = cmd.Apps.Retry(ctx, c.Namespace, v1.ObjectName(c.Name))
 	case c.Kind == multinode.CallVolumeDelete && cmd.Volumes != nil:
 		err = cmd.Volumes.DeleteVolume(ctx, c.Namespace, v1.ObjectName(c.Name), c.Volume)
+	case c.Kind == multinode.CallAdmit:
+		var obj v1.Object
+		if obj, err = a.admit(ctx, c); err == nil && obj != nil {
+			body(obj)
+		}
 	default:
 		err = fault.Unavailablef("agent.answer", "this node does not answer %s calls", c.Kind)
 	}
 	return ans, err
+}
+
+// admit runs the node's own node-state check that call c names (F250).
+func (a *Agent) admit(ctx context.Context, c multinode.Call) (v1.Object, error) {
+	var in multinode.AdmitRequest
+	if err := json.Unmarshal(c.Body, &in); err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, "agent.admit", "decode the request")
+	}
+	req, err := in.Request()
+	if err != nil {
+		return nil, err
+	}
+	for _, adm := range a.cfg.Commands.Admissions {
+		if adm.Name() == c.Name {
+			if !adm.Handles(req.GVK, req.Operation) {
+				return req.Object, nil
+			}
+			return adm.Admit(ctx, req)
+		}
+	}
+	return nil, fault.Unavailablef("agent.admit", "this node runs no %s check", c.Name)
 }
