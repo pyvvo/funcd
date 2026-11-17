@@ -31,8 +31,8 @@ the first ADR was drafted.
 ## Features
 
 F241 comes first: every other row needs the two roles. F242 and F243 make a node join and follow its namespaces, and
-F244 to F252 build on them. F253 also needs Jobs from FEAT-0012. F254 is deferred until cloud nodes are built, and
-F255 is an idea, not built in this epoch.
+F244 to F252 build on them. F253 also needs Jobs from FEAT-0012. F254 is deferred until cloud nodes are built. F255
+was dropped on 2026-11-17 (see Out of scope).
 
 ### This epoch
 
@@ -52,7 +52,6 @@ F255 is an idea, not built in this epoch.
 | F252 | **Nodes on older releases**: a node may run an older release than the control plane, within the node interface's supported versions, never a newer one, and the control plane refuses a spec that a namespace's node is too old to run. **Why**: funcd ships releases every few days, so nodes cannot all upgrade at once. | F243 | — | idea |
 | F253 | **Hands-free nodes**: an admin declares a node, its namespaces and a provisioning Job once; the Job gets that node's one-time token, creates the machine with it, and the machine joins with no human step. Removing a node is declared the same way, once its namespaces have moved. **Why**: nodes on Hetzner, AWS or another cloud come and go through automation, like the rest of the platform. | F242 · F245 · F246; F137, F140, F142 or F146, F257 (FEAT-0012) | — | idea |
 | F254 | **Workers on cloud nodes**: how a node that is itself a cloud container (Azure Container Apps, Cloud Run, Bunny) runs its workers. Deferred: it is decided before cloud nodes are built. **Why**: those platforms give no privileged containers, so containerd cannot run there. | F241 | — | idea |
-| F255 | **Hosts shared across nodes**: a node's edge forwards a path of a shared host to the node that serves it, so namespaces on different nodes can share one host. An idea, not built in this epoch. **Why**: on one host today, two namespaces can share a host by path. | F247 | — | idea |
 | F256 | **Packages for nodes**: funcd is released for each OS and CPU with its runtime images, and as a container image for cloud nodes. **Why**: a remote node needs something to install, and CI ships only funcdctl today. | F241; F19 (FEAT-0000) | — | idea |
 
 ### In other epochs, needed here
@@ -84,6 +83,8 @@ recovery and upgrades; then cloud nodes.
 - One namespace spread over several nodes.
 - Replicating a namespace's stores to another node, or keeping stores on shared storage.
 - Any change to an all-in-one install.
+- One host shared by namespaces on different nodes (F255, dropped on 2026-11-17): a gateway in front routes the host's
+  paths to each node, as Azure Container Apps' environment-level routing does for its apps.
 
 ## Exit criterion
 
