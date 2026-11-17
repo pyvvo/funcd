@@ -110,7 +110,8 @@ type Encryptor interface {
 type Option func(*config) error
 
 type config struct {
-	enc map[v1.Kind]Encryptor
+	enc          map[v1.Kind]Encryptor
+	changeRetain int
 }
 
 // WithEncryptor applies at-rest encryption to stored values of the named kinds
@@ -184,6 +185,10 @@ type store struct {
 	nextSubID int
 	ring      []recordedEvent
 	ringCap   int
+
+	changeRetain int // the change log's window (WithChangeLog); 0 ⇒ no change log
+	changeMu     sync.Mutex
+	changeCh     chan struct{}
 }
 
 // New wraps an Engine with the store semantics. Options configure at-rest
@@ -197,6 +202,7 @@ func New(e Engine, opts ...Option) Store {
 			return s
 		}
 	}
+	s.changeRetain = c.changeRetain
 	if err := s.loadMeta(context.Background()); err != nil {
 		s.initErr = err
 	}
@@ -395,7 +401,10 @@ func (s *store) createOnce(ctx context.Context, obj v1.Object) (v1.Object, error
 	if err != nil {
 		return nil, err
 	}
-	var rev uint64
+	var (
+		rev    uint64
+		logged bool
+	)
 	err = s.eng.Update(ctx, func(tx Txn) error {
 		if _, found, gerr := tx.Get(bucket, key); gerr != nil {
 			return gerr
@@ -415,10 +424,18 @@ func (s *store) createOnce(ctx context.Context, obj v1.Object) (v1.Object, error
 		if eerr != nil {
 			return eerr
 		}
-		return tx.Put(bucket, key, val)
+		if perr := tx.Put(bucket, key, val); perr != nil {
+			return perr
+		}
+		var lerr error
+		logged, lerr = s.putChange(ctx, tx, rev, Added, obj)
+		return lerr
 	})
 	if err != nil {
 		return nil, err
+	}
+	if logged {
+		s.afterChange(ctx, rev)
 	}
 	// Return the stamped work object to the caller and publish an INDEPENDENT clone to
 	// watchers, so a caller mutating the returned value cannot corrupt the watch stream
@@ -460,7 +477,7 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	// other ObjectMeta/spec/status field comes from the caller (last-writer-wins under
 	// the RV precondition).
 	var rev uint64
-	var noop bool
+	var noop, logged bool
 	err = s.eng.Update(ctx, func(tx Txn) error {
 		raw, found, gerr := tx.Get(bucket, key)
 		if gerr != nil {
@@ -512,10 +529,18 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if eerr != nil {
 			return eerr
 		}
-		return tx.Put(bucket, key, val)
+		if perr := tx.Put(bucket, key, val); perr != nil {
+			return perr
+		}
+		var lerr error
+		logged, lerr = s.putChange(ctx, tx, rev, Modified, obj)
+		return lerr
 	})
 	if err != nil {
 		return nil, err
+	}
+	if logged {
+		s.afterChange(ctx, rev)
 	}
 	if noop {
 		// Nothing changed: no revision advance, no Modified event. `obj` already carries the
@@ -561,6 +586,7 @@ func (s *store) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Names
 	var (
 		rev     uint64
 		deleted v1.Object
+		logged  bool
 	)
 	err := s.eng.Update(ctx, func(tx Txn) error {
 		raw, found, gerr := tx.Get(bucket, key)
@@ -583,10 +609,19 @@ func (s *store) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Names
 		}
 		rev = r
 		deleted = cur
-		return tx.Delete(bucket, key)
+		if derr := tx.Delete(bucket, key); derr != nil {
+			return derr
+		}
+		cur.GetObjectMeta().ResourceVersion = s.version(rev)
+		var lerr error
+		logged, lerr = s.putChange(ctx, tx, rev, Deleted, cur)
+		return lerr
 	})
 	if err != nil {
 		return err
+	}
+	if logged {
+		s.afterChange(ctx, rev)
 	}
 	// The event is the change at rev, and an event's resourceVersion is the watch cursor (ADR-0006 §2).
 	deleted.GetObjectMeta().ResourceVersion = s.version(rev)
