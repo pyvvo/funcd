@@ -66,6 +66,8 @@ type Deps struct {
 	Purger   BucketPurger
 	Interval time.Duration
 	Logger   *slog.Logger
+	// Skip leaves the children of a namespace a worker node runs to that node's collector (FEAT-0002); nil skips none.
+	Skip func(v1.NamespaceName) bool
 }
 
 // Collector deletes dead-owned children. Its passes are stateless and may run concurrently.
@@ -74,6 +76,7 @@ type Collector struct {
 	purger   BucketPurger
 	interval time.Duration
 	log      *slog.Logger
+	skip     func(v1.NamespaceName) bool
 
 	mu      sync.Mutex
 	deleted map[ownerKey]struct{}
@@ -112,7 +115,7 @@ func New(d Deps) (*Collector, error) {
 		log = slog.Default()
 	}
 	return &Collector{
-		store: d.Store, purger: d.Purger, interval: interval, log: log.With("component", "gc"),
+		store: d.Store, purger: d.Purger, interval: interval, log: log.With("component", "gc"), skip: d.Skip,
 		deleted: map[ownerKey]struct{}{}, wake: make(chan struct{}, 1),
 	}, nil
 }
@@ -407,6 +410,9 @@ func (p *pass) collectChild(ctx context.Context, obj v1.Object, ref v1.OwnerRefe
 // Revision an open workflow run holds (ADR-0190 Decision 7), and an App's store something else still uses, for a
 // later sweep.
 func (c *Collector) remove(ctx context.Context, obj v1.Object, ref v1.OwnerReference) error {
+	if c.skip != nil && c.skip(obj.GetObjectMeta().Namespace) {
+		return nil
+	}
 	if held, err := c.held(ctx, obj); err != nil || held {
 		return err
 	}

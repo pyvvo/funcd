@@ -592,6 +592,26 @@ Print a function's logs (tenant-scoped to your identity)
 | `--severity` | string |  | minimum level: trace\|debug\|info\|warn\|error\|fatal |
 | `--since` | string |  | only logs since a duration ago (15m, 1h30m) or an RFC3339 time (2026-10-07T22:00:00Z) |
 
+## `funcdctl node`
+
+```text
+funcdctl node
+
+Manage worker nodes
+```
+
+## `funcdctl node token`
+
+```text
+funcdctl node token <name> [flags]
+
+Mint a one-time join token for a declared WorkerNode, which funcd node join swaps for the node's certificate. It prints the token alone, so a script can capture it; funcd keeps only its hash, and an earlier unused token of the node stops working. An admin action.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--ttl` | string |  | how long the token works, from 1s to 24h, such as 30m (default 1h) |
+
 ## `funcdctl plugin`
 
 ```text

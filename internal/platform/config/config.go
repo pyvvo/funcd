@@ -470,6 +470,13 @@ type Config struct {
 		StorageProbeInterval string `json:"storageProbeInterval,omitempty" env:"FUNCD_HEALTH_STORAGE_PROBE_INTERVAL" doc:"How often funcd reads one key of the KV engine and one of the blob store to check that each answers; with an S3 blob.target, each blob read is one request. While a read fails or runs late, every KVStore, or every Bucket, is Degraded with the reason StorageUnreachable. It is a positive duration, more than health.storageProbeTimeout."`
 		StorageProbeTimeout  string `json:"storageProbeTimeout,omitempty" env:"FUNCD_HEALTH_STORAGE_PROBE_TIMEOUT" doc:"How long one storage read may take before it counts as failed; one late read is enough to make the stores Degraded. It is a positive duration, less than health.storageProbeInterval."`
 	} `json:"health,omitempty"`
+	// Cluster is the multi-node setting (FEAT-0002): the node API that worker nodes join on a control plane, and where
+	// a control plane keeps its CA or a worker node its identity.
+	Cluster struct {
+		ListenAddr string   `json:"listenAddr,omitempty" env:"FUNCD_CLUSTER_LISTEN_ADDR" doc:"The address that the node API listens on, where worker nodes join with a one-time token and then follow their namespaces over mTLS. Empty means no node can join funcd; funcd server listens on 0.0.0.0:7443 then. A worker node does not read it."`
+		Hosts      []string `json:"hosts,omitempty" env:"FUNCD_CLUSTER_HOSTS" envSeparator:"," doc:"The host names and addresses that the node API's certificate covers, besides localhost and loopback: the ones the worker nodes dial."`
+		DataDir    string   `json:"dataDir,omitempty" env:"FUNCD_CLUSTER_DATA_DIR" doc:"The directory of the cluster CA on a control plane, or of the identity that funcd node join writes on a worker node. Empty means <storage.dataDir>/cluster."`
+	} `json:"cluster,omitempty"`
 }
 
 // Flags are the top precedence tier (CLI flags with no env). MemoryOnly nil ⇒ --memory not set.
@@ -682,6 +689,9 @@ func Parse(name string, data []byte, flags Flags) (Config, error) {
 	}
 	if c.Eventing.EventStore.DataDir == "" {
 		c.Eventing.EventStore.DataDir = filepath.Join(c.Storage.DataDir, "eventstore")
+	}
+	if c.Cluster.DataDir == "" {
+		c.Cluster.DataDir = filepath.Join(c.Storage.DataDir, "cluster")
 	}
 	// The local blob store (ADR-0208): derived only where it serves, so a set blob.dir stays visible to CheckBlob.
 	switch {
