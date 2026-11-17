@@ -71,6 +71,8 @@ import (
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/lifecycle"
+	"github.com/pyvvo/funcd/internal/multinode"
+	"github.com/pyvvo/funcd/internal/multinode/agent"
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/network/egress"
 	"github.com/pyvvo/funcd/internal/platform/clock"
@@ -445,6 +447,11 @@ type config struct {
 	// backupParent is the generation a restore loaded (WithBackupParent); nil ⇒ none.
 	backupParent *backup.GenRef
 
+	// cluster makes the platform a control plane that worker nodes join (WithCluster, FEAT-0002); nil ⇒ none.
+	cluster *ClusterOptions
+	// nodeAgent makes the platform a worker node (WithNodeAgent, FEAT-0002); nil ⇒ none.
+	nodeAgent *NodeAgentOptions
+
 	// presetBlob and presetBus are what InMemory opened. WithBlob and WithBus close the one they replace, as nothing else
 	// would: the platform closes only the drivers it ends up with.
 	presetBlob blob.Bucket
@@ -546,10 +553,12 @@ type Platform struct {
 	providers    *provider.Catalog // the platform provider catalog (ADR-0082)
 
 	controller  *controller.Controller
-	collector   *gc.Collector    // ADR-0170: the owner garbage collector, run beside the controller
-	eventFanout *eventing.Fanout // ADR-0108: the named-event publisher the F69 Sensor subscribes to
-	edgeRouter  router.Router    // ADR-0110 (F79): the Route matcher the data-plane front door consults
-	tlsProvider edgetls.Provider // ADR-0111 (F74): the TLS cert provider (nil ⇒ plaintext)
+	collector   *gc.Collector      // ADR-0170: the owner garbage collector, run beside the controller
+	cluster     *multinode.Cluster // FEAT-0002: the node API of a control plane that worker nodes join; nil ⇒ none
+	agent       *agent.Agent       // FEAT-0002: the agent of a worker node; nil ⇒ none
+	eventFanout *eventing.Fanout   // ADR-0108: the named-event publisher the F69 Sensor subscribes to
+	edgeRouter  router.Router      // ADR-0110 (F79): the Route matcher the data-plane front door consults
+	tlsProvider edgetls.Provider   // ADR-0111 (F74): the TLS cert provider (nil ⇒ plaintext)
 	activator   *activator.Activator
 	httpServer  *http.Server
 	listener    net.Listener
@@ -700,6 +709,16 @@ func (p *Platform) buildControlPlane() error {
 		c.dataPlaneAddr = defaultDataPlaneAddr
 	}
 
+	// FEAT-0002: a worker node schedules under its own name, the one it joined under.
+	if c.nodeAgent != nil {
+		a, aerr := agent.New(agent.Config{Dir: c.nodeAgent.Dir, Store: c.store, Logger: p.logger,
+			Version: c.nodeAgent.Version, Platform: string(c.nodePlatform)})
+		if aerr != nil {
+			return fault.Wrapf(aerr, fault.KindOf(aerr), op, "load the worker node's identity")
+		}
+		p.agent, c.localNode = a, a.Name()
+	}
+
 	sched, err := singlenode.New(c.localNode, c.nodePlatform)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build scheduler")
@@ -806,7 +825,19 @@ func (p *Platform) buildControlPlane() error {
 			return fault.Wrapf(merr, fault.KindOf(merr), op, "load node master secret")
 		}
 	}
-	ctrl, err := controller.New(controller.Deps{Store: c.store, Logger: p.logger, RetryBackoffMax: c.pacing.RetryBackoffMax})
+	// FEAT-0002: a control plane that worker nodes join leaves each namespace placed on one to it.
+	var skip func(v1.NamespaceName) bool
+	if c.cluster != nil {
+		cl, cerr := multinode.New(multinode.Config{Store: c.store, Logger: p.logger, Dir: c.cluster.Dir,
+			ListenAddr: c.cluster.ListenAddr, Hosts: c.cluster.Hosts, LocalNode: c.localNode, LocalRuns: c.cluster.LocalRuns,
+			Master: master})
+		if cerr != nil {
+			return fault.Wrapf(cerr, fault.KindOf(cerr), op, "build the node API")
+		}
+		p.cluster, skip = cl, cl.Skip
+	}
+	ctrl, err := controller.New(controller.Deps{Store: c.store, Logger: p.logger, RetryBackoffMax: c.pacing.RetryBackoffMax,
+		Skip: skip})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build controller")
 	}
@@ -983,7 +1014,8 @@ func (p *Platform) buildControlPlane() error {
 	}
 	p.activator = act
 
-	if p.collector, err = gc.New(gc.Deps{Store: c.store, Purger: bucketPurger{shared: c.blob}, Interval: c.gcSweepInterval, Logger: p.logger}); err != nil {
+	if p.collector, err = gc.New(gc.Deps{Store: c.store, Purger: bucketPurger{shared: c.blob}, Interval: c.gcSweepInterval,
+		Logger: p.logger, Skip: skip}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build garbage collector")
 	}
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
@@ -1237,6 +1269,9 @@ func (p *Platform) buildControlPlane() error {
 
 	cpAdmissions := append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store}),
 		app.NewRequiresAdmission(storeReader{c.store}))
+	if p.cluster != nil {
+		cpAdmissions = append(cpAdmissions, p.cluster.Admissions()...)
+	}
 	// ADR-0349 Decision 2: a run that a Function starts passes the admission of a person's create, the control plane's.
 	p.jobStarts.admit = admission.NewPipeline(append([]admission.Admission{admission.NewValidateAdmission()}, cpAdmissions...)...)
 
@@ -1250,6 +1285,15 @@ func (p *Platform) buildControlPlane() error {
 		reader := logread.NewBlobReader(c.blob)
 		logReader = reader
 		runLogQuerier = controlplane.NewWorkflowRunLogQuerier(c.store, runs, reader)
+	}
+	// FEAT-0002 decision 9: a log read of a namespace a worker node runs goes through that node's call queue.
+	var joinTokens controlplane.JoinTokenMinter
+	if p.cluster != nil {
+		logReader, runLogQuerier = p.cluster.Logs(logReader), p.cluster.RunLogs(runLogQuerier)
+		joinTokens = p.cluster
+	}
+	if p.agent != nil {
+		p.agent.SetLogs(logReader, runLogQuerier)
 	}
 	// ADR-0205: the platform backup cuts the event store, the metastore and the run state.
 	var backupStatus controlplane.BackupStatuser
@@ -1278,6 +1322,7 @@ func (p *Platform) buildControlPlane() error {
 		}),
 		// ADR-0219: app-requires runs after app-parts.
 		Admissions: cpAdmissions,
+		JoinTokens: joinTokens,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build control-plane server")
@@ -1287,6 +1332,9 @@ func (p *Platform) buildControlPlane() error {
 	// ErrorLog sends net/http's own errors (TLS handshake, accept, recovered panic) through the configured
 	// logger; left nil they go to the stdlib log package, bypassing the log format (#454).
 	httpErrorLog := slog.NewLogLogger(p.logger.Handler(), slog.LevelWarn)
+	if p.agent != nil {
+		handler = readOnly(handler)
+	}
 	p.httpServer = &http.Server{Handler: recordControlPlane(handler), ReadHeaderTimeout: serverReadHeaderTimeout,
 		ReadTimeout: serverReadTimeout, ErrorLog: httpErrorLog}
 
@@ -1539,6 +1587,20 @@ func (p *Platform) Run(ctx context.Context) error {
 	if p.bridgeListen.IsValid() {
 		go p.serveBridge(ctx, serve)
 	}
+	if p.cluster != nil {
+		go func() {
+			if err := p.cluster.Run(ctx); err != nil {
+				p.logger.ErrorContext(ctx, "node API stopped", "error", err)
+			}
+		}()
+	}
+	if p.agent != nil {
+		go func() {
+			if err := p.agent.Run(ctx); err != nil {
+				p.logger.ErrorContext(ctx, "node agent stopped", "error", err)
+			}
+		}()
+	}
 
 	<-ctx.Done()
 
@@ -1572,6 +1634,9 @@ func (p *Platform) closeTimeout() time.Duration {
 // best-effort (joins errors, closing all even if one fails).
 func (p *Platform) Shutdown(ctx context.Context) error {
 	p.shutdownOnce.Do(func() {
+		if p.cluster != nil {
+			_ = p.cluster.Close()
+		}
 		if p.listener != nil {
 			_ = p.listener.Close() // best-effort; may already be closed by httpServer.Shutdown
 		}

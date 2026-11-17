@@ -1,0 +1,595 @@
+package multinode
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net"
+	"net/http"
+	"slices"
+	"strconv"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/store"
+)
+
+const (
+	defaultWait   = 25 * time.Second
+	maxWait       = 60 * time.Second
+	feedLimit     = 500
+	maxJoinBody   = 64 << 10
+	maxStatusBody = 1 << 20
+	maxObjectBody = 4 << 20
+	// readHeaderTimeout bounds a node's request header, as on the platform's own listeners.
+	readHeaderTimeout = 10 * time.Second
+)
+
+// ServerConfig is what the node API serves from.
+type ServerConfig struct {
+	Store     store.Store
+	CA        *CA
+	Placement *Placement
+	Liveness  *Liveness
+	Calls     *Calls
+	Keys      *NamespaceKeys
+	Logger    *slog.Logger
+	Now       func() time.Time
+}
+
+// Server is the node API (FEAT-0002 decisions 2, 3, 4 and 9): HTTPS and JSON on one listener, mTLS for every route but
+// the join, which a node calls with its one-time token.
+type Server struct {
+	cfg ServerConfig
+	cl  store.ChangeLog
+	srv *http.Server
+	ln  net.Listener
+}
+
+// NewServer binds the node API on listenAddr, with a certificate for hosts that the CA signs.
+func NewServer(cfg ServerConfig, listenAddr string, hosts []string) (*Server, error) {
+	const op = "multinode.NewServer"
+	cl, ok := cfg.Store.(store.ChangeLog)
+	if !ok {
+		return nil, fault.Invalidf(op, "the store keeps no change log")
+	}
+	cert, err := cfg.CA.ServerCertificate(hosts, cfg.Now())
+	if err != nil {
+		return nil, err
+	}
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "bind the node API on %s", listenAddr)
+	}
+	s := &Server{cfg: cfg, cl: cl, ln: ln}
+	s.srv = &http.Server{
+		Handler:           s.routes(),
+		ReadHeaderTimeout: readHeaderTimeout,
+		ErrorLog:          slog.NewLogLogger(cfg.Logger.Handler(), slog.LevelWarn),
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert}, ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: cfg.CA.Pool(),
+			MinVersion: tls.VersionTLS13,
+		},
+	}
+	return s, nil
+}
+
+// Addr is the bound address.
+func (s *Server) Addr() string { return s.ln.Addr().String() }
+
+// Serve serves until ctx ends, then closes every connection, long polls included.
+func (s *Server) Serve(ctx context.Context) error {
+	go func() {
+		<-ctx.Done()
+		_ = s.srv.Close()
+	}()
+	if err := s.srv.ServeTLS(s.ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// Close stops the listener.
+func (s *Server) Close() error { return s.srv.Close() }
+
+func (s *Server) routes() http.Handler {
+	r := chi.NewRouter()
+	r.Post(PathJoin, s.join)
+	r.Group(func(r chi.Router) {
+		r.Use(s.authNode)
+		r.Get(PathSnapshot, s.snapshot)
+		r.Get(PathFeed, s.feed)
+		r.Put(PathStatus, s.status)
+		r.Put(PathObjects, s.putObject)
+		r.Delete(PathObjects, s.deleteObject)
+		r.Get(PathCalls, s.poll)
+		r.Post(PathCalls+"/{id}", s.answer)
+		r.Get(PathKeys, s.keys)
+	})
+	return r
+}
+
+type nodeKey struct{}
+
+func nodeOf(ctx context.Context) v1.ObjectName {
+	n, _ := ctx.Value(nodeKey{}).(v1.ObjectName)
+	return n
+}
+
+// authNode admits a node by the certificate it joined with: verified against the CA, and still the one its WorkerNode
+// names, so a new join or a deleted WorkerNode ends the old certificate. A node speaking a node API version this control
+// plane does not serve gets 426 (decision 12).
+func (s *Server) authNode(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		api, err := strconv.Atoi(r.Header.Get(HeaderAPIVersion))
+		if err != nil || !slices.Contains(SupportedAPIVersions, api) {
+			http.Error(w, "this control plane serves node API versions "+versions()+"; upgrade or downgrade the node",
+				http.StatusUpgradeRequired)
+			return
+		}
+		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
+			http.Error(w, "a node certificate is required", http.StatusUnauthorized)
+			return
+		}
+		leaf := r.TLS.PeerCertificates[0]
+		node := v1.ObjectName(leaf.Subject.CommonName)
+		obj, err := s.cfg.Store.Get(r.Context(), v1.KindWorkerNode.GVK(), "", node)
+		if err != nil {
+			http.Error(w, "worker node "+string(node)+" is not declared", http.StatusUnauthorized)
+			return
+		}
+		n, ok := obj.(*v1.WorkerNode)
+		if !ok || n.Status.Certificate == nil || n.Status.Certificate.Serial != leaf.SerialNumber.Text(16) {
+			http.Error(w, "this certificate is not the node's current one; join again", http.StatusUnauthorized)
+			return
+		}
+		s.cfg.Liveness.Seen(node, r.Header.Get(HeaderVersion), api, r.Header.Get(HeaderPlatform))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), nodeKey{}, node)))
+	})
+}
+
+func versions() string {
+	out := ""
+	for i, v := range SupportedAPIVersions {
+		if i > 0 {
+			out += ", "
+		}
+		out += strconv.Itoa(v)
+	}
+	return out
+}
+
+//nolint:forbidigo // v is one of the node API's typed answers
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeFault(w http.ResponseWriter, err error) { http.Error(w, err.Error(), fault.StatusOf(err)) }
+
+//nolint:forbidigo // v is one of the node API's typed requests
+func decode(w http.ResponseWriter, r *http.Request, limit int64, v any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(v); err != nil {
+		http.Error(w, "decode the request: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// join swaps a one-time token for a node certificate (decision 2). The token must match the hash the node's
+// WorkerNode keeps, not be expired, and no running node may hold the name; the swap uses the token up.
+func (s *Server) join(w http.ResponseWriter, r *http.Request) {
+	const op = "multinode.join"
+	var in JoinRequest
+	if !decode(w, r, maxJoinBody, &in) {
+		return
+	}
+	tok, err := ParseToken(in.Token)
+	if err != nil {
+		writeFault(w, err)
+		return
+	}
+	if tok.CAHash != s.cfg.CA.Hash() {
+		writeFault(w, fault.Forbiddenf(op, "the join token was minted by another control plane"))
+		return
+	}
+	if s.cfg.Liveness.Ready(tok.Node) {
+		writeFault(w, fault.Conflictf(op, "a running node holds the name %s", tok.Node))
+		return
+	}
+	now := s.cfg.Now()
+	var cert []byte
+	var denied error
+	err = writeNodeStatus(r.Context(), s.cfg.Store, tok.Node, func(n *v1.WorkerNode) bool {
+		pj := n.Status.PendingJoin
+		switch {
+		case pj == nil:
+			denied = fault.Forbiddenf(op, "worker node %s has no join token waiting; mint one with funcdctl node token", tok.Node)
+			return false
+		case now.After(time.Time(pj.ExpiresAt)):
+			denied = fault.Forbiddenf(op, "the join token of worker node %s expired; mint a new one", tok.Node)
+			return false
+		case !secretMatches(tok.Secret, pj.TokenHash):
+			denied = fault.Forbiddenf(op, "the join token does not match the one minted for worker node %s", tok.Node)
+			return false
+		}
+		pemCert, serial, notAfter, serr := s.cfg.CA.SignNode(in.CSR, tok.Node, now)
+		if serr != nil {
+			denied = serr
+			return false
+		}
+		cert = pemCert
+		n.Status.Certificate = &v1.NodeCertificate{Serial: serial, NotAfter: v1.NewTimestamp(notAfter), IssuedAt: v1.NewTimestamp(now)}
+		n.Status.PendingJoin = nil
+		return true
+	})
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		writeFault(w, fault.Forbiddenf(op, "no WorkerNode %s is declared", tok.Node))
+	case err != nil:
+		writeFault(w, err)
+	case denied != nil:
+		writeFault(w, denied)
+	default:
+		s.cfg.Logger.InfoContext(r.Context(), "worker node joined", "node", tok.Node, "version", in.Version, "platform", in.Platform)
+		writeJSON(w, JoinResponse{Certificate: cert, CA: s.cfg.CA.PEM()})
+	}
+}
+
+// placedOn reports whether namespace ns is placed on node.
+func (s *Server) placedOn(ctx context.Context, ns v1.NamespaceName, node v1.ObjectName) bool {
+	at, err := s.cfg.Placement.NodeOf(ctx, ns)
+	return err == nil && at == node && node != ""
+}
+
+// nodeKinds are the cluster-scoped kinds every node follows, besides the Namespaces.
+func nodeKinds(k v1.Kind) bool { return k == v1.KindRuntimeClass }
+
+// snapshot answers GET …/snapshot[?namespace=]: every object of the node's namespaces (or the one asked), at the
+// revision it follows the feed after. The node's own children are left out.
+func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
+	ctx, node := r.Context(), nodeOf(r.Context())
+	head, err := s.cl.Head(ctx)
+	if err != nil {
+		writeFault(w, err)
+		return
+	}
+	var namespaces []v1.NamespaceName
+	if ns := v1.NamespaceName(r.URL.Query().Get("namespace")); ns != "" {
+		if !s.placedOn(ctx, ns, node) {
+			writeFault(w, fault.Forbiddenf("multinode.snapshot", "namespace %s is not placed on worker node %s", ns, node))
+			return
+		}
+		namespaces = []v1.NamespaceName{ns}
+	} else if namespaces, err = s.cfg.Placement.Namespaces(ctx, node); err != nil {
+		writeFault(w, err)
+		return
+	}
+	out := Snapshot{Rev: head, Objects: []store.Change{}}
+	add := func(obj v1.Object) error {
+		raw, err := json.Marshal(obj)
+		if err != nil {
+			return fault.Wrapf(err, fault.Internal, "multinode.snapshot", "marshal")
+		}
+		m := obj.GetObjectMeta()
+		out.Objects = append(out.Objects, store.Change{Rev: head, Type: store.Added, Kind: obj.GroupVersionKind().Kind,
+			Namespace: m.Namespace, Name: m.Name, Object: raw})
+		return nil
+	}
+	for _, k := range v1.AllKinds() {
+		if !nodeKinds(k) {
+			continue
+		}
+		res, err := s.cfg.Store.List(ctx, k.GVK(), store.ListOptions{})
+		if err != nil {
+			writeFault(w, err)
+			return
+		}
+		for _, obj := range res.Items {
+			if err := add(obj); err != nil {
+				writeFault(w, err)
+				return
+			}
+		}
+	}
+	for _, ns := range namespaces {
+		nsObj, err := s.cfg.Store.Get(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
+		if err != nil {
+			writeFault(w, err)
+			return
+		}
+		if err := add(nsObj); err != nil {
+			writeFault(w, err)
+			return
+		}
+		for _, k := range v1.AllKinds() {
+			if !k.Namespaced() {
+				continue
+			}
+			res, err := s.cfg.Store.List(ctx, k.GVK(), store.ListOptions{Namespace: ns})
+			if err != nil {
+				writeFault(w, err)
+				return
+			}
+			for _, obj := range res.Items {
+				if len(obj.GetObjectMeta().OwnerReferences) > 0 {
+					continue
+				}
+				if err := add(obj); err != nil {
+					writeFault(w, err)
+					return
+				}
+			}
+		}
+	}
+	writeJSON(w, out)
+}
+
+func waitOf(r *http.Request) time.Duration {
+	d, err := time.ParseDuration(r.URL.Query().Get("wait"))
+	if err != nil || d <= 0 || d > maxWait {
+		return defaultWait
+	}
+	return d
+}
+
+// feed answers GET …/feed?since=&wait= (decision 3): the node's records after since, or none once wait passes. A node
+// gets every Namespace record, so it sees placements come and go, and the records of the namespaces placed on it, but
+// not the ones it wrote itself. A since older than the change log is 410: the node starts again from a snapshot.
+func (s *Server) feed(w http.ResponseWriter, r *http.Request) {
+	ctx, node := r.Context(), nodeOf(r.Context())
+	since, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
+	if err != nil {
+		http.Error(w, "since must be a revision", http.StatusBadRequest)
+		return
+	}
+	keep := func(c store.Change) bool {
+		switch {
+		case c.Origin == node:
+			return false
+		case c.Kind == v1.KindNamespace || nodeKinds(c.Kind):
+			return true
+		case c.Namespace == "":
+			return false
+		default:
+			return s.placedOn(ctx, c.Namespace, node)
+		}
+	}
+	deadline := time.Now().Add(waitOf(r))
+	for {
+		signal := s.cl.ChangeSignal()
+		out, cursor, err := s.cl.Changes(ctx, since, feedLimit, keep)
+		if fault.KindOf(err) == fault.PreconditionFailed {
+			http.Error(w, err.Error(), http.StatusGone)
+			return
+		}
+		if err != nil {
+			writeFault(w, err)
+			return
+		}
+		if len(out) > 0 || !time.Now().Before(deadline) {
+			writeJSON(w, Feed{Rev: cursor, Changes: out})
+			return
+		}
+		since = cursor
+		t := time.NewTimer(time.Until(deadline))
+		select {
+		case <-signal:
+			t.Stop()
+		case <-t.C:
+			writeJSON(w, Feed{Rev: cursor})
+			return
+		case <-ctx.Done():
+			t.Stop()
+			return
+		}
+	}
+}
+
+// status answers PUT …/status (decision 4): the object's status becomes the node's; nothing else of it changes. The
+// object must sit in a namespace placed on the node, and pass validation (decision 5).
+func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	const op = "multinode.status"
+	ctx, node := r.Context(), nodeOf(r.Context())
+	var in StatusWrite
+	if !decode(w, r, maxStatusBody, &in) {
+		return
+	}
+	if !s.placedOn(ctx, in.Namespace, node) {
+		writeFault(w, fault.Forbiddenf(op, "namespace %s is not placed on worker node %s", in.Namespace, node))
+		return
+	}
+	ctx = store.WithoutChangeLog(ctx)
+	for range 5 {
+		cur, err := s.cfg.Store.Get(ctx, in.Kind.GVK(), in.Namespace, in.Name)
+		if err != nil {
+			writeFault(w, err)
+			return
+		}
+		obj, err := withStatus(cur, in.Status)
+		if err != nil {
+			writeFault(w, err)
+			return
+		}
+		if err := obj.Validate(); err != nil {
+			writeFault(w, err)
+			return
+		}
+		if _, err = s.cfg.Store.Update(ctx, obj); err == nil {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		} else if fault.KindOf(err) != fault.Conflict {
+			writeFault(w, err)
+			return
+		}
+	}
+	writeFault(w, fault.Conflictf(op, "%s %s kept changing", in.Kind, in.Name))
+}
+
+// withStatus is cur with its status replaced by status.
+func withStatus(cur v1.Object, status json.RawMessage) (v1.Object, error) {
+	const op = "multinode.withStatus"
+	raw, err := json.Marshal(cur)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "marshal")
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "unmarshal")
+	}
+	m["status"] = status
+	if raw, err = json.Marshal(m); err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "marshal with the status")
+	}
+	kind := cur.GroupVersionKind().Kind
+	obj, ok := v1.NewObject(kind)
+	if !ok {
+		return nil, fault.Internalf(op, "unknown kind %q", kind)
+	}
+	if err := json.Unmarshal(raw, obj); err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "the status does not fit %s", kind)
+	}
+	return obj, nil
+}
+
+// putObject answers PUT …/objects: a child the node owns (one with ownerReferences) is created or replaced, in a
+// namespace placed on the node. A node never writes an object a person wrote.
+func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
+	const op = "multinode.putObject"
+	ctx, node := r.Context(), nodeOf(r.Context())
+	var in ObjectWrite
+	if !decode(w, r, maxObjectBody, &in) {
+		return
+	}
+	obj, ok := v1.NewObject(in.Kind)
+	if !ok {
+		writeFault(w, fault.Invalidf(op, "unknown kind %q", in.Kind))
+		return
+	}
+	if err := json.Unmarshal(in.Object, obj); err != nil {
+		writeFault(w, fault.Wrapf(err, fault.Invalid, op, "decode the %s", in.Kind))
+		return
+	}
+	m := obj.GetObjectMeta()
+	switch {
+	case !s.placedOn(ctx, m.Namespace, node):
+		writeFault(w, fault.Forbiddenf(op, "namespace %s is not placed on worker node %s", m.Namespace, node))
+		return
+	case len(m.OwnerReferences) == 0:
+		writeFault(w, fault.Forbiddenf(op, "a node writes only the children it owns; %s %s has no owner", in.Kind, m.Name))
+		return
+	}
+	if err := obj.Validate(); err != nil {
+		writeFault(w, err)
+		return
+	}
+	ctx = store.WithOrigin(ctx, node)
+	for range 5 {
+		cur, err := s.cfg.Store.Get(ctx, obj.GroupVersionKind(), m.Namespace, m.Name)
+		if fault.KindOf(err) == fault.NotFound {
+			m.UID, m.ResourceVersion, m.Generation = "", "", 0
+			if _, err = s.cfg.Store.Create(ctx, obj); fault.KindOf(err) == fault.Conflict {
+				continue
+			}
+			writeDone(w, err)
+			return
+		}
+		if err != nil {
+			writeFault(w, err)
+			return
+		}
+		if len(cur.GetObjectMeta().OwnerReferences) == 0 {
+			writeFault(w, fault.Forbiddenf(op, "%s %s was written by a person, not by worker node %s", in.Kind, m.Name, node))
+			return
+		}
+		m.ResourceVersion = cur.GetObjectMeta().ResourceVersion
+		if _, err = s.cfg.Store.Update(ctx, obj); fault.KindOf(err) != fault.Conflict {
+			writeDone(w, err)
+			return
+		}
+	}
+	writeFault(w, fault.Conflictf(op, "%s %s kept changing", in.Kind, m.Name))
+}
+
+func writeDone(w http.ResponseWriter, err error) {
+	if err != nil {
+		writeFault(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteObject answers DELETE …/objects?kind=&namespace=&name=: a child the node owns goes.
+func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
+	const op = "multinode.deleteObject"
+	ctx, node := r.Context(), nodeOf(r.Context())
+	q := r.URL.Query()
+	kind, ns, name := v1.Kind(q.Get("kind")), v1.NamespaceName(q.Get("namespace")), v1.ObjectName(q.Get("name"))
+	if !s.placedOn(ctx, ns, node) {
+		writeFault(w, fault.Forbiddenf(op, "namespace %s is not placed on worker node %s", ns, node))
+		return
+	}
+	cur, err := s.cfg.Store.Get(ctx, kind.GVK(), ns, name)
+	if fault.KindOf(err) == fault.NotFound {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeFault(w, err)
+		return
+	}
+	if len(cur.GetObjectMeta().OwnerReferences) == 0 {
+		writeFault(w, fault.Forbiddenf(op, "%s %s was written by a person, not by worker node %s", kind, name, node))
+		return
+	}
+	err = s.cfg.Store.Delete(store.WithOrigin(ctx, node), kind.GVK(), ns, name, "")
+	if fault.KindOf(err) == fault.NotFound {
+		err = nil
+	}
+	writeDone(w, err)
+}
+
+// poll answers GET …/calls?wait=: the node's queued calls, or 204 once wait passes.
+func (s *Server) poll(w http.ResponseWriter, r *http.Request) {
+	calls := s.cfg.Calls.Poll(r.Context(), nodeOf(r.Context()), waitOf(r))
+	if len(calls) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, calls)
+}
+
+// answer answers POST …/calls/{id}: the node's answer reaches the waiting caller.
+func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
+	var a Answer
+	if !decode(w, r, maxObjectBody, &a) {
+		return
+	}
+	writeDone(w, s.cfg.Calls.Answer(nodeOf(r.Context()), chi.URLParam(r, "id"), a))
+}
+
+// keys answers GET …/keys?namespace=: the master of a namespace placed on the node (decision 8).
+func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
+	const op = "multinode.keys"
+	ctx, node := r.Context(), nodeOf(r.Context())
+	ns := v1.NamespaceName(r.URL.Query().Get("namespace"))
+	if !s.placedOn(ctx, ns, node) {
+		writeFault(w, fault.Forbiddenf(op, "namespace %s is not placed on worker node %s", ns, node))
+		return
+	}
+	if s.cfg.Keys == nil {
+		writeFault(w, fault.Unavailablef(op, "this control plane derives no namespace keys"))
+		return
+	}
+	k, err := s.cfg.Keys.Of(ctx, ns)
+	if err != nil {
+		writeFault(w, err)
+		return
+	}
+	writeJSON(w, k)
+}

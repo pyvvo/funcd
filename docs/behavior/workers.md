@@ -2,7 +2,7 @@
 
 Status words and how to read this: [the index](README.md).
 
-Kinds: WorkerNode, RuntimeClass.
+Kinds: RuntimeClass.
 
 ```mermaid
 stateDiagram-v2
@@ -38,7 +38,7 @@ New words: Placed, Stopping, Ended.
 | Placement | Every replica goes to the one configured node, unless the artifact lists platforms and not the node's, or its container engine's under `funcdctl dev`: then no worker is created | none | `Failed`, `NoMatchingPlatform`, `artifact provides [<list>]; node <name> runs <platform>` | decided | ADR-0145 Decisions 4 to 6, `TestScenarioFunctionNoMatchingPlatform` |
 | Under `funcdctl dev --containers` | Each `nodejs22` and `python314` worker, a Job run's too, runs alone in a container on dev's engine from the image funcdctl carries, loaded once; with no engine, another platform or no images, dev refuses to start | a container start | `loaded a runtime image` | decided | ADR-0359, `TestScenarioDevContainers`, `TestScenarioDevContainersRefused` |
 | A dev container worker's linked directory | A link in its bundle to a directory the engine sees, any on the host's network, one under the home directory in a VM, is bound read-only at the link's path, unless a link in it leaves it; any other link is copied | none | a `bind` mount in `docker inspect` | decided | ADR-0359 Decision 5, `TestScenarioDevContainersBindsNodeModules` |
-| A `WorkerNode` or `RuntimeClass` object | Stored and listed, and no reconciler reads it: placement knows one configured node, and `spec.runtime` picks the image: funcd's own, else an Addon's runtime of that name, else the operator's | none | the object as you applied it | deferred | ADR-0017 Open questions, ADR-0149 Scope, ADR-0344 Decision 6 |
+| A `RuntimeClass` object | Stored and listed, and no reconciler reads it: `spec.runtime` picks the image: funcd's own, else an Addon's runtime of that name, else the operator's. A WorkerNode: [Multi-node](multi-node.md) | none | the object as you applied it | deferred | ADR-0017 Open questions, ADR-0149 Scope, ADR-0344 Decision 6 |
 | A runtime with no image | On `containerd`, learned at the first `Create`, so a scale-to-zero Function learns it at its first wake. An image that appears recovers it | `runtime.supervisionPeriod` 10 s | `Failed`, `RuntimeUnavailable`, `is not embedded; set runtime.containerd.imageOverride` | decided | ADR-0149 Decisions 2 to 5, `TestADR0149_MissingImageScaleToZero` |
 | An Addon's runtime | Known at the gate, before any worker: an entry that does not serve the workload, or a driver that runs no image, fails there; the Addon's watch recovers the Function | none | `RuntimeUnavailable`, `ships it for <workloads>, not for Functions` | decided | ADR-0344 Decisions 6 and 7, `TestScenarioAddonRuntimeWrongWorkload`, `TestScenarioAddonRuntimeAppears` |
 | The first worker of a runtime in a namespace | Imports and unpacks the image inside its reconcile, on the controller's one worker, so every other reconcile waits. Each start of a private containerd begins with no image | seconds per image (#1292) | a slower first call | deferred | #1292, ADR-0186 Decision 6 and Consequences |

@@ -50,6 +50,7 @@ the bug rule in `.claude/CLAUDE.md`: a row points at what to read and proves not
 | [Apps](apps.md) | rollouts, hooks, rollback, delete |
 | [Disaster recovery](disaster-recovery.md) | backups, Restores, namespace holds |
 | [Health](health.md) | storage probes, what funcd says about itself |
+| [Multi-node](multi-node.md) | worker nodes: join, placement, follow, status back, node calls |
 | [Limits](limits.md) | quotas, the disk floor, caps a user hits |
 | [funcdctl dev](funcdctl-dev.md) | the dev loop, funcdctl's waits and errors |
 | [funcdctl](funcdctl.md) | plugins: an App's own CLI run as `funcdctl <name>` |

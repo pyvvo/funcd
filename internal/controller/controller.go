@@ -55,6 +55,8 @@ type Deps struct {
 	// RetryBackoffMax caps the failed-reconcile and re-Watch retry (controller.retryBackoffMax, ADR-0163); 0 ⇒
 	// maxBackoff.
 	RetryBackoffMax time.Duration
+	// Skip drops every request of a namespace that a worker node runs (FEAT-0002 decision 1); nil skips none.
+	Skip func(v1.NamespaceName) bool
 }
 
 // Controller is the reconcile engine.
@@ -65,6 +67,7 @@ type Controller struct {
 	reconcilers map[v1.GroupVersionKind]Reconciler
 	mappers     map[v1.GroupVersionKind][]MapFunc
 	queue       *queue
+	skip        func(v1.NamespaceName) bool
 }
 
 const (
@@ -96,8 +99,11 @@ func New(d Deps) (*Controller, error) {
 		reconcilers: map[v1.GroupVersionKind]Reconciler{},
 		mappers:     map[v1.GroupVersionKind][]MapFunc{},
 		queue:       newQueue(baseBackoff, retryMax),
+		skip:        d.Skip,
 	}, nil
 }
+
+func (c *Controller) skipped(req Request) bool { return c.skip != nil && c.skip(req.Namespace) }
 
 // Register binds a Reconciler to a gvk. Call before Run.
 func (c *Controller) Register(gvk v1.GroupVersionKind, r Reconciler) {
@@ -115,6 +121,9 @@ func (c *Controller) Watches(gvk v1.GroupVersionKind, mapFn MapFunc) {
 // run the workflow engine's goroutine advanced (ADR-0146). Safe from any goroutine, before Run, and a no-op after
 // shutdown.
 func (c *Controller) Enqueue(req Request) {
+	if c.skipped(req) {
+		return
+	}
 	c.queue.Add(req)
 }
 
@@ -215,11 +224,15 @@ func (c *Controller) forward(ctx context.Context, gvk v1.GroupVersionKind, w sto
 			}
 			key := Request{GVK: gvk, Namespace: meta.Namespace, Name: meta.Name}
 			var reqs []Request
-			if reconciled {
+			if reconciled && !c.skipped(key) {
 				reqs = append(reqs, key)
 			}
 			for _, mapFn := range c.mappers[gvk] {
-				reqs = append(reqs, mapFn(ctx, ev.Object)...)
+				for _, req := range mapFn(ctx, ev.Object) {
+					if !c.skipped(req) {
+						reqs = append(reqs, req)
+					}
+				}
 			}
 			for _, req := range reqs {
 				c.queue.Add(req)

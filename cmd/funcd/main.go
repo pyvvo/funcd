@@ -134,6 +134,8 @@ func newRootCmd(out io.Writer) *cobra.Command {
 			return err
 		},
 	})
+	root.AddCommand(newServerCmd(out))
+	root.AddCommand(newNodeCmd(out))
 	root.AddCommand(newRestoreCmd(out))
 	root.AddCommand(newBenchCmd(out))
 	root.AddCommand(newInstallCmd(out))
@@ -147,7 +149,12 @@ func newRootCmd(out io.Writer) *cobra.Command {
 // default), assembles the platform from it, and runs until a signal arrives. memoryFlag is the
 // --memory flag value (nil ⇒ the flag was not set; the config/default decides the substrate). The
 // logger writes to out; once it exists, serve logs its own failure and returns it as a loggedError.
-func serve(parent context.Context, configPath string, memoryFlag *bool, out io.Writer) (err error) {
+func serve(parent context.Context, configPath string, memoryFlag *bool, out io.Writer) error {
+	return serveAs(parent, configPath, memoryFlag, out, roleAll)
+}
+
+// serveAs is serve for role r: the all-in-one, the control plane alone (funcd server) or a worker node (funcd node).
+func serveAs(parent context.Context, configPath string, memoryFlag *bool, out io.Writer, r role) (err error) {
 	// Locate + load funcdconfig.yaml into the effective config (file + env + default, validated; ADR-0062).
 	path, err := config.Locate(configPath)
 	if err != nil {
@@ -157,6 +164,7 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 	if err != nil {
 		return err
 	}
+	cfg = r.prepare(cfg)
 	// ADR-0314 Decision 3: a config mistake, refused before the data directory, so it never counts as a start (ADR-0207).
 	if err := checkBuiltInTokenBind(cfg); err != nil {
 		return err
@@ -216,7 +224,7 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 	// store locked (ADR-0297 Decision 2).
 	closeExec, startLoops, substrate, platform := noopClose, func(context.Context) {}, "", (*funcd.Platform)(nil)
 	err = space.run(parent, func() error {
-		opts, ce, sl, sub, berr := buildOptions(parent, cfg, root, held)
+		opts, ce, sl, sub, berr := buildOptionsAs(parent, cfg, root, held, r)
 		if berr != nil {
 			return berr
 		}
@@ -319,7 +327,12 @@ func safeModeConfig(cfg config.Config) (safemode.Config, error) {
 // never held), which the platform, the backup runner and the blob mirror ask. It returns the options, the
 // execution closer the caller must defer, the start of the KV export and blob mirror loops, and the substrate label.
 // The platform owns the drivers; a failed call closes the ones it already opened (issue #437).
-func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, held *hold.Hold) (_ []funcd.Option, _ func() error, _ func(context.Context), _ string, err error) {
+func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, held *hold.Hold) ([]funcd.Option, func() error, func(context.Context), string, error) {
+	return buildOptionsAs(ctx, cfg, root, held, roleAll)
+}
+
+// buildOptionsAs is buildOptions for role r, which adds the node API of a control plane or the agent of a worker node.
+func buildOptionsAs(ctx context.Context, cfg config.Config, root *slog.Logger, held *hold.Hold, r role) (_ []funcd.Option, _ func() error, _ func(context.Context), _ string, err error) {
 	// Credentials first: a bad token file or entry refuses startup before anything opens (ADR-0171 Decision 3).
 	credOpt, err := credentialOption(cfg, root)
 	if err != nil {
@@ -346,7 +359,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		}
 	}()
 
-	st, err := buildStore(cfg, root)
+	st, err := buildStoreWith(cfg, root, r.servesNodes(cfg))
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
@@ -432,6 +445,9 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		funcd.WithLogger(root),
 		funcd.WithBlobStoreURL(blobStoreURL(cfg)), // ADR-0222: a BackupSchedule's target is compared with it
 	)
+	if opt := r.option(cfg); opt != nil { // FEAT-0002: the node API of a control plane, or the agent of a worker node
+		opts = append(opts, opt)
+	}
 	if tel != nil {
 		opts = append(opts, funcd.WithTelemetry(tel))
 	}
@@ -1140,6 +1156,11 @@ func limitsConfig(cfg config.Config) limit.Config {
 // when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
 // unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
 func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
+	return buildStoreWith(cfg, log, false)
+}
+
+// buildStoreWith is buildStore whose store keeps the change log worker nodes follow, when changeLog is set (FEAT-0002).
+func buildStoreWith(cfg config.Config, log *slog.Logger, changeLog bool) (store.Store, error) {
 	enc, err := secretEncryptor(cfg)
 	if err != nil {
 		return nil, err
@@ -1149,6 +1170,9 @@ func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
 		opts = append(opts, store.WithEncryptor([]v1.Kind{v1.KindSecret}, enc))
 	} else if cfg.Storage.Mode != "memory" {
 		log.Warn("funcd: no secrets.encryptionKeyFile — Secret values are NOT encrypted in the durable-store lane (set a 32-byte key file)")
+	}
+	if changeLog {
+		opts = append(opts, store.WithChangeLog(0))
 	}
 	// memory = ephemeral (ADR-0043); file = durable pure-Go Badger metastore at Storage.MetastoreDir
 	// (default <dataDir>/store, ADR-0065) — its own dedicated instance.

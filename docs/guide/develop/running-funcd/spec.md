@@ -197,6 +197,9 @@ description: "Every key of funcdconfig.yaml with its type, default, limits and v
 | `app.revisionHistory` | integer, 1 to 100 | `10` | How many AppRevisions an App keeps besides its current one; funcd deletes the older ones. Variable: `FUNCD_APP_REVISION_HISTORY`. |
 | `health.storageProbeInterval` | string | `10s` | How often funcd reads one key of the KV engine and one of the blob store to check that each answers; with an S3 blob.target, each blob read is one request. While a read fails or runs late, every KVStore, or every Bucket, is Degraded with the reason StorageUnreachable. It is a positive duration, more than health.storageProbeTimeout. Variable: `FUNCD_HEALTH_STORAGE_PROBE_INTERVAL`. |
 | `health.storageProbeTimeout` | string | `2s` | How long one storage read may take before it counts as failed; one late read is enough to make the stores Degraded. It is a positive duration, less than health.storageProbeInterval. Variable: `FUNCD_HEALTH_STORAGE_PROBE_TIMEOUT`. |
+| `cluster.listenAddr` | string |  | The address that the node API listens on, where worker nodes join with a one-time token and then follow their namespaces over mTLS. Empty means no node can join funcd; funcd server listens on 0.0.0.0:7443 then. A worker node does not read it. Variable: `FUNCD_CLUSTER_LISTEN_ADDR`. |
+| `cluster.hosts` | list of strings |  | The host names and addresses that the node API's certificate covers, besides localhost and loopback: the ones the worker nodes dial. Variable: `FUNCD_CLUSTER_HOSTS=a,b`. |
+| `cluster.dataDir` | string |  | The directory of the cluster CA on a control plane, or of the identity that funcd node join writes on a worker node. Empty means &lt;storage.dataDir&gt;/cluster. Variable: `FUNCD_CLUSTER_DATA_DIR`. |
 
 ## `funcd`
 
@@ -375,6 +378,31 @@ install lays down crun + the private containerd and writes + enables ONE funcd.s
 | --- | --- | --- | --- |
 | `--print` | bool | `false` | dry-run: print the version-stamped funcd.service unit and exit, touching nothing |
 
+## `funcd node`
+
+```text
+funcd node
+
+Run a worker node: it follows the namespaces placed on it from the control plane it joined with funcd node join, runs their workers, edge and stores, and writes their status back. Its own API answers reads only.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--config` | string |  | path to funcdconfig.yaml (else $FUNCD_CONFIG, ./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml) |
+
+## `funcd node join`
+
+```text
+funcd node join [flags]
+
+Join a control plane with a one-time token from funcdctl node token. funcd first checks that the control plane at --server presents the CA the token names, then swaps the token for this node's certificate, kept under cluster.dataDir. The token works once.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--server` | string |  | the control plane's node API, such as https://homebox.lan:7443 |
+| `--token` | string |  | the one-time join token (else $FUNCD_JOIN_TOKEN) |
+
 ## `funcd restore`
 
 ```text
@@ -496,6 +524,18 @@ Clear the unclean-start count after safe mode stopped funcd; the next start is h
 | Flag | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--config` | string |  | path to funcdconfig.yaml (as the daemon locates it) |
+
+## `funcd server`
+
+```text
+funcd server [flags]
+
+Run the control plane alone: the API, the metastore and the node API that worker nodes join, on cluster.listenAddr (0.0.0.0:7443 when unset). It runs no namespace itself: each runs on the worker node its spec.node names.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--config` | string |  | path to funcdconfig.yaml (else $FUNCD_CONFIG, ./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml) |
 
 ## `funcd uninstall`
 
