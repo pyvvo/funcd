@@ -22,6 +22,7 @@ func RegisterRoutes(api huma.API, h Handlers) {
 	registerInvocation(api, h)
 	registerRuntimeClass(api, h)
 	registerWorker(api, h)
+	registerAPIToken(api, h)
 	registerGateway(api, h)
 	registerKVStore(api, h)
 	registerBucket(api, h)

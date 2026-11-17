@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pyvvo/funcd/internal/auth/apitoken"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -421,4 +422,47 @@ func TestTheNodeCommandsRunOnTheNodeThatRunsTheNamespace(t *testing.T) {
 
 	_, err = dl.List(ctx, "elsewhere")
 	require.Equal(t, fault.Unavailable, fault.KindOf(err), "a namespace this control plane runs has no dead letters here")
+}
+
+func TestANodeChecksTheAPITokensOfTheControlPlaneItself(t *testing.T) {
+	ctx := context.Background()
+	r := startCP(t)
+	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	require.NoError(t, err)
+	run := func() func() {
+		a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+		require.NoError(t, err)
+		actx, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { _ = a.Run(actx); close(done) }()
+		return func() { stop(); <-done }
+	}
+	stop := run()
+	at := &v1.APIToken{TypeMeta: meta(v1.KindAPIToken)}
+	at.Name, at.Spec.Role, at.Spec.Namespaces = "ci", "developer", []v1.NamespaceName{"e1"}
+	_, err = r.cp.Create(ctx, at)
+	require.NoError(t, err)
+	secret, _, err := apitoken.NewMinter(r.cp, nil).MintAPIToken(ctx, "ci", time.Hour)
+	require.NoError(t, err)
+	onNode := apitoken.NewCredentials(r.node, nil)
+	eventually(t, "the node checks the token itself", func() bool {
+		id, err := onNode.Lookup(ctx, secret)
+		return err == nil && id.Role == "developer"
+	})
+	stop()
+
+	// A token revoked while the node was behind goes at the node's next snapshot.
+	require.NoError(t, r.cp.Delete(store.WithoutChangeLog(ctx), v1.KindAPIToken.GVK(), "", "ci", ""))
+	cursor := filepath.Join(dir, "cursor")
+	b, err := os.ReadFile(cursor)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cursor, []byte("an-older-timeline "+strings.Fields(string(b))[1]+"\n"), 0o600))
+	defer run()()
+	eventually(t, "the revoked token stops working on the node", func() bool {
+		_, err := onNode.Lookup(ctx, secret)
+		return fault.KindOf(err) == fault.Unauthorized
+	})
 }

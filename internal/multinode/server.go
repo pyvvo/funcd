@@ -259,7 +259,7 @@ func (s *Server) placedOn(ctx context.Context, ns v1.NamespaceName, node v1.Obje
 }
 
 // nodeKinds are the cluster-scoped kinds every node follows, besides the Namespaces.
-func nodeKinds(k v1.Kind) bool { return k == v1.KindRuntimeClass }
+func nodeKinds(k v1.Kind) bool { return k == v1.KindRuntimeClass || k == v1.KindAPIToken }
 
 // snapshot answers GET …/snapshot[?namespace=]: every object of the node's namespaces (or the one asked), at the
 // revision it follows the feed after. The node's own children are left out.

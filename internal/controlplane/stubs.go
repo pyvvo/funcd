@@ -28,6 +28,7 @@ type StubHandlers struct {
 	invocations      map[string]v1.Invocation
 	runtimeClasses   map[string]v1.RuntimeClass
 	workerNodes      map[string]v1.WorkerNode
+	apiTokens        map[string]v1.APIToken
 	gateways         map[string]v1.Gateway
 	kvstores         map[string]v1.KVStore
 	buckets          map[string]v1.Bucket
@@ -71,6 +72,7 @@ func NewStubHandlers() *StubHandlers {
 		invocations:      make(map[string]v1.Invocation),
 		runtimeClasses:   make(map[string]v1.RuntimeClass),
 		workerNodes:      make(map[string]v1.WorkerNode),
+		apiTokens:        make(map[string]v1.APIToken),
 		gateways:         make(map[string]v1.Gateway),
 		kvstores:         make(map[string]v1.KVStore),
 		buckets:          make(map[string]v1.Bucket),
@@ -905,6 +907,28 @@ func (s *StubHandlers) ReplaceWorkerNode(_ context.Context, name v1.ObjectName, 
 
 func (s *StubHandlers) DeleteWorkerNode(_ context.Context, name v1.ObjectName, _ string) error {
 	return stubDelete(s, s.workerNodes, "WorkerNode", string(name))
+}
+
+// ---- APIToken (cluster-scoped) ----
+
+func (s *StubHandlers) GetAPIToken(_ context.Context, name v1.ObjectName) (v1.APIToken, error) {
+	return stubGet(s, s.apiTokens, "APIToken", string(name))
+}
+
+func (s *StubHandlers) CreateAPIToken(_ context.Context, t v1.APIToken) (v1.APIToken, error) {
+	return stubPut(s, s.apiTokens, "APIToken", string(t.Name), t, false)
+}
+
+func (s *StubHandlers) ListAPITokens(_ context.Context) ([]v1.APIToken, error) {
+	return stubList(s, s.apiTokens, "")
+}
+
+func (s *StubHandlers) ReplaceAPIToken(_ context.Context, name v1.ObjectName, t v1.APIToken) (v1.APIToken, error) {
+	return stubPut(s, s.apiTokens, "APIToken", string(name), t, true)
+}
+
+func (s *StubHandlers) DeleteAPIToken(_ context.Context, name v1.ObjectName, _ string) error {
+	return stubDelete(s, s.apiTokens, "APIToken", string(name))
 }
 
 // ---- Gateway (cluster-scoped) ----

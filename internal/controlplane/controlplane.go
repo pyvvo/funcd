@@ -138,6 +138,13 @@ type Handlers interface {
 	ReplaceWorkerNode(ctx context.Context, name v1.ObjectName, w v1.WorkerNode) (v1.WorkerNode, error)
 	DeleteWorkerNode(ctx context.Context, name v1.ObjectName, rv string) error
 
+	// APIToken (cluster-scoped)
+	GetAPIToken(ctx context.Context, name v1.ObjectName) (v1.APIToken, error)
+	CreateAPIToken(ctx context.Context, t v1.APIToken) (v1.APIToken, error)
+	ListAPITokens(ctx context.Context) ([]v1.APIToken, error)
+	ReplaceAPIToken(ctx context.Context, name v1.ObjectName, t v1.APIToken) (v1.APIToken, error)
+	DeleteAPIToken(ctx context.Context, name v1.ObjectName, rv string) error
+
 	// Gateway (cluster-scoped)
 	GetGateway(ctx context.Context, name v1.ObjectName) (v1.Gateway, error)
 	CreateGateway(ctx context.Context, gw v1.Gateway) (v1.Gateway, error)

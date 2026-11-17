@@ -4,6 +4,8 @@ package funcd_test
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -131,4 +133,61 @@ func TestMintingAJoinTokenAnswersEachCase(t *testing.T) {
 	} {
 		a.run(t, c, base)
 	}
+}
+
+func TestAnAPITokenKeptAsAHashWorksUntilItIsMintedAgainOrDeleted(t *testing.T) {
+	const dev = "cluster-dev-token"
+	cp := runPlatform(t, funcd.WithStore(store.New(memory.New())),
+		funcd.WithCredentials(funcd.Credential{Token: clusterAdmin, Role: "admin"},
+			funcd.Credential{Token: dev, Role: "developer", Namespaces: []string{"default"}}))
+	base := "http://" + cp.Addr()
+	c := answersClient()
+	ask{what: "declare the token", method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/apitokens", token: clusterAdmin,
+		body:   `{"apiVersion":"funcd.io/v1alpha1","kind":"APIToken","metadata":{"name":"ci"},"spec":{"role":"developer","namespaces":["default"]}}`,
+		status: http.StatusOK}.run(t, c, base)
+	const path = "/apis/funcd.io/v1alpha1/apitokens/ci/token"
+	mint := func() string {
+		resp, err := ask{method: http.MethodPost, path: path, token: clusterAdmin, body: `{"ttl":"1h"}`}.do(c, base)
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var out struct {
+			Token string `json:"token"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+		return out.Token
+	}
+	first := mint()
+	const mine, other = "/apis/funcd.io/v1alpha1/namespaces/default/configmaps", "/apis/funcd.io/v1alpha1/namespaces/shop/configmaps"
+	ask{what: "the token acts in its namespace", method: http.MethodGet, path: mine, token: first, status: http.StatusOK}.run(t, c, base)
+	ask{what: "and in no other", method: http.MethodGet, path: other, token: first, status: http.StatusForbidden}.run(t, c, base)
+	second := mint()
+	ask{what: "a token minted again ends the one before", method: http.MethodGet, path: mine, token: first, status: http.StatusUnauthorized}.run(t, c, base)
+	ask{what: "the new one works", method: http.MethodGet, path: mine, token: second, status: http.StatusOK}.run(t, c, base)
+	for _, a := range []ask{
+		{what: "no credential", method: http.MethodPost, path: path, body: `{}`, status: http.StatusUnauthorized},
+		{what: "a developer", method: http.MethodPost, path: path, token: dev, body: `{}`, status: http.StatusForbidden},
+		{what: "an undeclared token", method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/apitokens/nope/token",
+			token: clusterAdmin, body: `{}`, status: http.StatusNotFound},
+		{what: "a name that is no DNS label", method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/apitokens/CI_1/token",
+			token: clusterAdmin, body: `{}`, status: http.StatusUnprocessableEntity},
+		{what: "a body that is no JSON", method: http.MethodPost, path: path, token: clusterAdmin, body: `{`, status: http.StatusBadRequest},
+		{what: "a ttl that is no duration", method: http.MethodPost, path: path, token: clusterAdmin, body: `{"ttl":"forever"}`,
+			status: http.StatusBadRequest},
+		{what: "a ttl past a year", method: http.MethodPost, path: path, token: clusterAdmin, body: `{"ttl":"9000h"}`,
+			status: http.StatusBadRequest},
+	} {
+		a.run(t, c, base)
+	}
+	resp, err := ask{method: http.MethodGet, path: "/apis/funcd.io/v1alpha1/apitokens/ci", token: clusterAdmin}.do(c, base)
+	require.NoError(t, err)
+	stored, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	require.NoError(t, err)
+	require.NotContains(t, string(stored), strings.TrimPrefix(second, "funcd.ci."), "the API shows a hash, never the token")
+	resp, err = ask{method: http.MethodDelete, path: "/apis/funcd.io/v1alpha1/apitokens/ci", token: clusterAdmin}.do(c, base)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Less(t, resp.StatusCode, 300)
+	ask{what: "a deleted token ends", method: http.MethodGet, path: mine, token: second, status: http.StatusUnauthorized}.run(t, c, base)
 }

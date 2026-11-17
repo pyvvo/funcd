@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/pyvvo/funcd/internal/auth/apitoken"
 	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/ownedstore"
 	"io"
@@ -827,6 +828,8 @@ func (p *Platform) buildControlPlane() error {
 			return fault.Wrapf(merr, fault.KindOf(merr), op, "load node master secret")
 		}
 	}
+	// FEAT-0002 F248: the API and the edge take the API tokens kept in the metastore too.
+	c.credentials = middleware.ChainCredentials(c.credentials, apitoken.NewCredentials(c.store, nil))
 	// FEAT-0002 decision 8: a worker node derives each namespace's credentials from that namespace's own master.
 	var masters nsmaster.Source
 	if p.agent != nil {
@@ -1348,6 +1351,7 @@ func (p *Platform) buildControlPlane() error {
 		// ADR-0219: app-requires runs after app-parts.
 		Admissions: cpAdmissions,
 		JoinTokens: joinTokens,
+		APITokens:  apitoken.NewMinter(c.store, nil),
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build control-plane server")

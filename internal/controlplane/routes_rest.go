@@ -389,6 +389,16 @@ func registerRuntimeClass(api huma.API, h Handlers) {
 
 // ===== WorkerNode (cluster-scoped) =====
 
+// ===== APIToken (cluster-scoped, FEAT-0002 F248) =====
+
+func registerAPIToken(api huma.API, h Handlers) {
+	registerClusterCRUD(api, clusterRoutes[v1.APIToken]{
+		kind: "APIToken", kinds: "APITokens", path: "apitokens",
+		list: h.ListAPITokens, create: h.CreateAPIToken, get: h.GetAPIToken,
+		replace: h.ReplaceAPIToken, remove: h.DeleteAPIToken,
+	})
+}
+
 func registerWorker(api huma.API, h Handlers) {
 	registerClusterCRUD(api, clusterRoutes[v1.WorkerNode]{
 		kind: "WorkerNode", kinds: "WorkerNodes", path: "workernodes",

@@ -46,6 +46,9 @@ type Deps struct {
 	// JoinTokens mints worker nodes' join tokens (FEAT-0002). Optional; when set, NewServer registers POST
 	// …/workernodes/{name}/token.
 	JoinTokens JoinTokenMinter
+	// APITokens mints the API tokens kept in the metastore (FEAT-0002 F248). Optional; when set, NewServer registers
+	// POST …/apitokens/{name}/token.
+	APITokens APITokenMinter
 	// Backup reads the platform backup's status (ADR-0205). Optional; nil ⇒ the route reads enabled: false.
 	Backup BackupStatuser
 	// Hold is the platform hold's status and release (ADR-0206). Optional; when set, NewServer registers
@@ -111,6 +114,9 @@ func NewServer(d Deps) (http.Handler, error) {
 	}
 	if d.Volumes != nil {
 		RegisterVolumes(api, d.Volumes, d.Authorizer)
+	}
+	if d.APITokens != nil {
+		RegisterAPIToken(api, d.APITokens, d.Authorizer)
 	}
 	if d.JoinTokens != nil {
 		RegisterJoinToken(api, d.JoinTokens, d.Authorizer)
