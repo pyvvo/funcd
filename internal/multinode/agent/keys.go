@@ -104,12 +104,13 @@ func (a *Agent) fetchMissingKeys(ctx context.Context) {
 	}
 }
 
-// dropKey forgets the master of a namespace that left the node.
+// dropKey forgets the master of a namespace that left the node: its file first, so a master gone from memory is gone
+// from the disk too.
 func (a *Agent) dropKey(ctx context.Context, ns v1.NamespaceName) {
-	a.mu.Lock()
-	delete(a.keys, ns)
-	a.mu.Unlock()
 	if err := os.Remove(filepath.Join(a.cfg.Dir, keysDir, string(ns)+".json")); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		a.log.WarnContext(ctx, "node agent: remove a namespace's master", "namespace", ns, "error", err)
 	}
+	a.mu.Lock()
+	delete(a.keys, ns)
+	a.mu.Unlock()
 }
