@@ -29,6 +29,7 @@ import (
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/multinode"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -637,4 +638,66 @@ func TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, resp.StatusCode)
 	_, err = r.cp.Get(ctx, v1.KindPolicy.GVK(), "e1", "grant-all")
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
+}
+
+// fakeHold records the hold releases and quarantine returns it ran.
+type fakeHold struct {
+	mu       sync.Mutex
+	released []v1.NamespaceName
+	returned []hold.QuarantineReturn
+}
+
+func (*fakeHold) Status(context.Context) (hold.Evidence, error) { return hold.Evidence{}, nil }
+func (*fakeHold) Release(context.Context, []string) error       { return nil }
+
+func (f *fakeHold) ReleaseNamespaces(_ context.Context, nss []v1.NamespaceName) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.released = append(f.released, nss...)
+	return nil
+}
+
+func (f *fakeHold) ReturnQuarantined(_ context.Context, q hold.QuarantineReturn) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.returned = append(f.returned, q)
+	return nil
+}
+
+func TestANamespacesHoldIsReleasedOnTheNodeThatRunsIt(t *testing.T) {
+	ctx := context.Background()
+	r := startCP(t)
+	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	require.NoError(t, err)
+	onNode := &fakeHold{}
+	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+		Commands: multinode.Commands{Hold: onNode}})
+	require.NoError(t, err)
+	actx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { _ = a.Run(actx); close(done) }()
+	defer func() { stop(); <-done }()
+	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+	ns.Name, ns.Spec.Node = "e1", "vm1"
+	_, err = r.cp.Create(ctx, ns)
+	require.NoError(t, err)
+
+	onCP := &fakeHold{}
+	h := r.cluster.Hold(onCP)
+	eventually(t, "the node releases e1's hold", func() bool {
+		return h.ReleaseNamespaces(ctx, []v1.NamespaceName{"e1"}) == nil
+	})
+	require.NoError(t, h.ReleaseNamespaces(ctx, []v1.NamespaceName{"here"}))
+	require.NoError(t, h.ReturnQuarantined(ctx, hold.QuarantineReturn{Kind: v1.KindKVStore, Namespace: "e1", Name: "kv1"}))
+	onNode.mu.Lock()
+	require.Equal(t, []v1.NamespaceName{"e1"}, onNode.released)
+	require.Len(t, onNode.returned, 1)
+	onNode.mu.Unlock()
+	onCP.mu.Lock()
+	require.Equal(t, []v1.NamespaceName{"here"}, onCP.released, "a namespace the control plane runs is released here")
+	require.Empty(t, onCP.returned)
+	onCP.mu.Unlock()
 }

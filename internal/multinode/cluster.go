@@ -131,6 +131,9 @@ func (c *Cluster) Volumes(local VolumeDeleter) VolumeDeleter {
 	return VolumeRouter{router: c.router(), local: local}
 }
 
+// Hold routes a namespace's hold release and quarantine return to the node that runs it.
+func (c *Cluster) Hold(local Holder) Holder { return HoldRouter{router: c.router(), Holder: local} }
+
 func (c *Cluster) router() router { return router{placement: c.placement, calls: c.calls} }
 
 // Admissions are the multi-node checks of the control plane's write path.

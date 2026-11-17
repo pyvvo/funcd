@@ -3,11 +3,14 @@ package multinode
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"slices"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 )
 
 // The node commands besides the log reads (FEAT-0002 F250): each acts where the namespace runs.
@@ -36,6 +39,8 @@ type Commands struct {
 	Admissions  []admission.Admission // the node-state checks before a write (NodeState)
 	// Backup reports the node's platform backup (F251); nil ⇒ the node runs none.
 	Backup func(ctx context.Context) (v1.NodeBackup, error)
+	// Hold releases the node's namespace holds and returns its quarantined data.
+	Hold Holder
 }
 
 // DeadLetterRouter is the dead-letter store the API reads, lists and discards with: a namespace that a worker node runs
@@ -160,5 +165,68 @@ func (r VolumeRouter) DeleteVolume(ctx context.Context, ns v1.NamespaceName, fn,
 		return r.local.DeleteVolume(ctx, ns, fn, name)
 	}
 	_, err = r.calls.Do(ctx, node, Call{Kind: CallVolumeDelete, Namespace: ns, Name: string(fn), Volume: name})
+	return err
+}
+
+// Holder is the platform hold's status and release (controlplane.Holder).
+type Holder interface {
+	Status(ctx context.Context) (hold.Evidence, error)
+	Release(ctx context.Context, advance []string) error
+	ReleaseNamespaces(ctx context.Context, nss []v1.NamespaceName) error
+	ReturnQuarantined(ctx context.Context, r hold.QuarantineReturn) error
+}
+
+// HoldRouter releases a namespace's hold and returns its quarantined data on the node that runs the namespace (F250).
+// The status and the release of the platform's hold stay this process's own: a worker node's own API answers them for
+// that node.
+type HoldRouter struct {
+	router
+	Holder
+}
+
+func (r HoldRouter) ReleaseNamespaces(ctx context.Context, nss []v1.NamespaceName) error {
+	var here []v1.NamespaceName
+	remote := map[v1.ObjectName][]v1.NamespaceName{}
+	for _, ns := range nss {
+		node, err := r.remote(ctx, ns)
+		if err != nil {
+			return err
+		}
+		if node == "" {
+			here = append(here, ns)
+			continue
+		}
+		remote[node] = append(remote[node], ns)
+	}
+	if len(here) > 0 {
+		if err := r.Holder.ReleaseNamespaces(ctx, here); err != nil {
+			return err
+		}
+	}
+	for _, node := range slices.Sorted(maps.Keys(remote)) {
+		body, err := json.Marshal(remote[node])
+		if err != nil {
+			return fault.Wrapf(err, fault.Internal, "multinode.ReleaseNamespaces", "marshal")
+		}
+		if _, err := r.calls.Do(ctx, node, Call{Kind: CallReleaseNamespaces, Namespace: remote[node][0], Body: body}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r HoldRouter) ReturnQuarantined(ctx context.Context, q hold.QuarantineReturn) error {
+	node, err := r.remote(ctx, q.Namespace)
+	switch {
+	case err != nil:
+		return err
+	case node == "":
+		return r.Holder.ReturnQuarantined(ctx, q)
+	}
+	body, err := json.Marshal(q)
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, "multinode.ReturnQuarantined", "marshal")
+	}
+	_, err = r.calls.Do(ctx, node, Call{Kind: CallReturnQuarantined, Namespace: q.Namespace, Body: body})
 	return err
 }
