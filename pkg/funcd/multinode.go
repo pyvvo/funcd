@@ -7,6 +7,10 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup/runner"
+	"github.com/pyvvo/funcd/internal/controlplane"
+	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	"github.com/pyvvo/funcd/internal/multinode"
 	"github.com/pyvvo/funcd/internal/snapshot"
 )
 
@@ -61,6 +65,47 @@ func nodeBackup(r *runner.Runner) func(context.Context) (v1.NodeBackup, error) {
 		}
 		return out, nil
 	}
+}
+
+// nodeParts are the parts of the control plane's API that act on a node's state (FEAT-0002 F250), with the join-token
+// minter.
+type nodeParts struct {
+	logs        controlplane.LogQuerier
+	runLogs     controlplane.WorkflowRunLogQuerier
+	deadLetters deadletter.Store
+	replayer    controlplane.Replayer
+	apps        controlplane.AppRetrier
+	volumes     controlplane.VolumeDeleter
+	hold        controlplane.Holder
+	joinTokens  controlplane.JoinTokenMinter
+}
+
+// routeNodeParts gives own, this process's parts, to a worker node's agent, which answers the node calls with them and
+// with checks, the node's own checks before a write. On a control plane it wraps them in the routers that send a
+// namespace's call to the node that runs it.
+func (p *Platform) routeNodeParts(own nodeParts, holdSvc *controlplane.HoldService, checks []admission.Admission) nodeParts {
+	c := p.cfg
+	if p.agent != nil {
+		p.agent.SetLogs(own.logs, own.runLogs)
+		cmds := multinode.Commands{DeadLetters: own.deadLetters, Apps: own.apps, Volumes: own.volumes, Admissions: checks,
+			Hold: holdSvc}
+		if p.eventing.sensorReconciler != nil {
+			cmds.Replayer = p.eventing.sensorReconciler
+		}
+		if c.backupRunner != nil {
+			cmds.Backup = nodeBackup(c.backupRunner)
+		}
+		p.agent.SetCommands(cmds)
+	}
+	if p.cluster == nil {
+		return own
+	}
+	out := own
+	out.logs, out.runLogs = p.cluster.Logs(own.logs), p.cluster.RunLogs(own.runLogs)
+	out.deadLetters, out.replayer = p.cluster.DeadLetters(own.deadLetters), p.cluster.Replayer(own.replayer)
+	out.apps, out.volumes, out.hold = p.cluster.AppRetrier(own.apps), p.cluster.Volumes(own.volumes), p.cluster.Hold(holdSvc)
+	out.joinTokens = p.cluster
+	return out
 }
 
 // ClusterAddr is the node API's bound address on a control plane that worker nodes join (WithCluster); "" ⇒ none.
