@@ -1144,39 +1144,17 @@ func (p *Platform) buildControlPlane() error {
 		logReader = reader
 		runLogQuerier = controlplane.NewWorkflowRunLogQuerier(c.store, runs, reader)
 	}
-	// FEAT-0002 decision 9: a log read of a namespace a worker node runs goes through that node's call queue.
-	var joinTokens controlplane.JoinTokenMinter
-	admissions := append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store}),
-		app.NewRequiresAdmission(storeReader{c.store}))
-	// F250: so do the other commands that act on a node's state.
-	deadLetters := p.eventing.deadLetters
-	var replayer controlplane.Replayer = p.eventing.sensorReconciler
-	var appRetrier controlplane.AppRetrier = appReconciler
-	volumes := p.volumeDeleter()
+	// FEAT-0002 F250: the parts that act on a node's state answer a worker node's calls, and on a control plane each
+	// reaches the node that runs the namespace.
 	holdSvc := controlplane.NewHoldService(controlplane.HoldDeps{ // ADR-0206: the hold's evidence and release
 		Hold: c.hold, Store: c.store, DeadLetters: p.eventing.deadLetters, Platform: holdPlatform{p},
 	})
-	var holder controlplane.Holder = holdSvc
-	if p.agent != nil {
-		p.agent.SetLogs(logReader, runLogQuerier)
-		cmds := multinode.Commands{DeadLetters: deadLetters, Apps: appReconciler, Volumes: volumes,
-			Admissions: multinode.NodeState(partAdmissions(storeReader{c.store})), Hold: holdSvc}
-		if p.eventing.sensorReconciler != nil {
-			cmds.Replayer = p.eventing.sensorReconciler
-		}
-		if c.backupRunner != nil {
-			cmds.Backup = nodeBackup(c.backupRunner)
-		}
-		p.agent.SetCommands(cmds)
-	}
-	if p.cluster != nil {
-		logReader, runLogQuerier = p.cluster.Logs(logReader), p.cluster.RunLogs(runLogQuerier)
-		deadLetters, replayer = p.cluster.DeadLetters(deadLetters), p.cluster.Replayer(replayer)
-		appRetrier, volumes = p.cluster.AppRetrier(appRetrier), p.cluster.Volumes(volumes)
-		holder = p.cluster.Hold(holdSvc)
-		joinTokens = p.cluster
-		admissions = append(admissions, p.cluster.Admissions()...)
-	}
+	parts := p.routeNodeParts(nodeParts{
+		logs: logReader, runLogs: runLogQuerier, deadLetters: p.eventing.deadLetters, replayer: p.eventing.sensorReconciler,
+		apps: appReconciler, volumes: p.volumeDeleter(), hold: holdSvc,
+		admissions: append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store}),
+			app.NewRequiresAdmission(storeReader{c.store})),
+	}, holdSvc, multinode.NodeState(partAdmissions(storeReader{c.store})))
 	// ADR-0205: the platform backup cuts the event store, the metastore and the run state.
 	var backupStatus controlplane.BackupStatuser
 	if c.backupRunner != nil {
@@ -1195,18 +1173,18 @@ func (p *Platform) buildControlPlane() error {
 		Authorizer:  c.authorizer,
 		Credentials: c.credentials,
 		Logger:      p.logger,
-		Logs:        logReader,
-		RunLogs:     runLogQuerier,
-		DeadLetters: deadLetters,             // ADR-0118: the DLQ read + replay/discard surface
-		Replayer:    replayer,                // ADR-0118: the imperative replay seam (one synchronous attempt)
+		Logs:        parts.logs,
+		RunLogs:     parts.runLogs,
+		DeadLetters: parts.deadLetters,       // ADR-0118: the DLQ read + replay/discard surface
+		Replayer:    parts.replayer,          // ADR-0118: the imperative replay seam (one synchronous attempt)
 		Collector:   p.collector,             // ADR-0170: a forced ResourceGroup delete collects the members' children
-		AppRetrier:  appRetrier,              // ADR-0214: retry an App's failed hook
+		AppRetrier:  parts.apps,              // ADR-0214: retry an App's failed hook
 		Planner:     app.NewPlanner(c.store), // ADR-0220: a dry-run App write's plan
-		Volumes:     volumes,                 // ADR-0262: delete a retained Function volume
-		Hold:        holder,                  // ADR-0206: the hold's evidence and release
+		Volumes:     parts.volumes,           // ADR-0262: delete a retained Function volume
+		Hold:        parts.hold,              // ADR-0206: the hold's evidence and release
 		// ADR-0219: app-requires runs after app-parts.
-		Admissions: admissions,
-		JoinTokens: joinTokens,
+		Admissions: parts.admissions,
+		JoinTokens: parts.joinTokens,
 		APITokens:  apitoken.NewMinter(c.store, nil),
 	})
 	if err != nil {
