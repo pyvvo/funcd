@@ -28,6 +28,17 @@ type WorkerNodeStatus struct {
 	Certificate *NodeCertificate `json:"certificate,omitempty" doc:"The node certificate that the control plane issued when the node joined."`
 	// PendingJoin is the one-time join token waiting to be used, as a hash.
 	PendingJoin *PendingJoin `json:"pendingJoin,omitempty" doc:"The one-time join token minted for the node and not used yet, kept as a hash."`
+	// Backup is the platform backup of the node's own stores, as the node reported it (F251).
+	Backup *NodeBackup `json:"backup,omitempty" doc:"The backup of the node's own stores, as the node last reported it; absent while the node runs no backup."`
+}
+
+// NodeBackup is a worker node's platform backup, as the node reports it (FEAT-0002 F251).
+type NodeBackup struct {
+	Held            bool       `json:"held,omitempty" doc:"True while the node is held: its backups wait for the release."`
+	RPORisk         bool       `json:"rpoRisk,omitempty" doc:"True when no verified generation of the node is newer than its backup.objectives.rpo."`
+	LastSuccessTime *Timestamp `json:"lastSuccessTime,omitempty" doc:"When the node's newest complete generation was written."`
+	NextRunTime     *Timestamp `json:"nextRunTime,omitempty" doc:"When the node's next run is due."`
+	LastFailure     string     `json:"lastFailure,omitempty" doc:"Why the node's last run failed since the node started; a run that succeeds clears it."`
 }
 
 // NodeCertificate identifies the certificate a node joined with.

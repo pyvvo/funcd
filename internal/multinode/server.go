@@ -111,6 +111,7 @@ func (s *Server) routes() http.Handler {
 		r.Get(PathCalls, s.poll)
 		r.Post(PathCalls+"/{id}", s.answer)
 		r.Get(PathKeys, s.keys)
+		r.Put(PathBackup, s.backup)
 	})
 	return r
 }
@@ -405,6 +406,23 @@ func (s *Server) feed(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// backup answers PUT …/backup (F251): the node's report of its own platform backup goes into its WorkerNode's status.
+func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
+	ctx, node := r.Context(), nodeOf(r.Context())
+	var in v1.NodeBackup
+	if !decode(w, r, maxStatusBody, &in) {
+		return
+	}
+	if err := writeNodeStatus(ctx, s.cfg.Store, node, func(n *v1.WorkerNode) bool {
+		n.Status.Backup = &in
+		return true
+	}); err != nil {
+		writeFault(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // status answers PUT …/status (decision 4): the object's status becomes the node's; nothing else of it changes. The

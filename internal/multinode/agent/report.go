@@ -25,6 +25,7 @@ func (a *Agent) report(ctx context.Context) {
 			go a.watch(ctx, k, events)
 		}
 	}
+	a.reportBackup(ctx)
 	t := time.NewTicker(resyncEvery)
 	defer t.Stop()
 	for {
@@ -35,6 +36,7 @@ func (a *Agent) report(ctx context.Context) {
 			a.push(ctx, ev.Type, ev.Object)
 		case <-t.C:
 			a.resyncReports(ctx)
+			a.reportBackup(ctx)
 		}
 	}
 }
@@ -269,4 +271,25 @@ func (a *Agent) admit(ctx context.Context, c multinode.Call) (v1.Object, error) 
 		}
 	}
 	return nil, fault.Unavailablef("agent.admit", "this node runs no %s check", c.Name)
+}
+
+// reportBackup sends the node's platform backup status when it changed (F251), so the control plane's WorkerNode shows it.
+func (a *Agent) reportBackup(ctx context.Context) {
+	if a.cfg.Commands.Backup == nil {
+		return
+	}
+	st, err := a.cfg.Commands.Backup(ctx)
+	if err != nil {
+		a.log.WarnContext(ctx, "node agent: read the backup status", "error", err)
+		return
+	}
+	b, err := json.Marshal(st)
+	if err != nil || string(b) == a.backupSent {
+		return
+	}
+	if _, err := a.do(ctx, http.MethodPut, multinode.PathBackup, st, nil); err != nil {
+		a.log.WarnContext(ctx, "node agent: report the backup status", "error", err)
+		return
+	}
+	a.backupSent = string(b)
 }

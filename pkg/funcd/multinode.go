@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/snapshot"
 )
 
@@ -37,6 +38,21 @@ func (w withoutSecrets) Snapshot(ctx context.Context, emit func(snapshot.Record)
 		}
 		return emit(r)
 	})
+}
+
+// nodeBackup reports a worker node's platform backup to its control plane (FEAT-0002 F251).
+func nodeBackup(r *runner.Runner) func(context.Context) (v1.NodeBackup, error) {
+	return func(ctx context.Context) (v1.NodeBackup, error) {
+		st, err := r.Status(ctx)
+		if err != nil {
+			return v1.NodeBackup{}, err
+		}
+		out := v1.NodeBackup{Held: st.Held, RPORisk: st.RPORisk, LastSuccessTime: st.LastSuccessTime, NextRunTime: st.NextRunTime}
+		if st.LastFailure != nil {
+			out.LastFailure = st.LastFailure.Error
+		}
+		return out, nil
+	}
 }
 
 // ClusterAddr is the node API's bound address on a control plane that worker nodes join (WithCluster); "" ⇒ none.
