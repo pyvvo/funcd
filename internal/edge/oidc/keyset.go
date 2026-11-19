@@ -93,10 +93,18 @@ func (k *keySet) unknownKey(ctx context.Context) (*jose.JSONWebKeySet, error) {
 	return k.fetch(ctx)
 }
 
-// fetch reads the keys once for every caller waiting on it, under a context no caller's end cancels.
+// fetch reads the keys once for every caller waiting on it, under a context no caller's end cancels. A caller that
+// decided to fetch just before another fetch ended gets that fetch's keys: the keys are read at most once each
+// keyRefetchInterval (ADR-0335 Decision 7).
 func (k *keySet) fetch(ctx context.Context) (*jose.JSONWebKeySet, error) {
 	ctx = context.WithoutCancel(ctx)
 	v, err, _ := k.group.Do(k.url, func() (interface{}, error) {
+		k.mu.Lock()
+		keys, fetched := k.keys, k.fetched
+		k.mu.Unlock()
+		if keys != nil && k.clock.Now().Sub(fetched) < keyRefetchInterval {
+			return keys, nil
+		}
 		body, err := get(ctx, k.client, k.url)
 		if err != nil {
 			return nil, err
