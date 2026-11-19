@@ -454,7 +454,7 @@ func TestDevAddonBackupAtTheRuntime(t *testing.T) {
 // afterEntryEngine runs after once, when a Move has created its entry's volume and before its helper writes the state.
 type afterEntryEngine struct {
 	Engine
-	after func()
+	after func(name string)
 }
 
 func (e *afterEntryEngine) CreateVolume(ctx context.Context, name string, labels map[string]string) error {
@@ -462,7 +462,7 @@ func (e *afterEntryEngine) CreateVolume(ctx context.Context, name string, labels
 	if err == nil && labels[roleLabel] == roleQuarantine && e.after != nil {
 		f := e.after
 		e.after = nil
-		f()
+		f(name)
 	}
 	return err
 }
@@ -479,8 +479,11 @@ func TestQuarantineMoveAndExpireTakeTurns(t *testing.T) {
 	require.NoError(t, rt.Teardown(ctx, spec.Ref))
 	q := rt.Quarantine()
 	swept := make(chan error, 1)
+	eng := rt.eng
 	// An Expire that does not wait ends well within the 3 s: one volume list and one helper.
-	rt.eng = &afterEntryEngine{Engine: rt.eng, after: func() {
+	rt.eng = &afterEntryEngine{Engine: eng, after: func(name string) {
+		// An Expire that removed the entry leaves the copy in a volume with no labels, which cleanupKey misses.
+		t.Cleanup(func() { _ = eng.RemoveVolume(context.Background(), name) })
 		go func() {
 			_, err := q.Expire(ctx, time.Now().Add(-time.Hour))
 			swept <- err

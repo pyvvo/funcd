@@ -335,8 +335,8 @@ func TestScenarioKeysReissuedOnUpgrade(t *testing.T) {
 	}
 }
 
-// An add-on engine's address is in the gateway's engine index from its worker's creation, before it starts (ADR-0332
-// Decision 3).
+// An add-on engine's address is in the gateway's engine index from its worker's creation, before it starts, and while
+// the add-on runtime still runs it in a namespace with no add-on object left (ADR-0332 Decision 3).
 func TestIndexAddonEngines_ACreatedEngineIsIndexed(t *testing.T) {
 	t.Parallel()
 	st := store.New(memory.New())
@@ -354,6 +354,13 @@ func TestIndexAddonEngines_ACreatedEngineIsIndexed(t *testing.T) {
 	ref, ok := e.egressEngines.Lookup(netip.MustParseAddr("10.63.0.7"))
 	require.True(t, ok, "a created engine is indexed before it starts")
 	require.Equal(t, auth.EntityRef{Type: v1.KindAddonObject, Namespace: "acme", Name: "login"}, ref)
+
+	runningWorker(rt, "gone", "old", v1.KindAddonObject, "10.63.0.11")
+	e.addonNamespaces = func() []v1.NamespaceName { return []v1.NamespaceName{"gone"} }
+	require.NoError(t, e.indexAddonEngines(context.Background()))
+	ref, ok = e.egressEngines.Lookup(netip.MustParseAddr("10.63.0.11"))
+	require.True(t, ok, "a stopping engine that the add-on runtime reports is indexed")
+	require.Equal(t, auth.EntityRef{Type: v1.KindAddonObject, Namespace: "gone", Name: "old"}, ref)
 }
 
 // A backup target at an add-on engine's address is refused from the engine's worker's creation on, before its

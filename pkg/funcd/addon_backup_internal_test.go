@@ -16,6 +16,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/testkit/fakeaddon"
 )
 
@@ -423,4 +424,33 @@ func TestAddonBackupTargetIsNeverAnEngine(t *testing.T) {
 	b := r.waitBackup("b2", v1.RunFailed)
 	c, _ := b.Status.Conditions.Get("Ready")
 	require.Contains(t, c.Message, addr+" is an add-on engine's address, which a backup target never is")
+}
+
+// ADR-0332 Decision 3 through the platform's wiring: an engine that the add-on runtime still runs in a namespace with no
+// add-on object left counts for the gateway's engine index, which reads the runtime's namespaces, and for a backup
+// target.
+func TestAStoppingEngineCountsThroughThePlatform(t *testing.T) {
+	t.Parallel()
+	rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
+	r := newWBRig(t, wbOptions{opts: []Option{WithRuntime(rt)}})
+	_, err := r.p.addon.engines.Converge(r.ctx, provider.ProviderSpec{Ref: provider.ProviderRef{Namespace: "gone", Name: "old"},
+		Image: "example.test/engine@sha256:" + strings.Repeat("a", 64), Port: 8080, Replicas: 1})
+	require.NoError(t, err)
+	rt.mu.Lock()
+	for id, in := range rt.insts {
+		if in.OwnerKind == v1.KindAddonObject {
+			in.IP = "10.63.0.11"
+			rt.insts[id] = in
+		}
+	}
+	rt.mu.Unlock()
+	require.Equal(t, []v1.NamespaceName{"gone"}, r.p.exec.addonNamespaces())
+
+	r.create(r.dev, r.schedule("at-the-engine", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+		s.Target.URL = "s3://backups?region=us-east-1&use_path_style=true&endpoint=http://10.63.0.11:9000"
+	}))
+	r.create(r.dev, r.backupObj("b3", "at-the-engine"))
+	b := r.waitBackup("b3", v1.RunFailed)
+	c, _ := b.Status.Conditions.Get("Ready")
+	require.Contains(t, c.Message, "10.63.0.11:9000 is an add-on engine's address, which a backup target never is")
 }
