@@ -223,9 +223,12 @@ func (f *fake) runEngine() {
 		c.Ports[p[strings.LastIndex(p, ":")+1:]+"/tcp"] = net.JoinHostPort("127.0.0.1", strings.TrimSpace(string(port)))
 	}
 	for _, m := range f.values("--mount") {
+		// A bind mount holds no volume in use, as real nerdctl sees one, even of a volume's own directory.
+		if !strings.Contains(m, "type=volume") {
+			continue
+		}
 		for _, part := range strings.Split(m, ",") {
 			if v, ok := strings.CutPrefix(part, "source="); ok {
-				v = strings.TrimSuffix(strings.TrimPrefix(v, "/var/lib/nerdctl/volumes/"), "/_data")
 				c.Volumes = append(c.Volumes, v)
 			}
 		}

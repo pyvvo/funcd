@@ -352,10 +352,10 @@ func TestReap(t *testing.T) {
 	require.True(t, st.Ready, "another key's engine still serves")
 }
 
-// scenario: dev-addon-deletion, the runtime's half (ADR-0334 Decision 3): Reclaim removes the volume under --persist
+// The runtime's half of the scenario dev-addon-deletion (ADR-0334 Decision 3): Reclaim removes the volume under --persist
 // too, Conflict while the engine's container exists, and a new object of that name starts empty; Quarantine keeps a
 // volume as an entry of its own, labelled with the key, the object and its since, holding data/ and its state.
-func TestScenarioDevAddonDeletion(t *testing.T) {
+func TestDevAddonDeletionAtTheRuntime(t *testing.T) {
 	t.Parallel()
 	sock := requireDocker(t)
 	ctx := context.Background()
@@ -410,11 +410,11 @@ func TestScenarioDevAddonDeletion(t *testing.T) {
 	require.Empty(t, listed)
 }
 
-// scenario: dev-addon-backup, the runtime's half (ADR-0334 Decision 4, ADR-0333 Decisions 2 and 3): the files of
+// The runtime's half of the scenario dev-addon-backup (ADR-0334 Decision 4, ADR-0333 Decisions 2 and 3): the files of
 // ADR-0333's backup member and in-place Restore, reached only through the helper. Newest streams the newest quiet
 // snapshot, skipping a name that ends in ~; Put writes a copy owned by the storage's uid and gid, making its
 // directory; Clear empties the restore directory.
-func TestScenarioDevAddonBackup(t *testing.T) {
+func TestDevAddonBackupAtTheRuntime(t *testing.T) {
 	t.Parallel()
 	sock := requireDocker(t)
 	ctx := context.Background()
@@ -449,4 +449,52 @@ func TestScenarioDevAddonBackup(t *testing.T) {
 	require.NoError(t, rt.Clear(ctx, "default", "nobody", "restore"), "no volume holds nothing to clear")
 	_, _, err = rt.Newest(ctx, "default", "nobody", snaps, 0)
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
+}
+
+// afterEntryEngine runs after once, when a Move has created its entry's volume and before its helper writes the state.
+type afterEntryEngine struct {
+	Engine
+	after func()
+}
+
+func (e *afterEntryEngine) CreateVolume(ctx context.Context, name string, labels map[string]string) error {
+	err := e.Engine.CreateVolume(ctx, name, labels)
+	if err == nil && labels[roleLabel] == roleQuarantine && e.after != nil {
+		f := e.after
+		e.after = nil
+		f()
+	}
+	return err
+}
+
+// ADR-0288 Decision 2 under dev: the sweep's Expire, which removes an entry with no state, waits while a retain move
+// has created its entry and not yet written the state, so the moved data stays a quarantine entry.
+func TestQuarantineMoveAndExpireTakeTurns(t *testing.T) {
+	sock := requireDocker(t)
+	ctx := context.Background()
+	rt, _ := newRuntime(t, sock, true)
+	spec := whoamiSpec("default", "login", true)
+	converge(t, rt, spec)
+	require.NoError(t, rt.Put(ctx, "default", "login", "db", "users", strings.NewReader("bob"), 10001, 10001))
+	require.NoError(t, rt.Teardown(ctx, spec.Ref))
+	q := rt.Quarantine()
+	swept := make(chan error, 1)
+	// An Expire that does not wait ends well within the 3 s: one volume list and one helper.
+	rt.eng = &afterEntryEngine{Engine: rt.eng, after: func() {
+		go func() {
+			_, err := q.Expire(ctx, time.Now().Add(-time.Hour))
+			swept <- err
+		}()
+		select {
+		case err := <-swept:
+			swept <- err
+		case <-time.After(3 * time.Second):
+		}
+	}}
+	_, err := q.Move(ctx, quarantine.Ref{ObjectRef: v1.ObjectRef{Kind: v1.KindAddonObject, Namespace: "default", Name: "login"}}, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, <-swept)
+	es, err := q.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, es, 1, "the sweep waited for the move")
 }

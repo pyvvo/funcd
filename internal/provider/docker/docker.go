@@ -97,9 +97,6 @@ const (
 // sessionKey is a session's key: the first 16 hex digits of a sha256 (Decision 6).
 var sessionKey = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
-// fileName is a snapshot's or a copy's name: one path segment (ADR-0333 Decision 6).
-var fileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-
 // Engine is the container engine a Runtime drives. Labels select by equality, and a missing container or volume is no
 // error where a method says so. An error is a fault error: Unavailable when the engine does not answer.
 type Engine interface {
@@ -119,7 +116,8 @@ type Engine interface {
 	CreateVolume(ctx context.Context, name string, labels map[string]string) error
 	// Volumes lists the volumes that carry every label.
 	Volumes(ctx context.Context, labels map[string]string) ([]Volume, error)
-	// RemoveVolume removes the volume name: Conflict while a container uses it, nil when it is gone.
+	// RemoveVolume removes the volume name, nil when it is gone. Docker refuses one a container uses, Conflict; nerdctl,
+	// whose engines bind their volume's directory, does not, so Reclaim checks for the engine's container first.
 	RemoveVolume(ctx context.Context, name string) error
 	// Exec runs the helper h with argv to its end and returns what it wrote on its standard output; a run that ends
 	// with another status than 0 is an error holding what it wrote on its standard error.
@@ -178,6 +176,9 @@ type Runtime struct {
 	logger  *slog.Logger
 	probe   *http.Client
 	limits  containerrt.LimitWarner // logs once per object that dev enforces no resources (Decision 2)
+	// quarantine makes a Move and an Expire take turns: Expire removes an entry with no state, which a Move has until
+	// its helper writes one (ADR-0288 Decision 2).
+	quarantine sync.Mutex
 }
 
 var (
@@ -706,7 +707,7 @@ func (r *Runtime) listFiles(ctx context.Context, ref provider.ProviderRef, in st
 		if len(parts) != 3 {
 			continue
 		}
-		if n := path.Base(parts[2]); fileName.MatchString(n) && !strings.HasSuffix(n, "~") {
+		if n := path.Base(parts[2]); v1.IsAddonFile(n) && !strings.HasSuffix(n, "~") {
 			files = append(files, fileStat{name: n, size: parts[0], mtime: parts[1]})
 		}
 	}
@@ -768,7 +769,7 @@ func (r *Runtime) Put(ctx context.Context, ns v1.NamespaceName, name v1.ObjectNa
 	if err != nil {
 		return err
 	}
-	if !fileName.MatchString(file) {
+	if !v1.IsAddonFile(file) {
 		return fault.Invalidf(op, "file %q is not one path segment of letters, digits, '.', '_' and '-'", file)
 	}
 	if err := r.needVolume(ctx, op, ref); err != nil {
@@ -844,6 +845,8 @@ type entry struct {
 func (q quarantineStore) Move(ctx context.Context, ref quarantine.Ref, now time.Time) (quarantine.Entry, error) {
 	const op = "docker.Quarantine"
 	r := q.r
+	r.quarantine.Lock()
+	defer r.quarantine.Unlock()
 	if ref.Kind != v1.KindAddonObject {
 		return quarantine.Entry{}, fault.Invalidf(op, "%s: this quarantine keeps %s volumes", ref, v1.KindAddonObject)
 	}
@@ -975,6 +978,8 @@ func (q quarantineStore) List(ctx context.Context) ([]quarantine.Entry, error) {
 
 // Expire removes each entry Expired at cutoff and each with neither data nor state, and returns the first.
 func (q quarantineStore) Expire(ctx context.Context, cutoff time.Time) ([]quarantine.Entry, error) {
+	q.r.quarantine.Lock()
+	defer q.r.quarantine.Unlock()
 	es, err := q.scan(ctx)
 	if err != nil {
 		return nil, err
