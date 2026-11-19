@@ -11,10 +11,11 @@ copies its data into the namespace's backups. The add-ons funcd ships live in
 [pyvvo/funcd-addons](https://github.com/pyvvo/funcd-addons). This page uses rauthy, an OpenID Connect provider of
 kind `IdentityProvider`.
 
-An admin registers it from a release, and an operator lists its registry in `addons.registries`:
+An operator lists the add-on's registry, `ghcr.io` for rauthy, in `addons.registries`. An admin then registers the
+add-on from a release, piping its manifest to `funcdctl apply -f -`:
 
 ```sh
-funcdctl apply -f https://github.com/pyvvo/funcd-addons/releases/download/v0.1.0/rauthy.yaml
+curl -fsSL https://github.com/pyvvo/funcd-addons/releases/download/v0.1.0/rauthy.yaml | funcdctl apply -f -
 ```
 
 A user writes the Secret its objects bind with its plugin, then declares an identity provider:
@@ -31,13 +32,15 @@ kind: IdentityProvider
 metadata:
   name: login
   namespace: default
+  resourceGroup: default
 spec:
   config:
     publicHost: login.example.com
     rpId: login.example.com
     https: true
-  secrets:
-    - rauthy-keys
+  bindings:
+    secret:
+      - rauthy-keys
   ingress:
     host: login.example.com
 ```
@@ -53,9 +56,10 @@ the copy, then again without it, and holds the namespace meanwhile.
 
 ## Sign users in through it
 
-An `OIDCProvider` whose `addon` names the IdentityProvider has funcd register the edge's sign-in client there. A Route
-whose `auth.mode` is `oidc` then signs its callers in, and the code behind it reads who they are from the
-`X-Funcd-Principal` headers.
+An `OIDCProvider` with `client.registration` has funcd register the edge's sign-in client at the provider, and its
+`addon`, naming the IdentityProvider, has funcd reach rauthy at the engine's own address. A Route whose `auth.mode` is
+`oidc` then signs its callers in, and the code behind it reads who signed in:
+[Sign users in](../../security-and-networking/security/index.md#sign-users-in).
 
 ## Build one
 

@@ -21,8 +21,8 @@ Save it as `funcdctl-fns` in a folder on PATH, make it executable, and run it:
 $ sudo install -m 0755 funcdctl-fns /usr/local/bin/
 $ funcdctl fns team-a
 $ funcdctl plugin list
-NAME  PATH
-fns   /usr/local/bin/funcdctl-fns
+NAME   PATH
+fns    /usr/local/bin/funcdctl-fns
 ```
 
 A plugin can be written in any language. It reaches funcd through funcdctl, as above, or through the API at

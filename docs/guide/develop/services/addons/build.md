@@ -23,13 +23,17 @@ to run, serve and back up one engine per object of that kind. funcd runs no code
 | Loads a copy at its start when one variable names it, for restores | `HQL_BACKUP_RESTORE=file:<path>` |
 | Stops cleanly on SIGTERM within the stop grace | rauthy, with hiqlite's crash marker removed |
 
-An engine reaches nothing outward: funcd fences its network, and only funcd reaches its port.
+On a server, an engine reaches nothing outward: funcd fences its network, and only funcd reaches its port. Under
+`funcdctl dev`, the engine runs on the local Docker or containerd network.
 
 ## The Addon
 
 rauthy's [`addon.yaml`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/addon.yaml), part by part:
 
 - `kind: IdentityProvider` is the kind users declare, at `/apis/funcd.io/v1alpha1/namespaces/<ns>/identityproviders`.
+  funcdctl takes it as `IdentityProvider`, `identityprovider` or `identityproviders`. A lower-case word that ends in
+  s is read as a plural, so a kind that ends in s, such as `Redis`, is typed with its capital letter or as its
+  plural, `rediss`.
 - `image` is pinned by digest, from a registry the server's `addons.registries` lists.
 - `port`, `basePath`, `readiness.path` and `storage` describe the engine, as the table above does.
 - `privatePaths` lists paths under `basePath` that the edge never serves. rauthy's client registration,
