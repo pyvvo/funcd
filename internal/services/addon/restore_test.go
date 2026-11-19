@@ -370,3 +370,17 @@ func TestCheckRestoreEnv(t *testing.T) {
 	bad := &v1.AddonRestore{Env: map[string]string{"A": "${{ restore.path }}"}}
 	require.Equal(t, fault.Invalid, fault.KindOf(addon.CheckRestoreEnv(bad, []byte(schema))), "restore holds file only")
 }
+
+// ADR-0333 Decision 4: the copy counts as gone only once restore.path holds no file, whatever its time says, so a copy
+// dated ahead of the clock keeps the mark until an engine loaded it.
+func TestRestoreKeepsTheMarkForACopyDatedAhead(t *testing.T) {
+	t.Parallel()
+	r := newRestoreRig(t)
+	r.running(t)
+	r.restore(t, `{"client-a":"before"}`)
+	ahead := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(filepath.Join(r.rt.Dir(loginRef()), "restore", "backup_1.json"), ahead, ahead))
+	r.pass(t, "login")
+	require.NotNil(t, r.object(t).Status.Restore, "the mark stays while the copy is there")
+	require.NotEmpty(t, r.copies(t), "and so does the copy")
+}

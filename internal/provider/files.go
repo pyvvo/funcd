@@ -61,7 +61,8 @@ func (f EngineFiles) Newest(ctx context.Context, ns v1.NamespaceName, name v1.Ob
 		if err != nil {
 			return "", nil, fault.Wrapf(err, fault.Internal, op, "inspect %s/%s of %s/%s", dir, e.Name(), ns, name)
 		}
-		if !fi.Mode().IsRegular() || now.Sub(fi.ModTime()) < quiet {
+		// A quiet of 0 asks only whether a file is there, whatever its time says (ADR-0333 Decision 4).
+		if !fi.Mode().IsRegular() || quiet > 0 && now.Sub(fi.ModTime()) < quiet {
 			continue
 		}
 		if best == nil || fi.ModTime().After(best.ModTime()) || fi.ModTime().Equal(best.ModTime()) && fi.Name() > best.Name() {

@@ -156,7 +156,7 @@ func (r *Reconciler) addonOf(ctx context.Context, kind string) (*v1.Addon, error
 		return nil, fault.Wrapf(err, fault.KindOf(err), "services.addon.addonOf", "list Addons")
 	}
 	for _, item := range list.Items {
-		if a, ok := item.(*v1.Addon); ok && v1.AddonPlural(a.Spec.Kind) == v1.AddonPlural(kind) {
+		if a, ok := item.(*v1.Addon); ok && v1.SameAddonKind(a.Spec.Kind, kind) {
 			return a, nil
 		}
 	}

@@ -163,7 +163,7 @@ func (r *Reconciler) MapAddon(ctx context.Context, obj v1.Object) []controller.R
 	if !ok {
 		return nil
 	}
-	return r.objects(ctx, "", func(o *v1.AddonObject) bool { return v1.AddonPlural(o.Spec.Kind) == v1.AddonPlural(a.Spec.Kind) })
+	return r.objects(ctx, "", func(o *v1.AddonObject) bool { return v1.SameAddonKind(o.Spec.Kind, a.Spec.Kind) })
 }
 
 // MapSecret maps a Secret's change to the objects of its namespace that bind it: a new Secret ends a SecretNotFound

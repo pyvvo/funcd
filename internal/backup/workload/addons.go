@@ -110,7 +110,7 @@ func (k addons) addonOf(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, 
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list Addons")
 	}
 	for _, o := range l.Items {
-		if a, ok := o.(*v1.Addon); ok && a.Spec.Kind == string(kind) {
+		if a, ok := o.(*v1.Addon); ok && v1.SameAddonKind(a.Spec.Kind, string(kind)) {
 			return a, nil
 		}
 	}

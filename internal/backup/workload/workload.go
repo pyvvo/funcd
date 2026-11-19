@@ -295,10 +295,10 @@ func addonMembers(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list Addons")
 	}
-	snapshots := map[string]bool{}
+	snapshots := map[string]bool{} // by plural: an object's Addon is the one of its kind's plural (ADR-0332 Decision 1)
 	for _, o := range addons.Items {
 		if a, ok := o.(*v1.Addon); ok && a.Spec.Snapshot != nil {
-			snapshots[a.Spec.Kind] = true
+			snapshots[v1.AddonPlural(a.Spec.Kind)] = true
 		}
 	}
 	objs, err := st.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{Namespace: ns, ResourceGroup: s.ResourceGroup})
@@ -306,7 +306,7 @@ func addonMembers(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list the add-on objects of %q", ns)
 	}
 	for _, o := range objs.Items {
-		if ao, ok := o.(*v1.AddonObject); ok && snapshots[ao.Spec.Kind] {
+		if ao, ok := o.(*v1.AddonObject); ok && snapshots[v1.AddonPlural(ao.Spec.Kind)] {
 			out = append(out, Member{Kind: v1.Kind(ao.Spec.Kind), Name: ao.Name})
 		}
 	}

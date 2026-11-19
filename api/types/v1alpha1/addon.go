@@ -134,6 +134,10 @@ func funcdKind(name string) bool {
 // AddonPlural is the path plural of an add-on's kind: the kind in lower case with an s (ADR-0332 Decision 1).
 func AddonPlural(kind string) string { return strings.ToLower(kind) + "s" }
 
+// SameAddonKind reports whether two add-on kinds are one: kinds are compared without case, by their plural, as the API
+// finds an object's Addon (ADR-0332 Decision 1).
+func SameAddonKind(a, b string) bool { return AddonPlural(a) == AddonPlural(b) }
+
 // AddonBasePath is the path an Addon's engine is served under: its basePath, else /.
 func (s *AddonSpec) AddonBasePath() string {
 	if s.BasePath == "" {

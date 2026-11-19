@@ -255,6 +255,11 @@ func TestAddons_LoadPlacesTheCopyAndWaitsForTheMarkToGo(t *testing.T) {
 	o.Status.Restore.State = v1.AddonRestoreLoaded
 	_, err = r.st.Update(r.ctx, o)
 	require.NoError(t, err)
+	select {
+	case err := <-done:
+		t.Fatalf("the load ended at Loaded, before the engine without restore.env is Ready: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
 	o = r.object(t)
 	o.Status.Restore = nil
 	_, err = r.st.Update(r.ctx, o)
@@ -338,4 +343,17 @@ func TestAddons_DestinationRules(t *testing.T) {
 	err = d.Load(r.ctx, memberFile(".."), opener(""))
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.True(t, strings.Contains(err.Error(), "not one path segment"), "%v", err)
+}
+
+// ADR-0332 Decision 1: an object's Addon is the one of its kind's plural, so an Addon that registers the kind again in
+// another case keeps the object a member of a group Backup and in place for a Restore.
+func TestAddons_AnAddonOfTheSamePluralKeepsItsObjects(t *testing.T) {
+	t.Parallel()
+	r := newAddonRig(t, func(s *v1.AddonSpec) { s.Kind = "Identityprovider" })
+	ms, err := workload.Resolve(r.ctx, r.st, "orders", v1.BackupScope{ResourceGroup: "app"}, workload.Limits{}.OrDefaults())
+	require.NoError(t, err)
+	require.Contains(t, ms, workload.Member{Kind: "IdentityProvider", Name: "login"}, "the group scope takes the object")
+	_, err = workload.Addons(r.st, r.files).Destination(workload.WithRestore(r.ctx, "rewind"), "orders",
+		v1.RestoreMember{Kind: "IdentityProvider", Name: "login", InPlace: true})
+	require.NoError(t, err, "an in-place Restore finds its Addon")
 }
