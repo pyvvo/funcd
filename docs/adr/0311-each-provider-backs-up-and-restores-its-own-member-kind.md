@@ -9,6 +9,7 @@
 - **Superseded in part by**: [ADR-0312](0312-a-buckets-backup-member-skips-its-lakes-prefixes.md) (2026-11-04) —
   Decision 4's Bucket row with the paragraph under it and its Lake row's `Prepare`, `Buckets` and `Lakes` in its
   Contracts, and what follows in its Consequences: a Bucket's copy no longer carries its Lakes' catalogs.
+- **Superseded in part by**: [ADR-0333](0333-an-add-on-objects-data-in-funcds-backups.md) (2026-11-19) — its `Kind()` contract, Decision 3's dispatch and Decision 6's unserved kind, for kinds funcd does not define.
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, backup, restore, refactor

@@ -182,6 +182,8 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.Identity:
 		o.TypeMeta = tm
+	case *v1.OIDCProvider:
+		o.TypeMeta = tm
 	case *v1.Role:
 		o.TypeMeta = tm
 	case *v1.RolesAssignment:
@@ -197,6 +199,10 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 	case *v1.Backup:
 		o.TypeMeta = tm
 	case *v1.Restore:
+		o.TypeMeta = tm
+	case *v1.Addon:
+		o.TypeMeta = tm
+	case *v1.AddonObject:
 		o.TypeMeta = tm
 	}
 }
@@ -356,6 +362,13 @@ func jsonFields(obj v1.Object) (map[string]json.RawMessage, error) {
 // as an unversioned replace does; with rv it answers 409 at once. With no Delete admission, store.Delete takes rv
 // as the precondition ("" ⇒ none) and nothing is read.
 func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteGuarded(ctx, kind, ns, name, rv, nil)
+}
+
+// deleteGuarded is deleteObjIf with guard run on the stored object before admission, as replaceObjIf runs its own: a
+// guard reads Old, so the delete is conditional on Old's version.
+func (h *storeHandlers) deleteGuarded(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string,
+	guard func(context.Context, v1.Object) error) error {
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
 	}
@@ -367,7 +380,7 @@ func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.Nam
 		return err
 	}
 	defer unlock()
-	if !h.admit.Handles(kind.GVK(), admission.Delete) {
+	if guard == nil && !h.admit.Handles(kind.GVK(), admission.Delete) {
 		return h.store.Delete(ctx, kind.GVK(), ns, name, rv)
 	}
 	_, err = retryOwnRead(func() (v1.Object, bool, error) {
@@ -377,6 +390,11 @@ func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.Nam
 		}
 		if err := staleVersion(kind, ns, name, rv, old); err != nil {
 			return nil, false, err
+		}
+		if guard != nil {
+			if err := guard(ctx, old); err != nil {
+				return nil, false, err
+			}
 		}
 		id, _ := middleware.IdentityFrom(ctx)
 		if _, err := h.admit.Admit(ctx, admission.Request{
@@ -800,10 +818,11 @@ func (h *storeHandlers) DeleteRestore(ctx context.Context, ns v1.NamespaceName, 
 // the stub helpers): a new kind joins the union instead of copying the per-kind boilerplate.
 type crudKind interface {
 	v1.Function | v1.Revision | v1.Service | v1.EventSource | v1.ConfigMap | v1.Secret | v1.Grant | v1.Identity |
-		v1.Namespace | v1.ResourceGroup | v1.Route |
+		v1.OIDCProvider | v1.Namespace | v1.ResourceGroup | v1.Route |
 		v1.Role | v1.RolesAssignment | v1.KVStore | v1.Bucket | v1.Lake | v1.SQLDatabase | v1.Policy |
 		v1.EgressPolicy | v1.Invocation | v1.RuntimeClass | v1.WorkerNode | v1.Gateway | v1.Workflow | v1.WorkflowRun |
-		v1.Sensor | v1.Site | v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore
+		v1.Sensor | v1.Site | v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore |
+		v1.Addon | v1.AddonObject
 }
 
 type objectPtr[T crudKind] interface {
@@ -1048,6 +1067,28 @@ func (h *storeHandlers) ReplaceIdentity(ctx context.Context, ns v1.NamespaceName
 
 func (h *storeHandlers) DeleteIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	return h.deleteObjIf(ctx, v1.KindIdentity, ns, name, rv)
+}
+
+// --- OIDCProvider (namespaced) — ADR-0335, ADR-0336 ---
+
+func (h *storeHandlers) GetOIDCProvider(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.OIDCProvider, error) {
+	return typedObj[v1.OIDCProvider](h.getObj(ctx, v1.KindOIDCProvider, ns, name))
+}
+
+func (h *storeHandlers) CreateOIDCProvider(ctx context.Context, p v1.OIDCProvider) (v1.OIDCProvider, error) {
+	return typedObj[v1.OIDCProvider](h.createObj(ctx, v1.KindOIDCProvider, &p))
+}
+
+func (h *storeHandlers) ListOIDCProviders(ctx context.Context, ns v1.NamespaceName) ([]v1.OIDCProvider, error) {
+	return typedObjs[v1.OIDCProvider](h.listObj(ctx, v1.KindOIDCProvider, ns))
+}
+
+func (h *storeHandlers) ReplaceOIDCProvider(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, p v1.OIDCProvider) (v1.OIDCProvider, error) {
+	return typedObj[v1.OIDCProvider](h.replaceObj(ctx, v1.KindOIDCProvider, ns, name, &p))
+}
+
+func (h *storeHandlers) DeleteOIDCProvider(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindOIDCProvider, ns, name, rv)
 }
 
 // --- Role + RolesAssignment (namespaced) — ADR-0136, FEAT-0008/F101 ---

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -33,7 +34,9 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	funcdconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/testkit/fakeaddon"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
 
@@ -244,7 +247,9 @@ type reclaimEvidence struct {
 func TestEveryReclaimHasHoldEvidence(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithSQLProviderRuntime(newSQLRuntime(t, sqlRef("gone"))))
+	addons := fakeaddon.New(t)
+	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithSQLProviderRuntime(newSQLRuntime(t, sqlRef("gone"))),
+		WithAddonRuntime(addons, v1.AddonRuntimeContainerd))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = p.Shutdown(ctx) })
 	evidence := map[string]reclaimEvidence{
@@ -257,6 +262,11 @@ func TestEveryReclaimHasHoldEvidence(t *testing.T) {
 		// The SQL runtime above already lists gone's directory.
 		"sql": {seed: func(*testing.T, *Platform) {},
 			listed: func(e hold.Evidence) []string { return e.SQLOrphans }, want: "default/gone"},
+		"addon": {seed: func(t *testing.T, _ *Platform) {
+			dir := addons.Dir(provider.ProviderRef{Namespace: "default", Name: "gone"})
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "data.json"), []byte("{}"), 0o600))
+		}, listed: func(e hold.Evidence) []string { return e.AddonOrphans }, want: "default/gone"},
 	}
 	for _, e := range evidence {
 		e.seed(t, p)

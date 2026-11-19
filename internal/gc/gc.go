@@ -31,11 +31,13 @@ type Pair struct{ Owner, Child v1.Kind }
 // The App pairs are one per App section kind (ADR-0199 Decision 7, ADR-0222 Decision 2), users before stores, with (App, ConfigMap) after
 // (App, Bucket) (ADR-0213 Decision 5), then (App, AppRevision) (ADR-0200 Decision 8) and the hook calls of an
 // AppRevision (ADR-0214). The Function's, Site's and Workflow's root entries follow, lakes before stores (ADR-0248
-// Decision 8), then a standalone Lake's (ADR-0251 Decision 6) and the rest of a Workflow's (ADR-0250 Decision 6).
+// Decision 8), then a standalone Lake's (ADR-0251 Decision 6) and the rest of a Workflow's (ADR-0250 Decision 6). An
+// OIDCProvider owns the Secret of the client it registers (ADR-0336 Decision 2).
 func Pairs() []Pair {
 	return []Pair{
 		{Owner: v1.KindWorkflow, Child: v1.KindFunction}, {Owner: v1.KindWorkflow, Child: v1.KindKVStore},
-		{Owner: v1.KindIdentity, Child: v1.KindSecret}, {Owner: v1.KindSite, Child: v1.KindRoute},
+		{Owner: v1.KindIdentity, Child: v1.KindSecret}, {Owner: v1.KindOIDCProvider, Child: v1.KindSecret},
+		{Owner: v1.KindSite, Child: v1.KindRoute},
 		{Owner: v1.KindApp, Child: v1.KindFunction}, {Owner: v1.KindApp, Child: v1.KindWorkflow},
 		{Owner: v1.KindApp, Child: v1.KindEventSource}, {Owner: v1.KindApp, Child: v1.KindSensor},
 		{Owner: v1.KindApp, Child: v1.KindRoute}, {Owner: v1.KindApp, Child: v1.KindSite},

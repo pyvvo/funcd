@@ -82,9 +82,10 @@ func (a *cli) devCmd() *cobra.Command {
 			"template as funcdctl app deploy does and applies the App, then again on each save.\n\n" +
 			"A " + devConfigFile + " in the current directory holds what dev is run with: its dev keys are these " +
 			"flags in camelCase (dir, values, build, hooks, apply, persist, persistTo, gport, s3port, cport), plus env and " +
-			"envFile for the values of a declared Secret no document defines, and platform for runtime.handOutSettle, " +
-			"eventing.blobPollInterval and funclog.segmentMaxAge. A flag given here replaces its key, and a dir argument " +
-			"replaces dev.dir.\n\n" +
+			"envFile for the values of a declared Secret no document defines, platform for runtime.handOutSettle, " +
+			"eventing.blobPollInterval and funclog.segmentMaxAge, and addons.runtime, docker or containerd, the container " +
+			"engine that runs the add-ons' engines, Docker first when it is unset. A flag given here replaces its key, and " +
+			"a dir argument replaces dev.dir.\n\n" +
 			"For an App template the file also takes watch, a list of name, run and dir: dev starts each command, waits " +
 			"for the builds they write and keeps their output in log files; and liveReload: true, which reloads open " +
 			"Site pages after a Site change.",
@@ -171,6 +172,10 @@ type devConfig struct {
 	// ADR-0255: the watch commands dev supervises, each dir made absolute from the file's, and Site live reload.
 	watch      []devWatchEntry
 	liveReload bool
+	// addonsRuntime is dev.addons.runtime, the container engine add-on engines run on, "" for Docker first
+	// (ADR-0334 Decision 1); addonDrivers find the engines, replaced by a test.
+	addonsRuntime string
+	addonDrivers  devAddonDrivers
 }
 
 // startDev is the entry seam tests drive (no signal handling, no blocking): it reads dir (ADR-0247 Decision 4), boots
@@ -344,18 +349,30 @@ func (a *cli) bootDev(ctx context.Context, op string, folder *devFolder, cfg dev
 		}
 	}()
 
-	client, cerr := sdk.New(inst.controlURL, sdk.WithToken(funcd.DevToken))
+	client, admin, cerr := devClients(inst.controlURL)
 	if cerr != nil {
 		return nil, cerr
 	}
 	inst.client = client
-	applied, aerr := applyBoot(ctx, op, client, desired, plan, inst.logger)
+	applied, aerr := applyBoot(ctx, op, client, admin, desired, plan, inst.logger)
 	if aerr != nil {
 		return nil, aerr
 	}
 	inst.watchDone = make(chan struct{})
-	go watchFolder(ctx, op, client, sess, applied, inst.logger, inst.watchDone)
+	go watchFolder(ctx, op, client, admin, sess, applied, inst.logger, inst.watchDone)
 	return inst, nil
+}
+
+// devClients are the clients dev applies with: its developer token's, and its admin token's, which registers the
+// Addons and deletes them and their objects (ADR-0334 Decision 5).
+func devClients(controlURL string) (dev, admin *sdk.Client, err error) {
+	if dev, err = sdk.New(controlURL, sdk.WithToken(funcd.DevToken)); err != nil {
+		return nil, nil, err
+	}
+	if admin, err = sdk.New(controlURL, sdk.WithToken(funcd.DevAdminToken)); err != nil {
+		return nil, nil, err
+	}
+	return dev, admin, nil
 }
 
 // declaredSecrets creates each Secret a Function declares (ADR-0248) that no document defines, each key from the
@@ -476,14 +493,14 @@ func (r *devImages) Contract(_ context.Context, image string) (v1.WorkflowContra
 
 // applyBoot applies desired in dependency order (applyOrdered) and, over a durable metastore, prunes what an earlier
 // session applied that the folder no longer holds. It returns the objects the reload starts from.
-func applyBoot(ctx context.Context, op string, c *sdk.Client, desired []v1.Object, plan persistPlan, logger *slog.Logger) ([]v1.Object, error) {
-	if err := applyOrdered(ctx, op, c, desired); err != nil {
+func applyBoot(ctx context.Context, op string, c, admin *sdk.Client, desired []v1.Object, plan persistPlan, logger *slog.Logger) ([]v1.Object, error) {
+	if err := applyOrdered(ctx, op, c, admin, desired); err != nil {
 		return nil, err
 	}
 	if plan.storeDir == "" {
 		return desired, nil
 	}
-	stale, lerr := pruneStale(ctx, c, desired, logger)
+	stale, lerr := pruneStale(ctx, c, admin, desired, logger)
 	if lerr != nil {
 		return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "prune the objects an earlier session applied")
 	}
@@ -495,13 +512,16 @@ func applyBoot(ctx context.Context, op string, c *sdk.Client, desired []v1.Objec
 //nolint:gochecknoglobals // an immutable lookup table
 var lateKinds = []v1.Kind{v1.KindRoute, v1.KindEventSource, v1.KindSensor, v1.KindSite, v1.KindWorkflowRun}
 
-// applyOrdered applies desired as production would order it: the backing resources (stageResources keeps a table or
-// prefix a Function still binds until the Functions no longer bind it, ADR-0073), the Functions with a link's target
-// before its caller, the resources staging held back, the Workflows, then what references them.
-func applyOrdered(ctx context.Context, op string, c *sdk.Client, desired []v1.Object) error {
-	var base, fns, wfs, late []v1.Object
+// applyOrdered applies desired as production would order it: the Addons first, with admin, before any object of their
+// kinds (ADR-0334 Decision 5), the backing resources (stageResources keeps a table or prefix a Function still binds
+// until the Functions no longer bind it, ADR-0073), the Functions with a link's target before its caller, the resources
+// staging held back, the Workflows, then what references them.
+func applyOrdered(ctx context.Context, op string, c, admin *sdk.Client, desired []v1.Object) error {
+	var addons, base, fns, wfs, late []v1.Object
 	for _, obj := range desired {
 		switch kind := obj.GroupVersionKind().Kind; {
+		case kind == v1.KindAddon:
+			addons = append(addons, obj)
 		case kind == v1.KindFunction:
 			fns = append(fns, obj)
 		case kind == v1.KindWorkflow:
@@ -510,6 +530,11 @@ func applyOrdered(ctx context.Context, op string, c *sdk.Client, desired []v1.Ob
 			late = append(late, obj)
 		default:
 			base = append(base, obj)
+		}
+	}
+	for _, obj := range addons {
+		if aerr := applyDesired(ctx, admin, obj); aerr != nil {
+			return fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Addon %q", obj.GetName())
 		}
 	}
 	first, last, serr := stageResources(ctx, op, c, base)
@@ -951,6 +976,8 @@ type devInstance struct {
 	live     *devLiveReload
 	logger   *slog.Logger // funcdctl dev's own warnings, in the daemon's text form over the cli's out (ADR-0197)
 	cleanup  []func()
+	// addons is the runtime the add-on engines run on (ADR-0334), which the cleanups stop.
+	addons devAddonRuntime
 }
 
 // stop cancels nothing itself (the caller owns the ctx passed to startDev); it waits for the platform's
@@ -1043,6 +1070,10 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		return nil, fault.Wrapf(rerr, fault.KindOf(rerr), op, "open the process runtime in %s", stateDir)
 	}
 	inst.cleanup = append(inst.cleanup, func() { _ = rt.Close() })
+	addonOpts, aerr := devAddonOptions(ctx, stateDir, cfg, inst)
+	if aerr != nil {
+		return nil, aerr
+	}
 
 	opts := []funcd.Option{
 		funcd.InMemory(),
@@ -1062,6 +1093,9 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 			funcd.WithMaterializer(artifact.NewOrasMaterializer(inst.artifactDir, v1.HostPlatform())),
 		}
 	}
+	// The admin token registers Addons (ADR-0334 Decision 5); the add-on engines run on the developer's container engine.
+	opts = append(opts, funcd.WithDevAdminToken())
+	opts = append(opts, addonOpts...)
 	// Dev's cadences in both modes (ADR-0254 Decision 4): a saved build, an upload and a log line show within about a
 	// second.
 	opts = append(opts,
@@ -1230,26 +1264,49 @@ func checkFixedPorts(op string, cfg devConfig) error {
 // pruneStale deletes each object an earlier --persist session applied that desired no longer holds, as a reload prunes
 // them (ADR-0247 Decision 8: the folder is the session's desired state), and returns the ones that stay.
 // Only an object carrying devManagedTag is the session's, so an object the user applied is never deleted. The
-// kinds are listed in apply order, so a Workflow goes before its Functions and a Function before what it binds.
-func pruneStale(ctx context.Context, c *sdk.Client, desired []v1.Object, logger *slog.Logger) ([]v1.Object, error) {
-	var prev []v1.Object
-	for _, kind := range []v1.Kind{
+// kinds are listed in apply order, so a Workflow goes before its Functions and a Function before what it binds. The
+// Addons and the objects of their kinds are listed and deleted with admin (ADR-0334 Decision 5).
+func pruneStale(ctx context.Context, c, admin *sdk.Client, desired []v1.Object, logger *slog.Logger) ([]v1.Object, error) {
+	addons, err := admin.List(ctx, v1.KindAddon, "")
+	if err != nil {
+		return nil, err
+	}
+	var addonKinds []v1.Kind
+	for _, a := range addons {
+		if ad, ok := a.(*v1.Addon); ok {
+			addonKinds = append(addonKinds, v1.Kind(ad.Spec.Kind))
+		}
+	}
+	prev := devManaged(addons)
+	for _, kind := range slices.Concat([]v1.Kind{
 		v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindSecret, v1.KindLake, v1.KindConfigMap,
+	}, addonKinds, []v1.Kind{
 		v1.KindRole, v1.KindRolesAssignment, v1.KindPolicy, v1.KindEgressPolicy, v1.KindFunction, v1.KindWorkflow,
 		v1.KindRoute, v1.KindEventSource, v1.KindSensor, v1.KindSite,
-	} {
-		objs, err := c.List(ctx, kind, devNamespace)
+	}) {
+		lister := c
+		if slices.Contains(addonKinds, kind) {
+			lister = admin
+		}
+		objs, err := lister.List(ctx, kind, devNamespace)
 		if err != nil {
 			return nil, err
 		}
-		for _, o := range objs {
-			if o.GetObjectMeta().Tags[devManagedTag] == devManagedBy {
-				prev = append(prev, o)
-			}
+		prev = append(prev, devManaged(objs)...)
+	}
+	kept := pruneRemoved(ctx, c, admin, prev, desired, true, logger)
+	return kept[len(desired):], nil
+}
+
+// devManaged are the objects of objs that dev applied, the ones carrying devManagedTag.
+func devManaged(objs []v1.Object) []v1.Object {
+	var out []v1.Object
+	for _, o := range objs {
+		if o.GetObjectMeta().Tags[devManagedTag] == devManagedBy {
+			out = append(out, o)
 		}
 	}
-	kept := pruneRemoved(ctx, c, prev, desired, true, logger)
-	return kept[len(desired):], nil
+	return out
 }
 
 // devS3Options enables the ADR-0080/0085 S3 frontend (Decision 6): it reserves a free node-private port,

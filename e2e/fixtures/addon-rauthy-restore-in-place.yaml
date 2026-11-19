@@ -1,0 +1,17 @@
+# login restored in place from Backup login-b1 (ADR-0333 Decision 3): an add-on object takes inPlace only. The lane
+# names each Restore by replacing NAME.
+apiVersion: funcd.io/v1alpha1
+kind: Restore
+metadata:
+  name: NAME
+  namespace: default
+  resourceGroup: rg1
+spec:
+  backup: login-b1
+  source:
+    credentialsSecret: todo-backup-reader
+    identitySecret: todo-backup-key
+  members:
+    - kind: IdentityProvider
+      name: login
+      inPlace: true

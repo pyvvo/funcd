@@ -46,6 +46,9 @@ const (
 	// ADR-0321: a Secret, the resource of secret::read; a Function's or a Lake's spec.bindings.secret are its
 	// `secretBindings`.
 	entityTypeSecret = "Secret"
+	// ADR-0332 Decision 4: an add-on object, the principal its engine's Secret reads are asked as; its
+	// spec.bindings.secret are its `secretBindings`.
+	entityTypeAddonObject = "AddonObject"
 )
 
 // defaultRegistry is the assembled capability registry (ADR-0116): every capability below + the two default
@@ -60,7 +63,7 @@ const (
 var defaultRegistry, _ = NewRegistry(
 	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability(), LakeCapability(), SQLCapability(),
 		SecretCapability()},
-	[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource()},
+	[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource(), AddonObjectPrincipalSource()},
 )
 
 // KnownAction reports whether action is in the assembled schema vocabulary (ADR-0116).
@@ -112,7 +115,8 @@ func (e scopeEntity) named() []scopeUID {
 func namespacedEntityType(t string) bool {
 	switch t {
 	case entityTypeFunction, entityTypeKVStore, entityTypeKVTable, entityTypeBucket, entityTypeBlobPrefix,
-		entityTypeS3Identity, entityTypeIdentity, entityTypeLake, entityTypeSQLDatabase, entityTypeSecret:
+		entityTypeS3Identity, entityTypeIdentity, entityTypeLake, entityTypeSQLDatabase, entityTypeSecret,
+		entityTypeAddonObject:
 		return true
 	}
 	return false

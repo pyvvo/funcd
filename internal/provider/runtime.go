@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -61,6 +62,9 @@ type Deps struct {
 	Floor Floor
 	// Now is the clock ProviderSpec.MaxAge is measured with (ADR-0270); nil ⇒ time.Now.
 	Now func() time.Time
+	// BeforeStart runs once an engine's worker is created, with its address, and before the worker starts. An error
+	// leaves the worker created, and a later Converge starts it once BeforeStart succeeds (ADR-0142). nil runs nothing.
+	BeforeStart func(ctx context.Context) error
 }
 
 // Floor is the free-space floor of the data filesystem (quota.Floor, ADR-0296).
@@ -72,6 +76,7 @@ const defaultProbeTimeout = 2 * time.Second
 
 // engineRuntime is the in-process driver of the provider Runtime port.
 type engineRuntime struct {
+	EngineFiles // an engine's files under its storage directory (ADR-0333 Decision 6)
 	rt          containerrt.Runtime
 	ownerKind   v1.Kind
 	gateway     gateway.Gateway // may be nil (internal-only deployment)
@@ -85,9 +90,22 @@ type engineRuntime struct {
 	// is replaced, since a provider re-created or changed between two reconciler passes reaches Converge with its new
 	// spec while the old engine runs (#1195). The map starts empty, so a running engine this process did not create is
 	// adopted; after a daemon restart there is none, since the boot sweep removed the earlier run's (ADR-0167, ADR-0186).
-	specsMu sync.Mutex
-	specs   map[ProviderRef]string
-	now     func() time.Time
+	specsMu     sync.Mutex
+	specs       map[ProviderRef]string
+	now         func() time.Time
+	beforeStart func(ctx context.Context) error
+}
+
+// Namespaces are the namespaces of the engines this runtime runs, from the Converge that creates an engine until the
+// Teardown that removed it, a stopping engine included.
+func (r *engineRuntime) Namespaces() []v1.NamespaceName {
+	r.specsMu.Lock()
+	defer r.specsMu.Unlock()
+	seen := map[v1.NamespaceName]bool{}
+	for ref := range r.specs {
+		seen[ref.Namespace] = true
+	}
+	return slices.Collect(maps.Keys(seen))
 }
 
 // NewRuntime builds the add-on-provider runtime. Deps.Runtime is required; Gateway is optional
@@ -117,6 +135,7 @@ func NewRuntime(d Deps) (Runtime, error) {
 		now = time.Now
 	}
 	return &engineRuntime{
+		EngineFiles: NewEngineFiles(d.StorageRoot, d.OwnerKind),
 		rt:          d.Runtime,
 		ownerKind:   d.OwnerKind,
 		gateway:     d.Gateway,
@@ -127,6 +146,7 @@ func NewRuntime(d Deps) (Runtime, error) {
 		floor:       d.Floor,
 		specs:       map[ProviderRef]string{},
 		now:         now,
+		beforeStart: d.BeforeStart,
 	}, nil
 }
 
@@ -226,6 +246,11 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 			fallthrough
 		// A failed Start leaves the instance Created (ADR-0142): start it.
 		case inst.State == containerrt.StateCreated:
+			if r.beforeStart != nil {
+				if berr := r.beforeStart(ctx); berr != nil {
+					return ProviderStatus{}, fault.Wrapf(berr, fault.KindOf(berr), op, "prepare the start of engine replica %d", i)
+				}
+			}
 			if serr := r.rt.Start(ctx, inst.ID); serr != nil {
 				return ProviderStatus{}, fault.Wrapf(serr, fault.KindOf(serr), op, "start engine replica %d", i)
 			}
@@ -329,6 +354,7 @@ func (r *engineRuntime) workerSpec(spec ProviderSpec, replica int) containerrt.W
 		Mounts:    append(r.storageMounts(spec), r.scratch.mounts(spec)...),
 
 		EgressOnly: spec.EgressOnly,
+		HostOnly:   spec.HostOnly,
 	}
 }
 

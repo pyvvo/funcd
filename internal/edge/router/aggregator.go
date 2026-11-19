@@ -60,6 +60,14 @@ const (
 	reasonDisabled      = "Disabled"
 )
 
+// ReasonProviderConflict refuses an entry that names another OIDCProvider than an earlier entry of its host; it
+// keeps its claims and answers 503 (ADR-0335 Decisions 3 and 10).
+const ReasonProviderConflict = "ProviderConflict"
+
+// ReasonProviderNotFound is an entry whose oidc stance names no OIDCProvider of its namespace; it keeps its claims and
+// answers 503 (ADR-0335 Decision 10).
+const ReasonProviderNotFound = "ProviderNotFound"
+
 // routeSource is the Route reconciler's source key: until it has Set once, no entry of a later kind rank is
 // programmed (ADR-0176 Decision 6).
 const routeSource = "routes"
@@ -75,6 +83,8 @@ func kindRank(k v1.Kind) (int, bool) {
 		return 0, true
 	case v1.KindLake:
 		return 1, true
+	case v1.KindAddonObject: // ranked after the Lake (ADR-0332 Decision 5)
+		return 2, true
 	default:
 		return 0, false
 	}
@@ -202,7 +212,8 @@ type heldClaim struct {
 
 // arbitrate rules on every entry of sources in (namespace, owned, name, kind rank) order, every entry that is not
 // owned first within a namespace (ADR-0241 Decision 7): Disabled, else ReservedPath, else HostRequired, else
-// HostReserved, else EdgeStarting, else RouteConflict, else programmed (ADR-0240 Decision 5, ADR-0241 Decision 6).
+// HostReserved, else EdgeStarting, else RouteConflict, else ProviderConflict, programmed refused with its claims, else
+// programmed (ADR-0240 Decision 5, ADR-0241 Decision 6, ADR-0335 Decision 3).
 // It returns the slots in source-key order, each slot's verdict, the programmed entries in ruling order and the
 // reserved namespace hosts. The caller must hold a.mu.
 func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, routesSet bool) ([]slot, []Verdict, []Entry, []string, error) {
@@ -239,6 +250,7 @@ func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, 
 	reserving := a.reserving(slots)
 	modes := map[v1.NamespaceName]v1.ExposureMode{}
 	held := map[string][]heldClaim{}
+	providers := map[string]hostProvider{}
 	verdicts := make([]Verdict, len(slots))
 	programmed := make([]Entry, 0, len(slots))
 	for _, i := range order {
@@ -266,8 +278,13 @@ func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, 
 				v.Reason = reasonRouteConflict
 				v.Message = fmt.Sprintf("conflicts with %s %s/%s on (host, path, method)", winner.Kind, winner.Namespace, winner.Name)
 			default:
-				hold(held, s.entry)
-				programmed = append(programmed, s.entry)
+				e := s.entry
+				if msg, conflict := providerConflict(providers, e); conflict {
+					v.Reason, v.Message = ReasonProviderConflict, msg
+					e.Refused = ReasonProviderConflict
+				}
+				hold(held, e)
+				programmed = append(programmed, e)
 			}
 		}
 		verdicts[i] = v
@@ -317,10 +334,16 @@ func ruledAsOwned(e Entry) bool { return e.Owned || e.Owner.Kind != v1.KindRoute
 // disabled is an entry turned off by its Route's spec.enabled, or an owned Route with enabled unset in an explicit
 // namespace (ADR-0241 Decision 6). A non-Route source is never Disabled by the mode.
 func disabled(e Entry, mode v1.ExposureMode) bool {
-	if e.Enabled != nil {
-		return !*e.Enabled
+	return RouteDisabled(e.Enabled, e.Owned && e.Owner.Kind == v1.KindRoute, mode)
+}
+
+// RouteDisabled reports whether a Route is off: its spec.enabled is false, or, owned by a workload, it leaves enabled
+// unset in an explicit namespace (ADR-0241 Decision 6).
+func RouteDisabled(enabled *bool, owned bool, mode v1.ExposureMode) bool {
+	if enabled != nil {
+		return !*enabled
 	}
-	return e.Owned && e.Owner.Kind == v1.KindRoute && mode == v1.ExposureExplicit
+	return owned && mode == v1.ExposureExplicit
 }
 
 // modeOf returns a namespace's exposure mode, reading each namespace at most once per arbitration.
@@ -356,6 +379,41 @@ func reservedPath(e Entry) (string, bool) {
 		if path.Clean(r.Path) == "/" && e.Owner.Kind == v1.KindLake {
 			return r.Path, true
 		}
+	}
+	return "", false
+}
+
+// hostProvider is the OIDCProvider a host's first entry that names one names (ADR-0335 Decision 3), and that entry.
+type hostProvider struct {
+	namespace v1.NamespaceName
+	name      v1.ObjectName
+	owner     Owner
+}
+
+// providerConflict reports whether e names another OIDCProvider than an earlier entry of its host, or two itself;
+// else it records what e names. An entry already refused names none.
+func providerConflict(providers map[string]hostProvider, e Entry) (string, bool) {
+	if e.Refused != "" {
+		return "", false
+	}
+	var named *hostProvider
+	for _, r := range e.Rules {
+		auth, oidc := ruleStance(e, r)
+		if auth != v1.AuthOIDC || oidc == nil {
+			continue
+		}
+		p := hostProvider{namespace: e.Namespace, name: oidc.Provider, owner: e.Owner}
+		if first, ok := providers[e.Host]; ok && (first.namespace != p.namespace || first.name != p.name) {
+			return fmt.Sprintf("names OIDCProvider %s/%s on host %q, where %s %s/%s names %s/%s", p.namespace, p.name,
+				e.Host, first.owner.Kind, first.owner.Namespace, first.owner.Name, first.namespace, first.name), true
+		}
+		if named != nil && named.name != p.name {
+			return fmt.Sprintf("names two OIDCProviders on host %q, %s and %s", e.Host, named.name, p.name), true
+		}
+		named = &p
+	}
+	if _, ok := providers[e.Host]; named != nil && !ok {
+		providers[e.Host] = *named
 	}
 	return "", false
 }

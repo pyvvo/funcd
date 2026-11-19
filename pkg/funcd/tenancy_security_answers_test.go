@@ -303,3 +303,24 @@ func TestNetworkingAnswersMatrix(t *testing.T) {
 	}
 	runMatrix(t, rows)
 }
+
+// oidcProviderFixture is OIDCProvider name of default, whose client is written by hand.
+func oidcProviderFixture(name v1.ObjectName) *v1.OIDCProvider {
+	p := &v1.OIDCProvider{Spec: v1.OIDCProviderSpec{Issuer: "https://login.example.com/auth/v1",
+		Client: v1.OIDCProviderClient{CredentialsSecret: "sso-client"}, SessionSecret: "sso-session"}}
+	p.TypeMeta, p.ObjectMeta = fixtureMeta(v1.KindOIDCProvider, name)
+	return p
+}
+
+// The answers of the OIDCProvider's operations (ADR-0335), one row per case of each.
+func TestOIDCProviderAnswersMatrix(t *testing.T) {
+	t.Parallel()
+	e := newAnswerEnv(t)
+	broken := oidcProviderFixture("sso")
+	broken.Spec.Client.Registration = &v1.OIDCRegistration{}
+	k := kindFixture{kind: "OIDCProvider", kinds: "OIDCProviders", path: "oidcproviders", name: "sso",
+		json: jsonOf(t, oidcProviderFixture("sso")), broken: jsonOf(t, broken),
+		detail: "spec.client must set exactly one of registration and credentialsSecret"}
+	postFixture(t, e, k)
+	runMatrix(t, k.sharedRows(e))
+}

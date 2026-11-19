@@ -33,7 +33,9 @@ This page lists the spec and status fields of Namespace and ResourceGroup, each 
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` | authenticated admits only a caller whose token, sent as Authorization: Bearer or X-Api-Key, may get the namespace's Functions; others get 401 or 403, and every caller gets 401 while server.auth.edge is off. open, or empty, admits anyone. |
+| `mode` | string, one of `""`, `authenticated`, `open`, `oidc` | authenticated admits only a caller whose token, sent as Authorization: Bearer or X-Api-Key, may get the namespace's Functions; others get 401 or 403, and every caller gets 401 while server.auth.edge is off. oidc signs callers in with the OIDCProvider that provider names. open, or empty, admits anyone. It reaches no Lake's or add-on object's address. |
+| `provider` | string, a DNS-1123 label | With mode oidc, the OIDCProvider of the namespace that signs callers in; required with oidc and refused with another mode. The namespace shows a ProviderNotFound condition while it names no OIDCProvider. |
+| `unauthenticated` | string, one of `""`, `redirect`, `401`, `allow` | With mode oidc, what a call that is not signed in gets: redirect, the default, 401 or allow, as on a Route's auth. Refused with another mode. |
 
 ### `Namespace.status`
 

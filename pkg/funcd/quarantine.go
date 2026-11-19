@@ -294,6 +294,11 @@ func (p *Platform) quarantineStores() []quarantine.Store {
 	if p.sql.reconciler != nil {
 		stores = append(stores, p.sql.reconciler.Quarantine())
 	}
+	if p.addon.reconciler != nil {
+		if s := p.addon.reconciler.Quarantine(); s != nil { // nil on a runtime with no engine storage
+			stores = append(stores, s)
+		}
+	}
 	if p.fnReconciler != nil {
 		if s := p.fnReconciler.Quarantine(); s != nil { // nil while volumes are off
 			stores = append(stores, s)

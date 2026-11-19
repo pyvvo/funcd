@@ -1,0 +1,144 @@
+# Venom e2e suite for the addon-rauthy containerd lane: an admin registers rauthy, an add-on built outside funcd, from
+# its published image pinned by digest (rauthy/addon.yaml of pyvvo/funcd-addons); a developer applies the lane's
+# IdentityProvider, which turns Ready once rauthy answers its readiness path, and the edge serves it at its host with the
+# path kept. Run host-side once the self-deploying Lima VM is up; each apply and engine probe runs in the VM, beside the
+# daemon, by one exec step, and the edge calls hit the VM's forwarded data plane.
+#
+# It proves on a real funcd (ADR-0332 scenarios addon-register-admin-only, addon-object-runs and addon-private-path):
+#   1. the developer's Addon is refused, and the admin's registers the kind IdentityProvider;
+#   2. login turns Ready on containerd, its engine pulled from ghcr.io by its digest, and lists under its plural;
+#   3. GET /auth/v1/ping at login.example.com reaches rauthy with its path kept;
+#   4. rauthy's private path /auth/v1/clients_dyn is 404 at the edge however it is spelled, and so is a .. segment,
+#      while the engine's own address, which funcd reaches, serves it;
+#   5. the engine's netns holds the fence: no outbound endpoint, and an input chain that admits only loopback and funcd's
+#      bridge address.
+name: addon-rauthy — an Addon built outside funcd, registered and run on containerd (ADR-0332, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081   # funcd data plane, forwarded from the Lima guest
+  # the lane's `tokens` in scripts/lanes.yaml, listed in auth.credentials (e2e/fixtures/addon-rauthy-funcdconfig.yaml)
+  devtoken: addon-rauthy-lane-developer
+  admintoken: addon-rauthy-lane-admin
+  ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
+
+testcases:
+  - name: a developer's Addon is refused, and the admin's registers IdentityProvider
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            funcdctl apply -f /opt/lane/addon.yaml 2>&1
+        info: "developer apply → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemout ShouldContainSubstring "may not act on cluster-scoped kind"
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
+            funcdctl apply -f /opt/lane/addon.yaml
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied Addon/rauthy"
+
+  - name: login turns Ready on containerd and lists under its plural
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            sh -c 'funcdctl apply -f /opt/lane/rauthy-keys.yaml && funcdctl apply -f /opt/lane/login.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied IdentityProvider/login"
+      # rauthy's first start creates its database on the new storage: about 8 s on a laptop (experiment 0025), more with
+      # the image pull, so the retry waits up to 2 min.
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            funcdctl get identityproviders login -n default -o json \
+            | python3 -c 'import sys,json;s=json.load(sys.stdin)["status"];print(s.get("phase",""), bool(s.get("address")), sep=",")'
+        retry: 60
+        delay: 2
+        info: "login → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual Ready,True
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            funcdctl get identityproviders -n default
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring login
+
+  - name: the edge serves rauthy at login.example.com with its path kept
+    steps:
+      - type: http
+        method: GET
+        url: "{{.dp}}/auth/v1/ping"
+        headers:
+          Host: login.example.com
+        retry: 15
+        delay: 2
+        info: "ping → {{.result.statuscode}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+
+  - name: the private path is 404 at the edge however it is spelled, and the engine's own address serves it
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/auth/v1/clients_dyn"
+        headers:
+          Host: login.example.com
+        assertions:
+          - result.statuscode ShouldEqual 404
+      - type: http
+        method: POST
+        url: "{{.dp}}/auth/v1//clients_dyn"
+        headers:
+          Host: login.example.com
+        assertions:
+          - result.statuscode ShouldEqual 404
+      - type: http
+        method: POST
+        url: "{{.dp}}/auth/v1/./clients_dyn"
+        headers:
+          Host: login.example.com
+        assertions:
+          - result.statuscode ShouldEqual 404
+      - type: http
+        method: GET
+        url: "{{.dp}}/auth/v1/x/../ping"
+        headers:
+          Host: login.example.com
+        assertions:
+          - result.statuscode ShouldEqual 404
+      # From the VM's host netns a connection to the engine carries funcd's bridge address, as funcd's own calls do: the
+      # engine answers its private path there with its own refusal of an empty registration, not the edge's 404.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            addr=$(funcdctl get identityproviders login -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"address\"])")
+            echo "PING=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$addr/auth/v1/ping") PRIVATE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" -X POST "http://$addr/auth/v1/clients_dyn")"'
+        info: "engine → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PING=200"
+          - result.systemout ShouldNotContainSubstring "PRIVATE=404"
+          - result.systemout ShouldNotContainSubstring "PRIVATE=000"
+
+  - name: the engine's netns holds the fence, which admits only loopback and funcd's bridge address
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            pid=$({{.ctr}} task ls | awk "\$1 == \"login-r0\" && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            nsenter -t "$pid" -n nft list table inet funcd_fence'
+        info: "fence → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "chain output"
+          - result.systemout ShouldContainSubstring "chain input"
+          - result.systemout ShouldContainSubstring "policy drop"
+          - result.systemout ShouldContainSubstring "ip saddr 10.63.0.1 accept"

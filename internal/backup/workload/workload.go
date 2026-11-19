@@ -106,11 +106,12 @@ type Manifest struct {
 	Recipients []string     `json:"recipients,omitempty"`
 }
 
-// Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, Lakes, SQLDatabases then Function volumes:
-// by name, the stores of the App's kv, buckets, lakes and sql entries and its Functions' local volumes, or the stores of
-// the ResourceGroup. In each form a Bucket brings in the Lakes on its Lake prefixes as their own members, once, after the
-// Lakes s names, whichever App or ResourceGroup holds them (ADR-0312). A named member or App that does not exist is
-// fault.NotFound naming it; a scope over limits.CopyMembers is fault.Invalid naming the limit.
+// Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, Lakes, SQLDatabases, Function volumes then
+// add-on objects: by name, the stores of the App's kv, buckets, lakes and sql entries and its Functions' local volumes,
+// or the stores of the ResourceGroup and its add-on objects whose Addon declares a snapshot (ADR-0333 Decision 2). In
+// each form a Bucket brings in the Lakes on its Lake prefixes as their own members, once, after the Lakes s names,
+// whichever App or ResourceGroup holds them (ADR-0312). A named member or App that does not exist is fault.NotFound
+// naming it; a scope over limits.CopyMembers is fault.Invalid naming the limit.
 func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope, limits Limits) ([]Member, error) {
 	const op = "workload.Resolve"
 	names := map[v1.Kind][]v1.ObjectName{
@@ -193,6 +194,11 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 		return nil, err
 	}
 	out = append(out, vols...)
+	adds, err := addonMembers(ctx, st, ns, s)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, adds...)
 	if len(out) > limits.CopyMembers {
 		return nil, fault.Invalidf(op, "the scope resolves to %d members, more than the %d one copy may hold", len(out), limits.CopyMembers)
 	}
@@ -269,6 +275,45 @@ func volumeMembers(ctx context.Context, st store.Store, ns v1.NamespaceName, ref
 	return out, nil
 }
 
+// addonMembers resolves the add-on objects s names, or those of its ResourceGroup whose Addon declares a snapshot, in
+// name order, each under its add-on's kind (ADR-0333 Decision 2). A named object resolves whatever its Addon declares:
+// its Backup fails NoSnapshot at the run, with no check at apply.
+func addonMembers(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope) ([]Member, error) {
+	const op = "workload.Resolve"
+	var out []Member
+	for _, n := range s.Addons {
+		obj, err := st.Get(ctx, v1.KindAddonObject.GVK(), ns, n)
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "member add-on object %s", n)
+		}
+		out = append(out, Member{Kind: v1.Kind(obj.(*v1.AddonObject).Spec.Kind), Name: n})
+	}
+	if s.ResourceGroup == "" {
+		return out, nil
+	}
+	addons, err := st.List(ctx, v1.KindAddon.GVK(), store.ListOptions{})
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list Addons")
+	}
+	snapshots := map[string]bool{} // by plural: an object's Addon is the one of its kind's plural (ADR-0332 Decision 1)
+	for _, o := range addons.Items {
+		if a, ok := o.(*v1.Addon); ok && a.Spec.Snapshot != nil {
+			snapshots[v1.AddonPlural(a.Spec.Kind)] = true
+		}
+	}
+	objs, err := st.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{Namespace: ns, ResourceGroup: s.ResourceGroup})
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list the add-on objects of %q", ns)
+	}
+	for _, o := range objs.Items {
+		if ao, ok := o.(*v1.AddonObject); ok && snapshots[v1.AddonPlural(ao.Spec.Kind)] {
+			out = append(out, Member{Kind: v1.Kind(ao.Spec.Kind), Name: ao.Name})
+		}
+	}
+	slices.SortFunc(out, func(a, b Member) int { return strings.Compare(string(a.Name), string(b.Name)) })
+	return out, nil
+}
+
 func memberKinds() []v1.Kind {
 	return []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindLake, v1.KindSQLDatabase}
 }
@@ -278,16 +323,16 @@ func KVPrefix(ns v1.NamespaceName, name v1.ObjectName) string {
 	return string(ns) + "/" + string(name) + "/"
 }
 
-// Write copies ms under o.Path, then puts the manifest (Decisions 4, 5): each member's kind among kinds writes its files
-// under its own directory of the copy (ADR-0311), a KVStore to kv/<store>/, a Bucket to blob/<bucket>/, a lake to
-// lake/<name>/<attempt>/, a SQLDatabase to sql/<name>/ and a Function's volume to volume/<function>/<volume>/. A member
-// that no kind serves is fault.Invalid naming its kind, before the first put; a refused IfNotExist is
-// ErrTargetUnconditional.
+// Write copies ms under o.Path, then puts the manifest (Decisions 4, 5): the member kind among kinds that Serves each
+// member's kind writes its files under its own directory of the copy (ADR-0311, ADR-0333 Decision 2), a KVStore to
+// kv/<store>/, a Bucket to blob/<bucket>/, a lake to lake/<name>/<attempt>/, a SQLDatabase to sql/<name>/, a Function's
+// volume to volume/<function>/<volume>/ and an add-on object to addon/<kind>/<name>/<file>/. A member that no kind
+// serves is fault.Invalid naming its kind, before the first put; a refused IfNotExist is ErrTargetUnconditional.
 func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, kinds []MemberKind, o Options) (Manifest, error) {
 	const op = "workload.Write"
 	served := make([]MemberKind, len(ms))
 	for i, mb := range ms {
-		j := slices.IndexFunc(kinds, func(k MemberKind) bool { return k.Kind() == mb.Kind })
+		j := slices.IndexFunc(kinds, func(k MemberKind) bool { return Serves(k, mb.Kind) })
 		if j < 0 {
 			return Manifest{}, fault.Invalidf(op, "member %s/%s: no member kind serves %s", mb.Kind, mb.Name, mb.Kind)
 		}

@@ -218,7 +218,7 @@ func TestDependencyCheckReadsThePolicies(t *testing.T) {
 	require.Eventually(t, func() bool {
 		var code int
 		code, rep = dependencies(t, p, "todo-api")
-		return code == http.StatusServiceUnavailable
+		return code == http.StatusServiceUnavailable && rep != nil && rep.Kind == local.DependencyKV
 	}, 5*time.Second, 5*time.Millisecond)
 	require.Equal(t, "kv", rep.Kind)
 	require.Equal(t, "store", rep.Binding)
@@ -258,7 +258,7 @@ func TestDependencyCheck_AForbiddenLinkFails(t *testing.T) {
 	require.Eventually(t, func() bool {
 		var code int
 		code, rep = dependencies(t, p, "front")
-		return code == http.StatusServiceUnavailable
+		return code == http.StatusServiceUnavailable && rep != nil && rep.Kind == local.DependencyLink
 	}, 5*time.Second, 5*time.Millisecond, "a forbidden link fails the check")
 	require.Equal(t, "link", rep.Kind)
 	require.Equal(t, "next", rep.Binding)

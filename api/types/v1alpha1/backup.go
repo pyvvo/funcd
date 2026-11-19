@@ -37,7 +37,7 @@ type BackupScheduleSpec struct {
 	TimeZone   string           `json:"timeZone,omitempty" doc:"The IANA time zone of schedule, such as Europe/Paris; UTC when empty."`
 	TTL        Duration         `json:"ttl,omitempty" doc:"How long funcd keeps each Backup's record after its creation; 0s or unset means 720h. Only the record goes: the copy stays on the target until the target's own lifecycle rule expires it. A Backup may set a shorter spec.ttl, never a longer one."`
 	Paused     bool             `json:"paused,omitempty" doc:"While true, the schedule creates no Backup and rpoRisk stays false; a Backup created by hand still runs. Once it is false again, the slots missed meanwhile collapse into one Backup."`
-	Scope      BackupScope      `json:"scope" doc:"The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases and volumes, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App."`
+	Scope      BackupScope      `json:"scope" doc:"The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases, volumes and addons, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App."`
 	Target     BackupTarget     `json:"target" doc:"Where each Backup writes its copy: an S3 bucket and the Secret of its write key."`
 	Encryption BackupEncryption `json:"encryption,omitempty" doc:"The age recipients that seal the member files of each Backup. It is required: a schedule with fewer than 2 recipients is refused."`
 }
@@ -51,7 +51,8 @@ func (s BackupScheduleSpec) EffectiveTTL() Duration {
 }
 
 // BackupScope names the members in one form (Decision 2): names, an App, or a ResourceGroup. In each form a Bucket brings in
-// the Lakes on its prefixes as their own members, since its copy holds none of their data (ADR-0312).
+// the Lakes on its prefixes as their own members, since its copy holds none of their data (ADR-0312). An add-on object is
+// a member of its own, copied from its engine's newest snapshot (ADR-0333 Decision 2).
 type BackupScope struct {
 	KVStores  []ObjectName `json:"kvStores,omitempty" doc:"KVStores of the namespace to copy, by name, each once."`
 	Buckets   []ObjectName `json:"buckets,omitempty" doc:"Buckets of the namespace to copy, by name, each once. A Bucket's copy holds none of the data of the Lakes located on its prefixes: each of them is copied as a member of its own."`
@@ -59,8 +60,9 @@ type BackupScope struct {
 	Databases []ObjectName `json:"databases,omitempty" doc:"SQLDatabases of the namespace to copy, by name, each once. A database whose engine is not Ready fails the Backup with reason EngineNotReady."`
 	// Volumes are local Function volumes, each "<function>/<name>" (ADR-0262 Decision 11).
 	Volumes       []string          `json:"volumes,omitempty" doc:"Local volumes of the namespace's Functions to copy, each as <function>/<name>, both DNS-1123 labels, and listed once. A volume is read live, file by file, so its copy is not a single point in time."`
+	Addons        []ObjectName      `json:"addons,omitempty" doc:"Add-on objects of the namespace to copy, by name, whatever their kind, each once: each copy is the newest snapshot that the object's engine wrote under its Addon's snapshot.path, copied as it is. An object whose Addon declares no snapshot, or whose engine has written none yet, fails the Backup with reason NoSnapshot."`
 	App           ObjectName        `json:"app,omitempty" doc:"An App of the namespace: each Backup copies the stores of its kv, buckets, lakes and sql entries, ref entries included, and the local volumes of the Functions it declares. Set it alone, with no other scope field."`
-	ResourceGroup ResourceGroupName `json:"resourceGroup,omitempty" doc:"A resource group of the namespace: each Backup copies its KVStores, Buckets, Lakes and SQLDatabases, but not its Functions' local volumes. Set it alone, with no other scope field."`
+	ResourceGroup ResourceGroupName `json:"resourceGroup,omitempty" doc:"A resource group of the namespace: each Backup copies its KVStores, Buckets, Lakes and SQLDatabases, and its add-on objects whose Addon declares a snapshot, but not its Functions' local volumes. Set it alone, with no other scope field."`
 }
 
 // BackupTarget is an s3:// URL and the Secret of its write credential (Decision 6).
@@ -118,7 +120,7 @@ type BackupStatus struct {
 
 // BackupMember is one store a Backup copied and the bytes it stored.
 type BackupMember struct {
-	Kind  Kind       `json:"kind" doc:"The member's kind: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume."`
+	Kind  Kind       `json:"kind" doc:"The member's kind: KVStore, Bucket, Lake, SQLDatabase, Function for a Function's local volume, or an add-on's kind for an add-on object."`
 	Name  ObjectName `json:"name" doc:"The member's name: the store's, or for a volume, its Function's."`
 	Bytes int64      `json:"bytes,omitempty" doc:"The size of the member's sealed copy on the target, in bytes."`
 	// Volume, with Kind Function, names the Function's local volume the member is (ADR-0262 Decision 11).
@@ -152,7 +154,7 @@ type RestoreSource struct {
 // inPlace. A Bucket's member acts only outside the prefixes of the Lakes on its destination, so restoring a Lake takes
 // naming that Lake too (ADR-0312).
 type RestoreMember struct {
-	Kind       Kind          `json:"kind" doc:"The member's kind, as the Backup's status.members lists it: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume."`
+	Kind       Kind          `json:"kind" doc:"The member's kind, as the Backup's status.members lists it: KVStore, Bucket, Lake, SQLDatabase, Function for a Function's local volume, or an add-on's kind for an add-on object, which takes inPlace only."`
 	Name       ObjectName    `json:"name" doc:"The member's name, as the Backup's status.members lists it: the store's, or for a volume, its Function's. A member the copy does not hold fails the Restore with reason MemberNotFound."`
 	As         ObjectName    `json:"as,omitempty" doc:"The destination: the name of an existing, empty store of the member's kind in the namespace, or for a volume, of a Function whose local volume of that name is empty. A SQLDatabase is empty with no table, view, index or trigger and no Function binding it. Exactly one of as, asLocation and inPlace; a Lake takes asLocation or inPlace."`
 	AsLocation *LakeLocation `json:"asLocation,omitempty" doc:"For a Lake: the bucket and prefix that receive its copy, where no Lake is located and nothing is stored yet; a Lake located there afterwards reads it. The bucket must exist and may not be one this Restore restores in place. Exactly one of as, asLocation and inPlace."`
@@ -269,7 +271,7 @@ func (s BackupScheduleSpec) validate(op string) error {
 
 // validate refuses a scope in no form or in two, and a name that is not a DNS label or repeats another.
 func (s BackupScope) validate(op string) error {
-	names := len(s.KVStores) + len(s.Buckets) + len(s.Lakes) + len(s.Databases) + len(s.Volumes)
+	names := len(s.KVStores) + len(s.Buckets) + len(s.Lakes) + len(s.Databases) + len(s.Volumes) + len(s.Addons)
 	forms := 0
 	for _, set := range []bool{names > 0, s.App != "", s.ResourceGroup != ""} {
 		if set {
@@ -277,12 +279,12 @@ func (s BackupScope) validate(op string) error {
 		}
 	}
 	if forms != 1 {
-		return fault.Invalidf(op, "spec.scope sets %d forms: want one of kvStores, buckets, lakes, databases and volumes, app, or resourceGroup", forms)
+		return fault.Invalidf(op, "spec.scope sets %d forms: want one of kvStores, buckets, lakes, databases, volumes and addons, app, or resourceGroup", forms)
 	}
 	for _, l := range []struct {
 		field string
 		names []ObjectName
-	}{{"kvStores", s.KVStores}, {"buckets", s.Buckets}, {"lakes", s.Lakes}, {"databases", s.Databases}} {
+	}{{"kvStores", s.KVStores}, {"buckets", s.Buckets}, {"lakes", s.Lakes}, {"databases", s.Databases}, {"addons", s.Addons}} {
 		seen := make(map[ObjectName]bool, len(l.names))
 		for i, n := range l.names {
 			if !dnsLabel.MatchString(string(n)) {
@@ -372,7 +374,8 @@ func (r *Restore) InPlace() bool {
 func (r *Restore) Ended() bool { return r.Status.Phase == RunSucceeded || r.Status.Phase == RunFailed }
 
 // Validate enforces Decision 7's shape: a name of at most 56 characters, the Backup and the two Secrets named, and
-// each member a KVStore, Bucket, Lake, SQLDatabase or Function volume, once, with exactly one target of its kind.
+// each member a KVStore, Bucket, Lake, SQLDatabase, Function volume or add-on object, once, with exactly one target of
+// its kind: an add-on object's is inPlace (ADR-0333 Decision 3).
 func (r *Restore) Validate() error {
 	const op = "Restore.Validate"
 	if err := validateMeta(r.TypeMeta, &r.ObjectMeta, KindRestore); err != nil {
@@ -465,7 +468,12 @@ func (m RestoreMember) validate(op, path string) error {
 			return fault.Invalidf(op, "%s.asLocation %q/%q: bucket and prefix must be DNS-1123 labels", path, c.Bucket, c.Prefix)
 		}
 	default:
-		return fault.Invalidf(op, "%s.kind %q: want KVStore, Bucket, Lake, SQLDatabase or Function", path, m.Kind)
+		if !IsAddonKind(string(m.Kind)) {
+			return fault.Invalidf(op, "%s.kind %q: want KVStore, Bucket, Lake, SQLDatabase, Function or an add-on's kind", path, m.Kind)
+		}
+		if !m.InPlace {
+			return fault.Invalidf(op, "%s: an object of the add-on kind %s restores in place only: set inPlace, not as or asLocation", path, m.Kind)
+		}
 	}
 	return nil
 }

@@ -38,6 +38,9 @@ func (*holdPlatform) BucketOrphans(context.Context) ([]v1.ObjectRef, error) { re
 func (*holdPlatform) SQLOrphans(context.Context) ([]v1.ObjectRef, error) {
 	return []v1.ObjectRef{{Kind: v1.KindSQLDatabase, Namespace: "default", Name: "gone-db"}}, nil
 }
+func (*holdPlatform) AddonOrphans(context.Context) ([]v1.ObjectRef, error) {
+	return []v1.ObjectRef{{Kind: v1.KindAddonObject, Namespace: "default", Name: "gone-login"}}, nil
+}
 func (*holdPlatform) VolumeOrphans(context.Context) ([]v1.ObjectRef, error) {
 	return []v1.ObjectRef{{Kind: v1.KindFunction, Namespace: "default", Name: "gone/state"}}, nil
 }
@@ -117,6 +120,7 @@ func TestReleaseRefuses(t *testing.T) {
 	require.Equal(t, map[string]int{"new": 2}, ev.Pending["team-a/files"])
 	require.Equal(t, []string{"default/gone/"}, ev.Orphans)
 	require.Equal(t, []string{"default/gone-db"}, ev.SQLOrphans, "ADR-0232: a held database directory with no object")
+	require.Equal(t, []string{"default/gone-login"}, ev.AddonOrphans, "ADR-0333: a held add-on object's storage with no object")
 	require.Equal(t, []string{"default/gone/state"}, ev.VolumeOrphans, "ADR-0262: a held local volume with no Function")
 	require.Equal(t, []hold.QuarantineEntry{{Kind: v1.KindBucket, Namespace: "default", Name: "gone-bucket", State: "kept"}},
 		ev.Quarantine, "ADR-0288: the quarantine, held or not")

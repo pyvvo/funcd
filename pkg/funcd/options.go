@@ -1,9 +1,12 @@
 package funcd
 
 import (
+	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"math"
+	"net/http"
 	"net/netip"
 	"reflect"
 	"regexp"
@@ -69,6 +72,33 @@ func WithSQLCallTimeout(d time.Duration) Option {
 // a bridge address, else a free loopback port (ADR-0260).
 func WithSQLChangeFeedPort(port int) Option {
 	return func(c *config) error { c.sqlChangeFeedPort = port; return nil }
+}
+
+// WithAddonRuntime runs the add-on engines on r, which serves the runtime.mode values modes (ADR-0332 Decision 3,
+// ADR-0334): an object whose Addon runs on none of them waits Pending, RuntimeUnavailable. Without it the production
+// runtime runs them on a containerd server, and a process server runs none. Tests and funcdctl dev inject theirs. An r
+// that is also workload.AddonFiles copies and places the engines' files, and one that is also provider.Volumes
+// reclaims or quarantines a deleted object's storage (ADR-0333).
+func WithAddonRuntime(r provider.Runtime, modes ...string) Option {
+	return func(c *config) error { c.addonRuntime, c.addonModes = r, modes; return nil }
+}
+
+// WithAddonRegistries sets addons.registries, the registries an Addon's image may come from (ADR-0332 Decision 6);
+// none, the default, refuses every Addon.
+func WithAddonRegistries(registries ...string) Option {
+	return func(c *config) error { c.addonRegistries = registries; return nil }
+}
+
+// WithAnyAddonRegistry lets an Addon's image come from any registry, still pinned by digest (ADR-0334 Decision 5):
+// funcdctl dev reads no addons.registries, and it runs the images its developer names.
+func WithAnyAddonRegistry() Option {
+	return func(c *config) error { c.addonAnyRegistry = true; return nil }
+}
+
+// WithAddonObjectQuota sets the per-namespace cap on the objects of the add-ons' kinds, all add-ons together, enforced
+// at admission (ADR-0332 Decision 2, addons.maxObjectsPerNamespace). 0 ⇒ the default (20); a negative value disables it.
+func WithAddonObjectQuota(maxPerNamespace int) Option {
+	return func(c *config) error { c.addonMaxObjects = maxPerNamespace; return nil }
 }
 
 // WithSQLProviderRuntime overrides the SQLDatabase engine runtime (ADR-0232); the production runtime supervises the
@@ -752,6 +782,39 @@ func WithEdgeAuth() Option {
 	return func(c *config) error { c.edgeAuthEnabled = true; return nil }
 }
 
+// WithEdgePublicScheme sets server.edgePublicScheme (ADR-0335 Decision 9): https behind a proxy that terminates TLS
+// makes the edge sign-in's callbacks https, with Secure __Host- cookies. "" is http.
+func WithEdgePublicScheme(scheme string) Option {
+	return func(c *config) error {
+		if scheme != "" && scheme != "http" && scheme != "https" {
+			return fault.Invalidf("funcd.WithEdgePublicScheme", "server.edgePublicScheme %q must be http or https", scheme)
+		}
+		c.edgePublicScheme = scheme
+		return nil
+	}
+}
+
+// WithEdgePublicPort sets server.edgePublicPort (ADR-0335 Decision 9), the port of the edge sign-in's callbacks; 0 is
+// the data plane's bound port, or none when only WithEdgePublicScheme makes them https.
+func WithEdgePublicPort(port int) Option {
+	return func(c *config) error {
+		if port < 0 || port > maxPort {
+			return fault.Invalidf("funcd.WithEdgePublicPort", "server.edgePublicPort %d is not a port", port)
+		}
+		c.edgePublicPort = port
+		return nil
+	}
+}
+
+// maxPort is the largest TCP port.
+const maxPort = 65535
+
+// WithOIDCBackChannel replaces the transport the edge sign-in reaches a provider outside funcd with, which otherwise
+// reaches https at globally reachable addresses only (ADR-0335 Decision 7): a test's provider listens on loopback.
+func WithOIDCBackChannel(rt http.RoundTripper) Option {
+	return func(c *config) error { c.oidcBackChannel = rt; return nil }
+}
+
 // WithEdgeObservability enables edge observability (ADR-0114, F76): RED metrics + an edge trace span
 // (traceparent) + an access log. Uses the injected Telemetry (no-op by default). Zero Config ⇒ off.
 func WithEdgeObservability(cfg observ.Config) Option {
@@ -851,6 +914,23 @@ func WithDevAuth(token string, namespaces ...string) Option {
 	}
 }
 
+// WithDevAdminToken makes the credential store also answer DevAdminToken as an admin, whichever option built the store
+// (ADR-0334 Decision 5). Only funcdctl dev passes it: WithDevAuth and InMemory() never add the token, and New refuses a
+// store that accepts it off loopback.
+func WithDevAdminToken() Option {
+	return func(c *config) error { c.devAdminToken = true; return nil }
+}
+
+// devAdminCredentials answers DevAdminToken as an admin and asks next for every other token.
+type devAdminCredentials struct{ next middleware.CredentialStore }
+
+func (d devAdminCredentials) Lookup(ctx context.Context, token string) (auth.Identity, error) {
+	if subtle.ConstantTimeCompare([]byte(token), []byte(DevAdminToken)) == 1 {
+		return auth.Identity{Subject: "dev-admin", Role: auth.RoleAdmin}, nil
+	}
+	return d.next.Lookup(ctx, token)
+}
+
 // Credential is one static control-plane and edge token (ADR-0171): Role is "admin",
 // "developer" or "viewer"; Namespaces scopes a developer or viewer (at least one) and
 // is empty for an admin.
@@ -902,6 +982,9 @@ func checkCredential(op string, i int, cr Credential) error {
 	}
 	if cr.Token == DevToken {
 		return fault.Invalidf(op, "credentials[%d]: token equals the built-in funcd.DevToken", i)
+	}
+	if cr.Token == DevAdminToken {
+		return fault.Invalidf(op, "credentials[%d]: token equals the built-in funcd.DevAdminToken", i)
 	}
 	switch auth.Role(cr.Role) {
 	case auth.RoleAdmin:

@@ -26,6 +26,7 @@ type HoldPlatform interface {
 	Orphans(ctx context.Context) ([]string, error)
 	BucketOrphans(ctx context.Context) ([]v1.ObjectRef, error)
 	SQLOrphans(ctx context.Context) ([]v1.ObjectRef, error)
+	AddonOrphans(ctx context.Context) ([]v1.ObjectRef, error)
 	VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error)
 	// Quarantine lists the quarantined data and ReturnQuarantined returns an entry into its object (ADR-0288).
 	Quarantine(ctx context.Context) ([]hold.QuarantineEntry, error)
@@ -113,6 +114,13 @@ func (s *HoldService) Status(ctx context.Context) (hold.Evidence, error) {
 	}
 	for _, d := range dbs {
 		st.SQLOrphans = append(st.SQLOrphans, string(d.Namespace)+"/"+string(d.Name))
+	}
+	objs, err := p.AddonOrphans(ctx)
+	if err != nil {
+		return hold.Evidence{}, err
+	}
+	for _, o := range objs {
+		st.AddonOrphans = append(st.AddonOrphans, string(o.Namespace)+"/"+string(o.Name))
 	}
 	vols, err := p.VolumeOrphans(ctx)
 	if err != nil {

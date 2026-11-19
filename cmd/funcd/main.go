@@ -43,6 +43,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/bus"
 	"github.com/pyvvo/funcd/internal/bus/nats"
+	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/observ"
 	"github.com/pyvvo/funcd/internal/edge/shape"
@@ -412,6 +413,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		funcd.WithKVStore(kvDriver),
 		funcd.WithKVStoreQuota(cfg.Kvstore.MaxStoresPerNamespace),
 		funcd.WithSQLDatabaseQuota(cfg.SQL.MaxDatabasesPerNamespace),
+		funcd.WithAddonRegistries(cfg.Addons.Registries...),
+		funcd.WithAddonObjectQuota(cfg.Addons.MaxObjectsPerNamespace),
 		funcd.WithNestedInFlightCap(cfg.Invoke.MaxNestedInFlight),
 		credOpt,
 		funcd.WithArtifactStore(filepath.Join(cfg.Storage.DataDir, "artifacts")),
@@ -419,6 +422,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		funcd.WithListenAddr(cfg.Server.ListenAddr),
 		funcd.WithDataPlaneAddr(cfg.Server.DataPlaneAddr),
 		funcd.WithBaseDomain(cfg.Server.BaseDomain),
+		funcd.WithEdgePublicScheme(cfg.Server.EdgePublicScheme),
+		funcd.WithEdgePublicPort(cfg.Server.EdgePublicPort),
 		funcd.WithLogger(root),
 		funcd.WithBlobStoreURL(blobStoreURL(cfg)), // ADR-0222: a BackupSchedule's target is compared with it
 	)
@@ -1561,6 +1566,8 @@ func containerdOptions(ctx context.Context, cfg config.Config, stopGrace time.Du
 		_ = mgr.Close()
 		return nil, noopClose, fmt.Errorf("ensure container runtime (private containerd is Linux+root; set runtime.containerd.socket otherwise): %w", err)
 	}
+	curated := mgrCfg.Pullable(c.ImagePrefix)
+	bridge, _ := bridgeAddress(cfg)
 	cd, err := newRuntime(containerd.Config{
 		Socket:      socket,
 		Snapshotter: c.Snapshotter,
@@ -1570,10 +1577,14 @@ func containerdOptions(ctx context.Context, cfg config.Config, stopGrace time.Du
 		SubnetCIDR:  c.SubnetCIDR,
 		Logger:      logger,
 		StopGrace:   stopGrace,
-		Pullable:    mgrCfg.Pullable(c.ImagePrefix),
-		Private:     c.Socket == "",
-		Exited:      mgr.Exited(),
-		Egress:      cfg.Server.Network.Egress,
+		// An Addon's image is pulled from a registry that addons.registries lists, as its admission checked (ADR-0332).
+		Pullable: func(ref string) bool {
+			return curated(ref) || controlplane.AddonImageAllowed(ref, cfg.Addons.Registries)
+		},
+		Private:       c.Socket == "",
+		Exited:        mgr.Exited(),
+		Egress:        cfg.Server.Network.Egress,
+		BridgeAddress: bridge,
 	})
 	if err != nil {
 		_ = mgr.Close()

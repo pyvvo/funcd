@@ -36,9 +36,27 @@ type RouteSpec struct {
 	Enabled *bool `json:"enabled,omitempty" doc:"false turns the Route off: it serves nothing, leaves its paths to other Routes and reports Disabled. Unset is true, except on a Route that a Site or a Function owns in a namespace whose defaultExposure is explicit."`
 }
 
-// RouteAuth is the F77 auth stance on a Route.
+// RouteAuth is the F77 auth stance on a Route, a rule or a workload's ingress; oidc names a provider (ADR-0335).
 type RouteAuth struct {
-	Mode AuthMode `json:"mode,omitempty" doc:"How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open."`
+	Mode AuthMode `json:"mode,omitempty" doc:"How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. oidc signs callers in with the OIDCProvider that provider names, and passes the signed-in user to the code behind it in the X-Funcd-Principal headers. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open."`
+	// Provider and Unauthenticated are the oidc stance's (ADR-0335 Decision 2), refused with another mode.
+	Provider        ObjectName      `json:"provider,omitempty" doc:"With mode oidc, the OIDCProvider of the namespace that signs callers in; required with oidc and refused with another mode."`
+	Unauthenticated Unauthenticated `json:"unauthenticated,omitempty" doc:"With mode oidc, what a call that is not signed in gets: redirect, the default, sends a GET or HEAD navigation to the provider with 302 and gives any other call 401; 401 gives every such call 401; allow passes every call, with no principal. Refused with another mode."`
+}
+
+// OIDC returns an oidc stance's provider and unauthenticated; ok is false for another stance or none.
+func (a *RouteAuth) OIDC() (ObjectName, Unauthenticated, bool) {
+	if a == nil || a.Mode != AuthOIDC {
+		return "", "", false
+	}
+	return a.Provider, a.Unauthenticated, true
+}
+
+func (a *RouteAuth) validate(op, field string) error {
+	if a == nil {
+		return nil
+	}
+	return validateStance(op, field, a.Mode, a.Provider, a.Unauthenticated)
 }
 
 // AuthMode selects whether the edge authenticates the caller for a target (ADR-0113, F77).
@@ -49,11 +67,13 @@ const (
 	AuthAuthenticated AuthMode = "authenticated"
 	// AuthOpen allows anonymous access (the zero/default stance, phased).
 	AuthOpen AuthMode = "open"
+	// AuthOIDC signs callers in with an OIDCProvider (ADR-0335).
+	AuthOIDC AuthMode = "oidc"
 )
 
 // Schema renders the huma enum for AuthMode (empty accepted, normalizes to open).
 func (AuthMode) Schema(huma.Registry) *huma.Schema {
-	return enumSchema("", string(AuthAuthenticated), string(AuthOpen))
+	return enumSchema("", string(AuthAuthenticated), string(AuthOpen), string(AuthOIDC))
 }
 
 // RouteRule matches a path (+ optional methods) and names the backend Function.
@@ -169,6 +189,9 @@ func (r *Route) Validate() error {
 		if rule.Path == "" || rule.Path[0] != '/' {
 			return fault.Invalidf(op, "spec.rules[%d].path %q must begin with '/'", i, rule.Path)
 		}
+		if UnderAuthPath(rule.Path) {
+			return fault.Invalidf(op, "spec.rules[%d].path %q lies under %s, the edge's own path on every host", i, rule.Path, AuthPath)
+		}
 		switch rule.PathType {
 		case "", PathTypePrefix, PathTypeExact:
 		default:
@@ -177,8 +200,11 @@ func (r *Route) Validate() error {
 		if err := validateBackend(r, rule, i, op); err != nil {
 			return err
 		}
-		if rule.Auth != nil {
-			if err := validateAuthMode(rule.Auth.Mode, fmt.Sprintf("spec.rules[%d].auth.mode", i)); err != nil {
+		if err := rule.Auth.validate(op, fmt.Sprintf("spec.rules[%d].auth", i)); err != nil {
+			return err
+		}
+		if _, _, ok := rule.Auth.OIDC(); ok {
+			if err := hostlessOIDC(op, fmt.Sprintf("spec.rules[%d].auth", i), r.Namespace, r.Spec.Host); err != nil {
 				return err
 			}
 		}
@@ -194,10 +220,11 @@ func (r *Route) Validate() error {
 		}
 		seen[key] = true
 	}
-	if r.Spec.Auth != nil {
-		if err := validateAuthMode(r.Spec.Auth.Mode, "spec.auth.mode"); err != nil {
-			return err
-		}
+	if err := r.Spec.Auth.validate(op, "spec.auth"); err != nil {
+		return err
+	}
+	if _, _, ok := r.Spec.Auth.OIDC(); ok {
+		return hostlessOIDC(op, "spec.auth", r.Namespace, r.Spec.Host)
 	}
 	return nil
 }

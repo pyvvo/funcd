@@ -160,6 +160,16 @@ func registerIdentity(api huma.API, h Handlers) {
 	})
 }
 
+// ===== OIDCProvider (namespaced) — ADR-0335, ADR-0336, FEAT-0018 =====
+
+func registerOIDCProvider(api huma.API, h Handlers) {
+	registerNamespacedCRUD(api, crudRoutes[v1.OIDCProvider]{
+		kind: "OIDCProvider", kinds: "OIDCProviders", path: "oidcproviders",
+		list: h.ListOIDCProviders, create: h.CreateOIDCProvider, get: h.GetOIDCProvider,
+		replace: h.ReplaceOIDCProvider, remove: h.DeleteOIDCProvider, cases: &kindCases{},
+	})
+}
+
 // ===== Role + RolesAssignment (namespaced) — ADR-0136, FEAT-0008/F101 =====
 
 func registerRole(api huma.API, h Handlers) {

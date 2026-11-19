@@ -65,6 +65,13 @@ const (
 	KindBackupSchedule Kind = "BackupSchedule"
 	KindBackup         Kind = "Backup"
 	KindRestore        Kind = "Restore"
+	// KindAddon (ADR-0332, F258) registers an add-on built outside funcd, cluster-scoped; KindAddonObject is how an
+	// object of an add-on's kind is stored, the API showing it under that kind.
+	KindAddon       Kind = "Addon"
+	KindAddonObject Kind = "AddonObject"
+	// KindOIDCProvider is an OpenID Connect provider the edge signs users in with (ADR-0335, F261), whose client funcd
+	// registers under client.registration (ADR-0336, F262).
+	KindOIDCProvider Kind = "OIDCProvider"
 	// KindS3Identity is the external SigV4 S3 principal (ADR-0080): NOT a stored/CRUD resource —
 	// it has no metastore registration (no NewObject/AllKinds/handlers), it exists only as a Cedar
 	// principal type the cedar driver materializes for the external-sigv4 authz path. It is excluded
@@ -89,7 +96,7 @@ func (k Kind) Validate() error {
 		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
 		KindLake, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
 		KindIdentity, KindRole, KindRolesAssignment, KindSite, KindApp, KindAppRevision,
-		KindBackupSchedule, KindBackup, KindRestore, KindSQLDatabase:
+		KindBackupSchedule, KindBackup, KindRestore, KindSQLDatabase, KindAddon, KindAddonObject, KindOIDCProvider:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -97,10 +104,10 @@ func (k Kind) Validate() error {
 }
 
 // Namespaced reports whether this kind is namespaced. Cluster-scoped kinds:
-// Namespace, RuntimeClass, WorkerNode, Gateway.
+// Namespace, RuntimeClass, WorkerNode, Gateway, Addon.
 func (k Kind) Namespaced() bool {
 	switch k {
-	case KindNamespace, KindRuntimeClass, KindWorkerNode, KindGateway:
+	case KindNamespace, KindRuntimeClass, KindWorkerNode, KindGateway, KindAddon:
 		return false
 	default:
 		return true
@@ -431,6 +438,18 @@ func NewObject(k Kind) (Object, bool) {
 		rs := &Restore{}
 		rs.TypeMeta = typeMetaFor(k)
 		return rs, true
+	case KindAddon:
+		a := &Addon{}
+		a.TypeMeta = typeMetaFor(k)
+		return a, true
+	case KindAddonObject:
+		o := &AddonObject{}
+		o.TypeMeta = typeMetaFor(k)
+		return o, true
+	case KindOIDCProvider:
+		p := &OIDCProvider{}
+		p.TypeMeta = typeMetaFor(k)
+		return p, true
 	default:
 		return nil, false
 	}
@@ -471,6 +490,9 @@ func AllKinds() []Kind {
 		KindBackup,
 		KindRestore,
 		KindSQLDatabase,
+		KindAddon,
+		KindAddonObject,
+		KindOIDCProvider,
 	}
 }
 

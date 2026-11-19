@@ -240,12 +240,15 @@ func TestScenarioSecretForbidReadiness(t *testing.T) {
 	r.waitStatus(t, "reports", isReady)
 
 	r.applyPolicy(t, "no-stripe-for-reports", forbidRead(`Function::"default/reports"`, "api-keys"))
-	st := r.waitStatus(t, "reports", func(s fnStatus) bool { return s.phase == v1.PhaseDegraded && notReadyForDependency(s) })
-	require.Contains(t, st.message, `secret binding "api-keys"`, st.String())
+	// Under load the check can overrun its budget and report the socket's timeout first, so the wait is for the
+	// report that names the binding.
+	r.waitStatus(t, "reports", func(s fnStatus) bool {
+		return s.phase == v1.PhaseDegraded && notReadyForDependency(s) && strings.Contains(s.message, `secret binding "api-keys"`)
+	})
 
 	r.applyPolicy(t, "no-stripe-for-late", forbidRead(`Function::"default/late"`, "api-keys"))
 	r.policyFn(t, "late", "STRIPE_KEY", apiKeys)
-	st = r.waitStatus(t, "late", notReadyForDependency)
+	st := r.waitStatus(t, "late", notReadyForDependency)
 	require.NotEqual(t, v1.PhaseFailed, st.phase, st.String())
 	require.NotEqual(t, "SecretResolveFailed", st.ready, st.String())
 }

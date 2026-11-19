@@ -48,17 +48,19 @@ var Features = []Feature{
 	{"services/lake", []v1.Kind{v1.KindLake}},
 	{"services/secrets", []v1.Kind{v1.KindSecret}},
 	{"services/events", []v1.Kind{v1.KindEventSource, v1.KindSensor}},
-	{"security-and-networking/security", []v1.Kind{v1.KindIdentity, v1.KindRole, v1.KindRolesAssignment, v1.KindPolicy}},
+	{"security-and-networking/security", []v1.Kind{v1.KindIdentity, v1.KindRole, v1.KindRolesAssignment, v1.KindPolicy, v1.KindOIDCProvider}},
 	{"security-and-networking/networking", []v1.Kind{v1.KindRoute, v1.KindEgressPolicy}},
 	{"tenancy-and-limits/namespaces", []v1.Kind{v1.KindNamespace, v1.KindResourceGroup}},
 	{"disaster-recovery", []v1.Kind{v1.KindBackup, v1.KindBackupSchedule, v1.KindRestore}},
 }
 
-// Omitted kinds get no Spec: pyvvo/funcd#1438 removes the first four, and RuntimeClass gets its fields and its first
-// reader with FEAT-0012 F139.
+// Omitted kinds get no Spec: pyvvo/funcd#1438 removes the first four, RuntimeClass gets its fields and its first
+// reader with FEAT-0012 F139, and an add-on's objects take the fields their Addon's schema gives them, which the
+// add-on documents (ADR-0332), so neither Addon nor AddonObject has a Developer page yet.
 //
 //nolint:gochecknoglobals // an immutable lookup table, the ADR's contract
-var Omitted = []v1.Kind{v1.KindService, v1.KindGrant, v1.KindGateway, v1.KindWorkerNode, v1.KindRuntimeClass}
+var Omitted = []v1.Kind{v1.KindService, v1.KindGrant, v1.KindGateway, v1.KindWorkerNode, v1.KindRuntimeClass,
+	v1.KindAddon, v1.KindAddonObject}
 
 // Marker is the first front-matter line of every page Render writes; specgen deletes a page that carries it and that
 // Render no longer returns.

@@ -148,3 +148,81 @@ func TestScenarioLibraryFollowsTheRule(t *testing.T) {
 		})
 	}
 }
+
+// runLibrary runs p until the test ends and returns a client of it with token.
+func runLibrary(t *testing.T, p *funcd.Platform, token string) *sdk.Client {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("Run did not return")
+		}
+	})
+	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(token))
+	require.NoError(t, err)
+	return c
+}
+
+// scenario: dev-admin-token-loopback-only, the library's half (ADR-0334 Decision 5): only WithDevAdminToken makes a
+// store answer DevAdminToken, as an admin, whichever option built the store; New refuses it off loopback for the
+// control plane and the edge, WithCredentials refuses it, and no error holds a token.
+func TestScenarioDevAdminTokenLoopbackOnly(t *testing.T) {
+	t.Parallel()
+	const own = "lib-own-0123456789abcdef"
+	for name, opts := range map[string][]funcd.Option{
+		"in-memory":        {funcd.InMemory(), funcd.WithDevAdminToken()},
+		"before-dev-auth":  {funcd.InMemory(), funcd.WithDevAdminToken(), funcd.WithDevAuth(own, "default")},
+		"over-credentials": {funcd.InMemory(), funcd.WithCredentials(funcd.Credential{Token: libAdminToken, Role: "admin"}), funcd.WithDevAdminToken()},
+	} {
+		t.Run("answered/"+name, func(t *testing.T) {
+			t.Parallel()
+			p, err := funcd.New(opts...)
+			require.NoError(t, err)
+			c := runLibrary(t, p, funcd.DevAdminToken)
+			_, err = c.List(context.Background(), v1.KindNamespace, "")
+			require.NoError(t, err, "the dev admin token is an admin")
+		})
+	}
+	for name, opts := range map[string][]funcd.Option{
+		"in-memory":   {funcd.InMemory()},
+		"own-token":   {funcd.InMemory(), funcd.WithDevAuth(own, "default")},
+		"credentials": {funcd.InMemory(), funcd.WithCredentials(funcd.Credential{Token: libAdminToken, Role: "admin"})},
+	} {
+		t.Run("unanswered/"+name, func(t *testing.T) {
+			t.Parallel()
+			p, err := funcd.New(opts...)
+			require.NoError(t, err)
+			_, err = runLibrary(t, p, funcd.DevAdminToken).List(context.Background(), v1.KindFunction, "default")
+			require.Equal(t, fault.Unauthorized, fault.KindOf(err), "only WithDevAdminToken adds it: %v", err)
+		})
+	}
+	for name, tc := range map[string]struct {
+		opts      []funcd.Option
+		key, addr string
+	}{
+		"control-plane": {[]funcd.Option{funcd.WithListenAddr("0.0.0.0:0")}, "WithListenAddr", "0.0.0.0:0"},
+		"edge":          {[]funcd.Option{funcd.WithEdgeAuth(), funcd.WithDataPlaneAddr("0.0.0.0:0")}, "WithDataPlaneAddr", "0.0.0.0:0"},
+	} {
+		t.Run("refused/"+name, func(t *testing.T) {
+			t.Parallel()
+			_, err := funcd.New(append([]funcd.Option{funcd.InMemory(), funcd.WithDevAuth(own, "default"), funcd.WithDevAdminToken()},
+				tc.opts...)...)
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+			require.ErrorContains(t, err, tc.key+` "`+tc.addr+`" is off loopback`)
+			require.ErrorContains(t, err, "DevAdminToken works only on loopback")
+			require.NotContains(t, err.Error(), funcd.DevAdminToken, "no token in the error")
+		})
+	}
+	t.Run("refused/credentials", func(t *testing.T) {
+		t.Parallel()
+		_, err := funcd.New(funcd.InMemory(), funcd.WithCredentials(funcd.Credential{Token: funcd.DevAdminToken, Role: "admin"}))
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+		require.ErrorContains(t, err, "credentials[0]")
+		require.NotContains(t, err.Error(), funcd.DevAdminToken, "no token in the error")
+	})
+}

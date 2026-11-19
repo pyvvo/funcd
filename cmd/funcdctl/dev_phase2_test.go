@@ -515,7 +515,7 @@ func TestIssue427_DevHotReloadRetriesConflict(t *testing.T) {
 	c, err := sdk.New(srv.URL)
 	require.NoError(t, err)
 
-	require.NoError(t, applyOrdered(context.Background(), "test", c, desired), "a Conflict on a reload apply is re-applied in place, not reported")
+	require.NoError(t, applyOrdered(context.Background(), "test", c, c, desired), "a Conflict on a reload apply is re-applied in place, not reported")
 	mu.Lock()
 	defer mu.Unlock()
 	require.Contains(t, puts, "PUT /apis/funcd.io/v1alpha1/namespaces/default/functions/api")

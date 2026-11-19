@@ -4,6 +4,7 @@
 - **Superseded in part by**: [ADR-0171](0171-static-credential-list.md) (2026-10-05) — Scope Out non-namespace-scoped identities as V2: admin token passes in V1.
 - **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 2: the by-name path reads the Function before its PEP, and a missing or closed one meets the namespace stance first; Decision 3: a stance per Route rule (`rules[].auth`).
 - **Superseded in part by**: [ADR-0314](0314-a-fresh-funcd-answers-on-loopback-until-it-has-a-real-credential.md) (2026-11-05) — Decision 6: WithEdgeAuth with the built-in token needs a data plane on loopback.
+- **Superseded in part by**: [ADR-0335](0335-the-edge-signs-users-in-with-an-openid-connect-provider.md) (2026-11-19) — Decision 3's stances: `oidc` joins `authenticated` and `open`.
 - **Date**: 2026-07-08
 - **Implemented**: 2026-07-08
 - **Deciders**: green-0-rabbit

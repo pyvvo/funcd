@@ -871,3 +871,34 @@ func TestServeWarnsOnAnOpenSecretFile(t *testing.T) {
 	require.Contains(t, logs.String(), "secrets.encryptionKeyFile")
 	require.NotContains(t, logs.String(), openSecretFileContent, "the key reached the log")
 }
+
+// scenario: dev-admin-token-loopback-only, the daemon's half (ADR-0334 Decision 5): a daemon answers the dev admin token
+// 401, and a token file or auth.token that holds it refuses the start, with no token in the error.
+func TestScenarioDevAdminTokenLoopbackOnly(t *testing.T) {
+	for _, tc := range []struct{ name, auth, token string }{
+		{"own-auth-token", "auth:\n  token: " + legacyToken + "\n", legacyToken},
+		{"built-in-token", "", funcd.DevToken},
+	} {
+		t.Run("401/"+tc.name, func(t *testing.T) {
+			addr := freeAddr(t)
+			serveDaemon(t, "server:\n  listenAddr: "+addr+"\n"+tc.auth)
+			waitServed(t, addr, tc.token, v1.KindFunction, "default")
+			c, err := sdk.New("http://"+addr, sdk.WithToken(funcd.DevAdminToken))
+			require.NoError(t, err)
+			_, err = c.List(context.Background(), v1.KindFunction, "default")
+			requireKind(t, fault.Unauthorized, err, "no daemon answers the dev admin token")
+		})
+	}
+	devAdmin := tokenFile(t, t.TempDir(), "dev-admin", funcd.DevAdminToken+"\n", 0o600)
+	for _, c := range []startCase{
+		{name: "token-file", body: "auth:\n  credentials:\n" + entry(devAdmin, "admin"), key: "auth.credentials[0].tokenFile"},
+		{name: "auth.token", body: "auth:\n  token: " + funcd.DevAdminToken + "\n", key: "auth.token (FUNCD_TOKEN)"},
+		{name: "FUNCD_TOKEN", key: "auth.token (FUNCD_TOKEN)", env: [2]string{"FUNCD_TOKEN", funcd.DevAdminToken + " "}},
+	} {
+		t.Run("refused/"+c.name, func(t *testing.T) {
+			err := requireRefused(t, c, &syncBuf{})
+			require.Contains(t, err.Error(), "built-in dev admin token")
+			require.NotContains(t, err.Error(), funcd.DevAdminToken, "a token value reached the refusal")
+		})
+	}
+}

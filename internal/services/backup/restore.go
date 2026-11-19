@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -164,6 +165,7 @@ func (r *RestoreReconciler) export(ctx context.Context, rs *v1.Restore, b *v1.Ba
 // hold that only a completed load lifts. A destination that is not empty is NotEmpty before any write; a failure
 // clears what each load began. It returns the failure's reason.
 func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Backup) (string, error) {
+	ctx = workload.WithRestore(ctx, rs.Name)
 	key, err := r.staticKey(ctx, rs.Namespace, rs.Spec.Source.CredentialsSecret)
 	if err != nil {
 		return reasonFailed, err
@@ -177,7 +179,7 @@ func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Back
 	if err != nil {
 		return reasonFailed, err
 	}
-	src, err := openTarget(ctx, b.Status.Target, key)
+	src, err := r.openTarget(ctx, b.Status.Target, key)
 	if err != nil {
 		return reasonFailed, err
 	}
@@ -258,7 +260,8 @@ func prepare(ctx context.Context, targets []*planned) (release func(), err error
 
 // plan resolves each member's file in m, its kind and its destination, and checks that a destination not in place is
 // empty, all before any write: a missing member or destination is MemberNotFound, a kind no MemberKind serves Failed
-// naming it, and a destination that is not empty NotEmpty.
+// naming it, and a destination that is not empty NotEmpty. A member's kind is the one that Serves it (ADR-0333
+// Decision 2), so an add-on's kind that names no add-on object of that kind is MemberNotFound.
 func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload.Manifest) ([]*planned, string, error) {
 	const op = "backup.Restore"
 	var out []*planned
@@ -272,11 +275,12 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 		if i < 0 {
 			return nil, ReasonMemberNotFound, fault.NotFoundf(op, "the Backup holds no %s/%s%s", mb.Kind, mb.Name, volumeSuffix(mb.Volume))
 		}
-		k, ok := r.kinds[mb.Kind]
-		if !ok {
+		j := slices.IndexFunc(r.d.Kinds, func(k workload.MemberKind) bool { return workload.Serves(k, mb.Kind) })
+		if j < 0 {
 			return nil, reasonFailed, fault.Invalidf(op, "member %s/%s%s: no member kind serves %s", mb.Kind, mb.Name,
 				volumeSuffix(mb.Volume), mb.Kind)
 		}
+		k := r.d.Kinds[j]
 		d, err := k.Destination(ctx, rs.Namespace, mb)
 		if err != nil {
 			return nil, reasonOf(callDestination, err), err
@@ -318,8 +322,8 @@ const (
 )
 
 // reasonOf is the reason of a member call's error (ADR-0311 Decision 5): a Destination's NotFound is MemberNotFound,
-// IsEmpty's and Load's ErrEngineNotReady EngineNotReady, Load's ErrNotEmpty NotEmpty and its ErrTornObject Integrity,
-// and any other Failed.
+// IsEmpty's and Load's ErrEngineNotReady EngineNotReady, Load's ErrNotEmpty NotEmpty, its ErrTornObject Integrity and
+// its ErrRestoreTimedOut RestoreTimedOut (ADR-0333 Decision 3), and any other Failed.
 func reasonOf(c call, err error) string {
 	switch {
 	case c == callDestination && fault.KindOf(err) == fault.NotFound:
@@ -328,6 +332,8 @@ func reasonOf(c call, err error) string {
 		return ReasonNotEmpty
 	case c == callLoad && errors.Is(err, workload.ErrTornObject):
 		return ReasonIntegrity
+	case c == callLoad && errors.Is(err, workload.ErrRestoreTimedOut):
+		return ReasonRestoreTimedOut
 	case (c == callIsEmpty || c == callLoad) && errors.Is(err, workload.ErrEngineNotReady):
 		return ReasonEngineNotReady
 	}

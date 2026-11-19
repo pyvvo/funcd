@@ -1,0 +1,18 @@
+# The addon-rauthy-restore lane's IdentityProvider (ADR-0333): an object of rauthy's kind whose config fits the schema
+# of rauthy's Addon, bound to the lane's keys. Its storage is quarantined at its delete, the default deletion.
+apiVersion: funcd.io/v1alpha1
+kind: IdentityProvider
+metadata:
+  name: login
+  namespace: default
+  resourceGroup: rg1
+spec:
+  config:
+    publicHost: login.example.com
+    rpId: login.example.com
+    https: false
+  bindings:
+    secret:
+      - rauthy-keys
+  ingress:
+    host: login.example.com

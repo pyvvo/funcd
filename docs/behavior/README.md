@@ -41,6 +41,7 @@ the bug rule in `.claude/CLAUDE.md`: a row points at what to read and proves not
 | [Functions](functions.md) | phases, gates, wake and idle, revisions, pools |
 | [Calls](calls.md) | a call from the listener to a worker, routes, Sites, deadlines |
 | [Services](services.md) | KVStore, Bucket, SQLDatabase, Lake, the S3 gateway |
+| [Addons](addons.md) | the add-ons an admin registers, their objects and engines |
 | [Eventing](eventing.md) | sources, Sensors, dead letters, Workflow runs |
 | [Apps](apps.md) | rollouts, hooks, rollback, delete |
 | [Disaster recovery](disaster-recovery.md) | backups, Restores, namespace holds |

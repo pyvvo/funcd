@@ -128,6 +128,7 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `sqlFeedBootWait` | 30s | `pkg/funcd/binding_providers.go` |
 | `engineOutputBuf` | 64KiB | `pkg/funcd/engineoutput.go` |
 | `closeMargin` | 2s | `pkg/funcd/funcd.go` |
+| `defaultAddonObjectsPerNamespace` | 20 | `pkg/funcd/funcd.go` |
 | `defaultBucketsPerNamespace` | 100 | `pkg/funcd/funcd.go` |
 | `defaultCloseGrace` | 3s | `pkg/funcd/funcd.go` |
 | `defaultDeadletterMaxEntries` | 1000 | `pkg/funcd/funcd.go` |
@@ -160,6 +161,7 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `maxAppRevisionHistory` | 100 | `pkg/funcd/options.go` |
 | `maxBaseDomain` | 189 | `pkg/funcd/options.go` |
 | `maxDefaultRetryBackoff` | 1h | `pkg/funcd/options.go` |
+| `maxPort` | 65535 | `pkg/funcd/options.go` |
 | `minDefaultAppUpgradeTimeout` | 5m | `pkg/funcd/options.go` |
 | `minDefaultLivenessTimeout` | 30s | `pkg/funcd/options.go` |
 | `minRetryBackoffMax` | 5ms | `pkg/funcd/options.go` |

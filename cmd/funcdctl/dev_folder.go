@@ -121,7 +121,8 @@ func refuseManifests(op, dir string) error {
 
 // devDocuments decodes file's funcd documents, skipping the rest and FuncdConfig documents, and stopping on an App, a
 // namespace other than default, and a document that does not parse. Each kept object lands in the dev namespace, in
-// group dev when it names none, tagged as dev's (Decision 5).
+// group dev when it names none, tagged as dev's (Decision 5); a cluster-scoped one, an Addon, keeps no namespace or
+// group (ADR-0334 Decision 5).
 func devDocuments(op, file string) ([]v1.Object, error) {
 	objs, err := resourceDocuments(op, file)
 	if err != nil {
@@ -133,6 +134,13 @@ func devDocuments(op, file string) ([]v1.Object, error) {
 			return nil, fault.Invalidf(op, "%s: funcdctl dev runs an App from its template directory (app.yaml beside resources/), not from a resource file", file)
 		}
 		meta := obj.GetObjectMeta()
+		if meta.Tags == nil {
+			meta.Tags = v1.Tags{}
+		}
+		meta.Tags[devManagedTag] = devManagedBy
+		if !kind.Namespaced() {
+			continue
+		}
 		if meta.Namespace != "" && meta.Namespace != devNamespace {
 			return nil, fault.Invalidf(op, "%s: %s %q is in namespace %q; funcdctl dev runs namespace %s only",
 				file, kind, obj.GetName(), meta.Namespace, devNamespace)
@@ -141,10 +149,6 @@ func devDocuments(op, file string) ([]v1.Object, error) {
 		if meta.ResourceGroup == "" {
 			meta.ResourceGroup = devResourceGroup
 		}
-		if meta.Tags == nil {
-			meta.Tags = v1.Tags{}
-		}
-		meta.Tags[devManagedTag] = devManagedBy
 	}
 	return objs, nil
 }

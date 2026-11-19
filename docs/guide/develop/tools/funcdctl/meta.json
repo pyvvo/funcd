@@ -1,4 +1,8 @@
 {
   "title": "funcdctl",
-  "pages": ["index", "spec"]
+  "pages": [
+    "index",
+    "spec",
+    "plugins"
+  ]
 }

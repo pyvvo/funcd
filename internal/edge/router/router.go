@@ -44,6 +44,27 @@ type Entry struct {
 	Owned bool
 	// Enabled is its Route's spec.enabled; nil is Decision 6's default.
 	Enabled *bool
+	// OIDC is the provider of an Auth oidc stance (ADR-0335); nil for another stance.
+	OIDC *OIDCAuth
+	// Refused, ProviderNotFound or ProviderConflict, keeps the entry's claims and makes each of its rows answer 503
+	// (ADR-0335 Decision 10); "" serves. The aggregator sets ProviderConflict itself.
+	Refused string
+}
+
+// OIDCAuth is an oidc stance (ADR-0335 Decision 2): the OIDCProvider of the entry's namespace that signs callers in,
+// and what a call that is not signed in gets.
+type OIDCAuth struct {
+	Provider        v1.ObjectName
+	Unauthenticated v1.Unauthenticated
+}
+
+// OIDCOf is a stance's OIDCAuth, nil unless its mode is oidc.
+func OIDCOf(a *v1.RouteAuth) *OIDCAuth {
+	provider, un, ok := a.OIDC()
+	if !ok {
+		return nil
+	}
+	return &OIDCAuth{Provider: provider, Unauthenticated: un}
 }
 
 // CompiledRule is one path rule ready to match.
@@ -54,6 +75,8 @@ type CompiledRule struct {
 	Function v1.ObjectName
 	// Auth is the rule's stance; "" uses Entry.Auth (ADR-0241 Decision 8).
 	Auth v1.AuthMode
+	// OIDC is the provider of an Auth oidc stance (ADR-0335); nil for another stance.
+	OIDC *OIDCAuth
 	// Static, when non-nil, is a static Bucket-prefix backend (ADR-0120, F82); Function is then unused
 	// and the data-plane serves it via internal/edge/static (no activator hop).
 	Static *v1.StaticBackend
@@ -63,6 +86,10 @@ type CompiledRule struct {
 	// never from a user-authored Route — a user backend has no Upstream arm, so the edge cannot be
 	// pointed at an arbitrary in-daemon address (no SSRF). Function/Static are then unused.
 	Upstream string
+	// KeepPath forwards an Upstream match its cleaned request path whole, the rule's path kept: an add-on engine
+	// serves under its own basePath (ADR-0332 Decision 5). PrivatePaths, under Path, are the edge's 404.
+	KeepPath     bool
+	PrivatePaths []string
 }
 
 // Match is the resolved target. StripPrefix is the matched rule's prefix the handler strips from
@@ -79,6 +106,13 @@ type Match struct {
 	// Upstream is non-empty for a node-private reverse-proxy backend (ADR-0138): the data-plane
 	// reverse-proxies to it (no activator hop, no Function resolve). Trusted in-daemon target only.
 	Upstream string
+	// KeepPath and PrivatePaths are the matched rule's (ADR-0332 Decision 5).
+	KeepPath     bool
+	PrivatePaths []string
+	// OIDC is the matched row's oidc stance (ADR-0335), nil for another stance.
+	OIDC *OIDCAuth
+	// Refused is the reason the row's entry answers 503 on its paths (ADR-0335 Decision 10); "" serves.
+	Refused string
 }
 
 // compiled is one flattened matcher row (host + rule), sorted longest-path-first.
@@ -91,7 +125,11 @@ type compiled struct {
 	function  v1.ObjectName
 	static    *v1.StaticBackend
 	upstream  string
+	keepPath  bool
+	private   []string
 	auth      v1.AuthMode
+	oidc      *OIDCAuth
+	refused   string
 }
 
 // table is the in-process Router driver.
@@ -108,10 +146,7 @@ func (t *table) Program(_ context.Context, entries []Entry, reserved []string) e
 	rows := make([]compiled, 0, len(entries))
 	for _, e := range entries {
 		for _, r := range e.Rules {
-			auth := r.Auth
-			if auth == "" {
-				auth = e.Auth
-			}
+			auth, oidc := ruleStance(e, r)
 			rows = append(rows, compiled{
 				host:      e.Host,
 				path:      matchedPath(r),
@@ -121,7 +156,11 @@ func (t *table) Program(_ context.Context, entries []Entry, reserved []string) e
 				function:  r.Function,
 				static:    r.Static,
 				upstream:  r.Upstream,
+				keepPath:  r.KeepPath,
+				private:   r.PrivatePaths,
 				auth:      auth,
+				oidc:      oidc,
+				refused:   e.Refused,
 			})
 		}
 	}
@@ -164,7 +203,9 @@ func (t *table) Resolve(host, path, method string) (Match, bool) {
 		if !row.exact {
 			strip = row.path
 		}
-		return Match{Namespace: row.namespace, Function: row.function, StripPrefix: strip, Path: row.path, Auth: row.auth, Static: row.static, Upstream: row.upstream}, true
+		return Match{Namespace: row.namespace, Function: row.function, StripPrefix: strip, Path: row.path, Auth: row.auth,
+			Static: row.static, Upstream: row.upstream, KeepPath: row.keepPath, PrivatePaths: row.private, OIDC: row.oidc,
+			Refused: row.refused}, true
 	}
 	return Match{}, false
 }
@@ -183,6 +224,18 @@ func (t *table) Hosts() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ruleStance is a rule's stance, else its entry's (ADR-0241 Decision 8), with the provider of an oidc one.
+func ruleStance(e Entry, r CompiledRule) (v1.AuthMode, *OIDCAuth) {
+	auth, oidc := r.Auth, r.OIDC
+	if auth == "" {
+		auth, oidc = e.Auth, e.OIDC
+	}
+	if auth != v1.AuthOIDC {
+		oidc = nil
+	}
+	return auth, oidc
 }
 
 // canonicalHost is the one spelling a host is claimed and matched by: lowercase, without a port, IPv6 brackets or

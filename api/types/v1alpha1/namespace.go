@@ -70,9 +70,20 @@ type EdgeDefaults struct {
 	Auth *EdgeAuth `json:"auth,omitempty" doc:"The default edge authentication of the namespace's Routes and of its Functions' and Sites' own addresses, used where a rule, its Route and spec.ingress.auth set none; unset is open. It is a default, not a floor: a rule or a Route that sets open stays open."`
 }
 
-// EdgeAuth is the F77 namespace-default auth stance.
+// EdgeAuth is the F77 namespace-default auth stance; oidc names a provider (ADR-0335).
 type EdgeAuth struct {
-	Mode AuthMode `json:"mode,omitempty" doc:"authenticated admits only a caller whose token, sent as Authorization: Bearer or X-Api-Key, may get the namespace's Functions; others get 401 or 403, and every caller gets 401 while server.auth.edge is off. open, or empty, admits anyone."`
+	Mode AuthMode `json:"mode,omitempty" doc:"authenticated admits only a caller whose token, sent as Authorization: Bearer or X-Api-Key, may get the namespace's Functions; others get 401 or 403, and every caller gets 401 while server.auth.edge is off. oidc signs callers in with the OIDCProvider that provider names. open, or empty, admits anyone. It reaches no Lake's or add-on object's address."`
+	// Provider and Unauthenticated are the oidc stance's (ADR-0335 Decision 2), refused with another mode.
+	Provider        ObjectName      `json:"provider,omitempty" doc:"With mode oidc, the OIDCProvider of the namespace that signs callers in; required with oidc and refused with another mode. The namespace shows a ProviderNotFound condition while it names no OIDCProvider."`
+	Unauthenticated Unauthenticated `json:"unauthenticated,omitempty" doc:"With mode oidc, what a call that is not signed in gets: redirect, the default, 401 or allow, as on a Route's auth. Refused with another mode."`
+}
+
+// RouteAuth is the stance as a Route carries it, nil for none.
+func (a *EdgeAuth) RouteAuth() *RouteAuth {
+	if a == nil {
+		return nil
+	}
+	return &RouteAuth{Mode: a.Mode, Provider: a.Provider, Unauthenticated: a.Unauthenticated}
 }
 
 // NamespaceStatus holds the observed state.
@@ -93,9 +104,15 @@ func (n *Namespace) Validate() error {
 	default:
 		return fault.Invalidf("Namespace.Validate", "spec.defaultExposure %q must be implicit or explicit", n.Spec.DefaultExposure)
 	}
-	if n.Spec.EdgeDefaults != nil && n.Spec.EdgeDefaults.Auth != nil {
-		if err := validateAuthMode(n.Spec.EdgeDefaults.Auth.Mode, "spec.edgeDefaults.auth.mode"); err != nil {
+	if n.Spec.EdgeDefaults != nil {
+		a := n.Spec.EdgeDefaults.Auth.RouteAuth()
+		if err := a.validate("Namespace.Validate", "spec.edgeDefaults.auth"); err != nil {
 			return err
+		}
+		if _, _, ok := a.OIDC(); ok {
+			if err := hostlessOIDC("Namespace.Validate", "spec.edgeDefaults.auth", NamespaceName(n.Name), ""); err != nil {
+				return err
+			}
 		}
 	}
 	// ADR-0266 Decision 3: at most one form of the volume budget.
@@ -108,16 +125,6 @@ func (n *Namespace) Validate() error {
 		}
 	}
 	return nil
-}
-
-// validateAuthMode checks an AuthMode is empty | authenticated | open (ADR-0113).
-func validateAuthMode(m AuthMode, field string) error {
-	switch m {
-	case "", AuthAuthenticated, AuthOpen:
-		return nil
-	default:
-		return fault.Invalidf("Validate", "%s %q must be authenticated or open", field, m)
-	}
 }
 
 // GetStatus returns the shared Status pointer, implementing StatusObject.

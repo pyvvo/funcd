@@ -14,10 +14,11 @@ import (
 	"github.com/pyvvo/funcd/internal/auth/cedar"
 )
 
-// secretMeta holds the Functions, Lakes, Secrets and custom Roles of "default".
+// secretMeta holds the Functions, Lakes, add-on objects, Secrets and custom Roles of "default".
 type secretMeta struct {
 	fns     map[v1.ObjectName]*v1.Function
 	lakes   map[v1.ObjectName]*v1.Lake
+	addons  map[v1.ObjectName]*v1.AddonObject
 	secrets map[v1.ObjectName]*v1.Secret
 	roles   map[v1.ObjectName]*v1.Role
 }
@@ -32,6 +33,10 @@ func (m secretMeta) Get(_ context.Context, gvk v1.GroupVersionKind, ns v1.Namesp
 		case v1.KindLake:
 			if l, ok := m.lakes[name]; ok {
 				return l, nil
+			}
+		case v1.KindAddonObject:
+			if o, ok := m.addons[name]; ok {
+				return o, nil
 			}
 		case v1.KindRole:
 			if r, ok := m.roles[name]; ok {
@@ -63,6 +68,10 @@ func newSecretMeta() secretMeta {
 			"stranger": secretFn("stranger"),
 		},
 		lakes: map[v1.ObjectName]*v1.Lake{"lake": lake},
+		addons: map[v1.ObjectName]*v1.AddonObject{"login": {
+			ObjectMeta: v1.ObjectMeta{Name: "login", Namespace: "default", ResourceGroup: "rg1"},
+			Spec:       v1.AddonObjectSpec{Kind: "IdentityProvider", Bindings: v1.AddonObjectBindings{Secret: []v1.ObjectName{"rauthy-keys"}}},
+		}},
 		roles: map[v1.ObjectName]*v1.Role{"secret-reader": {
 			ObjectMeta: v1.ObjectMeta{Name: "secret-reader", Namespace: "default"},
 			Spec:       v1.RoleSpec{Actions: []string{string(auth.ActionSecretRead)}},
@@ -74,7 +83,7 @@ func newSecretMeta() secretMeta {
 func secretDriver(t *testing.T, m secretMeta, policies ...v1.Policy) auth.Authorizer {
 	t.Helper()
 	reg, err := cedar.NewRegistry([]cedar.Capability{cedar.KVCapability(), cedar.SecretCapability()},
-		[]cedar.PrincipalSource{cedar.FunctionPrincipalSource(), cedar.LakePrincipalSource()})
+		[]cedar.PrincipalSource{cedar.FunctionPrincipalSource(), cedar.LakePrincipalSource(), cedar.AddonObjectPrincipalSource()})
 	require.NoError(t, err)
 	ep, err := reg.EntityProvider(m)
 	require.NoError(t, err)
@@ -90,6 +99,29 @@ func secretRead(t *testing.T, a auth.Authorizer, principal *auth.EntityRef, secr
 
 func lakeRef(name v1.ObjectName) *auth.EntityRef {
 	return &auth.EntityRef{Type: v1.KindLake, Namespace: "default", Name: name}
+}
+
+func addonRef(name v1.ObjectName) *auth.EntityRef {
+	return &auth.EntityRef{Type: v1.KindAddonObject, Namespace: "default", Name: name}
+}
+
+// An add-on object reads, as itself, the Secrets its spec.bindings.secret names, and a Policy that names it revokes one
+// (ADR-0332 Decision 4), as for a Lake.
+func TestSecretCapability_AnAddonObjectReadsAsItself(t *testing.T) {
+	t.Parallel()
+	a := secretDriver(t, newSecretMeta())
+	require.True(t, secretRead(t, a, addonRef("login"), "rauthy-keys").Allowed, "a Secret the object binds")
+	require.False(t, secretRead(t, a, addonRef("login"), "api-keys").Allowed, "and no other")
+	require.False(t, secretRead(t, a, addonRef("gone"), "rauthy-keys").Allowed, "a missing object binds nothing")
+	require.False(t, secretRead(t, a, fnPrincipal("default", "login"), "rauthy-keys").Allowed,
+		"a Function of the object's name is another principal")
+
+	text := `forbid(principal == AddonObject::"default/login", action == Action::"secret::read", resource == Secret::"default/rauthy-keys");`
+	require.NoError(t, cedar.ValidateCedarInNamespace("default", text))
+	require.Error(t, cedar.ValidateCedarInNamespace("team", text), "an add-on object is namespaced")
+	d := secretRead(t, secretDriver(t, newSecretMeta(), namespacePolicy("no-keys", text)), addonRef("login"), "rauthy-keys")
+	require.False(t, d.Allowed)
+	require.True(t, strings.HasPrefix(d.Reason, "cedar: forbidden by policy "), d.Reason)
 }
 
 func namespacePolicy(name v1.ObjectName, text string) v1.Policy {

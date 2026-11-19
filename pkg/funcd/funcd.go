@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,7 @@ import (
 	"github.com/pyvvo/funcd/internal/edge/authn"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/observ"
+	"github.com/pyvvo/funcd/internal/edge/oidc"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/edge/shape"
 	"github.com/pyvvo/funcd/internal/edge/static"
@@ -83,6 +85,7 @@ import (
 	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
 	"github.com/pyvvo/funcd/internal/sensor"
 	"github.com/pyvvo/funcd/internal/services"
+	addonsvc "github.com/pyvvo/funcd/internal/services/addon"
 	backupsvc "github.com/pyvvo/funcd/internal/services/backup"
 	blobsvc "github.com/pyvvo/funcd/internal/services/blob"
 	identitysvc "github.com/pyvvo/funcd/internal/services/identity"
@@ -103,6 +106,10 @@ import (
 // and New refuses it on an address off loopback (ADR-0314).
 const DevToken = "funcd-dev-token"
 
+// DevAdminToken is funcdctl dev's admin token, fixed and documented as DevToken is (ADR-0334 Decision 5). Only a
+// platform built WithDevAdminToken answers it, New refuses it off loopback, and no credential list holds it.
+const DevAdminToken = "funcd-dev-admin-token"
+
 const (
 	defaultProdAddr      = "0.0.0.0:8080"
 	defaultDataPlaneAddr = "0.0.0.0:8081" // function-traffic ingress (ADR-0033); intentionally public (auth is V2)
@@ -119,6 +126,8 @@ const (
 	defaultBucketsPerNamespace = 100
 	// defaultSQLDatabasesPerNamespace is the per-namespace SQLDatabase count cap when unset (ADR-0232).
 	defaultSQLDatabasesPerNamespace = 20
+	// defaultAddonObjectsPerNamespace is the per-namespace add-on object count cap when unset (ADR-0332 Decision 2).
+	defaultAddonObjectsPerNamespace = 20
 	// The workflow engine tunables when WithWorkflow is not given: the daemon config's workflow.* defaults
 	// (ADR-0094, internal/platform/config), so a hung step fails the same way in dev and in production.
 	defaultWorkflowStepTimeout  = 300 * time.Second
@@ -203,8 +212,10 @@ type config struct {
 	// control plane (ADR-0028)
 	listenAddr  string
 	credentials middleware.CredentialStore
-	authorizer  auth.Authorizer
-	localNode   v1.ObjectName
+	// devAdminToken makes the credential store also answer DevAdminToken as an admin (WithDevAdminToken, ADR-0334).
+	devAdminToken bool
+	authorizer    auth.Authorizer
+	localNode     v1.ObjectName
 	// nodePlatform is the platform this node runs (ADR-0145); "" ⇒ v1.HostPlatform().
 	nodePlatform v1.OCIPlatform
 
@@ -227,6 +238,12 @@ type config struct {
 	// (reusing the control-plane credentials + authorizer). false ⇒ no PEP (open-only; an
 	// authenticated stance then fails closed).
 	edgeAuthEnabled bool
+
+	// the edge sign-in (ADR-0335): server.edgePublicScheme and server.edgePublicPort build its callbacks (Decision 9);
+	// oidcBackChannel replaces Decision 7's transport to a provider outside funcd, which only a test sets.
+	edgePublicScheme string
+	edgePublicPort   int
+	oidcBackChannel  http.RoundTripper
 
 	// edge observability (ADR-0114, F76) + shaping (F78): RED metrics/trace/access-log; CORS/headers/
 	// compression. Zero values are pass-throughs (off by default).
@@ -312,6 +329,16 @@ type config struct {
 	lakeProvider provider.Runtime
 	// sqlProvider overrides the SQLDatabase engine runtime (ADR-0232); nil ⇒ the production runtime.
 	sqlProvider provider.Runtime
+	// addonRuntime overrides the add-on engines' runtime, and addonModes are the runtime.mode values it serves
+	// (ADR-0332 Decision 3, ADR-0334); nil ⇒ the production runtime, serving containerd on a containerd server.
+	addonRuntime provider.Runtime
+	addonModes   []string
+	// addonRegistries are addons.registries, the registries an Addon's image may come from (ADR-0332 Decision 6);
+	// addonMaxObjects is addons.maxObjectsPerNamespace, 0 ⇒ the default (20), negative disables the cap.
+	addonRegistries []string
+	addonMaxObjects int
+	// addonAnyRegistry lets an Addon's image come from any registry (WithAnyAddonRegistry, ADR-0334 Decision 5).
+	addonAnyRegistry bool
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
 	sqlCallTimeout time.Duration
 	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075 with a
@@ -458,17 +485,25 @@ func (c *config) validate() error {
 	return nil
 }
 
-// checkDevTokenBind refuses the built-in DevToken on an address off loopback: the control plane's, and the data plane's
-// when the edge reads the same credentials (ADR-0314 Decisions 5 and 6). An empty address is judged as what it binds.
+// checkDevTokenBind refuses a store that accepts the built-in DevToken or DevAdminToken on an address off loopback: the
+// control plane's, and the data plane's when the edge reads the same credentials (ADR-0314 Decisions 5 and 6, ADR-0334
+// Decision 5). An empty address is judged as what it binds.
 func (c *config) checkDevTokenBind() error {
-	const op, wayOut = "funcd.New", "pass WithCredentials, WithDevAuth with a token of your own, or a loopback address"
-	_, err := c.credentials.Lookup(context.Background(), DevToken)
-	accepted := err == nil
-	if addr := cmp.Or(c.listenAddr, defaultProdAddr); accepted && !platformconfig.IsLoopbackAddr(addr) {
-		return fault.Invalidf(op, "WithListenAddr %q is off loopback, and the built-in DevToken works only on loopback: %s", addr, wayOut)
-	}
-	if addr := cmp.Or(c.dataPlaneAddr, defaultDataPlaneAddr); accepted && c.edgeAuthEnabled && !platformconfig.IsLoopbackAddr(addr) {
-		return fault.Invalidf(op, "WithDataPlaneAddr %q is off loopback, WithEdgeAuth is on, and the built-in DevToken works only on loopback: %s", addr, wayOut)
+	const op = "funcd.New"
+	for _, b := range []struct{ token, name, wayOut string }{
+		{DevToken, "DevToken", "pass WithCredentials, WithDevAuth with a token of your own, or a loopback address"},
+		{DevAdminToken, "DevAdminToken", "leave out WithDevAdminToken, or use a loopback address"},
+	} {
+		if _, err := c.credentials.Lookup(context.Background(), b.token); err != nil {
+			continue
+		}
+		if addr := cmp.Or(c.listenAddr, defaultProdAddr); !platformconfig.IsLoopbackAddr(addr) {
+			return fault.Invalidf(op, "WithListenAddr %q is off loopback, and the built-in %s works only on loopback: %s", addr, b.name, b.wayOut)
+		}
+		if addr := cmp.Or(c.dataPlaneAddr, defaultDataPlaneAddr); c.edgeAuthEnabled && !platformconfig.IsLoopbackAddr(addr) {
+			return fault.Invalidf(op, "WithDataPlaneAddr %q is off loopback, WithEdgeAuth is on, and the built-in %s works only on loopback: %s",
+				addr, b.name, b.wayOut)
+		}
 	}
 	return nil
 }
@@ -513,6 +548,7 @@ type Platform struct {
 	blob       *blobProvider
 	sql        *sqlProvider
 	lake       *lakeProvider
+	addon      *addonProvider
 	eventing   *eventingProvider
 	secrets    *secretsProvider
 	invoke     *invokeProvider
@@ -544,9 +580,10 @@ func New(opts ...Option) (_ *Platform, err error) {
 	// (#94).
 	p.exec, p.kv, p.blob, p.sql, p.lake = &executor{cfg: cfg}, &kvProvider{cfg: cfg}, &blobProvider{cfg: cfg},
 		&sqlProvider{cfg: cfg}, &lakeProvider{cfg: cfg}
+	p.addon = &addonProvider{cfg: cfg}
 	p.eventing, p.secrets, p.invoke = &eventingProvider{cfg: cfg}, &secretsProvider{cfg: cfg}, &invokeProvider{cfg: cfg}
-	p.phases = lifecycle.New(append(append([]lifecycle.Provider{p.exec, p.kv, p.blob, p.sql, p.lake, p.eventing, p.secrets},
-		hookless()...), p.invoke)...)
+	p.phases = lifecycle.New(append(append([]lifecycle.Provider{p.exec, p.kv, p.blob, p.sql, p.lake, p.addon, p.eventing,
+		p.secrets}, hookless()...), p.invoke)...)
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
 	defer func() {
 		if err != nil {
@@ -561,6 +598,9 @@ func New(opts ...Option) (_ *Platform, err error) {
 		}
 	}
 	p.drainTimeout = orDefault(cfg.pacing.ShutdownTimeout, shutdownTimeout)
+	if cfg.devAdminToken && cfg.credentials != nil {
+		cfg.credentials = devAdminCredentials{next: cfg.credentials}
+	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -667,7 +707,8 @@ func (p *Platform) buildControlPlane() error {
 		// PEP proxy that calls it is not yet wired here — see TODO(ADR-0137) in internal/services/lake/reconcile.go.
 		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.LakeCapability(),
 			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapabilityWithWriters(writerLister)},
-		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.LakePrincipalSource()},
+		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.LakePrincipalSource(),
+			cedarauth.AddonObjectPrincipalSource()},
 	)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar capability registry")
@@ -789,6 +830,11 @@ func (p *Platform) buildControlPlane() error {
 		routes: edgeAgg, s3: p.blob.injection, ctrl: ctrl}); err != nil {
 		return err
 	}
+	if err := p.addon.build(addonDeps{secrets: p.secrets.resolver, routes: edgeAgg, ctrl: ctrl,
+		indexEngines: p.exec.indexAddonEngines}); err != nil {
+		return err
+	}
+	p.exec.addonNamespaces = p.addon.engineNamespaces
 	if err := p.invoke.build(invokeDeps{authz: cedarPDP}); err != nil {
 		return err
 	}
@@ -955,6 +1001,7 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build Identity reconciler")
 	}
 	ctrl.Register(v1.KindIdentity.GVK(), identityReconciler)
+	p.registerSignIn(ctrl, fnReconciler)
 
 	// Workflow engine (ADR-0094): durable run state (Badger at workflowDataDir; in-memory when
 	// unset — the InMemory preset / tests), a step dispatcher over the activator's endpoints +
@@ -1162,7 +1209,9 @@ func (p *Platform) buildControlPlane() error {
 	// bound is outermost, so every byte of every listener response passes it. Runtime order:
 	// WriteStall → Recover → RequestID → observ → limit → shape → dataplane.Handler.
 	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, c.baseDomain, edgeEnforcer, targetLimiter, staticHandler,
-		c.invokeDefaultTimeout, p.logger, dataplane.WithCallGate(c.callGate()), dataplane.WithChain(callChain))
+		c.invokeDefaultTimeout, p.logger, dataplane.WithCallGate(c.callGate()), dataplane.WithChain(callChain),
+		dataplane.WithOIDC(oidc.New(oidc.Deps{Store: c.store, CallbackURL: p.callbacks().URL, HTTPS: p.callbacks().HTTPS(),
+			BackChannel: c.oidcBackChannel, Addons: storedAddons{c.store}, Logger: p.logger})))
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
 	dpHandler := gateway.Chain(dpCore, gateway.WriteStall(gateway.WriteStallTimeout), gateway.Recover(p.logger),
 		gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
@@ -1184,6 +1233,36 @@ func (p *Platform) buildControlPlane() error {
 	p.dataPlaneAddr = dln.Addr().String()
 
 	return nil
+}
+
+// callbacks are the edge sign-in's callbacks (ADR-0335 Decision 9), on the data plane's bound port.
+func (p *Platform) callbacks() oidc.Callbacks {
+	c := p.cfg
+	return oidc.Callbacks{TLS: c.tlsSpec != nil, Scheme: c.edgePublicScheme, Port: c.edgePublicPort, Bound: func() int {
+		_, port, err := net.SplitHostPort(p.dataPlaneAddr)
+		if err != nil {
+			return 0
+		}
+		n, _ := strconv.Atoi(port)
+		return n
+	}}
+}
+
+// registerSignIn registers the OIDCProvider kind's one reconciler, which re-runs on a change of a Route, a workload,
+// a Namespace or a Secret of its namespace (ADR-0336 Decision 3), the Namespace check of edgeDefaults.auth, and the
+// watches that move a Route's or a Function's ProviderNotFound (ADR-0335 Decision 10).
+func (p *Platform) registerSignIn(ctrl *controller.Controller, fns *function.Reconciler) {
+	c := p.cfg
+	ctrl.Register(v1.KindOIDCProvider.GVK(), oidc.NewReconciler(oidc.ReconcilerDeps{Store: c.store, CallbackURL: p.callbacks().URL,
+		Client: oidc.BackChannelClient(c.oidcBackChannel), Held: c.nsGate(), SupervisionPeriod: c.pacing.SupervisionPeriod,
+		BaseDomain: c.baseDomain, Addons: storedAddons{c.store}, Logger: p.logger}))
+	for _, k := range []v1.Kind{v1.KindRoute, v1.KindFunction, v1.KindSite, v1.KindNamespace, v1.KindSecret, v1.KindAddonObject} {
+		ctrl.Watches(k.GVK(), oidc.MapProviders(c.store))
+	}
+	ctrl.Register(v1.KindNamespace.GVK(), oidc.NewNamespaceCheck(c.store, p.logger))
+	ctrl.Watches(v1.KindOIDCProvider.GVK(), oidc.MapProviderNamespace)
+	ctrl.Watches(v1.KindOIDCProvider.GVK(), route.MapOIDCProvider(c.store))
+	ctrl.Watches(v1.KindOIDCProvider.GVK(), fns.MapOIDCProvider)
 }
 
 // Addr returns the bound control-plane address (host:port), available after New.
@@ -1794,7 +1873,75 @@ func (e *executor) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 			e.egressWorkers.Remove(ip)
 		}
 	}
+	_ = e.indexAddonEngines(ctx) // a failed run keeps the index; the next sync runs again
 	return live
+}
+
+// indexAddonEngines puts the address of every add-on engine, from its worker's creation on, in the gateway's engine
+// index, which no rule reaches (ADR-0332 Decision 3). It runs at each worker sync and, through the add-on runtime's
+// BeforeStart, before each engine starts. Runs take turns, so a run's list never replaces a later run's. A failed read
+// keeps the index as it was and is the error.
+func (e *executor) indexAddonEngines(ctx context.Context) error {
+	if e.egressEngines == nil {
+		return nil
+	}
+	e.engineIndexMu.Lock()
+	defer e.engineIndexMu.Unlock()
+	engines, err := addonEngineAddrs(ctx, e.cfg.store, e.cfg.runtime, e.addonNamespaces)
+	if err != nil {
+		return err
+	}
+	e.egressEngines.Replace(engines)
+	return nil
+}
+
+// addonEngineAddrs are the addresses of the add-on engines' workers, from each worker's creation on, whatever its state
+// (ADR-0332 Decision 3): in each namespace that holds an add-on object or, as running reports, an engine of the add-on
+// runtime, a stopping engine's included.
+func addonEngineAddrs(ctx context.Context, st store.Store, rt runtime.Runtime, running func() []v1.NamespaceName) (map[netip.Addr]auth.EntityRef, error) {
+	const op = "funcd.addonEngineAddrs"
+	res, err := st.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{})
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list the add-on objects")
+	}
+	namespaces := map[v1.NamespaceName]bool{}
+	for _, o := range res.Items {
+		namespaces[o.GetNamespace()] = true
+	}
+	if running != nil {
+		for _, ns := range running() {
+			namespaces[ns] = true
+		}
+	}
+	engines := map[netip.Addr]auth.EntityRef{}
+	for ns := range namespaces {
+		insts, lerr := rt.List(ctx, ns)
+		if lerr != nil {
+			return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "list the workers of %s", ns)
+		}
+		for _, in := range insts {
+			if in.OwnerKind != v1.KindAddonObject {
+				continue
+			}
+			if ip, perr := netip.ParseAddr(in.IP); perr == nil {
+				engines[ip] = auth.EntityRef{Type: v1.KindAddonObject, Namespace: in.Namespace, Name: in.Name}
+			}
+		}
+	}
+	return engines, nil
+}
+
+// backupEngines tells a backup target's address from an add-on engine's: an object's status.address, and the address
+// of each engine's worker from its creation on (ADR-0332 Decision 3).
+func backupEngines(st store.Store, rt runtime.Runtime, running func() []v1.NamespaceName) addonsvc.Engines {
+	return addonsvc.Engines{Store: st, Workers: func(ctx context.Context, addr netip.Addr) (bool, error) {
+		engines, err := addonEngineAddrs(ctx, st, rt, running)
+		if err != nil {
+			return false, err
+		}
+		_, ok := engines[addr]
+		return ok, nil
+	}}
 }
 
 // enqueueAll enqueues every object of kind in the store.
@@ -1882,12 +2029,13 @@ func LakeData(key string) (prefix string, ok bool) {
 
 // registerWorkloadBackups builds the BackupSchedule, Backup and Restore reconcilers (ADR-0222) over the member kinds the
 // providers serve (ADR-0311), in list order, and registers them: a Backup's change requeues its schedule and the
-// Restores that read or wait for it.
+// Restores that read or wait for it. A target is never an add-on engine's address (ADR-0332 Decision 3).
 func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets backupsvc.SecretReader) error {
 	c := p.cfg
 	d := backupsvc.Deps{
 		Store: c.store, Secrets: secrets, StoreURL: c.blobStoreURL, Limits: c.workloadBackupLimits,
 		Period: c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
+		Engines: backupEngines(c.store, c.runtime, p.addon.engineNamespaces),
 	}
 	for _, h := range lifecycle.Each[backupHook](p.phases) {
 		d.Kinds = append(d.Kinds, h.BackupKinds()...)
@@ -2024,6 +2172,12 @@ func (h holdPlatform) BucketOrphans(ctx context.Context) ([]v1.ObjectRef, error)
 
 func (h holdPlatform) SQLOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
 	return h.p.sql.reconciler.Orphans(ctx)
+}
+
+// AddonOrphans are the add-on objects whose storage has no object, which a start not held quarantines (ADR-0333
+// Decision 5, ADR-0231 Decision 4).
+func (h holdPlatform) AddonOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
+	return h.p.addon.reconciler.Orphans(ctx)
 }
 
 func (h holdPlatform) VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error) {

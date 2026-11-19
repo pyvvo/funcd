@@ -6,6 +6,7 @@
 package sdk
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -77,6 +78,8 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindBackupSchedule:  {"backupschedules", true},  // ADR-0222, F111
 	v1.KindBackup:          {"backups", true},          // ADR-0222, F111
 	v1.KindRestore:         {"restores", true},         // ADR-0222, F111
+	v1.KindAddon:           {"addons", false},          // ADR-0332, F258
+	v1.KindOIDCProvider:    {"oidcproviders", true},    // ADR-0335, F261
 }
 
 // kindAliases are short CLI tokens (kubectl-style) for a few common kinds.
@@ -91,7 +94,8 @@ var kindAliases = map[string]v1.Kind{
 	"svc": v1.KindService,
 }
 
-// KindFromToken resolves a CLI token (plural, singular, or alias) to a v1.Kind.
+// KindFromToken resolves a CLI token (plural, singular, or alias) to a v1.Kind. A token that names no kind of funcd's
+// is an add-on's kind (ADR-0332 Decision 2), kept as typed: the server answers 404 when no Addon registers it.
 func KindFromToken(token string) (v1.Kind, bool) {
 	t := strings.ToLower(strings.TrimSpace(token))
 	if k, ok := kindAliases[t]; ok {
@@ -102,11 +106,29 @@ func KindFromToken(token string) (v1.Kind, bool) {
 			return kind, true
 		}
 	}
+	if k := strings.TrimSpace(token); v1.IsAddonKind(k) || addonToken.MatchString(k) {
+		return v1.Kind(k), true
+	}
 	return "", false
 }
 
-// descriptorFor returns the path descriptor for a kind.
+// addonToken is an add-on's kind typed in lower case, its singular or its plural.
+var addonToken = regexp.MustCompile(`^[a-z][a-z0-9]{1,63}$`)
+
+// descriptorFor returns the path descriptor for a kind. A kind funcd does not define is an add-on's, namespaced, at its
+// plural, with no code per kind (ADR-0332 Decision 2): a kind name's lower case with an s, or a lower-case token as
+// it is when it ends in s, else with an s.
 func descriptorFor(kind v1.Kind) (kindDescriptor, bool) {
-	d, ok := kindDescriptors[kind]
-	return d, ok
+	if d, ok := kindDescriptors[kind]; ok {
+		return d, true
+	}
+	switch k := string(kind); {
+	case v1.IsAddonKind(k):
+		return kindDescriptor{plural: v1.AddonPlural(k), namespaced: true}, true
+	case addonToken.MatchString(k) && strings.HasSuffix(k, "s"):
+		return kindDescriptor{plural: k, namespaced: true}, true
+	case addonToken.MatchString(k):
+		return kindDescriptor{plural: k + "s", namespaced: true}, true
+	}
+	return kindDescriptor{}, false
 }

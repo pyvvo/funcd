@@ -389,48 +389,47 @@ func lakeResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (ced
 // FunctionPrincipalSource resolves a Function principal's backing *v1.Function (ADR-0074); a principal of
 // any other type is not its own (ADR-0175).
 func FunctionPrincipalSource() PrincipalSource {
-	return func(ctx context.Context, r MetaReader, p auth.EntityRef) (PrincipalObject, bool, error) {
-		const op = "cedar.FunctionPrincipalSource"
-		if p.Type != v1.KindFunction {
-			return nil, false, nil
-		}
-		obj, err := r.Get(ctx, v1.KindFunction.GVK(), p.Namespace, p.Name)
-		if err != nil {
-			if fault.KindOf(err) == fault.NotFound {
-				return nil, false, nil
-			}
-			return nil, false, fault.Wrapf(err, fault.Internal, op, "get function %q", p.Name)
-		}
-		fn, ok := obj.(*v1.Function)
-		if !ok {
-			return nil, false, nil
-		}
-		return fn, true, nil
-	}
+	return principalSource[*v1.Function](v1.KindFunction, "cedar.FunctionPrincipalSource", "function")
 }
 
 // LakePrincipalSource resolves a Lake principal's backing *v1.Lake (ADR-0088,
 // ADR-0175): an engine is its own principal, never a same-named Function. Its spec.bindings.blob are its
 // blobBindings; it has no links/kv.
 func LakePrincipalSource() PrincipalSource {
+	return principalSource[*v1.Lake](v1.KindLake, "cedar.LakePrincipalSource", "lake")
+}
+
+// AddonObjectPrincipalSource resolves an add-on object principal's backing *v1.AddonObject (ADR-0332 Decision 4): its
+// engine asks for each of its Secrets as the object, as a Lake's does. Its spec.bindings.secret are its
+// secretBindings; it has no other binding.
+func AddonObjectPrincipalSource() PrincipalSource {
+	return principalSource[*v1.AddonObject](v1.KindAddonObject, "cedar.AddonObjectPrincipalSource", "add-on object")
+}
+
+// principalSource resolves a principal of kind to its stored T; a principal of another type, or with no such object,
+// is not its own (ADR-0175).
+func principalSource[T PrincipalObject](kind v1.Kind, op, what string) PrincipalSource {
 	return func(ctx context.Context, r MetaReader, p auth.EntityRef) (PrincipalObject, bool, error) {
-		const op = "cedar.LakePrincipalSource"
-		if p.Type != v1.KindLake {
+		if p.Type != kind {
 			return nil, false, nil
 		}
-		obj, err := r.Get(ctx, v1.KindLake.GVK(), p.Namespace, p.Name)
+		obj, err := r.Get(ctx, kind.GVK(), p.Namespace, p.Name)
 		if err != nil {
 			if fault.KindOf(err) == fault.NotFound {
 				return nil, false, nil
 			}
-			return nil, false, fault.Wrapf(err, fault.Internal, op, "get lake %q", p.Name)
+			return nil, false, fault.Wrapf(err, fault.Internal, op, "get %s %q", what, p.Name)
 		}
-		cs, ok := obj.(*v1.Lake)
+		o, ok := obj.(T)
 		if !ok {
 			return nil, false, nil
 		}
-		return cs, true, nil
+		return o, true, nil
 	}
+}
+
+func addonObjectUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
+	return cedartypes.NewEntityUID(entityTypeAddonObject, cedartypes.String(string(ns)+"/"+string(name)))
 }
 
 // netDestUID is the NetDestination UID for a "<ip>:<port>" id (ADR-0117). It is byte-matched by both
@@ -584,9 +583,9 @@ func secretUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
 	return cedartypes.NewEntityUID(entityTypeSecret, cedartypes.String(string(ns)+"/"+string(name)))
 }
 
-// SecretCapability is the secret::read and secret::write capability (ADR-0321, ADR-0327): a Function's or a Lake's
-// spec.bindings.secret → the `secretBindings` Set of Secret entity-refs (binding-as-read-grant); the resource is the
-// Secret with its owner and `writers`. Owner-only writers.
+// SecretCapability is the secret::read and secret::write capability (ADR-0321, ADR-0327): a Function's, a Lake's or
+// an add-on object's (ADR-0332) spec.bindings.secret → the `secretBindings` Set of Secret entity-refs
+// (binding-as-read-grant); the resource is the Secret with its owner and `writers`. Owner-only writers.
 func SecretCapability() Capability { return secretCapability(nil) }
 
 // SecretCapabilityWithWriters is SecretCapability with a WriterLister, so a writer-role RolesAssignment joins a Secret's
@@ -598,6 +597,8 @@ func secretCapability(writers WriterLister) Capability {
 		Name:            "secret",
 		Actions:         []auth.Action{auth.ActionSecretRead, auth.ActionSecretWrite},
 		EmitsEntityType: entityTypeSecret,
+		// An add-on object is a principal of secret::read alone, so a Policy names it here (ADR-0332 Decision 4).
+		SupportingEntityTypes: []cedartypes.EntityType{entityTypeAddonObject},
 		Resource: func(ctx context.Context, r MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
 			return secretResource(ctx, r, resource, writers)
 		},
@@ -609,6 +610,8 @@ func secretCapability(writers WriterLister) Capability {
 				case *v1.Function:
 					names = o.Spec.Bindings.Secret
 				case *v1.Lake:
+					names = o.Spec.Bindings.Secret
+				case *v1.AddonObject:
 					names = o.Spec.Bindings.Secret
 				default:
 					return nil

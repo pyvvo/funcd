@@ -1,0 +1,72 @@
+# The objects of the addon-rauthy-signin lane, applied after the Addons: rauthy's Secrets (base64 of test values), the
+# IdentityProvider login served at login.localhost, the OIDCProvider sso whose client funcd registers at rauthy's private
+# path, and the EchoService echo (traefik/whoami) behind an oidc stance on localhost, which answers the headers it gets.
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: rauthy-keys
+  namespace: default
+  resourceGroup: rg1
+spec:
+  type: Opaque
+  data:
+    HQL_SECRET_RAFT: bGFuZS1yYWZ0LXNlY3JldC0wMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg==
+    HQL_SECRET_API: bGFuZS1hcGktc2VjcmV0LTAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVm
+    ENC_KEYS: azEvQUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOD0=
+    ENC_KEY_ACTIVE: azE=
+    BOOTSTRAP_ADMIN_EMAIL: YWRtaW5AbG9naW4ubG9jYWxob3N0
+    BOOTSTRAP_ADMIN_PASSWORD_PLAIN: bGFuZS1hZG1pbi1wYXNzd29yZC0xMjM0
+---
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: sso-session
+  namespace: default
+  resourceGroup: rg1
+spec:
+  type: Opaque
+  data:
+    SESSION_KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+---
+apiVersion: funcd.io/v1alpha1
+kind: IdentityProvider
+metadata:
+  name: login
+  namespace: default
+  resourceGroup: rg1
+spec:
+  config:
+    publicHost: login.localhost:8081
+    rpId: login.localhost
+    https: false
+  bindings:
+    secret:
+      - rauthy-keys
+  ingress:
+    host: login.localhost
+---
+apiVersion: funcd.io/v1alpha1
+kind: OIDCProvider
+metadata:
+  name: sso
+  namespace: default
+  resourceGroup: rg1
+spec:
+  issuer: http://login.localhost:8081/auth/v1/
+  addon: login
+  client:
+    registration: {}
+  sessionSecret: sso-session
+---
+apiVersion: funcd.io/v1alpha1
+kind: EchoService
+metadata:
+  name: echo
+  namespace: default
+  resourceGroup: rg1
+spec:
+  ingress:
+    host: localhost
+    auth:
+      mode: oidc
+      provider: sso

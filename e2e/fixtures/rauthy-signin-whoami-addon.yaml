@@ -1,0 +1,14 @@
+# The Addon of the app behind the lane's oidc stance: traefik/whoami answers the headers of each request it gets, so the
+# suite reads the principal headers the edge set (ADR-0335 Decision 8). Its engine is an upstream entry, with no shim.
+apiVersion: funcd.io/v1alpha1
+kind: Addon
+metadata:
+  name: whoami
+spec:
+  kind: EchoService
+  image: docker.io/traefik/whoami@sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c
+  runtimes:
+    - containerd
+  port: 80
+  readiness:
+    path: /health

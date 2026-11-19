@@ -334,3 +334,56 @@ func TestScenarioKeysReissuedOnUpgrade(t *testing.T) {
 		require.Equal(t, tc.want, body.String())
 	}
 }
+
+// An add-on engine's address is in the gateway's engine index from its worker's creation, before it starts, and while
+// the add-on runtime still runs it in a namespace with no add-on object left (ADR-0332 Decision 3).
+func TestIndexAddonEngines_ACreatedEngineIsIndexed(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	login := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddonObject.GVK().APIVersion(), Kind: v1.KindAddonObject}}
+	login.Name, login.Namespace, login.ResourceGroup, login.Spec.Kind = "login", "acme", "rg1", "IdentityProvider"
+	seedObjects(t, st, login)
+	rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
+	runningWorker(rt, "acme", "login", v1.KindAddonObject, "10.63.0.7")
+	for id, in := range rt.insts {
+		in.State = runtime.StateCreated
+		rt.insts[id] = in
+	}
+	e := &executor{cfg: &config{store: st, runtime: rt}, egressEngines: egress.NewMemoryWorkerIndex()}
+	require.NoError(t, e.indexAddonEngines(context.Background()))
+	ref, ok := e.egressEngines.Lookup(netip.MustParseAddr("10.63.0.7"))
+	require.True(t, ok, "a created engine is indexed before it starts")
+	require.Equal(t, auth.EntityRef{Type: v1.KindAddonObject, Namespace: "acme", Name: "login"}, ref)
+
+	runningWorker(rt, "gone", "old", v1.KindAddonObject, "10.63.0.11")
+	e.addonNamespaces = func() []v1.NamespaceName { return []v1.NamespaceName{"gone"} }
+	require.NoError(t, e.indexAddonEngines(context.Background()))
+	ref, ok = e.egressEngines.Lookup(netip.MustParseAddr("10.63.0.11"))
+	require.True(t, ok, "a stopping engine that the add-on runtime reports is indexed")
+	require.Equal(t, auth.EntityRef{Type: v1.KindAddonObject, Namespace: "gone", Name: "old"}, ref)
+}
+
+// A backup target at an add-on engine's address is refused from the engine's worker's creation on, before its
+// object's status.address names it (ADR-0332 Decision 3).
+func TestBackupEnginesRefuseACreatedEngine(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	login := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddonObject.GVK().APIVersion(), Kind: v1.KindAddonObject}}
+	login.Name, login.Namespace, login.ResourceGroup, login.Spec.Kind = "login", "acme", "rg1", "IdentityProvider"
+	seedObjects(t, st, login)
+	rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
+	runningWorker(rt, "acme", "login", v1.KindAddonObject, "10.63.0.9")
+	for id, in := range rt.insts {
+		in.State = runtime.StateCreated
+		rt.insts[id] = in
+	}
+	// A stopping engine of a namespace whose last add-on object is gone, which the add-on runtime still reports.
+	runningWorker(rt, "gone", "old", v1.KindAddonObject, "10.63.0.11")
+	engines := backupEngines(st, rt, func() []v1.NamespaceName { return []v1.NamespaceName{"gone"} })
+	ctx := context.Background()
+	for addr, want := range map[string]bool{"10.63.0.9:9000": true, "10.63.0.11:9000": true, "10.63.0.10:9000": false} {
+		refused, err := engines.Engine(ctx, netip.MustParseAddrPort(addr))
+		require.NoError(t, err)
+		require.Equal(t, want, refused, addr)
+	}
+}

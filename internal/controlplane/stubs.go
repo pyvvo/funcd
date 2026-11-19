@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -33,6 +34,7 @@ type StubHandlers struct {
 	lakes            map[string]v1.Lake
 	sqlDatabases     map[string]v1.SQLDatabase
 	identities       map[string]v1.Identity
+	oidcProviders    map[string]v1.OIDCProvider
 	roles            map[string]v1.Role
 	rolesAssignments map[string]v1.RolesAssignment
 	sites            map[string]v1.Site
@@ -45,6 +47,8 @@ type StubHandlers struct {
 	workflows        map[string]v1.Workflow
 	workflowRuns     map[string]v1.WorkflowRun
 	sensors          map[string]v1.Sensor
+	addons           map[string]v1.Addon
+	addonObjects     map[string]v1.AddonObject
 }
 
 // NewStubHandlers returns an initialized StubHandlers.
@@ -70,6 +74,7 @@ func NewStubHandlers() *StubHandlers {
 		lakes:            make(map[string]v1.Lake),
 		sqlDatabases:     make(map[string]v1.SQLDatabase),
 		identities:       make(map[string]v1.Identity),
+		oidcProviders:    make(map[string]v1.OIDCProvider),
 		roles:            make(map[string]v1.Role),
 		rolesAssignments: make(map[string]v1.RolesAssignment),
 		sites:            make(map[string]v1.Site),
@@ -82,6 +87,8 @@ func NewStubHandlers() *StubHandlers {
 		workflows:        make(map[string]v1.Workflow),
 		workflowRuns:     make(map[string]v1.WorkflowRun),
 		sensors:          make(map[string]v1.Sensor),
+		addons:           make(map[string]v1.Addon),
+		addonObjects:     make(map[string]v1.AddonObject),
 	}
 }
 
@@ -676,6 +683,26 @@ func (s *StubHandlers) DeleteIdentity(_ context.Context, ns v1.NamespaceName, na
 	return stubDelete(s, s.identities, "Identity", nsKey(ns, name))
 }
 
+func (s *StubHandlers) GetOIDCProvider(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.OIDCProvider, error) {
+	return stubGet(s, s.oidcProviders, "OIDCProvider", nsKey(ns, name))
+}
+
+func (s *StubHandlers) CreateOIDCProvider(_ context.Context, p v1.OIDCProvider) (v1.OIDCProvider, error) {
+	return stubPut(s, s.oidcProviders, "OIDCProvider", nsKey(p.Namespace, p.Name), p, false)
+}
+
+func (s *StubHandlers) ListOIDCProviders(_ context.Context, ns v1.NamespaceName) ([]v1.OIDCProvider, error) {
+	return stubList(s, s.oidcProviders, ns)
+}
+
+func (s *StubHandlers) ReplaceOIDCProvider(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, p v1.OIDCProvider) (v1.OIDCProvider, error) {
+	return stubPut(s, s.oidcProviders, "OIDCProvider", nsKey(ns, name), p, true)
+}
+
+func (s *StubHandlers) DeleteOIDCProvider(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
+	return stubDelete(s, s.oidcProviders, "OIDCProvider", nsKey(ns, name))
+}
+
 func (s *StubHandlers) GetRole(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Role, error) {
 	return stubGet(s, s.roles, "Role", nsKey(ns, name))
 }
@@ -961,4 +988,49 @@ func (s *StubHandlers) ReplaceSensor(_ context.Context, ns v1.NamespaceName, nam
 
 func (s *StubHandlers) DeleteSensor(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	return stubDelete(s, s.sensors, "Sensor", nsKey(ns, name))
+}
+
+// ---- Addon (cluster-scoped, ADR-0332) ----
+
+func (s *StubHandlers) GetAddon(_ context.Context, name v1.ObjectName) (v1.Addon, error) {
+	return stubGet(s, s.addons, "Addon", string(name))
+}
+
+func (s *StubHandlers) CreateAddon(_ context.Context, a v1.Addon) (v1.Addon, error) {
+	return stubPut(s, s.addons, "Addon", string(a.Name), a, false)
+}
+
+func (s *StubHandlers) ListAddons(_ context.Context) ([]v1.Addon, error) {
+	return stubList(s, s.addons, "")
+}
+
+func (s *StubHandlers) ReplaceAddon(_ context.Context, name v1.ObjectName, a v1.Addon) (v1.Addon, error) {
+	return stubPut(s, s.addons, "Addon", string(name), a, true)
+}
+
+func (s *StubHandlers) DeleteAddon(_ context.Context, name v1.ObjectName, _ string) error {
+	return stubDelete(s, s.addons, "Addon", string(name))
+}
+
+// ---- The objects of the add-ons' kinds (ADR-0332): one name is one object per namespace, whatever its kind ----
+
+func (s *StubHandlers) ListAddonObjects(_ context.Context, ns v1.NamespaceName, plural string) ([]v1.AddonObject, error) {
+	all, err := stubList(s, s.addonObjects, ns)
+	return slices.DeleteFunc(all, func(o v1.AddonObject) bool { return v1.AddonPlural(o.AddonKind()) != plural }), err
+}
+
+func (s *StubHandlers) CreateAddonObject(_ context.Context, ns v1.NamespaceName, _ string, o v1.AddonObject) (v1.AddonObject, error) {
+	return stubPut(s, s.addonObjects, "AddonObject", nsKey(ns, o.Name), o, false)
+}
+
+func (s *StubHandlers) GetAddonObject(_ context.Context, ns v1.NamespaceName, _ string, name v1.ObjectName) (v1.AddonObject, error) {
+	return stubGet(s, s.addonObjects, "AddonObject", nsKey(ns, name))
+}
+
+func (s *StubHandlers) ReplaceAddonObject(_ context.Context, ns v1.NamespaceName, _ string, name v1.ObjectName, o v1.AddonObject) (v1.AddonObject, error) {
+	return stubPut(s, s.addonObjects, "AddonObject", nsKey(ns, name), o, true)
+}
+
+func (s *StubHandlers) DeleteAddonObject(_ context.Context, ns v1.NamespaceName, _ string, name v1.ObjectName, _ string) error {
+	return stubDelete(s, s.addonObjects, "AddonObject", nsKey(ns, name))
 }

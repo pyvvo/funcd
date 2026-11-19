@@ -1,6 +1,7 @@
 # ADR-0240: Namespace hosts
 
 - **Status**: Implemented (2026-10-17, review passed). Accepted (2026-10-17), after two judge rounds; the decider confirmed the rules of Decisions 1, 4 and 6.
+- **Superseded in part by**: [ADR-0335](0335-the-edge-signs-users-in-with-an-openid-connect-provider.md) (2026-11-19) — Decision 5: `ProviderConflict` after `RouteConflict`.
 - **Date**: 2026-10-17
 - **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 5's last sentence: `enabled: true` opens a Function in an `explicit` namespace; Decision 6: on a namespace host, `/function/…` goes by name unless a rule of that namespace under `/function` matches.
 - **Deciders**: green-0-rabbit

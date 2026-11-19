@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -28,11 +29,13 @@ import (
 	"github.com/pyvvo/funcd/internal/edge/authn"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/observ"
+	"github.com/pyvvo/funcd/internal/edge/oidc"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/edge/static"
 	"github.com/pyvvo/funcd/internal/invoke"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
+	"github.com/pyvvo/funcd/internal/platform/pathx"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -71,7 +74,19 @@ type Server struct {
 	held hold.CallGate
 	// chain is the invokePlugin chain every function call runs (ADR-0302).
 	chain *invoke.Chain
+	// signIn is the edge's sign-in (ADR-0335); nil answers 503 to an oidc stance and 404 under /.auth/.
+	signIn OIDCGate
 }
+
+// OIDCGate is the edge's sign-in (ADR-0335): Serve answers a call on an oidc stance, or returns true for it to go on
+// signed in or allowed; Auth answers a path under /.auth/.
+type OIDCGate interface {
+	Serve(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName, a router.OIDCAuth) bool
+	Auth(w http.ResponseWriter, r *http.Request)
+}
+
+// WithOIDC makes the data plane sign callers in with g on an oidc stance (ADR-0335).
+func WithOIDC(g OIDCGate) Option { return func(s *Server) { s.signIn = g } }
 
 // Option configures Handler.
 type Option func(*Server)
@@ -120,6 +135,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Internal fn-to-fn invoke (ADR-0064) is addressed by name and is NEVER gated or re-routed by
 	// exposure (ADR-0110): it skips the Route front door entirely and serves the /function/<name> form.
 	internal := isInternal(r.Context())
+	// ADR-0335 Decision 8: only the edge's sign-in sets the principal headers, on every way in.
+	oidc.Strip(r.Header)
+	// ADR-0335 Decision 3: /.auth/ is funcd's on every host, answered before the Route match.
+	if !internal && v1.UnderAuthPath(r.URL.Path) {
+		if s.signIn == nil {
+			fault.WriteProblem(w, fault.NotFoundf(op, "no route for %q", r.URL.Path))
+			return
+		}
+		s.signIn.Auth(w, r)
+		return
+	}
 	// ADR-0240 Decision 6, ADR-0241 Decision 4: on a public host that names a namespace, a request under /function
 	// goes by name in that namespace unless the rule it matches lies under /function and is that namespace's, so
 	// a / rule, such as an SPA's, never takes it.
@@ -131,6 +157,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Front door: try the Route matcher first (both exposure modes) — public requests only.
 	if s.router != nil && !internal {
 		if m, ok := s.router.Resolve(r.Host, r.URL.Path, r.Method); ok && (hostNS == "" || m.Namespace == hostNS && router.IsFunctionPath(m.Path)) {
+			if m.Refused != "" {
+				// ADR-0335 Decision 10: a refused oidc entry keeps its claims and fails closed.
+				fault.WriteProblem(w, fault.Unavailablef(op, "the route of this path cannot sign callers in: %s", m.Refused))
+				return
+			}
 			if m.Static != nil {
 				// Static backend (ADR-0120, F82): serve the Bucket prefix directly — no activator hop.
 				s.serveStatic(w, r, m, op)
@@ -138,15 +169,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if m.Upstream != "" {
 				// Node-private upstream backend (ADR-0138): reverse-proxy to an in-daemon target (the
-				// Lake's lake::query PEP proxy). No activator hop, no Function resolve. The
-				// upstream does its OWN authz (the proxy PEPs lake::query on the Quack handshake token),
-				// so the edge honors the entry's own stance (open for a lake) rather than gating here.
+				// Lake's lake::query PEP proxy, an add-on's engine). No activator hop, no Function resolve. The
+				// upstream does its OWN authz, so the edge honors the entry's own stance (open for a lake, open or oidc
+				// for an add-on object) and never the namespace's (ADR-0332 Decision 5).
+				if m.OIDC != nil && !s.admitOIDC(w, r, m.Namespace, m.OIDC) {
+					return
+				}
 				s.serveUpstream(w, r, m, op)
 				return
 			}
-			stance, err := s.authStance(r, m.Auth, m.Namespace)
+			stance, signIn, err := s.authStance(r, m.Auth, m.OIDC, m.Namespace)
 			if err != nil {
 				fault.WriteProblem(w, err)
+				return
+			}
+			if signIn != nil && !s.admitOIDC(w, r, m.Namespace, signIn) {
 				return
 			}
 			s.serveFunction(w, r, m.Namespace, m.Function, stripMatched(r.URL.Path, m.StripPrefix), stance, internal, received, op, nil)
@@ -193,12 +230,16 @@ func (s *Server) serveByName(w http.ResponseWriter, r *http.Request, ns v1.Names
 		return
 	}
 	var own v1.AuthMode
+	var ownOIDC *router.OIDCAuth
 	if served {
-		own = fn.Spec.Ingress.AuthMode()
+		own, ownOIDC = fn.Spec.Ingress.AuthMode(), router.OIDCOf(fn.Spec.Ingress.Stance())
 	}
-	stance, err := s.authStance(r, own, ns)
+	stance, signIn, err := s.authStance(r, own, ownOIDC, ns)
 	if err != nil {
 		fault.WriteProblem(w, err)
+		return
+	}
+	if signIn != nil && !s.admitOIDC(w, r, ns, signIn) {
 		return
 	}
 	if !served {
@@ -270,6 +311,7 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	// the reconciler, which decides whether the function is pooled.
 	out := c.Request
 	out.URL.Path = remainder
+	oidc.DropCookies(out) // funcd's sign-in cookies reach no backend (ADR-0335 Decision 8)
 	out = activator.WithFunction(out, c.Target)
 	out = activator.WithAnswerCheck(out, func(res *http.Response) error {
 		if rf := s.chain.After(r.Context(), c, invoke.NewAnswer(res)); rf != nil {
@@ -316,9 +358,12 @@ func refuseHeld(w http.ResponseWriter, err error) {
 // overload), and dispatches to the static handler with the stripped remainder — no activator hop.
 func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, m router.Match, op string) {
 	ns := m.Namespace
-	stance, err := s.authStance(r, m.Auth, ns)
+	stance, signIn, err := s.authStance(r, m.Auth, m.OIDC, ns)
 	if err != nil {
 		fault.WriteProblem(w, err)
+		return
+	}
+	if signIn != nil && !s.admitOIDC(w, r, ns, signIn) {
 		return
 	}
 	// Fill the F76 observability holder with (ns, bucket) — the function label is overloaded with the
@@ -360,12 +405,21 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	if t, ok := observ.TargetFrom(r.Context()); ok {
 		t.Namespace, t.Function = string(m.Namespace), m.Upstream
 	}
+	oidc.DropCookies(r) // funcd's sign-in cookies reach no backend (ADR-0335 Decision 8)
 	// No edge PEP runs here, so the refusal says what an engine that is down says and names no hold (ADR-0290).
 	if _, held := s.held.NamespaceMarker(m.Namespace); held {
 		refuseHeld(w, fault.Unavailablef(op, "edge upstream unavailable"))
 		return
 	}
 	remainder := stripMatched(r.URL.Path, m.StripPrefix)
+	if m.KeepPath {
+		kept, ok := keptPath(r.URL.Path, m.Path, m.PrivatePaths)
+		if !ok {
+			fault.WriteProblem(w, fault.NotFoundf(op, "no route for %q", r.URL.Path))
+			return
+		}
+		remainder = kept
+	}
 	if remainder == "" {
 		remainder = "/"
 	}
@@ -394,21 +448,51 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	proxy.ServeHTTP(w, r)
 }
 
+// keptPath is the path an add-on entry forwards, its base path kept (ADR-0332 Decision 5): a path with a .. segment is
+// refused, as the static backend refuses one, and so is a cleaned path outside base or under a private path; the rest
+// goes on cleaned, so another spelling of a private path finds it.
+func keptPath(p, base string, private []string) (string, bool) {
+	if pathx.ContainsDotDot(p) {
+		return "", false
+	}
+	clean := path.Clean(p)
+	if base != "/" && !pathx.HasPrefix(clean, base) {
+		return "", false
+	}
+	for _, pp := range private {
+		if pathx.HasPrefix(clean, pp) {
+			return "", false
+		}
+	}
+	return clean, true
+}
+
 // authStance resolves the F77 auth stance for a request: the matched Route's mode if set, else the
-// namespace's edgeDefaults.auth.mode, else `open` (the phased default). routeMode is "" for the path
-// form or a Route with no auth set. It short-circuits without a store read when routeMode is set.
-func (s *Server) authStance(r *http.Request, routeMode v1.AuthMode, ns v1.NamespaceName) (v1.AuthMode, error) {
+// namespace's edgeDefaults.auth.mode, else `open` (the phased default), with the provider of an oidc one (ADR-0335).
+// routeMode is "" for the path form or a Route with no auth set. It short-circuits without a store read when
+// routeMode is set.
+func (s *Server) authStance(r *http.Request, routeMode v1.AuthMode, routeOIDC *router.OIDCAuth, ns v1.NamespaceName) (v1.AuthMode, *router.OIDCAuth, error) {
 	if routeMode != "" {
-		return routeMode, nil
+		return routeMode, routeOIDC, nil
 	}
 	spec, err := s.namespaceSpec(r, ns)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if d := spec.EdgeDefaults; d != nil && d.Auth != nil && d.Auth.Mode != "" {
-		return d.Auth.Mode, nil
+		return d.Auth.Mode, router.OIDCOf(d.Auth.RouteAuth()), nil
 	}
-	return v1.AuthOpen, nil
+	return v1.AuthOpen, nil, nil
+}
+
+// admitOIDC runs the edge's sign-in where the PEP runs (ADR-0335 Decision 2): before any wake or rate token. It
+// reports whether the call goes on; without a sign-in configured it answers 503.
+func (s *Server) admitOIDC(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName, a *router.OIDCAuth) bool {
+	if s.signIn == nil {
+		fault.WriteProblem(w, fault.Unavailablef(callOp, "sign-in is unavailable"))
+		return false
+	}
+	return s.signIn.Serve(w, r, ns, *a)
 }
 
 // exposureMode reads the target namespace's normalized exposure mode; an absent Namespace is implicit —

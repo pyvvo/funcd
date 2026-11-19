@@ -1,6 +1,7 @@
 # ADR-0242: A Route backend that serves a Site
 
 - **Status**: Implemented (2026-10-17), review passed; Reviewing (2026-10-17); Accepted (2026-10-17), after two judge rounds; the decider confirmed Decisions 2–5 and asked for a lane case.
+- **Superseded in part by**: [ADR-0335](0335-the-edge-signs-users-in-with-an-openid-connect-provider.md) (2026-11-19) — Decision 4's rule, for `oidc` entries only: one that cannot serve keeps its claims and answers 503.
 - **Date**: 2026-10-17
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, routing, site, static

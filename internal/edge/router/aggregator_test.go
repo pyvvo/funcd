@@ -489,3 +489,65 @@ func TestAggregator_HostSpellingsAreOneClaim(t *testing.T) {
 		})
 	}
 }
+
+// An add-on object's entry takes the rank after the Lake's (ADR-0332 Decision 5): on a same-name tie for one claim, the
+// Lake keeps it and the add-on object reports RouteConflict, and the claim it holds alone keeps its path rules.
+func TestAggregator_AddonObjectRankedAfterTheLake(t *testing.T) {
+	t.Parallel()
+	rtr := router.New()
+	a := router.NewAggregator(rtr, nil, nil, "", nil)
+	set(t, a, "routes")
+	lake := withHost(upstreamEntry("a", "x", "/q", "http://lake"), "h")
+	addon := withHost(upstreamEntry("a", "x", "/q", "http://engine"), "h")
+	addon.Owner.Kind = v1.KindAddonObject
+	addon.Rules[0].KeepPath, addon.Rules[0].PrivatePaths = true, []string{"/q/private"}
+
+	require.Empty(t, set(t, a, "lake/a/x", lake)[0].Reason)
+	v := set(t, a, "addon/a/x", addon)[0]
+	require.Equal(t, "RouteConflict", v.Reason)
+	require.Contains(t, v.Message, "Lake a/x")
+
+	set(t, a, "lake/a/x")
+	require.Empty(t, set(t, a, "addon/a/x", addon)[0].Reason)
+	m, ok := rtr.Resolve("h", "/q/ping", "GET")
+	require.True(t, ok)
+	require.Equal(t, "http://engine", m.Upstream)
+	require.True(t, m.KeepPath)
+	require.Equal(t, []string{"/q/private"}, m.PrivatePaths)
+}
+
+// oidcEntry is a Route entry of ns on host whose stance signs callers in with provider.
+func oidcEntry(ns v1.NamespaceName, name, host, path string, provider v1.ObjectName) router.Entry {
+	return router.Entry{Namespace: ns, Host: host, Auth: v1.AuthOIDC, OIDC: &router.OIDCAuth{Provider: provider},
+		Rules: []router.CompiledRule{{Path: path, Function: "fn"}}, Owner: router.Owner{Kind: v1.KindRoute, Namespace: ns, Name: v1.ObjectName(name)}}
+}
+
+// ADR-0335 Decisions 3 and 10: a host's entries name one provider; a later one naming another, or one naming two, is
+// ProviderConflict after RouteConflict, and keeps its claims refused, so its paths answer 503 and no other rule takes them.
+func TestAggregator_ProviderConflictKeepsItsClaims(t *testing.T) {
+	t.Parallel()
+	rtr := router.New()
+	a := router.NewAggregator(rtr, nil, nil, "", nil)
+	two := oidcEntry("staging", "two", "app.example.com", "/c", "sso")
+	two.Rules = append(two.Rules, router.CompiledRule{Path: "/d", Function: "fn", Auth: v1.AuthOIDC, OIDC: &router.OIDCAuth{Provider: "other"}})
+	verdicts := set(t, a, "routes",
+		oidcEntry("staging", "app", "app.example.com", "/", "sso"),
+		oidcEntry("staging", "zz", "app.example.com", "/b", "public"),
+		oidcEntry("staging", "same", "app.example.com", "/s", "sso"),
+		oidcEntry("staging", "b", "b.example.com", "/", "public"),
+		oidcEntry("staging", "clash", "app.example.com", "/", "public"),
+		two,
+	)
+	got := map[v1.ObjectName]string{}
+	for _, v := range verdicts {
+		got[v.Owner.Name] = v.Reason
+	}
+	require.Equal(t, map[v1.ObjectName]string{"app": "", "zz": router.ReasonProviderConflict, "same": "", "b": "",
+		"clash": "RouteConflict", "two": router.ReasonProviderConflict}, got)
+	m, ok := rtr.Resolve("app.example.com", "/b/x", "GET")
+	require.True(t, ok)
+	require.Equal(t, router.ReasonProviderConflict, m.Refused, "zz keeps /b")
+	m, _ = rtr.Resolve("app.example.com", "/x", "GET")
+	require.Empty(t, m.Refused)
+	require.Equal(t, &router.OIDCAuth{Provider: "sso"}, m.OIDC)
+}

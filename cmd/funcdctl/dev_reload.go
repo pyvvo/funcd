@@ -112,7 +112,7 @@ func infoStamp(fi fs.FileInfo) string {
 // *.yaml file is added or removed, it re-reads the folder, re-applies it and prunes what is gone; it also removes the
 // old step copies whose step serves its new one (Decision 7). applied is what the boot applied, plus the objects of an
 // earlier session it could not delete.
-func watchFolder(ctx context.Context, op string, c *sdk.Client, s *devSession, applied []v1.Object, logger *slog.Logger, done chan<- struct{}) {
+func watchFolder(ctx context.Context, op string, c, admin *sdk.Client, s *devSession, applied []v1.Object, logger *slog.Logger, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(devReloadPoll)
 	defer t.Stop()
@@ -121,7 +121,7 @@ func watchFolder(ctx context.Context, op string, c *sdk.Client, s *devSession, a
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := s.reload(ctx, op, c, &applied, logger); err != nil && ctx.Err() == nil {
+			if err := s.reload(ctx, op, c, admin, &applied, logger); err != nil && ctx.Err() == nil {
 				logger.Warn("reload failed", "err", err)
 			}
 			s.collectOldSteps(ctx, c)
@@ -169,7 +169,7 @@ func (s *devSession) changed() bool {
 // the boot did and prunes what *applied holds that the folder no longer does. A folder that does not load is reported
 // once and retried on the next change; an apply that lost a race with a status write (Conflict) is retried on the next
 // poll.
-func (s *devSession) reload(ctx context.Context, op string, c *sdk.Client, applied *[]v1.Object, logger *slog.Logger) error {
+func (s *devSession) reload(ctx context.Context, op string, c, admin *sdk.Client, applied *[]v1.Object, logger *slog.Logger) error {
 	forced := s.file.reloadFile(op, &s.secrets, logger.Warn)
 	if !forced && !s.settle.pending && !s.changed() {
 		return nil
@@ -192,15 +192,15 @@ func (s *devSession) reload(ctx context.Context, op string, c *sdk.Client, appli
 		s.folder.stamps = folder.stamps
 		return perr
 	}
-	if aerr := applyOrdered(ctx, op, c, desired); aerr != nil {
+	if aerr := applyOrdered(ctx, op, c, admin, desired); aerr != nil {
 		if fault.KindOf(aerr) != fault.Conflict {
 			s.folder = folder
 		}
-		*applied = pruneRemoved(ctx, c, *applied, desired, false, logger)
+		*applied = pruneRemoved(ctx, c, admin, *applied, desired, false, logger)
 		return aerr
 	}
 	s.folder = folder
-	*applied = pruneRemoved(ctx, c, *applied, desired, true, logger)
+	*applied = pruneRemoved(ctx, c, admin, *applied, desired, true, logger)
 	return nil
 }
 
@@ -264,28 +264,40 @@ func (s *devSession) currentStamps() map[string]string {
 // folder is the session's desired state) and returns what the session keeps: next, then each removed resource it
 // did not delete. del is false when the reload failed to apply, as a Function may still bind a removed resource. A
 // KVStore, Bucket or SQLDatabase that still holds data refuses the delete (ADR-0073, ADR-0232), so a reload never drops
-// data: it stays with a warning, and the next reload retries it.
-func pruneRemoved(ctx context.Context, c *sdk.Client, prev, next []v1.Object, del bool, logger *slog.Logger) []v1.Object {
+// data: it stays with a warning, and the next reload retries it. The Addons go last, after every object of their kinds,
+// and both are deleted with admin (ADR-0334 Decision 5).
+func pruneRemoved(ctx context.Context, c, admin *sdk.Client, prev, next []v1.Object, del bool, logger *slog.Logger) []v1.Object {
 	key := func(o v1.Object) string { return string(o.GroupVersionKind().Kind) + "/" + string(o.GetName()) }
 	want := make(map[string]bool, len(next))
 	for _, o := range next {
 		want[key(o)] = true
 	}
-	var kept []v1.Object
+	gone := func(o v1.Object) bool {
+		kind, client := o.GroupVersionKind().Kind, c
+		if kind == v1.KindAddon || v1.IsAddonKind(string(kind)) {
+			client = admin
+		}
+		err := client.Delete(ctx, kind, devNamespace, o.GetName())
+		if err == nil || fault.KindOf(err) == fault.NotFound {
+			return true
+		}
+		logger.Warn("a resource removed from the folder stays until it can be deleted", "kind", kind, "name", o.GetName(), "err", err)
+		return false
+	}
+	var kept, addons []v1.Object
 	for i := len(prev) - 1; i >= 0; i-- {
-		o := prev[i]
-		if want[key(o)] {
-			continue
+		switch o := prev[i]; {
+		case want[key(o)]:
+		case o.GroupVersionKind().Kind == v1.KindAddon:
+			addons = append(addons, o)
+		case !del || !gone(o):
+			kept = append(kept, o)
 		}
-		if del {
-			err := c.Delete(ctx, o.GroupVersionKind().Kind, devNamespace, o.GetName())
-			if err == nil || fault.KindOf(err) == fault.NotFound {
-				continue
-			}
-			logger.Warn("a resource removed from the folder stays until it can be deleted",
-				"kind", o.GroupVersionKind().Kind, "name", o.GetName(), "err", err)
+	}
+	for _, a := range addons {
+		if !del || !gone(a) {
+			kept = append(kept, a)
 		}
-		kept = append(kept, o)
 	}
 	slices.Reverse(kept)
 	return append(next, kept...)

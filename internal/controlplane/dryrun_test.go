@@ -145,6 +145,9 @@ func sample(k v1.Kind, name v1.ObjectName) v1.Object {
 		x.Spec.Buckets, x.Spec.Bindings = []v1.BucketEntry{{Name: "b"}}, v1.SiteBindings{Blob: []v1.BlobRef{{Bucket: "b", Prefix: "p"}}}
 	case *v1.Identity:
 		x.Spec.Type = v1.IdentityTypeExternal
+	case *v1.OIDCProvider:
+		x.Spec = v1.OIDCProviderSpec{Issuer: "https://login.example.com", SessionSecret: "s",
+			Client: v1.OIDCProviderClient{CredentialsSecret: "c"}}
 	case *v1.BackupSchedule:
 		x.Spec = v1.BackupScheduleSpec{Schedule: "@daily", Scope: v1.BackupScope{App: "a"},
 			Target:     v1.BackupTarget{URL: "s3://b", CredentialsSecret: "c"},
@@ -154,6 +157,9 @@ func sample(k v1.Kind, name v1.ObjectName) v1.Object {
 	case *v1.Restore:
 		x.Spec = v1.RestoreSpec{Backup: "b", Source: v1.RestoreSource{CredentialsSecret: "c", IdentitySecret: "i"},
 			Members: []v1.RestoreMember{{Kind: v1.KindKVStore, Name: "s", As: "t"}}}
+	case *v1.Addon:
+		x.Spec = v1.AddonSpec{Kind: "EchoService", Image: "docker.io/traefik/whoami@sha256:" + strings.Repeat("a", 64), Port: 80,
+			Readiness: v1.AddonReadiness{Path: "/"}}
 	}
 	return o
 }
@@ -211,7 +217,8 @@ func TestDryRunEveryWritableKind(t *testing.T) {
 	created := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	for _, k := range v1.AllKinds() {
 		create, replace := ops["create"+string(k)], ops["replace"+string(k)]
-		if create == nil {
+		// An add-on object's write needs its Addon, which this store does not list: TestAddonObjectDryRun has it.
+		if create == nil || k == v1.KindAddonObject {
 			continue
 		}
 		t.Run(string(k), func(t *testing.T) {

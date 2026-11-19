@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -700,4 +701,83 @@ func TestScenarioIssuedEnvReplacesNoEngine(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rt.created, 3, "gaining a pair replaces the engine")
 	require.Equal(t, "AK-2", rt.created[2].Env["AWS_ACCESS_KEY_ID"])
+}
+
+// ADR-0332 Decision 3: a spec's fence, its endpoints and whether only funcd reaches the engine, is the worker's, and a
+// change of either replaces a running engine (#1195).
+func TestConvergeCopiesTheFenceToTheWorker(t *testing.T) {
+	host, port, closeFn := engineServer(t, 200)
+	defer closeFn()
+	rt := newFakeRuntime(host, port)
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindAddonObject})
+	require.NoError(t, err)
+
+	spec := specFor(host, port, nil)
+	spec.EgressOnly, spec.HostOnly = []netip.AddrPort{}, true
+	_, err = pr.Converge(context.Background(), spec)
+	require.NoError(t, err)
+	require.Len(t, rt.created, 1)
+	require.NotNil(t, rt.created[0].EgressOnly)
+	require.Empty(t, rt.created[0].EgressOnly, "no endpoint")
+	require.True(t, rt.created[0].HostOnly, "only funcd reaches the engine")
+
+	spec.HostOnly = false
+	_, err = pr.Converge(context.Background(), spec)
+	require.NoError(t, err)
+	require.Len(t, rt.created, 2, "another inbound fence replaces the engine")
+	require.False(t, rt.created[1].HostOnly)
+}
+
+// BeforeStart runs once an engine's worker is created and before it starts. Its error leaves the worker created, and
+// the next Converge starts it once BeforeStart succeeds.
+func TestConverge_BeforeStartRunsBetweenCreateAndStart(t *testing.T) {
+	host, port, closeFn := engineServer(t, 200)
+	defer closeFn()
+	rt := newFakeRuntime(host, port)
+	rt.state = containerrt.StateCreated
+	type seen struct{ created, started int }
+	var calls []seen
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake, BeforeStart: func(context.Context) error {
+		rt.mu.Lock()
+		calls = append(calls, seen{len(rt.created), len(rt.started)})
+		rt.mu.Unlock()
+		if len(calls) == 1 {
+			return fault.Unavailablef("test.BeforeStart", "not ready to start")
+		}
+		return nil
+	}})
+	require.NoError(t, err)
+	ctx := context.Background()
+	spec := specFor(host, port, nil)
+
+	_, err = pr.Converge(ctx, spec)
+	require.Error(t, err, "a failed BeforeStart fails the pass")
+	require.Empty(t, rt.started, "and the worker is not started")
+	_, err = pr.Converge(ctx, spec)
+	require.NoError(t, err)
+	require.Equal(t, []seen{{1, 0}, {1, 0}}, calls, "each BeforeStart runs after the create and before the start")
+	require.Len(t, rt.created, 1, "the created worker is kept")
+	require.Len(t, rt.started, 1, "and started once BeforeStart succeeds")
+}
+
+// Namespaces names an engine's namespace from its Converge until a Teardown removed it: a Teardown whose stop fails
+// keeps it.
+func TestNamespacesKeepAnEngineUntilItIsRemoved(t *testing.T) {
+	host, port, closeFn := engineServer(t, 200)
+	defer closeFn()
+	rt := newFakeRuntime(host, port)
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
+	require.NoError(t, err)
+	ns := pr.(interface{ Namespaces() []v1.NamespaceName })
+	ctx := context.Background()
+	spec := specFor(host, port, nil)
+	_, err = pr.Converge(ctx, spec)
+	require.NoError(t, err)
+	require.Equal(t, []v1.NamespaceName{spec.Ref.Namespace}, ns.Namespaces())
+
+	rt.stopErr = fault.Unavailablef("fakeRuntime.Stop", "the engine does not stop yet")
+	require.Error(t, pr.Teardown(ctx, spec.Ref))
+	require.Equal(t, []v1.NamespaceName{spec.Ref.Namespace}, ns.Namespaces(), "a failed teardown keeps it")
+	require.NoError(t, pr.Teardown(ctx, spec.Ref))
+	require.Empty(t, ns.Namespaces(), "a removed engine leaves no namespace")
 }

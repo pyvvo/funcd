@@ -70,6 +70,9 @@ func TestScenarioExamplesBuildWithTheTools(t *testing.T) {
 	}
 
 	for name, lane := range readLanes(t) {
+		if len(lane.Push) == 0 {
+			continue // a lane that pushes nothing has no contract file to find
+		}
 		staged := stagedFiles(t, lane)
 		for _, push := range lane.Push {
 			if push.Site {

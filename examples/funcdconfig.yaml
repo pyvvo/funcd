@@ -21,6 +21,8 @@ server:
   listenAddr: 127.0.0.1:8080      # control-plane API. default: 127.0.0.1:8080
   dataPlaneAddr: 127.0.0.1:8081   # function-invoke ingress. default: 127.0.0.1:0 (ephemeral)
   # baseDomain: localhost         # namespace hosts <namespace>.<baseDomain> (ADR-0240). default: localhost
+  # edgePublicScheme: http        # the edge sign-in's callback scheme behind a TLS proxy (ADR-0335). default: http
+  # edgePublicPort: 0             # the callbacks' port; 0 ⇒ the data plane's bound port, none with only edgePublicScheme https. default: 0
   # tls:                          # HTTPS on both listeners (ADR-0111)
   #   enabled: false              # default: false (plaintext)
   #   mode: selfsigned            # selfsigned | provided | acme. default: selfsigned
@@ -260,6 +262,11 @@ log:
 #   maxDatabasesPerNamespace: 20  # SQLDatabase count cap per namespace; negative ⇒ no cap. default: 20
 #   callTimeout: 30s              # bound of one context.sql call (ADR-0233), also the engine's db_timeout. default: 30s
 #   changeFeedPort: 7075          # where the engines post their changes (ADR-0235). default: 7075 on the bridge address, a free port on loopback (ADR-0260)
+
+# --- addons: add-ons an admin registers, built outside funcd (ADR-0332) --------------------------
+# addons:
+#   registries: []                # the registries an Addon's image may come from, its host (ghcr.io); empty refuses every Addon. default: []
+#   maxObjectsPerNamespace: 20    # add-on object count cap per namespace, all add-ons together; negative ⇒ no cap. default: 20
 
 # --- volumes: Function volumes (ADR-0262) -------------------------------------------------------
 # volumes:

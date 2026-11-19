@@ -24,13 +24,20 @@ const (
 )
 
 // FenceNetns writes the funcd_fence table into the network namespace at netnsPath: its output chain drops every
-// packet but loopback, established or related traffic, and new TCP to an allow endpoint (ADR-0269). A process in that
-// netns without CAP_NET_ADMIN cannot change it, and it goes with the netns.
-func FenceNetns(netnsPath string, allow []netip.AddrPort) error {
+// packet but loopback, established or related traffic, and new TCP to an allow endpoint (ADR-0269). With admit
+// non-nil, its input chain drops every packet but loopback, established or related traffic, and IPv4 from an admit
+// address (ADR-0332 Decision 3). A process in that netns without CAP_NET_ADMIN cannot change it, and it goes with the
+// netns.
+func FenceNetns(netnsPath string, allow []netip.AddrPort, admit []netip.Addr) error {
 	const op = "network.FenceNetns"
 	for _, ap := range allow {
 		if !ap.Addr().Is4() {
 			return fault.Invalidf(op, "fence endpoint %s is not IPv4", ap)
+		}
+	}
+	for _, a := range admit {
+		if !a.Is4() {
+			return fault.Invalidf(op, "fence source %s is not IPv4", a)
 		}
 	}
 	f, err := os.Open(netnsPath)
@@ -51,6 +58,15 @@ func FenceNetns(netnsPath string, allow []netip.AddrPort) error {
 	for _, exprs := range fenceRules(allow) {
 		c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: exprs})
 	}
+	if admit != nil {
+		in := c.AddChain(&nftables.Chain{
+			Name: "input", Table: t, Type: nftables.ChainTypeFilter,
+			Hooknum: nftables.ChainHookInput, Priority: nftables.ChainPriorityFilter, Policy: &drop,
+		})
+		for _, exprs := range admitRules(admit) {
+			c.AddRule(&nftables.Rule{Table: t, Chain: in, Exprs: exprs})
+		}
+	}
 	if err := c.Flush(); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "program %s in netns %s", fenceTableName, netnsPath)
 	}
@@ -68,6 +84,19 @@ func fenceRules(allow []netip.AddrPort) [][]expr.Any {
 		rules = append(rules, concat(
 			matchIPv4(), matchDstAddr(ap.Addr().As4()), matchL4Proto(unix.IPPROTO_TCP), matchDport(ap.Port()), verdict(expr.VerdictAccept),
 		))
+	}
+	return rules
+}
+
+// admitRules are the input chain's accepts, in order: loopback, established or related, then IPv4 from each admit
+// address.
+func admitRules(admit []netip.Addr) [][]expr.Any {
+	rules := [][]expr.Any{
+		concat(matchLoopback(expr.MetaKeyIIF, expr.CmpOpEq), verdict(expr.VerdictAccept)),
+		concat(matchEstablished(), verdict(expr.VerdictAccept)),
+	}
+	for _, a := range admit {
+		rules = append(rules, concat(matchIPv4(), matchSrcAddr(a.As4()), verdict(expr.VerdictAccept)))
 	}
 	return rules
 }
