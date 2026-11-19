@@ -304,3 +304,18 @@ func TestNamespaceOIDCStanceReachesTheByNamePath(t *testing.T) {
 	resp = e.call(http.MethodPost, "staging.localhost", "/function/app", nil)
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, "any other call whose provider is missing gets 503")
 }
+
+// ADR-0335 Decision 8: funcd's sign-in cookies reach no backend, whatever the stance of the rule that serves the call:
+// an open rule beside an oidc one on the host gets the call's other cookies as sent.
+func TestFuncdCookiesReachNoBackend(t *testing.T) {
+	t.Parallel()
+	e := newSignInEdge(t)
+	e.provider("sso", nil, "app.example.com")
+	e.program(entry("app", "app.example.com", oidcRule("/", "sso", v1.UnauthenticatedRedirect),
+		router.CompiledRule{Path: "/www", Function: "app", Auth: v1.AuthOpen}))
+	session := e.signIn("app.example.com", "/")
+	resp := e.call(http.MethodGet, "app.example.com", "/www", map[string]string{"Cookie": "theme=dark"}, session,
+		&http.Cookie{Name: "__Host-funcd_auth.staging.sso", Value: "x"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "theme=dark", e.last().Get("Cookie"), "only the call's other cookies reach the open rule's Function")
+}

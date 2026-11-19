@@ -311,6 +311,7 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	// the reconciler, which decides whether the function is pooled.
 	out := c.Request
 	out.URL.Path = remainder
+	oidc.DropCookies(out) // funcd's sign-in cookies reach no backend (ADR-0335 Decision 8)
 	out = activator.WithFunction(out, c.Target)
 	out = activator.WithAnswerCheck(out, func(res *http.Response) error {
 		if rf := s.chain.After(r.Context(), c, invoke.NewAnswer(res)); rf != nil {
@@ -404,6 +405,7 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	if t, ok := observ.TargetFrom(r.Context()); ok {
 		t.Namespace, t.Function = string(m.Namespace), m.Upstream
 	}
+	oidc.DropCookies(r) // funcd's sign-in cookies reach no backend (ADR-0335 Decision 8)
 	// No edge PEP runs here, so the refusal says what an engine that is down says and names no hold (ADR-0290).
 	if _, held := s.held.NamespaceMarker(m.Namespace); held {
 		refuseHeld(w, fault.Unavailablef(op, "edge upstream unavailable"))
