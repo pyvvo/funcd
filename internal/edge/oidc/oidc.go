@@ -170,7 +170,7 @@ func (g *Gate) Serve(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName
 	}
 	switch a.Unauthenticated.Normalized() {
 	case v1.UnauthenticatedAllow:
-		dropCookies(r)
+		DropCookies(r)
 		return true
 	case v1.UnauthenticatedRedirect:
 		if navigation(r) {
@@ -458,7 +458,7 @@ func signIn(r *http.Request, provider v1.ObjectName, claims json.RawMessage, idT
 	if idToken != "" {
 		r.Header.Set(HeaderIDToken, idToken)
 	}
-	dropCookies(r)
+	DropCookies(r)
 }
 
 // headerValue reports whether s is a non-empty header value with no control character.
@@ -472,8 +472,9 @@ func funcdCookie(name string) bool {
 	return strings.HasPrefix(name, stateCookie+".") || strings.HasPrefix(name, sessionCookie+".")
 }
 
-// dropCookies removes funcd's cookies from the call's Cookie headers and keeps the others as sent.
-func dropCookies(r *http.Request) {
+// DropCookies removes funcd's sign-in cookies from the call's Cookie headers and keeps the others as sent. The data
+// plane runs it on every request before any backend, after the gate has read them.
+func DropCookies(r *http.Request) {
 	var kept []string
 	for _, line := range r.Header.Values("Cookie") {
 		for _, part := range strings.Split(line, ";") {
@@ -643,29 +644,49 @@ func (g *Gate) signInCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 // stateOf is the provider of the call's state cookie that opens and holds state, with the cookie's name and data;
-// v is nil when none does. An error is a provider that cannot be used.
+// v is nil when none does. A cookie opens only under the session key and the client of a provider the store holds,
+// so a cookie that names no provider is one that does not open. An error is the provider of a cookie that opened,
+// which cannot finish the sign-in.
 func (g *Gate) stateOf(r *http.Request, state string) (*view, string, stateData, error) {
-	var unusable error
-	var unusableKey providerKey
+	if state == "" {
+		return nil, "", stateData{}, nil
+	}
 	for _, c := range r.Cookies() {
 		k, ok := g.parseCookie(c.Name, stateCookie)
-		if !ok || state == "" {
+		if !ok {
+			continue
+		}
+		sealer := g.sealerOf(r.Context(), k)
+		if sealer == nil {
+			continue
+		}
+		var st stateData
+		plain, ok := g.open(sealer, c.Name, c.Value)
+		if !ok || json.Unmarshal(plain, &st) != nil || st.State != state {
 			continue
 		}
 		v, err := g.load(r.Context(), k.ns, k.name)
 		if err != nil {
-			unusable, unusableKey = err, k
-			continue
+			return &view{providerKey: k}, "", stateData{}, err
 		}
-		var st stateData
-		if plain, ok := g.open(v, c.Name, c.Value); ok && json.Unmarshal(plain, &st) == nil && st.State == state {
-			return v, c.Name, st, nil
-		}
-	}
-	if unusable != nil {
-		return &view{providerKey: unusableKey}, "", stateData{}, unusable
+		return v, c.Name, st, nil
 	}
 	return nil, "", stateData{}, nil
+}
+
+// sealerOf is what opens the cookies of provider k: its session key and client ID as the store holds them, nil when
+// the store holds no such provider or no key that opens a cookie.
+func (g *Gate) sealerOf(ctx context.Context, k providerKey) *view {
+	s, err := read(ctx, g.store, g.addons, k.ns, k.name)
+	if err != nil {
+		return nil
+	}
+	key, cerr := s.check()
+	if cerr != nil {
+		return nil
+	}
+	id, _ := s.credentials()
+	return &view{providerKey: k, sessionKey: key, clientID: id}
 }
 
 // parseCookie is the provider a cookie of kind names, in the gate's own form of the name.
@@ -684,7 +705,8 @@ func (g *Gate) parseCookie(name, kind string) (providerKey, bool) {
 	if !ok || ns == "" || provider == "" {
 		return providerKey{}, false
 	}
-	return providerKey{v1.NamespaceName(ns), v1.ObjectName(provider)}, true
+	// A clone keeps no request's Cookie header alive past the request.
+	return providerKey{v1.NamespaceName(strings.Clone(ns)), v1.ObjectName(strings.Clone(provider))}, true
 }
 
 // queryToken keeps an error code from the query to letters, digits and _, so the answer carries no markup.

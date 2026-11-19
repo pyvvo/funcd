@@ -394,3 +394,21 @@ func TestASessionPastItsExpirySignsInAgain(t *testing.T) {
 	resp, _ = h.get(http.MethodPost, h.appURL(appHost, "/orders"), nil)
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
+
+// ADR-0335 Decision 4: a state cookie opens only under the session key and the client of a provider the store holds,
+// so a made-up one gets the 401 of a cookie that does not open, whether its provider exists or not, and the gate keeps
+// nothing of it.
+func TestCallbackMadeUpStateCookies(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, harnessOptions{})
+	h.withClient(nil)
+	h.browser.Jar, _ = cookiejar.New(nil)
+	for _, name := range []string{"__Host-funcd_auth.staging.sso", "__Host-funcd_auth.staging.nope",
+		"__Host-funcd_auth.nope.sso", "__Host-funcd_auth." + strings.Repeat("x", 4096) + ".y"} {
+		resp, _ := h.get(http.MethodGet, h.appURL(appHost, callbackPath+"?state=s&code=c"), map[string]string{"Cookie": name + "=AAAA"})
+		require.Equal(t, http.StatusUnauthorized, resp.StatusCode, name[:min(len(name), 40)])
+	}
+	h.gate.mu.Lock()
+	defer h.gate.mu.Unlock()
+	require.Empty(t, h.gate.logged, "no made-up cookie leaves a record")
+}
