@@ -1,6 +1,6 @@
 # ADR-0334: funcdctl dev runs add-on engines on the local Docker or containerd
 
-- **Status**: Accepted (2026-11-19), by the decider's standing go-ahead for FEAT-0018 ("go ahead, don't wait for
+- **Status**: Reviewing (2026-11-19); Accepted (2026-11-19), by the decider's standing go-ahead for FEAT-0018 ("go ahead, don't wait for
   me", "until we ship entirely the new feature"), after two rounds of an independent judge (a subagent), every
   Blocker and Major folded
 - **Date**: 2026-11-19
