@@ -160,7 +160,7 @@ func TestEngineThroughNerdctl(t *testing.T) {
 	require.Contains(t, strings.Join(chown.Args, " "), "chown")
 	run := find(t, cs, []string{"run", "-d"}, "--name", name, "--restart", "no", "--stop-signal", "SIGTERM",
 		"--stop-timeout", "10", "-p", "127.0.0.1::8080", "funcd/dev-key="+key, "funcd/role=engine",
-		"--mount", "type=volume,source="+name+",target=/app/data,volume-nocopy", "--env-file", "/dev/stdin", spec.Image)
+		"--mount", "type=bind,source=/var/lib/nerdctl/volumes/"+name+"/_data,target=/app/data", "--env-file", "/dev/stdin", spec.Image)
 	require.NotContains(t, strings.Join(run.Args, " "), "s3cret", "no Secret on the command line")
 	require.Equal(t, "HQL_SECRET_API=s3cret\n", run.Stdin)
 	require.Contains(t, run.Args, "TRUSTED_PROXIES=10.0.0.0/8\n127.0.0.1/32", "a value with a newline")

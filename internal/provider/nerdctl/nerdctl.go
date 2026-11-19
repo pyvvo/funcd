@@ -199,7 +199,13 @@ func (c cli) Run(ctx context.Context, spec docker.RunSpec) error {
 		"--stop-timeout", strconv.Itoa(int(spec.StopGrace / time.Second)), "-p", "127.0.0.1::" + strconv.Itoa(spec.Port)}
 	args = append(args, labelArgs("--label", spec.Labels)...)
 	if spec.Volume != "" {
-		args = append(args, "--mount", "type=volume,source="+spec.Volume+",target="+spec.Target+",volume-nocopy")
+		// nerdctl's releases take no volume-nocopy, so the engine mounts the volume's own directory as a bind, which
+		// never copies the image's files up (ADR-0334 Decision 3).
+		dir, err := c.mountpoint(ctx, spec.Volume)
+		if err != nil {
+			return err
+		}
+		args = append(args, "--mount", "type=bind,source="+dir+",target="+spec.Target)
 	}
 	// An env file on nerdctl's standard input keeps the values, Secrets among them, off its command line; an env file
 	// holds no newline, so a value with one goes on it.
@@ -233,6 +239,21 @@ func (c cli) Remove(ctx context.Context, name string) error {
 		return nil
 	}
 	return err
+}
+
+// mountpoint is the directory that holds volume name's files, where nerdctl runs.
+func (c cli) mountpoint(ctx context.Context, name string) (string, error) {
+	out, err := c.run(ctx, nil, "volume", "inspect", name)
+	if err != nil {
+		return "", err
+	}
+	var vols []struct {
+		Mountpoint string `json:"Mountpoint"`
+	}
+	if err := json.Unmarshal(out, &vols); err != nil || len(vols) != 1 || vols[0].Mountpoint == "" {
+		return "", fault.Internalf("nerdctl", "read the directory of the volume %s: %v", name, err)
+	}
+	return vols[0].Mountpoint, nil
 }
 
 func (c cli) CreateVolume(ctx context.Context, name string, labels map[string]string) error {

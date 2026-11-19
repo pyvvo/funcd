@@ -57,9 +57,13 @@ type binding struct {
 }
 
 type volume struct {
-	Name   string            `json:"Name"`
-	Labels map[string]string `json:"Labels"`
+	Name       string            `json:"Name"`
+	Labels     map[string]string `json:"Labels"`
+	Mountpoint string            `json:"Mountpoint"`
 }
+
+// mountpointOf is the directory the fake says holds volume name's files.
+func mountpointOf(name string) string { return "/var/lib/nerdctl/volumes/" + name + "/_data" }
 
 func main() {
 	os.Exit(run(os.Getenv(DirEnv), os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -221,6 +225,7 @@ func (f *fake) runEngine() {
 	for _, m := range f.values("--mount") {
 		for _, part := range strings.Split(m, ",") {
 			if v, ok := strings.CutPrefix(part, "source="); ok {
+				v = strings.TrimSuffix(strings.TrimPrefix(v, "/var/lib/nerdctl/volumes/"), "/_data")
 				c.Volumes = append(c.Volumes, v)
 			}
 		}
@@ -262,7 +267,7 @@ func (f *fake) volume(verb, last string) int {
 	case "inspect":
 		var vols []volume
 		for _, n := range f.args[2:] {
-			vols = append(vols, volume{Name: n, Labels: f.st.Volumes[n]})
+			vols = append(vols, volume{Name: n, Labels: f.st.Volumes[n], Mountpoint: mountpointOf(n)})
 		}
 		b, _ := json.Marshal(vols)
 		_, _ = f.stdout.Write(b)
