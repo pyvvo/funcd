@@ -2,15 +2,18 @@ package funcd
 
 import (
 	"cmp"
+	"context"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/edge/oidc"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/provider"
 	addonsvc "github.com/pyvvo/funcd/internal/services/addon"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // addonProvider is the add-ons an admin registers (ADR-0332): one engine per object of an add-on's kind, run by its
@@ -85,5 +88,40 @@ func (s *addonProvider) build(d addonDeps) error {
 	d.ctrl.Register(v1.KindAddonObject.GVK(), rec)
 	d.ctrl.Watches(v1.KindAddon.GVK(), rec.MapAddon)
 	d.ctrl.Watches(v1.KindSecret.GVK(), rec.MapSecret)
+	d.ctrl.Watches(v1.KindOIDCProvider.GVK(), rec.MapOIDCProvider)
 	return nil
+}
+
+// storedAddons is the sign-in's view of the stored add-on objects (ADR-0335 Decisions 1 and 7): an OIDCProvider's
+// addon names one, whose engine the back channel reaches at its own address.
+type storedAddons struct{ store store.Store }
+
+func (s storedAddons) Get(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (oidc.AddonObject, error) {
+	obj, err := s.store.Get(ctx, v1.KindAddonObject.GVK(), ns, name)
+	if err != nil {
+		return oidc.AddonObject{}, err
+	}
+	o, ok := obj.(*v1.AddonObject)
+	if !ok {
+		return oidc.AddonObject{}, fault.Internalf("funcd.storedAddons", "object %s/%s is not an AddonObject", ns, name)
+	}
+	return addonView(o), nil
+}
+
+func (s storedAddons) List(ctx context.Context, ns v1.NamespaceName) ([]oidc.AddonObject, error) {
+	list, err := s.store.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{Namespace: ns})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]oidc.AddonObject, 0, len(list.Items))
+	for _, item := range list.Items {
+		if o, ok := item.(*v1.AddonObject); ok {
+			out = append(out, addonView(o))
+		}
+	}
+	return out, nil
+}
+
+func addonView(o *v1.AddonObject) oidc.AddonObject {
+	return oidc.AddonObject{Name: o.Name, Address: o.Status.Address, Ingress: o.Spec.Ingress}
 }

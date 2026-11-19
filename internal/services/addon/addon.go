@@ -35,6 +35,9 @@ const (
 	reasonBindingResolveFailed = "BindingResolveFailed"
 	reasonEngineNotReady       = "EngineNotReady"
 	reasonProgrammed           = "Programmed"
+	// reasonProviderNotFound is IngressReady's while the object's oidc stance names no OIDCProvider (ADR-0335
+	// Decision 10).
+	reasonProviderNotFound = "ProviderNotFound"
 )
 
 // expectStatus is the answer of an engine's readiness path that makes it Ready (ADR-0332 Decision 1).
@@ -136,6 +139,16 @@ func (r *Reconciler) MapSecret(ctx context.Context, obj v1.Object) []controller.
 			}
 		}
 		return false
+	})
+}
+
+// MapOIDCProvider maps an OIDCProvider's change to the objects of its namespace whose own ingress.auth names it, so a
+// new provider ends a ProviderNotFound (ADR-0335 Decision 10).
+func (r *Reconciler) MapOIDCProvider(ctx context.Context, obj v1.Object) []controller.Request {
+	m := obj.GetObjectMeta()
+	return r.objects(ctx, m.Namespace, func(o *v1.AddonObject) bool {
+		p, _, ok := o.Spec.Ingress.Stance().OIDC()
+		return ok && p == m.Name
 	})
 }
 

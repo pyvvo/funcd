@@ -662,3 +662,34 @@ func TestAddonObjectDryRun(t *testing.T) {
 	stored, _ := e.object(t, "default", "login")
 	require.Empty(t, stored.Spec.Resources.Memory, "a dry-run replace stores nothing")
 }
+
+// ADR-0335 Decision 10: an add-on object whose ingress.auth names no OIDCProvider of its namespace keeps its claim,
+// refused, so its paths answer 503, and shows IngressReady=False, ProviderNotFound, until the provider exists.
+func TestAddonObjectProviderNotFound(t *testing.T) {
+	t.Parallel()
+	e := startAddons(t, []string{"containerd"})
+	e.apply(t, e.admin, rauthyAddon("rauthy"))
+	login := identityProvider("default")
+	login.Spec.Ingress.Auth = &v1.RouteAuth{Mode: v1.AuthOIDC, Provider: "sso"}
+	e.apply(t, e.dev, login)
+	ingress := func(reason string) func() bool {
+		return func() bool {
+			o, ok := e.object(t, "default", "login")
+			if !ok {
+				return false
+			}
+			c, _ := o.Status.Conditions.Get("IngressReady")
+			return c.Reason == reason
+		}
+	}
+	require.Eventually(t, ingress("ProviderNotFound"), 5*time.Second, 10*time.Millisecond)
+	status, _ := e.edge(t, http.MethodGet, "login.example.com", "/auth/v1/ping")
+	require.Equal(t, http.StatusServiceUnavailable, status, "the entry keeps its claim, refused")
+
+	sso := &v1.OIDCProvider{TypeMeta: tmeta(v1.KindOIDCProvider)}
+	sso.Name, sso.Namespace, sso.ResourceGroup = "sso", "default", "rg1"
+	sso.Spec = v1.OIDCProviderSpec{Issuer: "https://login.example.com/auth/v1",
+		Client: v1.OIDCProviderClient{CredentialsSecret: "sso-client"}, SessionSecret: "sso-session"}
+	e.apply(t, e.dev, sso)
+	require.Eventually(t, ingress("Programmed"), 5*time.Second, 10*time.Millisecond, "a new provider ends the wait")
+}

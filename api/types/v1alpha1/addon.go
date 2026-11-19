@@ -132,6 +132,9 @@ func (a *Addon) Validate() error {
 		if err := validateServedPath(op, "spec.basePath", s.BasePath); err != nil {
 			return err
 		}
+		if UnderAuthPath(s.BasePath) {
+			return fault.Invalidf(op, "spec.basePath %q lies under %s, the edge's own path on every host", s.BasePath, AuthPath)
+		}
 	}
 	base := s.AddonBasePath()
 	for i, p := range s.PrivatePaths {
@@ -277,6 +280,9 @@ func (o *AddonObject) Validate() error {
 			return fault.Invalidf(op, "spec.ingress.auth.mode authenticated is not allowed: an add-on's entry runs no edge check of funcd's credentials")
 		}
 		if err := in.validate(op, "spec.ingress"); err != nil {
+			return err
+		}
+		if err := in.ValidateOIDCHost(op, "spec.ingress", o.Namespace); err != nil {
 			return err
 		}
 	}

@@ -43,6 +43,8 @@ func TestAddonValidate(t *testing.T) {
 		"no port":                      func(s *AddonSpec) { s.Port = 0 },
 		"a base path ending in /":      func(s *AddonSpec) { s.BasePath = "/auth/v1/" },
 		"a base path with ..":          func(s *AddonSpec) { s.BasePath = "/auth/../v1" },
+		"the edge's own path":          func(s *AddonSpec) { s.BasePath = "/.auth" },
+		"a base path under /.auth":     func(s *AddonSpec) { s.BasePath = "/.auth/v1" },
 		"a private path outside":       func(s *AddonSpec) { s.PrivatePaths = []string{"/admin"} },
 		"a private path beside":        func(s *AddonSpec) { s.PrivatePaths = []string{"/auth/v10"} },
 		"a private path spelled //":    func(s *AddonSpec) { s.PrivatePaths = []string{"/auth/v1//clients_dyn"} },
@@ -123,6 +125,9 @@ func TestAddonObjectValidate(t *testing.T) {
 			o.Spec.Ingress.Auth = &RouteAuth{Mode: AuthAuthenticated}
 		},
 		"a bad cpu": func(o *AddonObject) { o.Spec.Resources.CPU = "lots" },
+		"an oidc stance with no host in default": func(o *AddonObject) {
+			o.Spec.Ingress.Host, o.Spec.Ingress.Auth = "", &RouteAuth{Mode: AuthOIDC, Provider: "sso"}
+		},
 	} {
 		o := identityProvider()
 		edit(o)
@@ -132,4 +137,6 @@ func TestAddonObjectValidate(t *testing.T) {
 	o = identityProvider()
 	o.Spec.Ingress.Auth = &RouteAuth{Mode: AuthOpen}
 	require.NoError(t, o.Validate(), "the open mode")
+	o.Spec.Ingress.Auth = &RouteAuth{Mode: AuthOIDC, Provider: "sso"}
+	require.NoError(t, o.Validate(), "the oidc mode on a host")
 }

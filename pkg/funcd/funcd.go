@@ -1189,7 +1189,7 @@ func (p *Platform) buildControlPlane() error {
 	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, c.baseDomain, edgeEnforcer, targetLimiter, staticHandler,
 		c.invokeDefaultTimeout, p.logger, dataplane.WithCallGate(c.callGate()), dataplane.WithChain(callChain),
 		dataplane.WithOIDC(oidc.New(oidc.Deps{Store: c.store, CallbackURL: p.callbacks().URL, HTTPS: p.callbacks().HTTPS(),
-			BackChannel: c.oidcBackChannel, Logger: p.logger})))
+			BackChannel: c.oidcBackChannel, Addons: storedAddons{c.store}, Logger: p.logger})))
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
 	dpHandler := gateway.Chain(dpCore, gateway.WriteStall(gateway.WriteStallTimeout), gateway.Recover(p.logger),
 		gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
@@ -1233,8 +1233,8 @@ func (p *Platform) registerSignIn(ctrl *controller.Controller, fns *function.Rec
 	c := p.cfg
 	ctrl.Register(v1.KindOIDCProvider.GVK(), oidc.NewReconciler(oidc.ReconcilerDeps{Store: c.store, CallbackURL: p.callbacks().URL,
 		Client: oidc.BackChannelClient(c.oidcBackChannel), Held: c.nsGate(), SupervisionPeriod: c.pacing.SupervisionPeriod,
-		BaseDomain: c.baseDomain, Logger: p.logger}))
-	for _, k := range []v1.Kind{v1.KindRoute, v1.KindFunction, v1.KindSite, v1.KindNamespace, v1.KindSecret} {
+		BaseDomain: c.baseDomain, Addons: storedAddons{c.store}, Logger: p.logger}))
+	for _, k := range []v1.Kind{v1.KindRoute, v1.KindFunction, v1.KindSite, v1.KindNamespace, v1.KindSecret, v1.KindAddonObject} {
 		ctrl.Watches(k.GVK(), oidc.MapProviders(c.store))
 	}
 	ctrl.Register(v1.KindNamespace.GVK(), oidc.NewNamespaceCheck(c.store, p.logger))

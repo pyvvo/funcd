@@ -198,7 +198,9 @@ func (r *Reconciler) engineSpec(a *v1.Addon, o *v1.AddonObject, env map[string]s
 
 // syncEntry programs the object's edge entry while it is Ready and declares spec.ingress, and clears it otherwise. The
 // entry is an upstream one (ADR-0138) at the Addon's basePath, kept, with its private paths, and its stance is the
-// object's own ingress.auth, open when unset: an upstream entry takes no namespace default (ADR-0332 Decision 5).
+// object's own ingress.auth, open when unset: an upstream entry takes no namespace default (ADR-0332 Decision 5). An
+// oidc stance whose provider the namespace lacks keeps the entry's claims, refused, so its paths answer 503 (ADR-0335
+// Decision 10).
 func (r *Reconciler) syncEntry(ctx context.Context, a *v1.Addon, o *v1.AddonObject, st provider.ProviderStatus) error {
 	const op = "services.addon.syncEntry"
 	if r.routes == nil {
@@ -209,16 +211,24 @@ func (r *Reconciler) syncEntry(ctx context.Context, a *v1.Addon, o *v1.AddonObje
 	if in == nil || !st.Ready {
 		return r.clearEntry(ctx, o)
 	}
+	missing, err := r.missingProvider(ctx, o)
+	if err != nil {
+		return err
+	}
 	enabled := in.Enabled == nil || *in.Enabled
 	entry := router.Entry{
 		Namespace: o.Namespace,
 		Host:      in.Host,
 		Auth:      stance(in),
+		OIDC:      router.OIDCOf(in.Stance()),
 		Enabled:   &enabled,
 		Rules: []router.CompiledRule{{
 			Path: a.Spec.AddonBasePath(), Upstream: "http://" + st.Address, KeepPath: true, PrivatePaths: a.Spec.PrivatePaths,
 		}},
 		Owner: router.Owner{Kind: v1.KindAddonObject, Namespace: o.Namespace, Name: o.Name},
+	}
+	if missing != "" {
+		entry.Refused = router.ReasonProviderNotFound
 	}
 	verdicts, err := r.routes.Set(ctx, src, []router.Entry{entry})
 	if err != nil {
@@ -227,12 +237,32 @@ func (r *Reconciler) syncEntry(ctx context.Context, a *v1.Addon, o *v1.AddonObje
 	if len(verdicts) != 1 {
 		return fault.Internalf(op, "the edge aggregator returned %d verdicts for the 1 entry of %s", len(verdicts), src)
 	}
-	if v := verdicts[0]; v.Reason != "" {
+	switch v := verdicts[0]; {
+	case missing != "":
+		o.Status.Conditions.Set(v1.Condition{Type: condIngressReady, Status: v1.ConditionFalse, Reason: reasonProviderNotFound,
+			Message: fmt.Sprintf("spec.ingress.auth.provider %q names no OIDCProvider of namespace %s", missing, o.Namespace)})
+	case v.Reason != "":
 		o.Status.Conditions.Set(v1.Condition{Type: condIngressReady, Status: v1.ConditionFalse, Reason: v.Reason, Message: v.Message})
-	} else {
+	default:
 		o.Status.Conditions.Set(v1.Condition{Type: condIngressReady, Status: v1.ConditionTrue, Reason: reasonProgrammed})
 	}
 	return nil
+}
+
+// missingProvider is the OIDCProvider the object's own oidc stance names when its namespace does not hold it, else "".
+func (r *Reconciler) missingProvider(ctx context.Context, o *v1.AddonObject) (v1.ObjectName, error) {
+	provider, _, ok := o.Spec.Ingress.Stance().OIDC()
+	if !ok {
+		return "", nil
+	}
+	_, err := r.store.Get(ctx, v1.KindOIDCProvider.GVK(), o.Namespace, provider)
+	if fault.KindOf(err) == fault.NotFound {
+		return provider, nil
+	}
+	if err != nil {
+		return "", fault.Wrapf(err, fault.KindOf(err), "services.addon.syncEntry", "get OIDCProvider %s/%s", o.Namespace, provider)
+	}
+	return "", nil
 }
 
 // clearEntry retracts the object's edge entry: IngressReady goes with no spec.ingress, and is False while the object is

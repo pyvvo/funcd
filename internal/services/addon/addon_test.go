@@ -89,3 +89,31 @@ func TestMapAddonAndSecret(t *testing.T) {
 	keys := &v1.Secret{ObjectMeta: v1.ObjectMeta{Name: "keys", Namespace: "a"}}
 	require.ElementsMatch(t, []controller.Request{req("a", "login"), req("a", "echo")}, r.MapSecret(ctx, keys))
 }
+
+// ADR-0335 Decision 10: an OIDCProvider's change reaches the objects of its namespace whose own ingress.auth names it.
+func TestMapOIDCProvider(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(memory.New())
+	t.Cleanup(func() { _ = st.Close() })
+	seed := func(ns v1.NamespaceName, name, provider v1.ObjectName) {
+		o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject}}
+		o.Name, o.Namespace, o.ResourceGroup, o.Spec.Kind = name, ns, "rg1", "IdentityProvider"
+		o.Spec.Ingress = &v1.Ingress{Host: string(name) + ".example.com"}
+		if provider != "" {
+			o.Spec.Ingress.Auth = &v1.RouteAuth{Mode: v1.AuthOIDC, Provider: provider}
+		}
+		_, err := st.Create(ctx, o)
+		require.NoError(t, err)
+	}
+	seed("a", "behind", "sso")
+	seed("a", "other", "other-sso")
+	seed("a", "open", "")
+	seed("b", "elsewhere", "sso")
+	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: noRuntime{}})
+	require.NoError(t, err)
+
+	sso := &v1.OIDCProvider{ObjectMeta: v1.ObjectMeta{Name: "sso", Namespace: "a"}}
+	require.Equal(t, []controller.Request{{GVK: v1.KindAddonObject.GVK(), Namespace: "a", Name: "behind"}},
+		r.MapOIDCProvider(ctx, sso))
+}
