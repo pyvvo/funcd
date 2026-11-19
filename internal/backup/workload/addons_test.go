@@ -356,4 +356,15 @@ func TestAddons_AnAddonOfTheSamePluralKeepsItsObjects(t *testing.T) {
 	_, err = workload.Addons(r.st, r.files).Destination(workload.WithRestore(r.ctx, "rewind"), "orders",
 		v1.RestoreMember{Kind: "IdentityProvider", Name: "login", InPlace: true})
 	require.NoError(t, err, "an in-place Restore finds its Addon")
+
+	// A write under the new Addon stores its kind's case; a Backup taken before still names the old one.
+	obj, err := r.st.Get(r.ctx, v1.KindAddonObject.GVK(), "orders", "login")
+	require.NoError(t, err)
+	stored := obj.(*v1.AddonObject)
+	stored.Spec.Kind = "Identityprovider"
+	_, err = r.st.Update(r.ctx, stored)
+	require.NoError(t, err)
+	_, err = workload.Addons(r.st, r.files).Destination(workload.WithRestore(r.ctx, "rewind"), "orders",
+		v1.RestoreMember{Kind: "IdentityProvider", Name: "login", InPlace: true})
+	require.NoError(t, err, "a Backup taken before the object was written again restores in place")
 }

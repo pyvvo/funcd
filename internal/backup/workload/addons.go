@@ -102,7 +102,7 @@ func (k addons) addonOf(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, 
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "%s %s/%s", kind, ns, name)
 	}
-	if o, ok := obj.(*v1.AddonObject); !ok || o.Spec.Kind != string(kind) {
+	if o, ok := obj.(*v1.AddonObject); !ok || !v1.SameAddonKind(o.Spec.Kind, string(kind)) {
 		return nil, fault.NotFoundf(op, "no %s %s/%s: the add-on object %s is of another kind", kind, ns, name, name)
 	}
 	l, err := k.st.List(ctx, v1.KindAddon.GVK(), store.ListOptions{})
