@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.46.0](https://github.com/pyvvo/funcd/compare/v0.45.0...v0.46.0) (2026-11-19)
+
+
+### Features
+
+* **addon:** an admin registers add-ons built outside funcd, and users declare their objects (ADR-0332) ([af38698](https://github.com/pyvvo/funcd/commit/af38698ce0a9de91edc54f9be135b55ee9afba38))
+* **backup:** an add-on object's data is in funcd's backups, restored in place (ADR-0333) ([af38698](https://github.com/pyvvo/funcd/commit/af38698ce0a9de91edc54f9be135b55ee9afba38))
+* **edge:** funcd registers the edge's sign-in client at the provider (ADR-0336) ([af38698](https://github.com/pyvvo/funcd/commit/af38698ce0a9de91edc54f9be135b55ee9afba38))
+* **edge:** the edge signs users in with an OpenID Connect provider (ADR-0335) ([af38698](https://github.com/pyvvo/funcd/commit/af38698ce0a9de91edc54f9be135b55ee9afba38))
+* **funcdctl:** funcdctl dev runs add-on images on the local Docker or containerd (ADR-0334) ([af38698](https://github.com/pyvvo/funcd/commit/af38698ce0a9de91edc54f9be135b55ee9afba38))
+
+
+### Bug Fixes
+
+* **edge:** an add-on engine gets only the caller's address in its forwarding headers ([#1509](https://github.com/pyvvo/funcd/issues/1509)) ([e02a15f](https://github.com/pyvvo/funcd/commit/e02a15f503310316bbca2fa287a4b5c26168cc48))
+
 ## [0.45.0](https://github.com/pyvvo/funcd/compare/v0.44.2...v0.45.0) (2026-11-15)
 
 
