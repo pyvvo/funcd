@@ -834,6 +834,7 @@ func (p *Platform) buildControlPlane() error {
 		indexEngines: p.exec.indexAddonEngines}); err != nil {
 		return err
 	}
+	p.exec.addonNamespaces = p.addon.engineNamespaces
 	if err := p.invoke.build(invokeDeps{authz: cedarPDP}); err != nil {
 		return err
 	}
@@ -1886,7 +1887,7 @@ func (e *executor) indexAddonEngines(ctx context.Context) error {
 	}
 	e.engineIndexMu.Lock()
 	defer e.engineIndexMu.Unlock()
-	engines, err := addonEngineAddrs(ctx, e.cfg.store, e.cfg.runtime)
+	engines, err := addonEngineAddrs(ctx, e.cfg.store, e.cfg.runtime, e.addonNamespaces)
 	if err != nil {
 		return err
 	}
@@ -1895,8 +1896,9 @@ func (e *executor) indexAddonEngines(ctx context.Context) error {
 }
 
 // addonEngineAddrs are the addresses of the add-on engines' workers, from each worker's creation on, whatever its state
-// (ADR-0332 Decision 3).
-func addonEngineAddrs(ctx context.Context, st store.Store, rt runtime.Runtime) (map[netip.Addr]auth.EntityRef, error) {
+// (ADR-0332 Decision 3): in each namespace that holds an add-on object or, as running reports, an engine of the add-on
+// runtime, a stopping engine's included.
+func addonEngineAddrs(ctx context.Context, st store.Store, rt runtime.Runtime, running func() []v1.NamespaceName) (map[netip.Addr]auth.EntityRef, error) {
 	const op = "funcd.addonEngineAddrs"
 	res, err := st.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{})
 	if err != nil {
@@ -1905,6 +1907,11 @@ func addonEngineAddrs(ctx context.Context, st store.Store, rt runtime.Runtime) (
 	namespaces := map[v1.NamespaceName]bool{}
 	for _, o := range res.Items {
 		namespaces[o.GetNamespace()] = true
+	}
+	if running != nil {
+		for _, ns := range running() {
+			namespaces[ns] = true
+		}
 	}
 	engines := map[netip.Addr]auth.EntityRef{}
 	for ns := range namespaces {
@@ -1926,9 +1933,9 @@ func addonEngineAddrs(ctx context.Context, st store.Store, rt runtime.Runtime) (
 
 // backupEngines tells a backup target's address from an add-on engine's: an object's status.address, and the address
 // of each engine's worker from its creation on (ADR-0332 Decision 3).
-func backupEngines(st store.Store, rt runtime.Runtime) addonsvc.Engines {
+func backupEngines(st store.Store, rt runtime.Runtime, running func() []v1.NamespaceName) addonsvc.Engines {
 	return addonsvc.Engines{Store: st, Workers: func(ctx context.Context, addr netip.Addr) (bool, error) {
-		engines, err := addonEngineAddrs(ctx, st, rt)
+		engines, err := addonEngineAddrs(ctx, st, rt, running)
 		if err != nil {
 			return false, err
 		}
@@ -2028,7 +2035,7 @@ func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets 
 	d := backupsvc.Deps{
 		Store: c.store, Secrets: secrets, StoreURL: c.blobStoreURL, Limits: c.workloadBackupLimits,
 		Period: c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
-		Engines: backupEngines(c.store, c.runtime),
+		Engines: backupEngines(c.store, c.runtime, p.addon.engineNamespaces),
 	}
 	for _, h := range lifecycle.Each[backupHook](p.phases) {
 		d.Kinds = append(d.Kinds, h.BackupKinds()...)

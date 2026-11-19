@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -93,6 +94,18 @@ type engineRuntime struct {
 	specs       map[ProviderRef]string
 	now         func() time.Time
 	beforeStart func(ctx context.Context) error
+}
+
+// Namespaces are the namespaces of the engines this runtime runs, from the Converge that creates an engine until the
+// Teardown that removed it, a stopping engine included.
+func (r *engineRuntime) Namespaces() []v1.NamespaceName {
+	r.specsMu.Lock()
+	defer r.specsMu.Unlock()
+	seen := map[v1.NamespaceName]bool{}
+	for ref := range r.specs {
+		seen[ref.Namespace] = true
+	}
+	return slices.Collect(maps.Keys(seen))
 }
 
 // NewRuntime builds the add-on-provider runtime. Deps.Runtime is required; Gateway is optional

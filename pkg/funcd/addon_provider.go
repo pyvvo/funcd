@@ -27,6 +27,7 @@ type addonProvider struct {
 	reconciler *addonsvc.Reconciler
 	reserved   []string            // the path segments funcd serves, which no add-on's plural may be
 	files      workload.AddonFiles // the engines' files, when the runtime reaches them; nil otherwise
+	engines    provider.Runtime    // the runtime of the objects' engines
 }
 
 var (
@@ -96,6 +97,7 @@ func (s *addonProvider) build(d addonDeps) error {
 	if c.imageFor != nil {
 		serverMode = v1.AddonRuntimeContainerd
 	}
+	s.engines = engineRuntime
 	s.files, _ = engineRuntime.(workload.AddonFiles)
 	volumes, _ := engineRuntime.(provider.Volumes)
 	rec, err := addonsvc.NewReconciler(addonsvc.Deps{
@@ -149,4 +151,13 @@ func (s storedAddons) List(ctx context.Context, ns v1.NamespaceName) ([]oidc.Add
 
 func addonView(o *v1.AddonObject) oidc.AddonObject {
 	return oidc.AddonObject{Name: o.Name, Address: o.Status.Address, Ingress: o.Spec.Ingress}
+}
+
+// engineNamespaces are the namespaces of the engines the add-on runtime runs, a stopping one included: those of a
+// runtime that names them, as provider.NewRuntime's does.
+func (s *addonProvider) engineNamespaces() []v1.NamespaceName {
+	if n, ok := s.engines.(interface{ Namespaces() []v1.NamespaceName }); ok {
+		return n.Namespaces()
+	}
+	return nil
 }

@@ -370,12 +370,13 @@ func TestBackupEnginesRefuseACreatedEngine(t *testing.T) {
 		in.State = runtime.StateCreated
 		rt.insts[id] = in
 	}
-	engines := backupEngines(st, rt)
+	// A stopping engine of a namespace whose last add-on object is gone, which the add-on runtime still reports.
+	runningWorker(rt, "gone", "old", v1.KindAddonObject, "10.63.0.11")
+	engines := backupEngines(st, rt, func() []v1.NamespaceName { return []v1.NamespaceName{"gone"} })
 	ctx := context.Background()
-	refused, err := engines.Engine(ctx, netip.MustParseAddrPort("10.63.0.9:9000"))
-	require.NoError(t, err)
-	require.True(t, refused, "a created engine's address, which no status names yet")
-	refused, err = engines.Engine(ctx, netip.MustParseAddrPort("10.63.0.10:9000"))
-	require.NoError(t, err)
-	require.False(t, refused, "another address")
+	for addr, want := range map[string]bool{"10.63.0.9:9000": true, "10.63.0.11:9000": true, "10.63.0.10:9000": false} {
+		refused, err := engines.Engine(ctx, netip.MustParseAddrPort(addr))
+		require.NoError(t, err)
+		require.Equal(t, want, refused, addr)
+	}
 }

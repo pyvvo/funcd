@@ -759,3 +759,25 @@ func TestConverge_BeforeStartRunsBetweenCreateAndStart(t *testing.T) {
 	require.Len(t, rt.created, 1, "the created worker is kept")
 	require.Len(t, rt.started, 1, "and started once BeforeStart succeeds")
 }
+
+// Namespaces names an engine's namespace from its Converge until a Teardown removed it: a Teardown whose stop fails
+// keeps it.
+func TestNamespacesKeepAnEngineUntilItIsRemoved(t *testing.T) {
+	host, port, closeFn := engineServer(t, 200)
+	defer closeFn()
+	rt := newFakeRuntime(host, port)
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
+	require.NoError(t, err)
+	ns := pr.(interface{ Namespaces() []v1.NamespaceName })
+	ctx := context.Background()
+	spec := specFor(host, port, nil)
+	_, err = pr.Converge(ctx, spec)
+	require.NoError(t, err)
+	require.Equal(t, []v1.NamespaceName{spec.Ref.Namespace}, ns.Namespaces())
+
+	rt.stopErr = fault.Unavailablef("fakeRuntime.Stop", "the engine does not stop yet")
+	require.Error(t, pr.Teardown(ctx, spec.Ref))
+	require.Equal(t, []v1.NamespaceName{spec.Ref.Namespace}, ns.Namespaces(), "a failed teardown keeps it")
+	require.NoError(t, pr.Teardown(ctx, spec.Ref))
+	require.Empty(t, ns.Namespaces(), "a removed engine leaves no namespace")
+}
