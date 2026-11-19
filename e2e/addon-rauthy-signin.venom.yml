@@ -189,9 +189,9 @@ testcases:
         info: "the app → {{.result.statuscode}} {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
-          - result.body ShouldContainSubstring "X-Funcd-Principal: "
-          - result.body ShouldContainSubstring "X-Funcd-Principal-Name: "
-          - result.body ShouldContainSubstring "X-Funcd-Id-Token: "
+          - 'result.body ShouldContainSubstring "X-Funcd-Principal: "'
+          - 'result.body ShouldContainSubstring "X-Funcd-Principal-Name: "'
+          - 'result.body ShouldContainSubstring "X-Funcd-Id-Token: "'
           - result.body ShouldNotContainSubstring mallory
           - result.body ShouldNotContainSubstring funcd_session
 
