@@ -253,8 +253,12 @@ func (r *Reconciler) Quarantine() quarantine.Store {
 
 // Engines tells an add-on engine's address from the objects' status.address, each engine's own (ADR-0332 Decision 3):
 // an engine on a loopback address, as funcdctl dev publishes one, is that address and port; any other is its whole
-// address, which only its engine holds.
-type Engines struct{ Store store.Store }
+// address, which only its engine holds. Workers, when set, also reports an engine's worker address from the worker's
+// creation on, before its object's status names it.
+type Engines struct {
+	Store   store.Store
+	Workers func(ctx context.Context, addr netip.Addr) (bool, error)
+}
 
 // Engine reports whether addr is an add-on engine's address.
 func (e Engines) Engine(ctx context.Context, addr netip.AddrPort) (bool, error) {
@@ -276,6 +280,10 @@ func (e Engines) Engine(ctx context.Context, addr netip.AddrPort) (bool, error) 
 		if at == addr || !at.Addr().IsLoopback() && at.Addr() == addr.Addr() {
 			return true, nil
 		}
+	}
+	// A worker's address is never loopback, where a local target such as an S3 server may listen on another port.
+	if e.Workers != nil && !addr.Addr().IsLoopback() {
+		return e.Workers(ctx, addr.Addr())
 	}
 	return false, nil
 }

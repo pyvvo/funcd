@@ -1886,9 +1886,21 @@ func (e *executor) indexAddonEngines(ctx context.Context) error {
 	}
 	e.engineIndexMu.Lock()
 	defer e.engineIndexMu.Unlock()
-	res, err := e.cfg.store.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{})
+	engines, err := addonEngineAddrs(ctx, e.cfg.store, e.cfg.runtime)
 	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), "funcd.indexAddonEngines", "list the add-on objects")
+		return err
+	}
+	e.egressEngines.Replace(engines)
+	return nil
+}
+
+// addonEngineAddrs are the addresses of the add-on engines' workers, from each worker's creation on, whatever its state
+// (ADR-0332 Decision 3).
+func addonEngineAddrs(ctx context.Context, st store.Store, rt runtime.Runtime) (map[netip.Addr]auth.EntityRef, error) {
+	const op = "funcd.addonEngineAddrs"
+	res, err := st.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{})
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list the add-on objects")
 	}
 	namespaces := map[v1.NamespaceName]bool{}
 	for _, o := range res.Items {
@@ -1896,9 +1908,9 @@ func (e *executor) indexAddonEngines(ctx context.Context) error {
 	}
 	engines := map[netip.Addr]auth.EntityRef{}
 	for ns := range namespaces {
-		insts, lerr := e.cfg.runtime.List(ctx, ns)
+		insts, lerr := rt.List(ctx, ns)
 		if lerr != nil {
-			return fault.Wrapf(lerr, fault.KindOf(lerr), "funcd.indexAddonEngines", "list the workers of %s", ns)
+			return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "list the workers of %s", ns)
 		}
 		for _, in := range insts {
 			if in.OwnerKind != v1.KindAddonObject {
@@ -1909,8 +1921,20 @@ func (e *executor) indexAddonEngines(ctx context.Context) error {
 			}
 		}
 	}
-	e.egressEngines.Replace(engines)
-	return nil
+	return engines, nil
+}
+
+// backupEngines tells a backup target's address from an add-on engine's: an object's status.address, and the address
+// of each engine's worker from its creation on (ADR-0332 Decision 3).
+func backupEngines(st store.Store, rt runtime.Runtime) addonsvc.Engines {
+	return addonsvc.Engines{Store: st, Workers: func(ctx context.Context, addr netip.Addr) (bool, error) {
+		engines, err := addonEngineAddrs(ctx, st, rt)
+		if err != nil {
+			return false, err
+		}
+		_, ok := engines[addr]
+		return ok, nil
+	}}
 }
 
 // enqueueAll enqueues every object of kind in the store.
@@ -2004,7 +2028,7 @@ func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets 
 	d := backupsvc.Deps{
 		Store: c.store, Secrets: secrets, StoreURL: c.blobStoreURL, Limits: c.workloadBackupLimits,
 		Period: c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
-		Engines: addonsvc.Engines{Store: c.store},
+		Engines: backupEngines(c.store, c.runtime),
 	}
 	for _, h := range lifecycle.Each[backupHook](p.phases) {
 		d.Kinds = append(d.Kinds, h.BackupKinds()...)

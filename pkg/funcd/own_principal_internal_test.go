@@ -355,3 +355,27 @@ func TestIndexAddonEngines_ACreatedEngineIsIndexed(t *testing.T) {
 	require.True(t, ok, "a created engine is indexed before it starts")
 	require.Equal(t, auth.EntityRef{Type: v1.KindAddonObject, Namespace: "acme", Name: "login"}, ref)
 }
+
+// A backup target at an add-on engine's address is refused from the engine's worker's creation on, before its
+// object's status.address names it (ADR-0332 Decision 3).
+func TestBackupEnginesRefuseACreatedEngine(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	login := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddonObject.GVK().APIVersion(), Kind: v1.KindAddonObject}}
+	login.Name, login.Namespace, login.ResourceGroup, login.Spec.Kind = "login", "acme", "rg1", "IdentityProvider"
+	seedObjects(t, st, login)
+	rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
+	runningWorker(rt, "acme", "login", v1.KindAddonObject, "10.63.0.9")
+	for id, in := range rt.insts {
+		in.State = runtime.StateCreated
+		rt.insts[id] = in
+	}
+	engines := backupEngines(st, rt)
+	ctx := context.Background()
+	refused, err := engines.Engine(ctx, netip.MustParseAddrPort("10.63.0.9:9000"))
+	require.NoError(t, err)
+	require.True(t, refused, "a created engine's address, which no status names yet")
+	refused, err = engines.Engine(ctx, netip.MustParseAddrPort("10.63.0.10:9000"))
+	require.NoError(t, err)
+	require.False(t, refused, "another address")
+}
