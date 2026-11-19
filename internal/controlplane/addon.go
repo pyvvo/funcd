@@ -64,6 +64,8 @@ type AddonRules struct {
 	Store admission.StoreReader // reads the other Addons
 	// Registries are addons.registries: the registries an Addon's image may come from; none refuses every Addon.
 	Registries []string
+	// AnyRegistry lets the image come from any registry, as under funcdctl dev (ADR-0334 Decision 5).
+	AnyRegistry bool
 	// Reserved are the path segments funcd serves (ReservedPlurals): an add-on's plural among them is refused.
 	Reserved []string
 }
@@ -131,7 +133,11 @@ func (a addonRules) Admit(_ context.Context, req admission.Request) (v1.Object, 
 	if old, ok := req.Old.(*v1.Addon); ok && old.Spec.Kind != ad.Spec.Kind {
 		return nil, fault.Invalidf(op, "spec.kind cannot change from %q to %q: a new kind needs a new Addon", old.Spec.Kind, ad.Spec.Kind)
 	}
-	if !AddonImageAllowed(ad.Spec.Image, a.Registries) {
+	registries := a.Registries
+	if host, _ := addonImageHost(ad.Spec.Image); a.AnyRegistry {
+		registries = []string{host}
+	}
+	if !AddonImageAllowed(ad.Spec.Image, registries) {
 		return nil, fault.Invalidf(op, "spec.image %q does not come from a registry that addons.registries lists (%s)",
 			ad.Spec.Image, strings.Join(a.Registries, ", "))
 	}
@@ -148,14 +154,20 @@ func (a addonRules) Admit(_ context.Context, req admission.Request) (v1.Object, 
 // and its registry, its host after docker.io normalization as internal/runtime/containerd/image_ref.go normalizes
 // it, is one of registries. The containerd driver pulls such an image (cmd/funcd's Pullable).
 func AddonImageAllowed(image string, registries []string) bool {
+	host, pinned := addonImageHost(image)
+	return pinned && slices.ContainsFunc(registries, func(r string) bool { return strings.EqualFold(r, host) })
+}
+
+// addonImageHost is image's registry, its host after docker.io normalization, and whether image is pinned by digest
+// with no tag.
+func addonImageHost(image string) (host string, pinned bool) {
 	named, err := reference.ParseNormalizedNamed(image)
 	if err != nil {
-		return false
+		return "", false
 	}
 	_, digested := named.(reference.Digested)
 	_, tagged := named.(reference.Tagged)
-	host := reference.Domain(named)
-	return digested && !tagged && slices.ContainsFunc(registries, func(r string) bool { return strings.EqualFold(r, host) })
+	return reference.Domain(named), digested && !tagged
 }
 
 // ReservedPlurals are the path segments funcd serves under /apis/funcd.io/v1alpha1, a namespace's included: the

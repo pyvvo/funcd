@@ -1,6 +1,8 @@
 package funcd
 
 import (
+	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"math"
@@ -82,6 +84,12 @@ func WithAddonRuntime(r provider.Runtime, modes ...string) Option {
 // none, the default, refuses every Addon.
 func WithAddonRegistries(registries ...string) Option {
 	return func(c *config) error { c.addonRegistries = registries; return nil }
+}
+
+// WithAnyAddonRegistry lets an Addon's image come from any registry, still pinned by digest (ADR-0334 Decision 5):
+// funcdctl dev reads no addons.registries, and it runs the images its developer names.
+func WithAnyAddonRegistry() Option {
+	return func(c *config) error { c.addonAnyRegistry = true; return nil }
 }
 
 // WithAddonObjectQuota sets the per-namespace cap on the objects of the add-ons' kinds, all add-ons together, enforced
@@ -870,6 +878,23 @@ func WithDevAuth(token string, namespaces ...string) Option {
 	}
 }
 
+// WithDevAdminToken makes the credential store also answer DevAdminToken as an admin, whichever option built the store
+// (ADR-0334 Decision 5). Only funcdctl dev passes it: WithDevAuth and InMemory() never add the token, and New refuses a
+// store that accepts it off loopback.
+func WithDevAdminToken() Option {
+	return func(c *config) error { c.devAdminToken = true; return nil }
+}
+
+// devAdminCredentials answers DevAdminToken as an admin and asks next for every other token.
+type devAdminCredentials struct{ next middleware.CredentialStore }
+
+func (d devAdminCredentials) Lookup(ctx context.Context, token string) (auth.Identity, error) {
+	if subtle.ConstantTimeCompare([]byte(token), []byte(DevAdminToken)) == 1 {
+		return auth.Identity{Subject: "dev-admin", Role: auth.RoleAdmin}, nil
+	}
+	return d.next.Lookup(ctx, token)
+}
+
 // Credential is one static control-plane and edge token (ADR-0171): Role is "admin",
 // "developer" or "viewer"; Namespaces scopes a developer or viewer (at least one) and
 // is empty for an admin.
@@ -921,6 +946,9 @@ func checkCredential(op string, i int, cr Credential) error {
 	}
 	if cr.Token == DevToken {
 		return fault.Invalidf(op, "credentials[%d]: token equals the built-in funcd.DevToken", i)
+	}
+	if cr.Token == DevAdminToken {
+		return fault.Invalidf(op, "credentials[%d]: token equals the built-in funcd.DevAdminToken", i)
 	}
 	switch auth.Role(cr.Role) {
 	case auth.RoleAdmin:

@@ -103,6 +103,10 @@ import (
 // and New refuses it on an address off loopback (ADR-0314).
 const DevToken = "funcd-dev-token"
 
+// DevAdminToken is funcdctl dev's admin token, fixed and documented as DevToken is (ADR-0334 Decision 5). Only a
+// platform built WithDevAdminToken answers it, New refuses it off loopback, and no credential list holds it.
+const DevAdminToken = "funcd-dev-admin-token"
+
 const (
 	defaultProdAddr      = "0.0.0.0:8080"
 	defaultDataPlaneAddr = "0.0.0.0:8081" // function-traffic ingress (ADR-0033); intentionally public (auth is V2)
@@ -205,8 +209,10 @@ type config struct {
 	// control plane (ADR-0028)
 	listenAddr  string
 	credentials middleware.CredentialStore
-	authorizer  auth.Authorizer
-	localNode   v1.ObjectName
+	// devAdminToken makes the credential store also answer DevAdminToken as an admin (WithDevAdminToken, ADR-0334).
+	devAdminToken bool
+	authorizer    auth.Authorizer
+	localNode     v1.ObjectName
 	// nodePlatform is the platform this node runs (ADR-0145); "" ⇒ v1.HostPlatform().
 	nodePlatform v1.OCIPlatform
 
@@ -322,6 +328,8 @@ type config struct {
 	// addonMaxObjects is addons.maxObjectsPerNamespace, 0 ⇒ the default (20), negative disables the cap.
 	addonRegistries []string
 	addonMaxObjects int
+	// addonAnyRegistry lets an Addon's image come from any registry (WithAnyAddonRegistry, ADR-0334 Decision 5).
+	addonAnyRegistry bool
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
 	sqlCallTimeout time.Duration
 	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075 with a
@@ -468,17 +476,25 @@ func (c *config) validate() error {
 	return nil
 }
 
-// checkDevTokenBind refuses the built-in DevToken on an address off loopback: the control plane's, and the data plane's
-// when the edge reads the same credentials (ADR-0314 Decisions 5 and 6). An empty address is judged as what it binds.
+// checkDevTokenBind refuses a store that accepts the built-in DevToken or DevAdminToken on an address off loopback: the
+// control plane's, and the data plane's when the edge reads the same credentials (ADR-0314 Decisions 5 and 6, ADR-0334
+// Decision 5). An empty address is judged as what it binds.
 func (c *config) checkDevTokenBind() error {
-	const op, wayOut = "funcd.New", "pass WithCredentials, WithDevAuth with a token of your own, or a loopback address"
-	_, err := c.credentials.Lookup(context.Background(), DevToken)
-	accepted := err == nil
-	if addr := cmp.Or(c.listenAddr, defaultProdAddr); accepted && !platformconfig.IsLoopbackAddr(addr) {
-		return fault.Invalidf(op, "WithListenAddr %q is off loopback, and the built-in DevToken works only on loopback: %s", addr, wayOut)
-	}
-	if addr := cmp.Or(c.dataPlaneAddr, defaultDataPlaneAddr); accepted && c.edgeAuthEnabled && !platformconfig.IsLoopbackAddr(addr) {
-		return fault.Invalidf(op, "WithDataPlaneAddr %q is off loopback, WithEdgeAuth is on, and the built-in DevToken works only on loopback: %s", addr, wayOut)
+	const op = "funcd.New"
+	for _, b := range []struct{ token, name, wayOut string }{
+		{DevToken, "DevToken", "pass WithCredentials, WithDevAuth with a token of your own, or a loopback address"},
+		{DevAdminToken, "DevAdminToken", "leave out WithDevAdminToken, or use a loopback address"},
+	} {
+		if _, err := c.credentials.Lookup(context.Background(), b.token); err != nil {
+			continue
+		}
+		if addr := cmp.Or(c.listenAddr, defaultProdAddr); !platformconfig.IsLoopbackAddr(addr) {
+			return fault.Invalidf(op, "WithListenAddr %q is off loopback, and the built-in %s works only on loopback: %s", addr, b.name, b.wayOut)
+		}
+		if addr := cmp.Or(c.dataPlaneAddr, defaultDataPlaneAddr); c.edgeAuthEnabled && !platformconfig.IsLoopbackAddr(addr) {
+			return fault.Invalidf(op, "WithDataPlaneAddr %q is off loopback, WithEdgeAuth is on, and the built-in %s works only on loopback: %s",
+				addr, b.name, b.wayOut)
+		}
 	}
 	return nil
 }
@@ -573,6 +589,9 @@ func New(opts ...Option) (_ *Platform, err error) {
 		}
 	}
 	p.drainTimeout = orDefault(cfg.pacing.ShutdownTimeout, shutdownTimeout)
+	if cfg.devAdminToken && cfg.credentials != nil {
+		cfg.credentials = devAdminCredentials{next: cfg.credentials}
+	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}

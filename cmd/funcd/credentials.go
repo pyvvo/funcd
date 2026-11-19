@@ -52,6 +52,9 @@ func credentialOption(cfg config.Config, log *slog.Logger) (funcd.Option, error)
 		if token == funcd.DevToken {
 			return nil, fault.Invalidf(op, "config key %q: token file %q holds the built-in dev token: generate a new one", key+".tokenFile", e.TokenFile)
 		}
+		if token == funcd.DevAdminToken {
+			return nil, fault.Invalidf(op, "config key %q: token file %q holds the built-in dev admin token: generate a new one", key+".tokenFile", e.TokenFile)
+		}
 		if j, dup := first[token]; dup {
 			return nil, fault.Invalidf(op, "config keys %q and %q hold the same token", fmt.Sprintf("auth.credentials[%d]", j), key)
 		}
@@ -77,6 +80,10 @@ func devAuthOption(cfg config.Config, log *slog.Logger) (funcd.Option, error) {
 		t, err := parseToken(cfg.Auth.Token)
 		if err != nil {
 			return nil, fault.Invalidf(op, "config key %q %v", "auth.token (FUNCD_TOKEN)", err)
+		}
+		if t == funcd.DevAdminToken {
+			return nil, fault.Invalidf(op, "config key %q holds the built-in dev admin token, which only funcdctl dev answers: "+
+				"set a token of your own", "auth.token (FUNCD_TOKEN)")
 		}
 		token = t
 	}

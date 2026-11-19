@@ -73,6 +73,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	secrets.MergeEnvGuarded(env, bound, r.logger)
 
 	st, cerr := r.prov.Converge(ctx, r.engineSpec(a, o, env))
+	if cerr != nil && st.Reason == reasonRuntimeUnavailable {
+		// A runtime that can run no engine, funcdctl dev's with no container engine, says why (ADR-0334 Decision 1).
+		return r.hold(ctx, o, reasonRuntimeUnavailable, cerr.Error(), 0)
+	}
 	if cerr != nil {
 		st = provider.ProviderStatus{Reason: reasonEngineNotReady}
 	}

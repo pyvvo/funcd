@@ -3,6 +3,7 @@ package addon_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -88,4 +89,43 @@ func TestMapAddonAndSecret(t *testing.T) {
 	require.ElementsMatch(t, []controller.Request{req("a", "login"), req("b", "login")}, r.MapAddon(ctx, idp))
 	keys := &v1.Secret{ObjectMeta: v1.ObjectMeta{Name: "keys", Namespace: "a"}}
 	require.ElementsMatch(t, []controller.Request{req("a", "login"), req("a", "echo")}, r.MapSecret(ctx, keys))
+}
+
+// unavailableRuntime can run no engine, as funcdctl dev's with no container engine (ADR-0334 Decision 1).
+type unavailableRuntime struct{}
+
+func (unavailableRuntime) Converge(context.Context, provider.ProviderSpec) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Reason: "RuntimeUnavailable"}, fault.Unavailablef("funcdctl dev", "no Docker engine answers, and nerdctl is not on PATH")
+}
+func (unavailableRuntime) Teardown(context.Context, provider.ProviderRef) error { return nil }
+
+// ADR-0334 Decision 1: an object on a runtime that can run no engine waits Pending, RuntimeUnavailable, with the
+// runtime's own words, and no retry: the runtime is chosen at dev's start.
+func TestRuntimeUnavailableNamesWhy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(memory.New())
+	t.Cleanup(func() { _ = st.Close() })
+	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}}
+	a.Name, a.Spec = "whoami", v1.AddonSpec{Kind: "EchoService", Image: "traefik/whoami@sha256:" + strings.Repeat("a", 64), Port: 80,
+		Readiness: v1.AddonReadiness{Path: "/health"}}
+	_, err := st.Create(ctx, a)
+	require.NoError(t, err)
+	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject}}
+	o.Name, o.Namespace, o.ResourceGroup, o.Spec.Kind = "echo", "default", "rg1", "EchoService"
+	_, err = st.Create(ctx, o)
+	require.NoError(t, err)
+	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: unavailableRuntime{}, Modes: []string{v1.AddonRuntimeContainerd}})
+	require.NoError(t, err)
+
+	res, err := r.Reconcile(ctx, controller.Request{GVK: v1.KindAddonObject.GVK(), Namespace: "default", Name: "echo"})
+	require.NoError(t, err)
+	require.Zero(t, res.RequeueAfter, "no retry")
+	got, err := st.Get(ctx, v1.KindAddonObject.GVK(), "default", "echo")
+	require.NoError(t, err)
+	status := got.(*v1.AddonObject).Status
+	require.Equal(t, v1.PhasePending, status.Phase)
+	ready := status.Conditions[0]
+	require.Equal(t, "RuntimeUnavailable", ready.Reason)
+	require.Contains(t, ready.Message, "nerdctl is not on PATH")
 }

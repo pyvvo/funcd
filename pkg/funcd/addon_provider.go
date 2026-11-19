@@ -45,7 +45,8 @@ func (s *addonProvider) Descriptors() []provider.Descriptor {
 // cap (ADR-0332 Decisions 1, 2 and 6).
 func (s *addonProvider) Admissions(r admission.StoreReader) []admission.Admission {
 	c := s.cfg
-	return append(controlplane.NewAddonAdmissions(controlplane.AddonRules{Store: r, Registries: c.addonRegistries, Reserved: s.reserved}),
+	return append(controlplane.NewAddonAdmissions(controlplane.AddonRules{Store: r, Registries: c.addonRegistries,
+		AnyRegistry: c.addonAnyRegistry, Reserved: s.reserved}),
 		admission.NewAddonObjectQuotaAdmission(r, cmp.Or(c.addonMaxObjects, defaultAddonObjectsPerNamespace)))
 }
 

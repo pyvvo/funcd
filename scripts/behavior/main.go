@@ -68,7 +68,7 @@ func chapters() []chapter {
 		{"Disaster recovery", []string{"internal/backup", "internal/restore", "internal/services/backup", "internal/platform/hold", "internal/snapshot"}, []string{"backup", "workloadBackup"}},
 		{"Health", []string{"internal/health"}, []string{"health"}},
 		{"Limits", []string{"internal/quota"}, nil},
-		{"funcdctl dev", []string{"cmd/funcdctl", "pkg/sdk"}, nil},
+		{"funcdctl dev", []string{"cmd/funcdctl", "pkg/sdk", "internal/provider/docker", "internal/provider/nerdctl"}, nil},
 		{"funcdctl", nil, nil},
 	}
 }
