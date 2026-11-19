@@ -24,6 +24,7 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -407,10 +408,10 @@ func TestScenarioAddonRemoved(t *testing.T) {
 	other.Spec.Kind = "EchoService"
 	e.apply(t, e.admin, other)
 	e.p.controller.Enqueue(controller.Request{GVK: v1.KindAddonObject.GVK(), Namespace: "default", Name: "login"})
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		_, running, _ := e.rt.state(ref("default", "login"))
 		return running
-	}, 300*time.Millisecond, 10*time.Millisecond, "an Addon of another kind under the old name takes no object")
+	}, 300*time.Millisecond, 10*time.Millisecond), "an Addon of another kind under the old name takes no object")
 	e.waitReason(t, "default", "login", v1.PhasePending, "AddonNotFound")
 
 	e.apply(t, e.admin, rauthyAddon("identity"))
