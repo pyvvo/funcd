@@ -34,11 +34,11 @@ F262 builds on F261.
 
 | # | Feature | Builds on | ADR(s) | Status |
 |---|---|---|---|---|
-| F258 | **Add-ons built outside funcd**: an admin registers an add-on, an engine image built outside funcd's repository with the kind it adds, and users declare objects of that kind, checked against the add-on's own schema and run like funcd's own add-ons, from images the operator allows | — | [ADR-0332](../adr/0332-an-admin-registers-add-ons-built-outside-funcd.md) | accepted |
+| F258 | **Add-ons built outside funcd**: an admin registers an add-on, an engine image built outside funcd's repository with the kind it adds, and users declare objects of that kind, checked against the add-on's own schema and run like funcd's own add-ons, from images the operator allows | — | [ADR-0332](../adr/0332-an-admin-registers-add-ons-built-outside-funcd.md) | reviewing |
 | F259 | **An add-on's data in funcd's backups**: a BackupSchedule copies an add-on object's data from the engine's own consistent copies, without stopping it, and a Restore brings it back | F258 | [ADR-0333](../adr/0333-an-add-on-objects-data-in-funcds-backups.md) | accepted |
 | F260 | **Add-ons under `funcdctl dev`**: dev runs an add-on's image on the local Docker or containerd, so an App that uses an add-on runs on a laptop as on a server | F258 | [ADR-0334](../adr/0334-funcdctl-dev-runs-add-on-images.md) | accepted |
 | F261 | **An edge that signs users in**: a Route, a workload's address or a whole namespace asks its callers to sign in with an OpenID Connect provider, and the code behind it reads who they are from the request, with no sign-in code of its own | — | [ADR-0335](../adr/0335-the-edge-signs-users-in-with-an-openid-connect-provider.md) | accepted |
-| F262 | **Sign-in clients registered by funcd**: funcd registers and updates the edge's client at a provider that allows it, registers it again when the provider loses it, and keeps its secret, so no client is created by hand | F261 | [ADR-0336](../adr/0336-funcd-registers-the-edges-sign-in-client.md) | accepted |
+| F262 | **Sign-in clients registered by funcd**: funcd registers and updates the edge's client at a provider that allows it, registers it again when the provider loses it, and keeps its secret, so no client is created by hand | F261 | [ADR-0336](../adr/0336-funcd-registers-the-edges-sign-in-client.md) | reviewing |
 
 ## How it lands on funcd (high level)
 
