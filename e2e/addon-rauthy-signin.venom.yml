@@ -258,6 +258,8 @@ testcases:
         url: "{{.dp}}/auth/v1/oidc/session"
         headers:
           Host: "{{.idp}}"
+        assertions:
+          - result.statuscode ShouldBeLessThan 300
         vars:
           rauthysession:
             from: result.headers.Set-Cookie
