@@ -334,10 +334,16 @@ func ruledAsOwned(e Entry) bool { return e.Owned || e.Owner.Kind != v1.KindRoute
 // disabled is an entry turned off by its Route's spec.enabled, or an owned Route with enabled unset in an explicit
 // namespace (ADR-0241 Decision 6). A non-Route source is never Disabled by the mode.
 func disabled(e Entry, mode v1.ExposureMode) bool {
-	if e.Enabled != nil {
-		return !*e.Enabled
+	return RouteDisabled(e.Enabled, e.Owned && e.Owner.Kind == v1.KindRoute, mode)
+}
+
+// RouteDisabled reports whether a Route is off: its spec.enabled is false, or, owned by a workload, it leaves enabled
+// unset in an explicit namespace (ADR-0241 Decision 6).
+func RouteDisabled(enabled *bool, owned bool, mode v1.ExposureMode) bool {
+	if enabled != nil {
+		return !*enabled
 	}
-	return e.Owned && e.Owner.Kind == v1.KindRoute && mode == v1.ExposureExplicit
+	return owned && mode == v1.ExposureExplicit
 }
 
 // modeOf returns a namespace's exposure mode, reading each namespace at most once per arbitration.

@@ -414,3 +414,22 @@ func (h *harness) nsObject() *v1.Namespace {
 	require.NoError(h.t, err)
 	return obj.(*v1.Namespace)
 }
+
+// ADR-0336 Decision 5: a callback names its host as the gate sends it, in lower case, and a Route that is off adds
+// none: one a workload owns, with enabled unset, is off in an explicit namespace.
+func TestOidcCallbacksNameEachServedHostAsTheGateDoes(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, harnessOptions{})
+	h.withRegistration(false, nil)
+	h.registered()
+	h.seed(routeOf("upper", "B.Example.com", oidcStance(sso), "/"))
+	off := routeOf("owned", "c.example.com", oidcStance(sso), "/")
+	off.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Name: "fn"}, UID: "u1", Controller: true}}
+	h.seed(off)
+	n := h.nsObject()
+	n.Spec.DefaultExposure = v1.ExposureExplicit
+	h.update(n)
+
+	p := h.pass(sso)
+	require.Equal(t, []string{appCallback, "https://b.example.com" + callbackPath}, p.Status.Callbacks)
+}

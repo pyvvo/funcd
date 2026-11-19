@@ -533,8 +533,10 @@ func bearer(r *http.Request) (string, bool) {
 }
 
 // host is the call's host as the callback names it: lower case, with no port or trailing dot.
-func host(r *http.Request) string {
-	h := r.Host
+func host(r *http.Request) string { return canonicalHost(r.Host) }
+
+// canonicalHost is a host as the gate names it in a callback: lower case, with no port, brackets or trailing dot.
+func canonicalHost(h string) string {
 	if hp, _, err := net.SplitHostPort(h); err == nil {
 		h = hp
 	}

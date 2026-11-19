@@ -18,6 +18,7 @@ import (
 	"github.com/pyvvo/funcd/internal/ownedstore"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/route/owned"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -377,14 +378,15 @@ func (r *Reconciler) callbacks(ctx context.Context, p *v1.OIDCProvider) ([]strin
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list the Routes of %s", ns)
 	}
+	mode := nsSpec.DefaultExposure.Normalized()
 	for _, o := range routes.Items {
 		rt, ok := o.(*v1.Route)
-		if !ok || rt.Spec.Enabled != nil && !*rt.Spec.Enabled {
+		if !ok || router.RouteDisabled(rt.Spec.Enabled, owned.IsOwned(rt), mode) {
 			continue
 		}
 		for i := range rt.Spec.Rules {
 			if names(cmpAuth(rt.Spec.Rules[i].Auth, rt.Spec.Auth, nsAuth)) {
-				hosts[cmpOr(rt.Spec.Host, nsHost)] = true
+				hosts[canonicalHost(cmpOr(rt.Spec.Host, nsHost))] = true
 			}
 		}
 	}
@@ -401,7 +403,7 @@ func (r *Reconciler) callbacks(ctx context.Context, p *v1.OIDCProvider) ([]strin
 			continue // its own Route, listed above
 		}
 		if names(cmpAuth(fn.Spec.Ingress.Stance(), nsAuth)) {
-			hosts[nsHost] = true
+			hosts[canonicalHost(nsHost)] = true
 		}
 	}
 	addons, err := r.addons.List(ctx, ns)
@@ -410,7 +412,7 @@ func (r *Reconciler) callbacks(ctx context.Context, p *v1.OIDCProvider) ([]strin
 	}
 	for _, a := range addons {
 		if a.Ingress != nil && names(a.Ingress.Stance()) {
-			hosts[cmpOr(a.Ingress.Host, nsHost)] = true
+			hosts[canonicalHost(cmpOr(a.Ingress.Host, nsHost))] = true
 		}
 	}
 	out := []string{}
