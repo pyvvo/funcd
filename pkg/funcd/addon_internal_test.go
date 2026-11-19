@@ -18,8 +18,12 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -692,4 +696,51 @@ func TestAddonObjectProviderNotFound(t *testing.T) {
 		Client: v1.OIDCProviderClient{CredentialsSecret: "sso-client"}, SessionSecret: "sso-session"}
 	e.apply(t, e.dev, sso)
 	require.Eventually(t, ingress("Programmed"), 5*time.Second, 10*time.Millisecond, "a new provider ends the wait")
+}
+
+// The add-on runtime indexes each engine's address once its worker is created and before it starts, and a failed
+// index leaves the worker unstarted (ADR-0332 Decision 3).
+func TestAddonRuntimeIndexesEachEngineBeforeItStarts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(memory.New())
+	ctrl, err := controller.New(controller.Deps{Store: st})
+	require.NoError(t, err)
+	rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
+	engineState := func() runtime.State {
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		for _, in := range rt.insts {
+			if in.OwnerKind == v1.KindAddonObject {
+				return in.State
+			}
+		}
+		return ""
+	}
+	var seen []runtime.State
+	refuse := true
+	s := &addonProvider{cfg: &config{store: st, runtime: rt, imageFor: func(string) string { return "image" }}}
+	routes := router.NewAggregator(router.New(), nil, nil, "", nil)
+	require.NoError(t, s.build(addonDeps{ctrl: ctrl, routes: routes, indexEngines: func(context.Context) error {
+		seen = append(seen, engineState())
+		if refuse {
+			return fault.Unavailablef("test.indexEngines", "the index cannot be read")
+		}
+		return nil
+	}}))
+	addon := rauthyAddon("rauthy")
+	addon.Spec.Storage = nil
+	login := identityProvider("default")
+	login.TypeMeta, login.Spec.Kind = tmeta(v1.KindAddonObject), "IdentityProvider"
+	seedObjects(t, st, addon, login)
+	req := controller.Request{GVK: v1.KindAddonObject.GVK(), Namespace: "default", Name: "login"}
+
+	_, err = s.reconciler.Reconcile(ctx, req)
+	require.Error(t, err, "a failed index fails the pass")
+	require.Equal(t, runtime.StateCreated, engineState(), "and leaves the engine created, not started")
+	refuse = false
+	_, err = s.reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, []runtime.State{runtime.StateCreated, runtime.StateCreated}, seen, "each index runs before the start")
+	require.Equal(t, runtime.StateRunning, engineState(), "the engine starts once it is indexed")
 }

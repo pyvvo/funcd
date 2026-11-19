@@ -810,7 +810,8 @@ func (p *Platform) buildControlPlane() error {
 		routes: edgeAgg, s3: p.blob.injection, ctrl: ctrl}); err != nil {
 		return err
 	}
-	if err := p.addon.build(addonDeps{secrets: p.secrets.resolver, routes: edgeAgg, ctrl: ctrl}); err != nil {
+	if err := p.addon.build(addonDeps{secrets: p.secrets.resolver, routes: edgeAgg, ctrl: ctrl,
+		indexEngines: p.exec.indexAddonEngines}); err != nil {
 		return err
 	}
 	if err := p.invoke.build(invokeDeps{authz: cedarPDP}); err != nil {
@@ -1851,19 +1852,23 @@ func (e *executor) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 			e.egressWorkers.Remove(ip)
 		}
 	}
-	e.indexAddonEngines(ctx)
+	_ = e.indexAddonEngines(ctx) // a failed run keeps the index; the next sync runs again
 	return live
 }
 
-// indexAddonEngines puts the running add-on engines' addresses in the gateway's engine index, which no rule reaches
-// (ADR-0332 Decision 3). A failed read keeps the index as it was.
-func (e *executor) indexAddonEngines(ctx context.Context) {
+// indexAddonEngines puts the address of every add-on engine, from its worker's creation on, in the gateway's engine
+// index, which no rule reaches (ADR-0332 Decision 3). It runs at each worker sync and, through the add-on runtime's
+// BeforeStart, before each engine starts. Runs take turns, so a run's list never replaces a later run's. A failed read
+// keeps the index as it was and is the error.
+func (e *executor) indexAddonEngines(ctx context.Context) error {
 	if e.egressEngines == nil {
-		return
+		return nil
 	}
+	e.engineIndexMu.Lock()
+	defer e.engineIndexMu.Unlock()
 	res, err := e.cfg.store.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{})
 	if err != nil {
-		return
+		return fault.Wrapf(err, fault.KindOf(err), "funcd.indexAddonEngines", "list the add-on objects")
 	}
 	namespaces := map[v1.NamespaceName]bool{}
 	for _, o := range res.Items {
@@ -1873,10 +1878,10 @@ func (e *executor) indexAddonEngines(ctx context.Context) {
 	for ns := range namespaces {
 		insts, lerr := e.cfg.runtime.List(ctx, ns)
 		if lerr != nil {
-			return
+			return fault.Wrapf(lerr, fault.KindOf(lerr), "funcd.indexAddonEngines", "list the workers of %s", ns)
 		}
 		for _, in := range insts {
-			if in.OwnerKind != v1.KindAddonObject || in.State != runtime.StateRunning {
+			if in.OwnerKind != v1.KindAddonObject {
 				continue
 			}
 			if ip, perr := netip.ParseAddr(in.IP); perr == nil {
@@ -1885,6 +1890,7 @@ func (e *executor) indexAddonEngines(ctx context.Context) {
 		}
 	}
 	e.egressEngines.Replace(engines)
+	return nil
 }
 
 // enqueueAll enqueues every object of kind in the store.

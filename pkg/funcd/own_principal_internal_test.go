@@ -334,3 +334,24 @@ func TestScenarioKeysReissuedOnUpgrade(t *testing.T) {
 		require.Equal(t, tc.want, body.String())
 	}
 }
+
+// An add-on engine's address is in the gateway's engine index from its worker's creation, before it starts (ADR-0332
+// Decision 3).
+func TestIndexAddonEngines_ACreatedEngineIsIndexed(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	login := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddonObject.GVK().APIVersion(), Kind: v1.KindAddonObject}}
+	login.Name, login.Namespace, login.ResourceGroup, login.Spec.Kind = "login", "acme", "rg1", "IdentityProvider"
+	seedObjects(t, st, login)
+	rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
+	runningWorker(rt, "acme", "login", v1.KindAddonObject, "10.63.0.7")
+	for id, in := range rt.insts {
+		in.State = runtime.StateCreated
+		rt.insts[id] = in
+	}
+	e := &executor{cfg: &config{store: st, runtime: rt}, egressEngines: egress.NewMemoryWorkerIndex()}
+	require.NoError(t, e.indexAddonEngines(context.Background()))
+	ref, ok := e.egressEngines.Lookup(netip.MustParseAddr("10.63.0.7"))
+	require.True(t, ok, "a created engine is indexed before it starts")
+	require.Equal(t, auth.EntityRef{Type: v1.KindAddonObject, Namespace: "acme", Name: "login"}, ref)
+}

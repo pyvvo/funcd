@@ -30,11 +30,13 @@ var (
 	_ admissionHook = (*addonProvider)(nil)
 )
 
-// addonDeps are the parts the add-on provider is built over: what secrets and the edge built before it.
+// addonDeps are the parts the add-on provider is built over: what secrets and the edge built before it, and the
+// executor's indexing of the engines' addresses, which runs before each engine starts.
 type addonDeps struct {
-	secrets provider.SecretResolver
-	routes  *router.Aggregator
-	ctrl    *controller.Controller
+	secrets      provider.SecretResolver
+	routes       *router.Aggregator
+	ctrl         *controller.Controller
+	indexEngines func(ctx context.Context) error
 }
 
 func (s *addonProvider) Name() string { return "addon" }
@@ -62,7 +64,7 @@ func (s *addonProvider) build(d addonDeps) error {
 		var err error
 		if engineRuntime, err = provider.NewRuntime(provider.Deps{
 			Runtime: c.runtime, OwnerKind: v1.KindAddonObject, Gateway: c.gateway, Logger: c.logger,
-			ProbeTimeout: c.pacing.EngineProbeTimeout, StorageRoot: c.providerStorage,
+			ProbeTimeout: c.pacing.EngineProbeTimeout, StorageRoot: c.providerStorage, BeforeStart: d.indexEngines,
 		}); err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "build the add-on provider runtime")
 		}
