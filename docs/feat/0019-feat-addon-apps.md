@@ -35,13 +35,13 @@ F263 comes first: an App that holds the add-on's objects is what F264's Function
 
 | # | Feature | Builds on | ADR(s) | Status |
 |---|---|---|---|---|
-| F263 | **An add-on ships as an App template**: an App template carries its Addon and the objects of the add-on's kind; an admin's deploy registers the Addon before the App, as written, a developer's deploy only checks that it is registered, the App requires the Addon and owns its objects, and the Addon outlives every App | FEAT-0018 F258 | [ADR-0337](../adr/0337-an-app-template-carries-its-add-on.md) | adr |
+| F263 | **An add-on ships as an App template**: an App template carries its Addon and the objects of the add-on's kind; an admin's deploy registers the Addon before the App, as written, a developer's deploy only checks that its kind is served, the App owns its objects, whose kind must be registered, and the Addon outlives every App | FEAT-0018 F258 | [ADR-0337](../adr/0337-an-app-template-carries-its-add-on.md) | adr |
 | F264 | **A Function calls an add-on object's engine**: a Function binds an add-on object of its namespace and calls the engine through funcd, as it calls a SQL database, so an add-on's App applies its engine's settings after each revision and repairs them on a timer | F263 | [ADR-0338](../adr/0338-a-function-calls-an-add-on-objects-engine.md) | adr |
 
 ## How it lands on funcd (high level)
 
 Nothing new to package: an add-on's App template is an App template with one more file, its Addon, and the App gains a
-section for the add-on's objects and a requirement on its Addon. The engine call is one more route of the worker-node
+section for the add-on's objects. The engine call is one more route of the worker-node
 local API, beside the routes that `ctx.sql` (ADR-0233), `ctx.kv` and `ctx.blob` use. rauthy, in `pyvvo/funcd-addons`,
 is the worked example.
 
