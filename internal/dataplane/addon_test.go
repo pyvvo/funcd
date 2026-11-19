@@ -59,3 +59,32 @@ func TestAddonEntryKeepsItsPathAndRefusesPrivatePaths(t *testing.T) {
 	defer mu.Unlock()
 	require.Equal(t, []string{"/auth/v1/ping", "/auth/v1/oidc/authorize"}, got, "the engine gets the cleaned path, kept")
 }
+
+// An add-on engine that trusts funcd as its proxy reads the caller's address from the forwarding headers, so the edge
+// sends only the address it sees itself: a caller's own X-Forwarded-For, Forwarded and X-Real-IP never reach it.
+func TestAddonEngineGetsOnlyTheCallersAddress(t *testing.T) {
+	t.Parallel()
+	var seen http.Header
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { seen = r.Header.Clone() }))
+	t.Cleanup(engine.Close)
+	rtr := router.New()
+	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
+		Namespace: "default", Host: "login.example.com", Auth: v1.AuthOpen,
+		Rules: []router.CompiledRule{{Path: "/auth/v1", Upstream: engine.URL, KeepPath: true}},
+	}}, nil))
+	st := store.New(memory.New())
+	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
+	require.NoError(t, err)
+	h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/v1/ping", nil)
+	req.Host, req.RemoteAddr = "login.example.com", "198.51.100.7:4242"
+	for _, name := range []string{"X-Forwarded-For", "Forwarded", "X-Real-IP", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		req.Header.Set(name, "203.0.113.9")
+	}
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	require.Equal(t, "198.51.100.7", seen.Get("X-Forwarded-For"))
+	for _, name := range []string{"Forwarded", "X-Real-IP", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		require.Empty(t, seen.Get(name), name)
+	}
+}

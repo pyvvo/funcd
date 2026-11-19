@@ -406,6 +406,11 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 		t.Namespace, t.Function = string(m.Namespace), m.Upstream
 	}
 	oidc.DropCookies(r) // funcd's sign-in cookies reach no backend (ADR-0335 Decision 8)
+	// An upstream that trusts funcd as its proxy reads the caller's address from these headers, and funcd honors no
+	// caller's own (ADR-0112): the proxy then sets X-Forwarded-For to the address funcd sees.
+	for _, name := range [...]string{"X-Forwarded-For", "Forwarded", "X-Real-IP", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		r.Header.Del(name)
+	}
 	// No edge PEP runs here, so the refusal says what an engine that is down says and names no hold (ADR-0290).
 	if _, held := s.held.NamespaceMarker(m.Namespace); held {
 		refuseHeld(w, fault.Unavailablef(op, "edge upstream unavailable"))
