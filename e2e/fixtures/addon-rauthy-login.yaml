@@ -11,7 +11,7 @@ spec:
   config:
     publicHost: login.example.com
     rpId: login.example.com
-    origin: http://login.example.com
+    https: false
   bindings:
     secret:
       - rauthy-keys

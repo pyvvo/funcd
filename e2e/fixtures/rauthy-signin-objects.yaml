@@ -38,7 +38,7 @@ spec:
   config:
     publicHost: login.localhost:8081
     rpId: login.localhost
-    origin: http://login.localhost:8081
+    https: false
   bindings:
     secret:
       - rauthy-keys
