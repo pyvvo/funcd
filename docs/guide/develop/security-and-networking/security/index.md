@@ -220,8 +220,8 @@ the callers of a Route, a rule, a workload's own address or a namespace in. In `
 | `allow` | Passes, with no principal |
 
 The provider sends the browser back to `/.auth/callback` on the same host, and `/.auth/logout` clears funcd's session
-cookies of the host. A call also signs in with an ID token in `Authorization: Bearer` whose `aud` is one of the
-provider's `audiences`.
+cookies of the host. A call also signs in with a token that the provider signed, such as an ID token or a JWT access
+token, in `Authorization: Bearer`, when its `aud` is one of the provider's `audiences`.
 
 The code behind the stance reads who signed in:
 
