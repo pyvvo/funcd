@@ -160,6 +160,7 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `maxAppRevisionHistory` | 100 | `pkg/funcd/options.go` |
 | `maxBaseDomain` | 189 | `pkg/funcd/options.go` |
 | `maxDefaultRetryBackoff` | 1h | `pkg/funcd/options.go` |
+| `maxPort` | 65535 | `pkg/funcd/options.go` |
 | `minDefaultAppUpgradeTimeout` | 5m | `pkg/funcd/options.go` |
 | `minDefaultLivenessTimeout` | 30s | `pkg/funcd/options.go` |
 | `minRetryBackoffMax` | 5ms | `pkg/funcd/options.go` |

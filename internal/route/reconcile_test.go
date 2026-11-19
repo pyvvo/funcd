@@ -406,3 +406,41 @@ func TestStatusObservesGeneration(t *testing.T) {
 		})
 	}
 }
+
+// ADR-0335 Decision 10: a Route whose oidc stance names no OIDCProvider is ProviderNotFound, keeps its claims and
+// answers 503 there, not the shorter rule's backend; once the provider exists it is Programmed.
+func TestOIDCRouteWithAMissingProviderKeepsItsClaims(t *testing.T) {
+	ctx, st, rtr, rec := setup(t)
+	seedFunction(t, st, "staging", "www")
+	seedFunction(t, st, "staging", "admin")
+	seedRoute(t, st, "staging", "www", "app.example.com", "/", "www")
+	admin := &v1.Route{TypeMeta: v1.TypeMeta{APIVersion: v1.KindRoute.GVK().APIVersion(), Kind: v1.KindRoute}}
+	admin.Name, admin.Namespace, admin.ResourceGroup = "admin", "staging", "rg1"
+	admin.Spec = v1.RouteSpec{Host: "app.example.com", Auth: &v1.RouteAuth{Mode: v1.AuthOIDC, Provider: "sso"},
+		Rules: []v1.RouteRule{{Path: "/admin", Backend: v1.RouteBackend{Function: "admin"}}}}
+	_, err := st.Create(ctx, admin)
+	require.NoError(t, err)
+	reconcile(t, rec, "staging", "admin")
+
+	status, reason := readyCond(t, st, "staging", "admin")
+	require.Equal(t, v1.ConditionFalse, status)
+	require.Equal(t, router.ReasonProviderNotFound, reason)
+	m, ok := rtr.Resolve("app.example.com", "/admin/x", "GET")
+	require.True(t, ok)
+	require.Equal(t, v1.ObjectName("admin"), m.Function, "admin keeps its claims")
+	require.Equal(t, router.ReasonProviderNotFound, m.Refused)
+	require.Equal(t, &router.OIDCAuth{Provider: "sso"}, m.OIDC)
+
+	reqs := route.MapOIDCProvider(st)(ctx, &v1.OIDCProvider{ObjectMeta: v1.ObjectMeta{Namespace: "staging", Name: "sso"}})
+	require.Equal(t, []controller.Request{{GVK: v1.KindRoute.GVK(), Namespace: "staging", Name: "admin"}}, reqs)
+	p := &v1.OIDCProvider{TypeMeta: v1.TypeMeta{APIVersion: v1.KindOIDCProvider.GVK().APIVersion(), Kind: v1.KindOIDCProvider}}
+	p.Name, p.Namespace, p.ResourceGroup = "sso", "staging", "rg1"
+	p.Spec = v1.OIDCProviderSpec{Issuer: "https://login.example.com", SessionSecret: "s", Client: v1.OIDCProviderClient{CredentialsSecret: "c"}}
+	_, err = st.Create(ctx, p)
+	require.NoError(t, err)
+	reconcile(t, rec, "staging", "admin")
+	status, reason = readyCond(t, st, "staging", "admin")
+	require.Equal(t, v1.ConditionTrue, status, reason)
+	m, _ = rtr.Resolve("app.example.com", "/admin/x", "GET")
+	require.Empty(t, m.Refused)
+}

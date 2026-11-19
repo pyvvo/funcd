@@ -855,3 +855,24 @@ funcdctl-plugin:
   tokens:
     developer: funcdctl-plugin-lane-developer
   venom: e2e/funcdctl-plugin.venom.yml
+
+addon-rauthy-signin:
+  description: The edge signs a user in through rauthy, an add-on built outside funcd, on real containerd (ADR-0335, ADR-0336) — funcd registers the edge's client at rauthy's private path, a navigation is sent to rauthy, the app behind the oidc stance gets the principal headers, a rotation stores a new secret that rauthy takes at once, and a code rauthy refused for the old secret is redeemed with the current one.
+  module: github.com/pyvvo/funcd-addons
+  dir: rauthy
+  stage:
+    - addon.yaml
+    - from: e2e/fixtures/rauthy-signin-funcdconfig.yaml
+      to: funcdconfig.yaml
+    # traefik/whoami answers the headers it gets, behind the oidc stance.
+    - from: e2e/fixtures/rauthy-signin-whoami-addon.yaml
+      to: rauthy-signin-whoami-addon.yaml
+    - from: e2e/fixtures/rauthy-signin-objects.yaml
+      to: rauthy-signin-objects.yaml
+    - from: e2e/fixtures/rauthy-signin-rotate.yaml
+      to: rauthy-signin-rotate.yaml
+  # The admin token registers the Addons; the suite applies everything itself, so the lane has no ready gate.
+  tokens:
+    admin: rauthy-signin-lane-admin
+    developer: rauthy-signin-lane-developer
+  venom: e2e/addon-rauthy-signin.venom.yml

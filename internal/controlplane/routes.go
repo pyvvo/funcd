@@ -28,6 +28,7 @@ func RegisterRoutes(api huma.API, h Handlers) {
 	registerLake(api, h)
 	registerSQLDatabase(api, h)
 	registerIdentity(api, h)
+	registerOIDCProvider(api, h)
 	registerRole(api, h)
 	registerRolesAssignment(api, h)
 	registerSite(api, h)

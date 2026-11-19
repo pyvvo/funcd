@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/edge/oidc"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
@@ -152,4 +153,22 @@ func TestFetchKeepsAnEscapedPath(t *testing.T) {
 		require.Equal(t, c.path, path, c.sent)
 		require.Equal(t, c.query, query, c.sent)
 	}
+}
+
+// scenario: oidc-fetch-forged — a Function's ctx.fetch never sends the principal headers on: only the edge's sign-in
+// sets them (ADR-0335 Decision 8).
+func TestScenarioOidcFetchForged(t *testing.T) {
+	var got local.FetchRequest
+	r := httptest.NewRequest(http.MethodGet, "/fetch/devices/devices", nil)
+	for _, h := range []string{oidc.HeaderPrincipal, oidc.HeaderPrincipalID, oidc.HeaderPrincipalName, oidc.HeaderIDToken} {
+		r.Header.Set(h, "forged")
+	}
+	r.Header.Set("X-Request-Note", "kept")
+	rec := httptest.NewRecorder()
+	fetchHandler(v1.ProtocolHTTP, fetchInvoker{got: &got, reply: local.FetchReply{Status: http.StatusOK}}, nil).ServeHTTP(rec, r)
+	require.Equal(t, http.StatusOK, rec.Code)
+	for _, h := range []string{oidc.HeaderPrincipal, oidc.HeaderPrincipalID, oidc.HeaderPrincipalName, oidc.HeaderIDToken} {
+		require.Empty(t, got.Header.Get(h), "%s is dropped", h)
+	}
+	require.Equal(t, "kept", got.Header.Get("X-Request-Note"))
 }

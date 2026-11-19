@@ -143,6 +143,14 @@ func (d Deps) restricted(ip netip.Addr) (bool, error) {
 	return slices.Contains(node, ip), nil
 }
 
+// GloballyReachable reports whether ip lies outside ADR-0317's table and off the node's interfaces: what a domain rule
+// may reach, and all the edge's sign-in back channel reaches (ADR-0335 Decision 7). A failed read of the node's
+// addresses is false with the error.
+func GloballyReachable(ip netip.Addr) (bool, error) {
+	restricted, err := Deps{}.restricted(ip)
+	return !restricted, err
+}
+
 // interfaceAddrs reads the addresses on the host's interfaces, each with any IPv4 mapping removed.
 func interfaceAddrs() ([]netip.Addr, error) {
 	addrs, err := net.InterfaceAddrs()

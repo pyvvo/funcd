@@ -8,13 +8,15 @@ Kinds: Route, Site, Gateway, Service, NetDestination, Invocation.
 stateDiagram-v2
     [*] --> limit : the listener read the headers
     limit --> Refused : over a limit
+    limit --> Auth : a path under /.auth/
+    Auth --> Answered : the callback, the logout, else 404
     limit --> Resolve : within the limits
     Resolve --> Refused : no rule, not exposed by name, a failed read of the Namespace
     Resolve --> Direct : a static rule, a Site or a Lake
     Resolve --> Admit : a Function rule, or its name
     Direct --> Answered : the file, or the Lake answers
     Direct --> Refused : no object, or the Lake is down
-    Admit --> Refused : stance not met, a health path, Function missing
+    Admit --> Refused : stance not met, a 302 to the sign-in, a health path, Function missing
     Admit --> Before : admitted
     Before --> Refused : hold, rate, body, contract
     Before --> Wake : deadline set
@@ -31,7 +33,8 @@ stateDiagram-v2
 `Direct` is `serveStatic` or `serveUpstream`: no wake and no chain. A fn-to-fn call enters at `Admit`, past `limit` and `Resolve`;
 of the chain only the hold and the contract apply to it. Calls to a cold Function share one wake and its clock: [Functions](functions.md)
 has the hold, [Disaster recovery](disaster-recovery.md) a held namespace. A `Service` object only turns `Ready` (ADR-0019 Decision 3)
-and no call reads it; `NetDestination` and `Invocation` are no step of a call. New words: Direct, Refused, Answered.
+and no call reads it; `NetDestination` and `Invocation` are no step of a call. An `oidc` stance runs the sign-in where the PEP runs,
+`Direct` included: [Security](security.md). New words: Direct, Refused, Answered, Auth.
 
 | Where | What happens | Time | You see | Status | Source |
 |---|---|---|---|---|---|
@@ -43,6 +46,7 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. N
 | A rule with no host | In a namespace it answers only on `<ns>.<baseDomain>`; in `default`, on any host no namespace reserves | none | `status.host`, a 404 on another host | decided | ADR-0240 Decisions 3 and 4, `TestScenario_namespace_host_routes` |
 | Two rules match | The longest path wins and a host only breaks a tie, so a `default` host-less rule at a longer path takes a host's shorter one | none | the other rule's backend | deferred | ADR-0176 Open questions, `TestScenarioMatchLongestPrefix` |
 | A Route that cannot serve | It serves nothing, whichever rule is at fault | re-check `controller.referentPollInterval` 2 s while a backend is missing, else `controller.routeResyncInterval` 10 s | `Pending`, `Ready=False`: `BackendNotFound`, `RouteConflict` | decided | ADR-0242 Decision 4, `TestScenarioRouteNotReadyMissingBackend` |
+| An `oidc` Route whose provider is missing or conflicts | It keeps its claims and answers 503 on each of its paths, which no other rule takes | `controller.referentPollInterval` 2 s while the provider is missing | `Ready=False`: `ProviderNotFound`, `ProviderConflict`; 503 | decided | ADR-0335 Decision 10, `TestScenarioOidcProviderMissing` |
 | `server.limits` | Over a limit, refused before any wake; off by default | `server.limits.ratePerMin` 0, `server.limits.maxInFlight` 0 | 429 `rate limit exceeded`, 503 `in-flight concurrency ceiling reached` | decided | ADR-0112 Decision 1, `TestScenarioOverRate429NoWake` |
 | A chunked call | The edge reads it whole to build the CloudEvent, so the worker gets the body with a `Content-Length` | none | as any call | decided | ADR-0134 Contracts, ADR-0181 Decision 2, `TestChunkedCallReachesTheWorkerWithItsLength` |
 | A body over the cap | Refused before any wake, since the edge reads it whole to build the CloudEvent | `maxNormalizeBytes` 1 MiB | 413 `request body exceeds 1048576 bytes` | decided | ADR-0134 Contracts, `TestScenarioUpgradeWithBodyStillCapped` |
@@ -57,6 +61,7 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. N
 | Nested calls to one Function | Over the cap the next call is refused at once, whoever calls | `invoke.maxNestedInFlight` 10 | 429 `<ns>/<name> has 10 nested calls in flight, the cap set by invoke.maxNestedInFlight` | decided | ADR-0147 Decision 3, `TestScenarioInflightFanoutOverCap` |
 | A Site's deploy | The last good build serves until the new index is written and the Route moves | none | `Ready=False`, `IndexMissing` or `ArtifactNotFound` | decided | ADR-0139 Decision 3, `TestScenarioRedeploySwapsAtomically` |
 | A GET or another path on a cloudevent Function | Unless it lies under `/health/` or its contract refuses the input, it wakes the worker, whose shim answers only `POST /` | a cold start | the shim's 404 | decided | ADR-0134 Contracts Wiring, ADR-0016 Decision 3, ADR-0243 Context |
+| A path under `/.auth/` | The edge answers it on every host before the Route match: the sign-in's callback, the logout, else 404 | none | 404 `no route for "<path>"` | decided | ADR-0335 Decision 3, `TestScenarioOidcAuthPaths` |
 | A path under `/health/` | Refused once the stance is met, by name and through a Route, with any method and whatever the Function's state. Nothing wakes and no worker is called | none | 404 `no route for "<path>"`; 401 or 403 first | decided | ADR-0316 Decisions 1 and 2, `TestScenarioAHealthPathAnswers404`, `TestScenarioTheStanceAnswersFirst` |
 | An http app's route under `/health/` | The edge answers it, so a route such as `/health/db` answers only over a link; the app's `/health` itself still answers | none | 404 `no route for "<path>"` | accepted | ADR-0316 Consequences, `TestScenarioOtherPathsReachTheWorker` |
 | A health path over a link | Another Function's `ctx.fetch` reaches these paths on an http Function: it holds a link and passes `link::invoke` | none | the worker's answer | accepted | ADR-0316 Scope and Risks accepted, `TestScenarioAnotherFunctionKeepsThePath` |
@@ -77,6 +82,8 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. N
 | `server.auth.edge` | false | config |
 | `server.baseDomain` | localhost | config |
 | `server.dataPlaneAddr` | 127.0.0.1:0 | config |
+| `server.edgePublicPort` | 0 | config |
+| `server.edgePublicScheme` | http | config |
 | `server.limits.burst` | 0 ⇒ ratePerMin | config |
 | `server.limits.key` | clientIP | config |
 | `server.limits.maxBodyBytes` | 0 | config |
@@ -119,6 +126,17 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. N
 | `heldRetryAfter` | 30 | `internal/dataplane/dataplane.go` |
 | `maxNormalizeBytes` | 1MiB | `internal/dataplane/normalize.go` |
 | `defaultMaxKeys` | 4096 | `internal/edge/limit/limit.go` |
+| `backChannelTimeout` | 10s | `internal/edge/oidc/backchannel.go` |
+| `dialTimeout` | 5s | `internal/edge/oidc/backchannel.go` |
+| `maxBackChannelBytes` | 1MiB | `internal/edge/oidc/backchannel.go` |
+| `defaultHTTPPort` | 80 | `internal/edge/oidc/callback.go` |
+| `defaultHTTPSPort` | 443 | `internal/edge/oidc/callback.go` |
+| `keyMaxAge` | 24h | `internal/edge/oidc/keyset.go` |
+| `keyRefetchInterval` | 1m | `internal/edge/oidc/keyset.go` |
+| `maxCookieBytes` | 4096 | `internal/edge/oidc/oidc.go` |
+| `randomBytes` | 32 | `internal/edge/oidc/oidc.go` |
+| `stateTTL` | 10m | `internal/edge/oidc/oidc.go` |
+| `sessionKeyBytes` | 32 | `internal/edge/oidc/provider.go` |
 | `WriteStallTimeout` | 1m | `internal/gateway/writestall.go` |
 | `clearAhead` | 876000h | `internal/gateway/writestall.go` |
 | `stallChunk` | 32KiB | `internal/gateway/writestall.go` |

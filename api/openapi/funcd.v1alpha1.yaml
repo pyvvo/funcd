@@ -2365,11 +2365,26 @@ components:
       additionalProperties: false
       properties:
         mode:
-          description: "authenticated admits only a caller whose token, sent as Authorization: Bearer or X-Api-Key, may get the namespace's Functions; others get 401 or 403, and every caller gets 401 while server.auth.edge is off. open, or empty, admits anyone."
+          description: "authenticated admits only a caller whose token, sent as Authorization: Bearer or X-Api-Key, may get the namespace's Functions; others get 401 or 403, and every caller gets 401 while server.auth.edge is off. oidc signs callers in with the OIDCProvider that provider names. open, or empty, admits anyone. It reaches no Lake's or add-on object's address."
           enum:
             - ""
             - authenticated
             - open
+            - oidc
+          type: string
+        provider:
+          description: With mode oidc, the OIDCProvider of the namespace that signs callers in; required with oidc and refused with another mode. The namespace shows a ProviderNotFound condition while it names no OIDCProvider.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        unauthenticated:
+          description: "With mode oidc, what a call that is not signed in gets: redirect, the default, 401 or allow, as on a Route's auth. Refused with another mode."
+          enum:
+            - ""
+            - redirect
+            - "401"
+            - allow
           type: string
       type: object
     EdgeDefaults:
@@ -4026,6 +4041,132 @@ components:
             - Terminating
           type: string
       type: object
+    OIDCProvider:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/OIDCProviderSpec"
+        status:
+          $ref: "#/components/schemas/OIDCProviderStatus"
+      required:
+        - metadata
+        - spec
+        - apiVersion
+        - kind
+      type: object
+    OIDCProviderClient:
+      additionalProperties: false
+      properties:
+        credentialsSecret:
+          description: A Secret of the namespace, written by hand, whose CLIENT_ID and CLIENT_SECRET hold a client made at the provider.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        registration:
+          $ref: "#/components/schemas/OIDCRegistration"
+          description: funcd registers the client at the provider's registration endpoint, keeps its redirect URIs on the callbacks of the hosts that sign in with the provider, and writes its credentials to a Secret it owns.
+      type: object
+    OIDCProviderSpec:
+      additionalProperties: false
+      properties:
+        addon:
+          description: "The add-on object of the namespace that serves the provider: funcd reaches the provider at the engine's own address, while browsers use issuer."
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        audiences:
+          description: The aud values a Bearer token may carry to sign a call in. Empty, the default, means that a Bearer token signs nobody in.
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        client:
+          $ref: "#/components/schemas/OIDCProviderClient"
+          description: "The sign-in client: set exactly one of registration, a client funcd registers at the provider, and credentialsSecret, a client made by hand."
+        issuer:
+          description: The provider's issuer URL, as its discovery document names it and as browsers reach it. Without addon, funcd reads the discovery document and every endpoint it names over https only, at addresses reachable from the internet; with addon, at the add-on engine's own address.
+          type: string
+        sessionSecret:
+          description: A Secret of the namespace whose SESSION_KEY holds 32 random bytes, the key that seals the sign-in cookies. A new key ends every session of the provider.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - issuer
+        - client
+        - sessionSecret
+      type: object
+    OIDCProviderStatus:
+      additionalProperties: false
+      properties:
+        callbacks:
+          description: The callbacks funcd last applied to the registered client's redirect URIs, sorted.
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        clientId:
+          description: The client ID the stored client carries.
+          type: string
+        conditions:
+          description: The conditions that explain the phase.
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          description: The generation of the spec that funcd last acted on.
+          format: int64
+          type: integer
+        observedRotate:
+          description: "The spec.client.registration.rotate value funcd last applied: a rotation is done once it equals rotate."
+          format: int64
+          type: integer
+        phase:
+          description: Where the object is in its lifecycle.
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
+      type: object
+    OIDCRegistration:
+      additionalProperties: false
+      properties:
+        credentialSecretName:
+          description: The Secret funcd writes the client to, as CLIENT_ID, CLIENT_SECRET, REGISTRATION_ACCESS_TOKEN and REGISTRATION_CLIENT_URI, and deletes with the provider. Empty means the provider's name. funcd leaves alone a Secret of that name it did not write, and the provider then stays Pending with reason SecretNotOwned.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        rotate:
+          description: "Raise it above status.observedRotate to rotate the client's secret: funcd asks the provider for a new one and stores it."
+          format: int64
+          minimum: 0
+          type: integer
+        tokenSecret:
+          description: A Secret whose REGISTRATION_TOKEN funcd sends as a Bearer token with every registration, for a provider that requires one.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      type: object
     ObjectMeta:
       additionalProperties: false
       properties:
@@ -4817,11 +4958,26 @@ components:
       additionalProperties: false
       properties:
         mode:
-          description: "How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open."
+          description: "How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. oidc signs callers in with the OIDCProvider that provider names, and passes the signed-in user to the code behind it in the X-Funcd-Principal headers. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open."
           enum:
             - ""
             - authenticated
             - open
+            - oidc
+          type: string
+        provider:
+          description: With mode oidc, the OIDCProvider of the namespace that signs callers in; required with oidc and refused with another mode.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        unauthenticated:
+          description: "With mode oidc, what a call that is not signed in gets: redirect, the default, sends a GET or HEAD navigation to the provider with 302 and gives any other call 401; 401 gives every such call 401; allow passes every call, with no principal. Refused with another mode."
+          enum:
+            - ""
+            - redirect
+            - "401"
+            - allow
           type: string
       type: object
     RouteBackend:
@@ -14481,6 +14637,539 @@ paths:
       summary: Replace a Lake
       tags:
         - Lake
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/oidcproviders:
+    get:
+      operationId: listOIDCProviders
+      parameters:
+        - description: The namespace whose objects the answer lists.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The namespace whose objects the answer lists.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/OIDCProvider"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list OIDCProviders in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list OIDCProviders in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the OIDCProviders of a namespace
+      tags:
+        - OIDCProvider
+    post:
+      operationId: createOIDCProvider
+      parameters:
+        - description: Admit the write and store nothing.
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: Admit the write and store nothing.
+            type: boolean
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OIDCProvider"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OIDCProvider"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create an OIDCProvider in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create an OIDCProvider in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: An OIDCProvider of that name already exists in the namespace. Choose another name, or replace the existing OIDCProvider."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: An OIDCProvider of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing OIDCProvider.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create an OIDCProvider
+      tags:
+        - OIDCProvider
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/oidcproviders/{name}:
+    delete:
+      operationId: deleteOIDCProvider
+      parameters:
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+          in: header
+          name: If-Match
+          schema:
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+            type: string
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete an OIDCProvider in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete an OIDCProvider in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No OIDCProvider of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No OIDCProvider of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The OIDCProvider has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the OIDCProvider again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The OIDCProvider has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the OIDCProvider again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete an OIDCProvider
+      tags:
+        - OIDCProvider
+    get:
+      operationId: getOIDCProvider
+      parameters:
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OIDCProvider"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read an OIDCProvider in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read an OIDCProvider in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No OIDCProvider of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No OIDCProvider of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read an OIDCProvider
+      tags:
+        - OIDCProvider
+    put:
+      operationId: replaceOIDCProvider
+      parameters:
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+          in: header
+          name: If-Match
+          schema:
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+            type: string
+        - description: Admit the write and store nothing.
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: Admit the write and store nothing.
+            type: boolean
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OIDCProvider"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OIDCProvider"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace an OIDCProvider in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace an OIDCProvider in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No OIDCProvider of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No OIDCProvider of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The OIDCProvider has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the OIDCProvider again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The OIDCProvider has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the OIDCProvider again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace an OIDCProvider
+      tags:
+        - OIDCProvider
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/policies:
     get:
       operationId: listPolicies

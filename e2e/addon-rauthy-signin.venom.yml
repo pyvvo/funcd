@@ -1,0 +1,319 @@
+# Venom e2e suite for the addon-rauthy-signin containerd lane (ADR-0335, ADR-0336), run host-side by
+# `just lima-example addon-rauthy-signin` once funcd runs in the VM. The suite registers the rauthy and whoami Addons
+# with the admin token, applies the lane's objects, then proves on rauthy that funcd registers the edge's client at
+# rauthy's private path, that a user signs in through the edge and the app behind its oidc stance gets the principal
+# headers, that a rotation stores a new secret rauthy refuses the old one for at once, and that a code rauthy refused for
+# the old secret is redeemed with the current one. rauthy's login takes a session, a proof of work and the login post,
+# as its own tests do.
+name: addon-rauthy-signin — the edge signs a user in through rauthy with the client funcd registered (ADR-0335, ADR-0336, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081
+  devtoken: rauthy-signin-lane-developer
+  admintoken: rauthy-signin-lane-admin
+  idp: login.localhost:8081
+  app: localhost:8081
+  callback: http://localhost:8081/.auth/callback
+  email: admin@login.localhost
+  password: lane-admin-password-1234
+  verifier: addon-rauthy-signin-lane-verifier-0123456789abcdef
+  challenge: usgF0WYeCWucpze1ZxJrhvoBmZ6bowFc-mXMZdb_t04
+
+testcases:
+  - name: rauthy runs, and funcd registers the edge's client at its private path
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
+            funcdctl apply -f /opt/lane/addon.yaml -f /opt/lane/rauthy-signin-whoami-addon.yaml
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            funcdctl apply -f /opt/lane/rauthy-signin-objects.yaml
+        retry: 10
+        delay: 2
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get oidcprovider sso -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];c={x[\"type\"]:x[\"reason\"] for x in s.get(\"conditions\",[])};print(c.get(\"Ready\",\"\")+\",\"+c.get(\"ClientUpkeep\",\"\")+\",\"+\" \".join(s.get(\"callbacks\",[])))"'
+        retry: 60
+        delay: 3
+        info: "sso → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual "ClientReady,Applied,http://localhost:8081/.auth/callback"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get secret sso -n default -o json | python3 -c "import sys,json;print(\",\".join(sorted(json.load(sys.stdin)[\"spec\"][\"data\"])))"'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual CLIENT_ID,CLIENT_SECRET,REGISTRATION_ACCESS_TOKEN,REGISTRATION_CLIENT_URI
+      - type: http
+        method: POST
+        url: "{{.dp}}/auth/v1/clients_dyn"
+        headers:
+          Host: "{{.idp}}"
+          content-type: application/json
+        body: '{"redirect_uris":["http://localhost:8081/.auth/callback"]}'
+        info: "the registration path at the edge → {{.result.statuscode}}"
+        assertions:
+          - result.statuscode ShouldEqual 404
+
+  - name: a navigation is sent to rauthy, a user signs in there, and the app gets the principal headers
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get oidcprovider sso -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"clientId\"])"'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotBeEmpty
+        vars:
+          clientid:
+            from: result.systemout
+      - type: http
+        method: GET
+        url: "{{.dp}}/"
+        no_follow_redirect: true
+        headers:
+          Host: "{{.app}}"
+          Sec-Fetch-Mode: navigate
+        retry: 20
+        delay: 2
+        info: "the navigation → {{.result.statuscode}} {{.result.headers.Location}}"
+        assertions:
+          - result.statuscode ShouldEqual 302
+          - result.headers.Location ShouldContainSubstring http://login.localhost:8081/auth/v1/oidc/authorize?
+          - result.headers.Location ShouldContainSubstring code_challenge_method=S256
+          - result.headers.Location ShouldContainSubstring redirect_uri=http%3A%2F%2Flocalhost%3A8081%2F.auth%2Fcallback
+        vars:
+          query:
+            from: result.headers.Location
+            regex: "\\?(.*)$"
+          state:
+            from: result.headers.Location
+            regex: "[?&]state=([^&]+)"
+          nonce:
+            from: result.headers.Location
+            regex: "[?&]nonce=([^&]+)"
+          pkce:
+            from: result.headers.Location
+            regex: "[?&]code_challenge=([^&]+)"
+          statecookie:
+            from: result.headers.Set-Cookie
+            regex: "(funcd_auth\\.default\\.sso=[^;]+)"
+      - type: http
+        method: POST
+        url: "{{.dp}}/auth/v1/oidc/session"
+        headers:
+          Host: "{{.idp}}"
+        assertions:
+          - result.statuscode ShouldBeLessThan 300
+        vars:
+          rauthysession:
+            from: result.headers.Set-Cookie
+            regex: "^([^;]+)"
+          csrf:
+            from: result.bodyjson.csrf_token
+      - type: http
+        method: POST
+        url: "{{.dp}}/auth/v1/pow"
+        headers:
+          Host: "{{.idp}}"
+        assertions:
+          - result.statuscode ShouldBeLessThan 300
+        vars:
+          powchallenge:
+            from: result.body
+            regex: "\"?([^\"]+)\"?"
+      - type: exec
+        script: |
+          python3 -c 'import hashlib, itertools, sys
+          c = sys.argv[1]
+          bits = int(c[2:4])
+          print(next(c + str(n) for n in itertools.count() if int.from_bytes(hashlib.sha256((c + str(n)).encode()).digest(), "big") >> (256 - bits) == 0))' '{{.powchallenge}}'
+        assertions:
+          - result.code ShouldEqual 0
+        vars:
+          pow:
+            from: result.systemout
+      - type: http
+        method: POST
+        url: "{{.dp}}/auth/v1/oidc/authorize?{{.query}}"
+        no_follow_redirect: true
+        headers:
+          Host: "{{.idp}}"
+          Cookie: "{{.rauthysession}}"
+          x-csrf-token: "{{.csrf}}"
+          content-type: application/json
+        body: '{"email":"{{.email}}","password":"{{.password}}","pow":"{{.pow}}","client_id":"{{.clientid}}","redirect_uri":"{{.callback}}","scopes":["openid","profile","email"],"state":"{{.state}}","nonce":"{{.nonce}}","code_challenge":"{{.pkce}}","code_challenge_method":"S256"}'
+        info: "rauthy's login → {{.result.statuscode}} {{.result.headers.Location}}"
+        assertions:
+          - result.statuscode ShouldEqual 202
+          - result.headers.Location ShouldStartWith http://localhost:8081/.auth/callback?
+        vars:
+          back:
+            from: result.headers.Location
+            regex: "(/\\.auth/callback\\?.*)$"
+      - type: http
+        method: GET
+        url: "{{.dp}}{{.back}}"
+        no_follow_redirect: true
+        headers:
+          Host: "{{.app}}"
+          Cookie: "{{.statecookie}}"
+        info: "the callback → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 302
+          - result.headers.Location ShouldEqual /
+          - result.headers.Set-Cookie ShouldContainSubstring funcd_session.default.sso=
+        vars:
+          session:
+            from: result.headers.Set-Cookie
+            regex: "(funcd_session\\.default\\.sso=[^;]+)"
+      - type: http
+        method: GET
+        url: "{{.dp}}/"
+        headers:
+          Host: "{{.app}}"
+          Cookie: "{{.session}}"
+          X-Funcd-Principal-Id: mallory
+        info: "the app → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "X-Funcd-Principal: "
+          - result.body ShouldContainSubstring "X-Funcd-Principal-Name: "
+          - result.body ShouldContainSubstring "X-Funcd-Id-Token: "
+          - result.body ShouldNotContainSubstring mallory
+          - result.body ShouldNotContainSubstring funcd_session
+
+  - name: a rotation stores a new secret, rauthy refuses the old one, and a code it refused for it is redeemed with the current one
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get secret sso -n default -o json | python3 -c "import sys,json,base64;print(base64.b64decode(json.load(sys.stdin)[\"spec\"][\"data\"][\"CLIENT_SECRET\"]).decode())"'
+        assertions:
+          - result.code ShouldEqual 0
+        vars:
+          oldsecret:
+            from: result.systemout
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            funcdctl apply -f /opt/lane/rauthy-signin-rotate.yaml
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get oidcprovider sso -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"].get(\"observedRotate\",0))"'
+        retry: 30
+        delay: 2
+        assertions:
+          - result.systemout ShouldEqual 1
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get secret sso -n default -o json | python3 -c "import sys,json,base64;print(base64.b64decode(json.load(sys.stdin)[\"spec\"][\"data\"][\"CLIENT_SECRET\"]).decode())"'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotEqual "{{.oldsecret}}"
+        vars:
+          newsecret:
+            from: result.systemout
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get oidcprovider sso -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"clientId\"])"'
+        vars:
+          clientid:
+            from: result.systemout
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get identityprovider login -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"address\"])"'
+        assertions:
+          - result.systemout ShouldNotBeEmpty
+        vars:
+          engine:
+            from: result.systemout
+      - type: http
+        method: POST
+        url: "{{.dp}}/auth/v1/oidc/session"
+        headers:
+          Host: "{{.idp}}"
+        vars:
+          rauthysession:
+            from: result.headers.Set-Cookie
+            regex: "^([^;]+)"
+          csrf:
+            from: result.bodyjson.csrf_token
+      - type: http
+        method: POST
+        url: "{{.dp}}/auth/v1/pow"
+        headers:
+          Host: "{{.idp}}"
+        vars:
+          powchallenge:
+            from: result.body
+            regex: "\"?([^\"]+)\"?"
+      - type: exec
+        script: |
+          python3 -c 'import hashlib, itertools, sys
+          c = sys.argv[1]
+          bits = int(c[2:4])
+          print(next(c + str(n) for n in itertools.count() if int.from_bytes(hashlib.sha256((c + str(n)).encode()).digest(), "big") >> (256 - bits) == 0))' '{{.powchallenge}}'
+        vars:
+          pow:
+            from: result.systemout
+      - type: http
+        method: POST
+        url: "{{.dp}}/auth/v1/oidc/authorize?client_id={{.clientid}}&redirect_uri=http%3A%2F%2Flocalhost%3A8081%2F.auth%2Fcallback&response_type=code&scope=openid&state=lane-state&nonce=lane-nonce&code_challenge={{.challenge}}&code_challenge_method=S256"
+        no_follow_redirect: true
+        headers:
+          Host: "{{.idp}}"
+          Cookie: "{{.rauthysession}}"
+          x-csrf-token: "{{.csrf}}"
+          content-type: application/json
+        body: '{"email":"{{.email}}","password":"{{.password}}","pow":"{{.pow}}","client_id":"{{.clientid}}","redirect_uri":"{{.callback}}","scopes":["openid"],"state":"lane-state","nonce":"lane-nonce","code_challenge":"{{.challenge}}","code_challenge_method":"S256"}'
+        assertions:
+          - result.statuscode ShouldEqual 202
+        vars:
+          code:
+            from: result.headers.Location
+            regex: "[?&]code=([^&]+)"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            curl -s -o /dev/null -w "%{http_code}" -X POST http://{{.engine}}/auth/v1/oidc/token \
+              --data-urlencode grant_type=authorization_code --data-urlencode code={{.code}} \
+              --data-urlencode redirect_uri={{.callback}} --data-urlencode code_verifier={{.verifier}} \
+              --data-urlencode client_id={{.clientid}} --data-urlencode client_secret={{.oldsecret}}'
+        info: "the old secret → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldNotEqual 200
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            curl -s -X POST http://{{.engine}}/auth/v1/oidc/token \
+              --data-urlencode grant_type=authorization_code --data-urlencode code={{.code}} \
+              --data-urlencode redirect_uri={{.callback}} --data-urlencode code_verifier={{.verifier}} \
+              --data-urlencode client_id={{.clientid}} --data-urlencode client_secret={{.newsecret}}'
+        info: "the current secret → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring id_token

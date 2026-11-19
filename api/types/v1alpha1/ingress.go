@@ -36,6 +36,14 @@ func (i *Ingress) AuthMode() AuthMode {
 	return i.Auth.Mode
 }
 
+// Stance is the stance of the resource's own address, nil for the namespace default.
+func (i *Ingress) Stance() *RouteAuth {
+	if i == nil {
+		return nil
+	}
+	return i.Auth
+}
+
 // IngressPath is a resource's own edge path (ADR-0241 Decision 3): ingress.path, else "/" when ingress.host is set,
 // else /<kind>/<name>, kind lowercased.
 func IngressPath(i *Ingress, kind Kind, name ObjectName) string {
@@ -54,10 +62,8 @@ func (i *Ingress) validate(op, field string) error {
 	if i == nil {
 		return nil
 	}
-	if i.Auth != nil {
-		if err := validateAuthMode(i.Auth.Mode, field+".auth.mode"); err != nil {
-			return err
-		}
+	if err := i.Auth.validate(op, field+".auth"); err != nil {
+		return err
 	}
 	if i.Path == "" {
 		return nil
@@ -65,8 +71,20 @@ func (i *Ingress) validate(op, field string) error {
 	if i.Path[0] != '/' {
 		return fault.Invalidf(op, "%s.path %q must begin with '/'", field, i.Path)
 	}
+	if UnderAuthPath(i.Path) {
+		return fault.Invalidf(op, "%s.path %q lies under %s, the edge's own path on every host", field, i.Path, AuthPath)
+	}
 	if i.Path != "/" && strings.HasSuffix(i.Path, "/") {
 		return fault.Invalidf(op, "%s.path %q must not end with '/'", field, i.Path)
 	}
 	return nil
+}
+
+// ValidateOIDCHost refuses an oidc stance with no host in the default namespace, which has no namespace host (ADR-0335
+// Decision 3); every kind with an ingress checks it in its Validate.
+func (i *Ingress) ValidateOIDCHost(op, field string, ns NamespaceName) error {
+	if _, _, ok := i.Stance().OIDC(); !ok {
+		return nil
+	}
+	return hostlessOIDC(op, field+".auth", ns, i.Host)
 }

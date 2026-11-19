@@ -149,7 +149,9 @@ This page lists the spec and status fields of Function, Revision and Invocation,
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
+| `mode` | string, one of `""`, `authenticated`, `open`, `oidc` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. oidc signs callers in with the OIDCProvider that provider names, and passes the signed-in user to the code behind it in the X-Funcd-Principal headers. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
+| `provider` | string, a DNS-1123 label | With mode oidc, the OIDCProvider of the namespace that signs callers in; required with oidc and refused with another mode. |
+| `unauthenticated` | string, one of `""`, `redirect`, `401`, `allow` | With mode oidc, what a call that is not signed in gets: redirect, the default, sends a GET or HEAD navigation to the provider with 302 and gives any other call 401; 401 gives every such call 401; allow passes every call, with no principal. Refused with another mode. |
 
 ### `Function.spec.kv[]`
 

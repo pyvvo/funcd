@@ -182,6 +182,8 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.Identity:
 		o.TypeMeta = tm
+	case *v1.OIDCProvider:
+		o.TypeMeta = tm
 	case *v1.Role:
 		o.TypeMeta = tm
 	case *v1.RolesAssignment:
@@ -800,7 +802,7 @@ func (h *storeHandlers) DeleteRestore(ctx context.Context, ns v1.NamespaceName, 
 // the stub helpers): a new kind joins the union instead of copying the per-kind boilerplate.
 type crudKind interface {
 	v1.Function | v1.Revision | v1.Service | v1.EventSource | v1.ConfigMap | v1.Secret | v1.Grant | v1.Identity |
-		v1.Namespace | v1.ResourceGroup | v1.Route |
+		v1.OIDCProvider | v1.Namespace | v1.ResourceGroup | v1.Route |
 		v1.Role | v1.RolesAssignment | v1.KVStore | v1.Bucket | v1.Lake | v1.SQLDatabase | v1.Policy |
 		v1.EgressPolicy | v1.Invocation | v1.RuntimeClass | v1.WorkerNode | v1.Gateway | v1.Workflow | v1.WorkflowRun |
 		v1.Sensor | v1.Site | v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore
@@ -1048,6 +1050,28 @@ func (h *storeHandlers) ReplaceIdentity(ctx context.Context, ns v1.NamespaceName
 
 func (h *storeHandlers) DeleteIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	return h.deleteObjIf(ctx, v1.KindIdentity, ns, name, rv)
+}
+
+// --- OIDCProvider (namespaced) — ADR-0335, ADR-0336 ---
+
+func (h *storeHandlers) GetOIDCProvider(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.OIDCProvider, error) {
+	return typedObj[v1.OIDCProvider](h.getObj(ctx, v1.KindOIDCProvider, ns, name))
+}
+
+func (h *storeHandlers) CreateOIDCProvider(ctx context.Context, p v1.OIDCProvider) (v1.OIDCProvider, error) {
+	return typedObj[v1.OIDCProvider](h.createObj(ctx, v1.KindOIDCProvider, &p))
+}
+
+func (h *storeHandlers) ListOIDCProviders(ctx context.Context, ns v1.NamespaceName) ([]v1.OIDCProvider, error) {
+	return typedObjs[v1.OIDCProvider](h.listObj(ctx, v1.KindOIDCProvider, ns))
+}
+
+func (h *storeHandlers) ReplaceOIDCProvider(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, p v1.OIDCProvider) (v1.OIDCProvider, error) {
+	return typedObj[v1.OIDCProvider](h.replaceObj(ctx, v1.KindOIDCProvider, ns, name, &p))
+}
+
+func (h *storeHandlers) DeleteOIDCProvider(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindOIDCProvider, ns, name, rv)
 }
 
 // --- Role + RolesAssignment (namespaced) — ADR-0136, FEAT-0008/F101 ---

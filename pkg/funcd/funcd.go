@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,7 @@ import (
 	"github.com/pyvvo/funcd/internal/edge/authn"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/observ"
+	"github.com/pyvvo/funcd/internal/edge/oidc"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/edge/shape"
 	"github.com/pyvvo/funcd/internal/edge/static"
@@ -227,6 +229,12 @@ type config struct {
 	// (reusing the control-plane credentials + authorizer). false ⇒ no PEP (open-only; an
 	// authenticated stance then fails closed).
 	edgeAuthEnabled bool
+
+	// the edge sign-in (ADR-0335): server.edgePublicScheme and server.edgePublicPort build its callbacks (Decision 9);
+	// oidcBackChannel replaces Decision 7's transport to a provider outside funcd, which only a test sets.
+	edgePublicScheme string
+	edgePublicPort   int
+	oidcBackChannel  http.RoundTripper
 
 	// edge observability (ADR-0114, F76) + shaping (F78): RED metrics/trace/access-log; CORS/headers/
 	// compression. Zero values are pass-throughs (off by default).
@@ -955,6 +963,7 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build Identity reconciler")
 	}
 	ctrl.Register(v1.KindIdentity.GVK(), identityReconciler)
+	p.registerSignIn(ctrl, fnReconciler)
 
 	// Workflow engine (ADR-0094): durable run state (Badger at workflowDataDir; in-memory when
 	// unset — the InMemory preset / tests), a step dispatcher over the activator's endpoints +
@@ -1162,7 +1171,9 @@ func (p *Platform) buildControlPlane() error {
 	// bound is outermost, so every byte of every listener response passes it. Runtime order:
 	// WriteStall → Recover → RequestID → observ → limit → shape → dataplane.Handler.
 	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, c.baseDomain, edgeEnforcer, targetLimiter, staticHandler,
-		c.invokeDefaultTimeout, p.logger, dataplane.WithCallGate(c.callGate()), dataplane.WithChain(callChain))
+		c.invokeDefaultTimeout, p.logger, dataplane.WithCallGate(c.callGate()), dataplane.WithChain(callChain),
+		dataplane.WithOIDC(oidc.New(oidc.Deps{Store: c.store, CallbackURL: p.callbacks().URL, HTTPS: p.callbacks().HTTPS(),
+			BackChannel: c.oidcBackChannel, Logger: p.logger})))
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
 	dpHandler := gateway.Chain(dpCore, gateway.WriteStall(gateway.WriteStallTimeout), gateway.Recover(p.logger),
 		gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
@@ -1184,6 +1195,36 @@ func (p *Platform) buildControlPlane() error {
 	p.dataPlaneAddr = dln.Addr().String()
 
 	return nil
+}
+
+// callbacks are the edge sign-in's callbacks (ADR-0335 Decision 9), on the data plane's bound port.
+func (p *Platform) callbacks() oidc.Callbacks {
+	c := p.cfg
+	return oidc.Callbacks{TLS: c.tlsSpec != nil, Scheme: c.edgePublicScheme, Port: c.edgePublicPort, Bound: func() int {
+		_, port, err := net.SplitHostPort(p.dataPlaneAddr)
+		if err != nil {
+			return 0
+		}
+		n, _ := strconv.Atoi(port)
+		return n
+	}}
+}
+
+// registerSignIn registers the OIDCProvider kind's one reconciler, which re-runs on a change of a Route, a workload,
+// a Namespace or a Secret of its namespace (ADR-0336 Decision 3), the Namespace check of edgeDefaults.auth, and the
+// watches that move a Route's or a Function's ProviderNotFound (ADR-0335 Decision 10).
+func (p *Platform) registerSignIn(ctrl *controller.Controller, fns *function.Reconciler) {
+	c := p.cfg
+	ctrl.Register(v1.KindOIDCProvider.GVK(), oidc.NewReconciler(oidc.ReconcilerDeps{Store: c.store, CallbackURL: p.callbacks().URL,
+		Client: oidc.BackChannelClient(c.oidcBackChannel), Held: c.nsGate(), SupervisionPeriod: c.pacing.SupervisionPeriod,
+		BaseDomain: c.baseDomain, Logger: p.logger}))
+	for _, k := range []v1.Kind{v1.KindRoute, v1.KindFunction, v1.KindSite, v1.KindNamespace, v1.KindSecret} {
+		ctrl.Watches(k.GVK(), oidc.MapProviders(c.store))
+	}
+	ctrl.Register(v1.KindNamespace.GVK(), oidc.NewNamespaceCheck(c.store, p.logger))
+	ctrl.Watches(v1.KindOIDCProvider.GVK(), oidc.MapProviderNamespace)
+	ctrl.Watches(v1.KindOIDCProvider.GVK(), route.MapOIDCProvider(c.store))
+	ctrl.Watches(v1.KindOIDCProvider.GVK(), fns.MapOIDCProvider)
 }
 
 // Addr returns the bound control-plane address (host:port), available after New.

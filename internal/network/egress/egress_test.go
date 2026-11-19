@@ -574,3 +574,24 @@ func TestNotGlobalIsTheDecidedTable(t *testing.T) {
 	}
 	require.ElementsMatch(t, want, notGlobal)
 }
+
+// The back channel's addresses (ADR-0335 Decision 7): an address of ADR-0317's table or of the node's interfaces is
+// not globally reachable, a public one is.
+func TestGloballyReachableIsOutsideTheTableAndOffTheNode(t *testing.T) {
+	t.Parallel()
+	for _, ip := range []string{"10.0.0.5", "127.0.0.1", "169.254.169.254", "192.168.1.10", "::1", "fe80::1", "100.64.0.1", "::ffff:10.0.0.5"} {
+		ok, err := GloballyReachable(netip.MustParseAddr(ip))
+		require.NoError(t, err)
+		require.False(t, ok, "%s is not globally reachable", ip)
+	}
+	ok, err := GloballyReachable(netip.MustParseAddr("93.184.216.34"))
+	require.NoError(t, err)
+	require.True(t, ok, "a public address is reachable")
+	node, err := interfaceAddrs()
+	require.NoError(t, err)
+	for _, ip := range node {
+		ok, err := GloballyReachable(ip)
+		require.NoError(t, err)
+		require.False(t, ok, "%s is the node's own address", ip)
+	}
+}

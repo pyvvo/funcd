@@ -419,6 +419,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		funcd.WithListenAddr(cfg.Server.ListenAddr),
 		funcd.WithDataPlaneAddr(cfg.Server.DataPlaneAddr),
 		funcd.WithBaseDomain(cfg.Server.BaseDomain),
+		funcd.WithEdgePublicScheme(cfg.Server.EdgePublicScheme),
+		funcd.WithEdgePublicPort(cfg.Server.EdgePublicPort),
 		funcd.WithLogger(root),
 		funcd.WithBlobStoreURL(blobStoreURL(cfg)), // ADR-0222: a BackupSchedule's target is compared with it
 	)

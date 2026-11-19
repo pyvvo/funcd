@@ -162,6 +162,13 @@ type Handlers interface {
 	ReplaceIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, id v1.Identity) (v1.Identity, error)
 	DeleteIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
 
+	// OIDCProvider (namespaced) — ADR-0335, ADR-0336
+	GetOIDCProvider(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.OIDCProvider, error)
+	CreateOIDCProvider(ctx context.Context, p v1.OIDCProvider) (v1.OIDCProvider, error)
+	ListOIDCProviders(ctx context.Context, ns v1.NamespaceName) ([]v1.OIDCProvider, error)
+	ReplaceOIDCProvider(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, p v1.OIDCProvider) (v1.OIDCProvider, error)
+	DeleteOIDCProvider(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
+
 	// Role + RolesAssignment (namespaced) — ADR-0136, FEAT-0008/F101
 	GetRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Role, error)
 	CreateRole(ctx context.Context, ro v1.Role) (v1.Role, error)

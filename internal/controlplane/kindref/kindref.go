@@ -48,7 +48,7 @@ var Features = []Feature{
 	{"services/lake", []v1.Kind{v1.KindLake}},
 	{"services/secrets", []v1.Kind{v1.KindSecret}},
 	{"services/events", []v1.Kind{v1.KindEventSource, v1.KindSensor}},
-	{"security-and-networking/security", []v1.Kind{v1.KindIdentity, v1.KindRole, v1.KindRolesAssignment, v1.KindPolicy}},
+	{"security-and-networking/security", []v1.Kind{v1.KindIdentity, v1.KindRole, v1.KindRolesAssignment, v1.KindPolicy, v1.KindOIDCProvider}},
 	{"security-and-networking/networking", []v1.Kind{v1.KindRoute, v1.KindEgressPolicy}},
 	{"tenancy-and-limits/namespaces", []v1.Kind{v1.KindNamespace, v1.KindResourceGroup}},
 	{"disaster-recovery", []v1.Kind{v1.KindBackup, v1.KindBackupSchedule, v1.KindRestore}},
