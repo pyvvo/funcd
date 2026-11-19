@@ -703,6 +703,8 @@ github.com/prometheus/common v0.70.1 h1:1HvjP4D5oL3t8RsPlwxA9onvvStjtIHYE5XuuwOi
 github.com/prometheus/common v0.70.1/go.mod h1:VdFUQDMZK3VLkurFUVhia6uys/0suUp86TJz5qbJRhc=
 github.com/prometheus/procfs v0.21.1 h1:GljZCt+zSTS+NZq88cyQ1LjZ+RCHp3uVuabBWA5+OJI=
 github.com/prometheus/procfs v0.21.1/go.mod h1:aB55Cww9pdSJVHk0hUf0inxWyyjPogFIjmHKYgMKmtY=
+github.com/pyvvo/funcd-addons v0.1.0 h1:mO8pZrY8RNGHShD6upVuD3mPW0KzCPD72JWn4v9PDjo=
+github.com/pyvvo/funcd-addons v0.1.0/go.mod h1:KFlK+z4bZ9KNRr8/OsrwrSABRbBwm9D2MFaUu30xX5I=
 github.com/pyvvo/funcd-functions v0.25.1 h1:LLXuNRmOWtHx/v3D6A9ZZ7Ibl9DPmzAgCuVVwM6frko=
 github.com/pyvvo/funcd-functions v0.25.1/go.mod h1:L91uY7v74Ik9u+ui8J8p6Zqu/6RAK9uJWJFAKl6TxSY=
 github.com/pyvvo/funcd-python v0.25.0 h1:K+W5tZ2ResXB6PRTFF4U3P7AyfAXn0T70HjI6WGtRMQ=
