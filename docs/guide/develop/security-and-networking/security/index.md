@@ -199,6 +199,40 @@ Policy decides only requests whose principal and resource are in its namespace. 
 built-in rules forbid; it widens only S3 requests, Lake queries and outbound connections, such as `s3::read` on
 `resource in Bucket::"default/lakehouse"`, a scope that no RolesAssignment has.
 
+## Sign users in
+
+An [`OIDCProvider`](spec.md#oidcprovider) names an OpenID Connect provider by its
+[`issuer`](spec.md#oidcproviderspec), a client and a session key. With
+[`client.registration`](spec.md#oidcproviderspecclientregistration), funcd registers the client itself at a provider
+that offers dynamic registration, such as the [rauthy add-on](../../services/addons/build.md), and keeps its redirect
+URIs on the hosts that sign in with it. With `client.credentialsSecret`, a Secret written by hand holds `CLIENT_ID` and
+`CLIENT_SECRET`. `sessionSecret` names a Secret whose `SESSION_KEY` holds 32 random bytes, the key that seals the
+session cookies.
+
+The `oidc` mode of an [`auth`](../networking/spec.md#routespecauth), with `provider` naming the OIDCProvider, signs
+the callers of a Route, a rule, a workload's own address or a namespace in. In `default`, the mode needs a host.
+`unauthenticated` sets what a call that is not signed in gets:
+
+| `unauthenticated` | A call that is not signed in |
+|---|---|
+| `redirect`, the default | A `GET` or `HEAD` navigation, with `Sec-Fetch-Mode: navigate` or else `text/html` in `Accept`, gets 302 to the provider; any other call gets 401 |
+| `401` | 401 |
+| `allow` | Passes, with no principal |
+
+The provider sends the browser back to `/.auth/callback` on the same host, and `/.auth/logout` clears funcd's session
+cookies of the host. A call also signs in with an ID token in `Authorization: Bearer` whose `aud` is one of the
+provider's `audiences`.
+
+The code behind the stance reads who signed in:
+
+- An http app gets `X-Funcd-Principal`, the Base64 of a JSON object with `provider` and `claims`;
+  `X-Funcd-Principal-Id`, the `sub` claim; `X-Funcd-Principal-Name`, the first of the `name`, `preferred_username` and
+  `email` claims; and `X-Funcd-Id-Token` when the call has a session.
+- A handler reads `ctx.principal`, with `provider`, `id`, `name` when the token has one, and `claims`. It is
+  `undefined` in TypeScript and `None` in Python when the call is not signed in.
+
+funcd removes these headers from every request that it did not sign in.
+
 ## Access
 
 Without a role:
