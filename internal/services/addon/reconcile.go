@@ -74,7 +74,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 
 	st, cerr := r.prov.Converge(ctx, r.engineSpec(a, o, env))
 	if cerr != nil {
-		st = provider.ProviderStatus{Reason: reasonEngineNotReady}
+		st = provider.ProviderStatus{Reason: reasonEngineConvergeFailed}
 	}
 	o.Status.Address = st.Address
 	o.Status.Phase, o.Status.ObservedGeneration = v1.PhasePending, o.Generation
@@ -104,14 +104,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	return controller.Result{RequeueAfter: r.period}, nil
 }
 
-// addonOf is the Addon that registers kind, whatever its name; nil when none does.
+// addonOf is the Addon that registers kind, whatever its name, matched by plural as the API matches it; nil when none
+// does.
 func (r *Reconciler) addonOf(ctx context.Context, kind string) (*v1.Addon, error) {
 	list, err := r.store.List(ctx, v1.KindAddon.GVK(), store.ListOptions{})
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), "services.addon.addonOf", "list Addons")
 	}
 	for _, item := range list.Items {
-		if a, ok := item.(*v1.Addon); ok && a.Spec.Kind == kind {
+		if a, ok := item.(*v1.Addon); ok && v1.AddonPlural(a.Spec.Kind) == v1.AddonPlural(kind) {
 			return a, nil
 		}
 	}

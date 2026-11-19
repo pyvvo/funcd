@@ -117,3 +117,63 @@ func TestMapOIDCProvider(t *testing.T) {
 	require.Equal(t, []controller.Request{{GVK: v1.KindAddonObject.GVK(), Namespace: "a", Name: "behind"}},
 		r.MapOIDCProvider(ctx, sso))
 }
+
+// stored is the object login of namespace a, of kind, as funcd stores it, and its Addon rauthy registering addonKind,
+// with env; both are written to st directly, as no admission checks them.
+func stored(t *testing.T, st store.Store, addonKind, kind string, env map[string]string) controller.Request {
+	t.Helper()
+	ctx := context.Background()
+	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}}
+	a.Name = "rauthy"
+	a.Spec = v1.AddonSpec{Kind: addonKind, Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"}, Env: env,
+		Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d"}
+	_, err := st.Create(ctx, a)
+	require.NoError(t, err)
+	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject}}
+	o.Name, o.Namespace, o.ResourceGroup, o.Spec.Kind = "login", "a", "rg1", kind
+	_, err = st.Create(ctx, o)
+	require.NoError(t, err)
+	return controller.Request{GVK: v1.KindAddonObject.GVK(), Namespace: "a", Name: "login"}
+}
+
+// readyReason is the Ready reason of the stored object login of namespace a.
+func readyReason(t *testing.T, st store.Store) string {
+	t.Helper()
+	obj, err := st.Get(context.Background(), v1.KindAddonObject.GVK(), "a", "login")
+	require.NoError(t, err)
+	c, _ := obj.(*v1.AddonObject).Status.Conditions.Get("Ready")
+	return c.Reason
+}
+
+// ADR-0332 Decision 2: an object's Addon is the one whose kind has its plural, as the API finds it, so an Addon that
+// registers the kind again in another case runs the objects stored under the first. A converge that fails is
+// EngineConvergeFailed, as for a Lake.
+func TestReconcileFindsTheAddonByPlural(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	t.Cleanup(func() { _ = st.Close() })
+	req := stored(t, st, "Identityprovider", "IdentityProvider", nil)
+	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: noRuntime{}, Modes: []string{v1.AddonRuntimeContainerd}})
+	require.NoError(t, err)
+
+	_, err = r.Reconcile(context.Background(), req)
+	require.Error(t, err, "noRuntime's converge fails")
+	require.Equal(t, "EngineConvergeFailed", readyReason(t, st), "the object found its Addon and converged")
+	idp := &v1.Addon{ObjectMeta: v1.ObjectMeta{Name: "rauthy"}, Spec: v1.AddonSpec{Kind: "Identityprovider"}}
+	require.Equal(t, []controller.Request{req}, r.MapAddon(context.Background(), idp))
+}
+
+// ADR-0332 Decision 4: an env that does not render holds the object Pending, EnvInvalid, with no engine. The apply
+// checks each env value, so this Addon is one written before a check that it now fails.
+func TestReconcileHoldsAnObjectWhoseEnvFails(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	t.Cleanup(func() { _ = st.Close() })
+	req := stored(t, st, "IdentityProvider", "IdentityProvider", map[string]string{"PUB_URL": "${{ config. }}"})
+	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: noRuntime{}, Modes: []string{v1.AddonRuntimeContainerd}})
+	require.NoError(t, err)
+
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, "EnvInvalid", readyReason(t, st))
+}

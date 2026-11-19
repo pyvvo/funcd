@@ -34,6 +34,7 @@ const (
 	reasonSecretNotFound       = "SecretNotFound"
 	reasonBindingResolveFailed = "BindingResolveFailed"
 	reasonEngineNotReady       = "EngineNotReady"
+	reasonEngineConvergeFailed = "EngineConvergeFailed" // as a Lake and a SQL database name a failed converge
 	reasonProgrammed           = "Programmed"
 	// reasonProviderNotFound is IngressReady's while the object's oidc stance names no OIDCProvider (ADR-0335
 	// Decision 10).
@@ -125,7 +126,7 @@ func (r *Reconciler) MapAddon(ctx context.Context, obj v1.Object) []controller.R
 	if !ok {
 		return nil
 	}
-	return r.objects(ctx, "", func(o *v1.AddonObject) bool { return o.Spec.Kind == a.Spec.Kind })
+	return r.objects(ctx, "", func(o *v1.AddonObject) bool { return v1.AddonPlural(o.Spec.Kind) == v1.AddonPlural(a.Spec.Kind) })
 }
 
 // MapSecret maps a Secret's change to the objects of its namespace that bind it: a new Secret ends a SecretNotFound

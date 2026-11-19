@@ -435,7 +435,7 @@ func TestScenarioAddonPrivatePath(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 
 	for _, p := range []string{"/auth/v1/clients_dyn", "/auth/v1//clients_dyn", "/auth/v1/./clients_dyn",
-		"/auth/v1/x/../clients_dyn", "/auth/v1/../admin"} {
+		"/auth/v1/x/../clients_dyn", "/auth/v1/../admin", "/auth/v1/x/../ping"} {
 		status, _ := e.edge(t, http.MethodPost, "login.example.com", p)
 		require.Equal(t, http.StatusNotFound, status, p)
 	}
