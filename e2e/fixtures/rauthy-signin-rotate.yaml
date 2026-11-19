@@ -6,7 +6,7 @@ metadata:
   namespace: default
   resourceGroup: rg1
 spec:
-  issuer: http://login.localhost:8081/auth/v1
+  issuer: http://login.localhost:8081/auth/v1/
   addon: login
   client:
     registration:
