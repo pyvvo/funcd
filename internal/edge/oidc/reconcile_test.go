@@ -163,12 +163,22 @@ func TestScenarioOidcRotate(t *testing.T) {
 	old := string(before.Spec.Data[keyClientSecret])
 
 	callback := h.startSignIn(appHost, "/")
-	// The sign-in read the old secret; the rotation lands before its exchange.
+	// The sign-in read the old secret; the rotation lands before its exchange. The hook runs on the provider's
+	// goroutine, so it reports its error instead of failing the test there.
+	var rotated error
 	h.idp.BeforeNextToken(func() {
-		h.raiseRotate()
-		h.pass(sso)
+		obj, err := h.st.Get(h.ctx, v1.KindOIDCProvider.GVK(), staging, sso)
+		if rotated = err; err != nil {
+			return
+		}
+		p := obj.(*v1.OIDCProvider)
+		p.Spec.Client.Registration.Rotate++
+		if _, rotated = h.st.Update(h.ctx, p); rotated == nil {
+			_, rotated = h.rec.Reconcile(h.ctx, controller.Request{GVK: v1.KindOIDCProvider.GVK(), Namespace: staging, Name: sso})
+		}
 	})
 	resp, body := h.get(http.MethodGet, callback, nil)
+	require.NoError(t, rotated)
 	require.Equal(t, http.StatusFound, resp.StatusCode, "the sign-in succeeds on its retry: %s", body)
 
 	p := h.provider(sso)

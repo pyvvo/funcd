@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -99,10 +100,11 @@ func newHarness(t *testing.T, o harnessOptions) *harness {
 	if o.callback != nil {
 		callback = o.callback(h)
 	}
-	h.gate = New(Deps{Store: h.st, CallbackURL: callback, HTTPS: h.https, BackChannel: h.idp.Transport(), Addons: h.addons})
+	quiet := slog.New(slog.DiscardHandler)
+	h.gate = New(Deps{Store: h.st, CallbackURL: callback, HTTPS: h.https, BackChannel: h.idp.Transport(), Addons: h.addons, Logger: quiet})
 	h.gate.clock = h.clock
 	h.rec = NewReconciler(ReconcilerDeps{Store: h.st, CallbackURL: callback, Client: &http.Client{Transport: h.idp.Transport()},
-		SupervisionPeriod: 10 * time.Second, BaseDomain: "localhost", Addons: h.addons})
+		SupervisionPeriod: 10 * time.Second, BaseDomain: "localhost", Addons: h.addons, Logger: quiet})
 	h.rec.clock = h.clock
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
