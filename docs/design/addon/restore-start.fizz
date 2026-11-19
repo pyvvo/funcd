@@ -1,0 +1,115 @@
+---
+# An add-on object's in-place Restore (ADR-0333 Decision 4). The Restore holds the namespace, puts the copy in
+# restore.path and marks the object restorePending. The reconciler starts each engine from the object's spec: with
+# restore.env while the object is marked, and it replaces a running engine whose start env differs from that. An engine
+# started with restore.env loads the copy at its start, and fails to start when the copy is gone. Once that engine runs,
+# the reconciler removes the copy, then clears the mark. The Restore waits until an engine runs without restore.env,
+# then lifts the hold. An engine may crash at any time; the reconciler starts the next one from the spec. A write
+# reaches the engine only while it runs and the namespace is not held: the edge refuses a held namespace's calls
+# (ADR-0290). Environment: the runtime replaces an engine with SIGTERM and its grace (ADR-0277), so hiqlite removes its
+# crash marker before the next start; an engine starts from the current spec, never with an old container's env. Left
+# out: funcd stopping during the Restore (ADR-0222's Interrupted, which keeps the hold), and the copy's transfer, which
+# the backup service checks.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 16
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant lift-early: NoAckedWriteRolledBack
+# mutant clear-first: TheCopyIsLoaded
+# mutant never-clear: liveness
+
+# lift-early: the Restore lifts the hold once an engine loaded the copy, while that engine still runs with restore.env.
+# clear-first: the reconciler clears the mark before the engine that loads the copy started, so the Restore lifts the
+#   hold while that engine's start is still to come.
+# never-clear: the mark outlives the load, so the hold never lifts.
+MUTANT = ""
+
+action Init:
+    phase = "running"
+    held = False
+    copy = False
+    pending = False
+    engine = "up"
+    env = False
+    loaded = False
+    data = "old"
+    acked = False
+    crashes = 0
+
+atomic fair action Hold:
+    require phase == "running"
+    held = True
+    phase = "held"
+
+atomic fair action Place:
+    require phase == "held"
+    copy = True
+    phase = "placed"
+
+atomic fair action Mark:
+    require phase == "placed"
+    pending = True
+    phase = "marked"
+
+# SIGTERM to an engine whose start env is not the spec's.
+atomic fair action Replace:
+    require engine == "up"
+    require env != pending
+    engine = "down"
+
+atomic fair action Start:
+    require engine == "down"
+    env = pending
+    if not env:
+        engine = "up"
+    elif copy:
+        data = "copy"
+        loaded = True
+        engine = "up"
+
+atomic fair action Remove:
+    require pending
+    require copy
+    if MUTANT != "clear-first":
+        require engine == "up" and env
+    copy = False
+
+atomic fair action Clear:
+    require pending
+    require not copy
+    if MUTANT != "never-clear":
+        pending = False
+
+atomic fair action Lift:
+    require phase == "marked"
+    if MUTANT == "lift-early":
+        require loaded
+    else:
+        require not pending and engine == "up" and not env
+    held = False
+    phase = "done"
+
+atomic action Crash:
+    require engine == "up"
+    require crashes < 1
+    engine = "down"
+    crashes += 1
+
+atomic action Write:
+    require engine == "up"
+    require not held
+    require data != "old"
+    data = "copy+"
+    acked = True
+
+always assertion NoAckedWriteRolledBack:
+    return not acked or data == "copy+"
+
+always assertion TheCopyIsLoaded:
+    return phase != "done" or loaded
+
+always eventually assertion TheHoldLifts:
+    return phase == "done"
