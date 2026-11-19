@@ -11,6 +11,23 @@ to run, serve and back up one engine per object of that kind. funcd runs no code
 [pyvvo/funcd-addons](https://github.com/pyvvo/funcd-addons) is the example on this page: its Addon adds the kind
 `IdentityProvider`, and its funcdctl plugin, `funcdctl-rauthy`, writes the Secret each object binds.
 
+## Two kinds of add-on
+
+An add-on always adds a kind of its own, and it may also back one of funcd's own features:
+
+- **A kind of its own.** The add-on defines the API: its Addon's `kind` and `config` schema. funcd runs, fences,
+  serves and backs up one engine per object, and the engine does the rest. In Kubernetes terms, this is a custom
+  resource with its operator, where funcd's add-on reconciler is the operator framework.
+- **A funcd feature it backs.** funcd defines the API, one of its own kinds, and does the feature's work, the same
+  for every engine that speaks the feature's protocol. The engine is the driver behind it, as an ingress controller
+  is behind a Kubernetes Ingress.
+
+rauthy is both. `IdentityProvider` is its own kind, and it backs the edge's sign-in
+([Sign users in](../../security-and-networking/security/index.md#sign-users-in)). Three of its settings serve the sign-in rather than its own kind:
+`ENABLE_DYN_CLIENT_REG` lets funcd register the edge's client, `privatePaths` keeps that registration endpoint off the
+edge, and an `OIDCProvider` names the object with `spec.addon`. A funcd feature that add-ons back is a funcd decision,
+made in a funcd ADR before any add-on uses it.
+
 ## What the engine must do
 
 | The engine | rauthy |
