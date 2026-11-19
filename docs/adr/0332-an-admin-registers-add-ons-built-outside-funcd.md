@@ -1,6 +1,8 @@
 # ADR-0332: An admin registers add-ons built outside funcd, and users declare their objects
 
-- **Status**: Reviewing (2026-11-19); Accepted (2026-11-19), by the decider's standing go-ahead for FEAT-0018 ("go ahead, don't wait for
+- **Status**: Implemented (2026-11-19), review passed in its second round with no model finding open
+  ([report](../reviews/adr-0332-implementation-claude-opus-5-5-2.md)); Reviewing (2026-11-19, implemented); Accepted
+  (2026-11-19), by the decider's standing go-ahead for FEAT-0018 ("go ahead, don't wait for
   me", "until we ship entirely the new feature"), after three rounds of an independent judge (a subagent), every
   Blocker and Major folded
 - **Date**: 2026-11-19
