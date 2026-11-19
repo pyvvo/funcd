@@ -252,21 +252,22 @@ func (r *wbRig) getBackup(name v1.ObjectName) (*v1.Backup, bool) {
 	return obj.(*v1.Backup), true
 }
 
-// waitBackup waits for Backup name to reach phase.
+// waitBackup waits for Backup name to reach phase. The last poll is atomic: on a timeout, Eventually returns while
+// its poll may still run, and the failure log reads it.
 func (r *wbRig) waitBackup(name v1.ObjectName, phase v1.RunPhase) *v1.Backup {
 	r.t.Helper()
-	var b *v1.Backup
+	var last atomic.Pointer[v1.Backup]
 	defer func() {
 		if r.t.Failed() {
-			r.t.Logf("Backup %s: %+v\n%s", name, b, r.logs.String())
+			r.t.Logf("Backup %s: %+v\n%s", name, last.Load(), r.logs.String())
 		}
 	}()
 	require.Eventually(r.t, func() bool {
-		var ok bool
-		b, ok = r.getBackup(name)
+		b, ok := r.getBackup(name)
+		last.Store(b)
 		return ok && b.Status.Phase == phase
 	}, 15*time.Second, 10*time.Millisecond, "Backup %s reaches %s", name, phase)
-	return b
+	return last.Load()
 }
 
 func (r *wbRig) backups() []string {
