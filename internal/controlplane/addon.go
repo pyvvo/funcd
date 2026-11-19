@@ -25,17 +25,18 @@ func registerAddon(api huma.API, h Handlers) {
 	writes := []ErrorCase{
 		problem(fault.Invalid, "spec.kind is a kind of funcd's, or its plural is a path that funcd serves, whatever the "+
 			"case; or a replace changes spec.kind.", "Choose another kind. A new kind needs a new Addon."),
-		problem(fault.Conflict, "Another Addon registers the same kind or the same plural, whatever the case.",
-			"Choose another kind, or change the other Addon."),
 		problem(fault.Invalid, "The registry of spec.image is not one that addons.registries lists.",
 			"Use an image from a listed registry, or ask the operator to list its registry."),
 		problem(fault.Invalid, "spec.config is not a JSON Schema in funcd's contract profile, or an env value is not a "+
 			"literal or a single ${{ }} expression that the schema types.", "Correct the field that the detail names."),
 	}
+	// Only a create can take another Addon's kind or plural: a replace keeps its kind.
+	taken := problem(fault.Conflict, "Another Addon registers the same kind or the same plural, whatever the case.",
+		"Choose another kind, or change the other Addon.")
 	registerClusterCRUD(api, clusterRoutes[v1.Addon]{
 		kind: "Addon", kinds: "Addons", path: "addons",
 		list: h.ListAddons, create: h.CreateAddon, get: h.GetAddon, replace: h.ReplaceAddon, remove: h.DeleteAddon,
-		cases: &kindCases{create: writes, replace: writes},
+		cases: &kindCases{create: append(slices.Clone(writes), taken), replace: writes},
 	})
 }
 
@@ -465,7 +466,7 @@ func (h *storeHandlers) GetAddonObject(ctx context.Context, ns v1.NamespaceName,
 }
 
 func notOfPlural(ns v1.NamespaceName, plural string, name v1.ObjectName) error {
-	return fault.NotFoundf("controlplane.addonObject", "no object %s/%s of the plural %q", ns, name, plural)
+	return fault.NotFoundf("controlplane.addonObject", "object %s/%s of the plural %q not found", ns, name, plural)
 }
 
 func (h *storeHandlers) CreateAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, o v1.AddonObject) (v1.AddonObject, error) {

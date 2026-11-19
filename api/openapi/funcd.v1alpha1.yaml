@@ -7195,16 +7195,11 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: |-
-            - `urn:funcd:problem:conflict`: The Addon has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Addon again, apply the change to it, and send it with its new resourceVersion.
-            - `urn:funcd:problem:conflict`: Another Addon registers the same kind or the same plural, whatever the case. Choose another kind, or change the other Addon.
+          description: "`urn:funcd:problem:conflict`: The Addon has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Addon again, apply the change to it, and send it with its new resourceVersion."
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
               when: The Addon has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
               fix: Read the Addon again, apply the change to it, and send it with its new resourceVersion.
-            - type: urn:funcd:problem:conflict
-              when: Another Addon registers the same kind or the same plural, whatever the case.
-              fix: Choose another kind, or change the other Addon.
         "413":
           content:
             application/problem+json:
@@ -23151,10 +23146,10 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create a object in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create an object in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
           x-funcd-cases:
             - type: urn:funcd:problem:forbidden
-              when: The credential's role or namespaces do not allow it to create a object in the namespace.
+              when: The credential's role or namespaces do not allow it to create an object in the namespace.
               fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
         "404":
           content:
@@ -23171,10 +23166,10 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:conflict`: A object of that name already exists in the namespace. Choose another name, or replace the existing object."
+          description: "`urn:funcd:problem:conflict`: An object of that name already exists in the namespace. Choose another name, or replace the existing object."
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
-              when: A object of that name already exists in the namespace.
+              when: An object of that name already exists in the namespace.
               fix: Choose another name, or replace the existing object.
         "413":
           content:
@@ -23294,10 +23289,10 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete a object in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete an object in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
           x-funcd-cases:
             - type: urn:funcd:problem:forbidden
-              when: The credential's role or namespaces do not allow it to delete a object in the namespace.
+              when: The credential's role or namespaces do not allow it to delete an object in the namespace.
               fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
         "404":
           content:
@@ -23392,10 +23387,10 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read a object in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read an object in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
           x-funcd-cases:
             - type: urn:funcd:problem:forbidden
-              when: The credential's role or namespaces do not allow it to read a object in the namespace.
+              when: The credential's role or namespaces do not allow it to read an object in the namespace.
               fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
         "404":
           content:
@@ -23521,10 +23516,10 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace a object in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace an object in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
           x-funcd-cases:
             - type: urn:funcd:problem:forbidden
-              when: The credential's role or namespaces do not allow it to replace a object in the namespace.
+              when: The credential's role or namespaces do not allow it to replace an object in the namespace.
               fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
         "404":
           content:

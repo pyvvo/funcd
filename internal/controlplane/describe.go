@@ -325,7 +325,7 @@ func (v verbCases) remove(own []ErrorCase) []ErrorCase {
 
 // an is kind with its indefinite article.
 func an(kind string) string {
-	if strings.ContainsRune("AEIOU", rune(kind[0])) {
+	if strings.ContainsRune("AEIOUaeiou", rune(kind[0])) {
 		return "an " + kind
 	}
 	return "a " + kind
