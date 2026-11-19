@@ -388,8 +388,11 @@ func TestScenarioAddonRemoved(t *testing.T) {
 
 	require.NoError(t, e.admin.Delete(e.ctx, v1.KindAddon, "", "rauthy"))
 	e.waitReason(t, "default", "login", v1.PhasePending, "AddonNotFound")
-	_, running, _ := e.rt.state(ref("default", "login"))
-	require.False(t, running, "the engine stops")
+	// The hold writes the status before it stops the engine, as a Lake's does.
+	require.Eventually(t, func() bool {
+		_, running, _ := e.rt.state(ref("default", "login"))
+		return !running
+	}, 5*time.Second, 10*time.Millisecond, "the engine stops")
 	got, err := e.dev.Get(e.ctx, "identityproviders", "default", "login")
 	require.NoError(t, err, "get still serves it")
 	require.Equal(t, v1.ObjectName("login"), got.GetName())
@@ -412,7 +415,7 @@ func TestScenarioAddonRemoved(t *testing.T) {
 
 	e.apply(t, e.admin, rauthyAddon("identity"))
 	e.waitReason(t, "default", "login", v1.PhaseReady, "")
-	_, running, _ = e.rt.state(ref("default", "login"))
+	_, running, _ := e.rt.state(ref("default", "login"))
 	require.True(t, running, "the Addon of its kind runs it, whatever its name")
 
 	require.NoError(t, e.admin.Delete(e.ctx, v1.KindAddon, "", "identity"))

@@ -472,7 +472,7 @@ func (m RestoreMember) validate(op, path string) error {
 			return fault.Invalidf(op, "%s.kind %q: want KVStore, Bucket, Lake, SQLDatabase, Function or an add-on's kind", path, m.Kind)
 		}
 		if !m.InPlace {
-			return fault.Invalidf(op, "%s: a %s is an add-on object, which restores in place only: set inPlace, not as or asLocation", path, m.Kind)
+			return fault.Invalidf(op, "%s: an object of the add-on kind %s restores in place only: set inPlace, not as or asLocation", path, m.Kind)
 		}
 	}
 	return nil
