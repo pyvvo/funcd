@@ -302,21 +302,22 @@ testcases:
             regex: "[?&]code=([^&]+)"
       - type: exec
         script: |
-          limactl shell --workdir / {{.vm}} bash -lc '
+          limactl shell --workdir / {{.vm}} env CODE='{{.code}}' VERIFIER='{{.verifier}}' CID='{{.clientid}}' SECRET='{{.oldsecret}}' bash -lc '
             curl -s -o /dev/null -w "%{http_code}" -X POST http://{{.engine}}/auth/v1/oidc/token \
-              --data-urlencode grant_type=authorization_code --data-urlencode code={{.code}} \
-              --data-urlencode redirect_uri={{.callback}} --data-urlencode code_verifier={{.verifier}} \
-              --data-urlencode client_id={{.clientid}} --data-urlencode client_secret={{.oldsecret}}'
+              --data-urlencode grant_type=authorization_code --data-urlencode "code=$CODE" \
+              --data-urlencode redirect_uri={{.callback}} --data-urlencode "code_verifier=$VERIFIER" \
+              --data-urlencode "client_id=$CID" --data-urlencode "client_secret=$SECRET"'
         info: "the old secret → {{.result.systemout}}"
         assertions:
           - result.systemout ShouldNotEqual 200
+          - result.systemout ShouldNotEqual 404
       - type: exec
         script: |
-          limactl shell --workdir / {{.vm}} bash -lc '
+          limactl shell --workdir / {{.vm}} env CODE='{{.code}}' VERIFIER='{{.verifier}}' CID='{{.clientid}}' SECRET='{{.newsecret}}' bash -lc '
             curl -s -X POST http://{{.engine}}/auth/v1/oidc/token \
-              --data-urlencode grant_type=authorization_code --data-urlencode code={{.code}} \
-              --data-urlencode redirect_uri={{.callback}} --data-urlencode code_verifier={{.verifier}} \
-              --data-urlencode client_id={{.clientid}} --data-urlencode client_secret={{.newsecret}}'
+              --data-urlencode grant_type=authorization_code --data-urlencode "code=$CODE" \
+              --data-urlencode redirect_uri={{.callback}} --data-urlencode "code_verifier=$VERIFIER" \
+              --data-urlencode "client_id=$CID" --data-urlencode "client_secret=$SECRET"'
         info: "the current secret → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
