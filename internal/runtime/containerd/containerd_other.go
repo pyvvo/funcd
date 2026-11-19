@@ -8,6 +8,7 @@ package containerd
 
 import (
 	"log/slog"
+	"net/netip"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -46,6 +47,10 @@ type Config struct {
 
 	// Egress is server.network.egress: each worker's eth0 gets no IPv6 before its task starts (ADR-0318).
 	Egress bool
+
+	// BridgeAddress is funcd's address on the bridge (ADR-0238), the one source a host-only worker admits besides
+	// loopback (ADR-0332 Decision 3); invalid ⇒ the subnet's network address + 1.
+	BridgeAddress netip.Addr
 }
 
 // New returns fault.Unavailable on non-Linux platforms — the containerd runtime

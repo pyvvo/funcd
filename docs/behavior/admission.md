@@ -67,6 +67,7 @@ New words: Schema, Refused, DryRun, Store.
 
 | Value | Default | From |
 |---|---|---|
+| `maxPort` | 65535 | `api/types/v1alpha1/addon.go` |
 | `maxAppConfigMapNameLength` | 52 | `api/types/v1alpha1/app.go` |
 | `maxAppNameLength` | 52 | `api/types/v1alpha1/app.go` |
 | `maxAppRevisionNumber` | 9999999999 | `api/types/v1alpha1/apprevision.go` |

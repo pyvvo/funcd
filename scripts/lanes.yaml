@@ -855,3 +855,23 @@ funcdctl-plugin:
   tokens:
     developer: funcdctl-plugin-lane-developer
   venom: e2e/funcdctl-plugin.venom.yml
+
+addon-rauthy:
+  description: An admin registers rauthy, an add-on built outside funcd, from its published image pinned by digest, and a developer's IdentityProvider of it turns Ready on real containerd; the edge serves its /auth/v1/ping at its host with the path kept, answers 404 to its private path however it is spelled, and the engine's netns admits only funcd (ADR-0332).
+  # rauthy's Addon is rauthy/addon.yaml of pyvvo/funcd-addons; the lane's own IdentityProvider, its test keys and its
+  # daemon config are funcd's fixtures.
+  module: github.com/pyvvo/funcd-addons
+  dir: rauthy
+  stage:
+    - addon.yaml
+    - from: e2e/fixtures/addon-rauthy-funcdconfig.yaml
+      to: funcdconfig.yaml
+    - from: e2e/fixtures/addon-rauthy-keys.yaml
+      to: rauthy-keys.yaml
+    - from: e2e/fixtures/addon-rauthy-login.yaml
+      to: login.yaml
+  tokens:
+    admin: addon-rauthy-lane-admin
+    developer: addon-rauthy-lane-developer
+  # Only an admin registers an Addon, so the suite applies every manifest itself, and waits for login.
+  venom: e2e/addon-rauthy.venom.yml

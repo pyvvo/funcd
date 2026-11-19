@@ -128,6 +128,7 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `sqlFeedBootWait` | 30s | `pkg/funcd/binding_providers.go` |
 | `engineOutputBuf` | 64KiB | `pkg/funcd/engineoutput.go` |
 | `closeMargin` | 2s | `pkg/funcd/funcd.go` |
+| `defaultAddonObjectsPerNamespace` | 20 | `pkg/funcd/funcd.go` |
 | `defaultBucketsPerNamespace` | 100 | `pkg/funcd/funcd.go` |
 | `defaultCloseGrace` | 3s | `pkg/funcd/funcd.go` |
 | `defaultDeadletterMaxEntries` | 1000 | `pkg/funcd/funcd.go` |

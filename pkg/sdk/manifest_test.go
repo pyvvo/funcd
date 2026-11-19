@@ -85,9 +85,19 @@ metadata:
 	_, err = sdk.DecodeManifests([]byte("---\n# nothing\n"))
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 
-	_, err = sdk.DecodeManifests([]byte("apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\n---\nkind: Frobnicate\n"))
+	// A kind name such as Frobnicate may be an add-on's (ADR-0332), so the unknown kind is one that no kind name spells.
+	_, err = sdk.DecodeManifests([]byte("apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\n---\nkind: frobnicate\n"))
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.Contains(t, err.Error(), "document 2")
+
+	objs, err = sdk.DecodeManifests([]byte("apiVersion: funcd.io/v1alpha1\nkind: IdentityProvider\nmetadata:\n  name: login\n" +
+		"  namespace: team\n  resourceGroup: rg1\nspec:\n  config:\n    issuer: https://login.example.com\n    port: 8080\n"))
+	require.NoError(t, err)
+	o, ok := objs[0].(*v1.AddonObject)
+	require.True(t, ok, "an add-on's kind decodes as an add-on object")
+	require.Equal(t, v1.Kind("IdentityProvider"), o.GroupVersionKind().Kind)
+	require.JSONEq(t, `{"issuer":"https://login.example.com","port":8080}`, string(o.Spec.Config), "config keeps its types")
+	require.NoError(t, o.Validate())
 }
 
 // A bare `on:` key (the documented Sensor and blob EventSource shape) decodes as the string key "on",

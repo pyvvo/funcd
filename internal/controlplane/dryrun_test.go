@@ -154,6 +154,9 @@ func sample(k v1.Kind, name v1.ObjectName) v1.Object {
 	case *v1.Restore:
 		x.Spec = v1.RestoreSpec{Backup: "b", Source: v1.RestoreSource{CredentialsSecret: "c", IdentitySecret: "i"},
 			Members: []v1.RestoreMember{{Kind: v1.KindKVStore, Name: "s", As: "t"}}}
+	case *v1.Addon:
+		x.Spec = v1.AddonSpec{Kind: "EchoService", Image: "docker.io/traefik/whoami@sha256:" + strings.Repeat("a", 64), Port: 80,
+			Readiness: v1.AddonReadiness{Path: "/"}}
 	}
 	return o
 }
@@ -211,7 +214,8 @@ func TestDryRunEveryWritableKind(t *testing.T) {
 	created := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	for _, k := range v1.AllKinds() {
 		create, replace := ops["create"+string(k)], ops["replace"+string(k)]
-		if create == nil {
+		// An add-on object's write needs its Addon, which this store does not list: TestAddonObjectDryRun has it.
+		if create == nil || k == v1.KindAddonObject {
 			continue
 		}
 		t.Run(string(k), func(t *testing.T) {

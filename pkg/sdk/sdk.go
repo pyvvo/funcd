@@ -201,9 +201,13 @@ func (d *openAPIDocument) declares(method, path, name string) bool {
 	return slices.ContainsFunc(op.Parameters, func(p openAPIParameter) bool { return p.In == "query" && p.Name == name })
 }
 
-// operationPath is the OpenAPI path template of kind's collection, or of its item.
+// operationPath is the OpenAPI path template of kind's collection, or of its item; an add-on's kind is served at the
+// one template of every add-on's plural (ADR-0332 Decision 2).
 func operationPath(kind v1.Kind, item bool) string {
-	d, _ := descriptorFor(kind)
+	d, funcds := kindDescriptors[kind]
+	if !funcds {
+		d = kindDescriptor{plural: "{plural}", namespaced: true}
+	}
 	path := apiPrefix + "/" + d.plural
 	if d.namespaced {
 		path = apiPrefix + "/namespaces/{namespace}/" + d.plural
@@ -474,11 +478,14 @@ func toWireBody(obj v1.Object) ([]byte, error) {
 }
 
 // decodeObject unmarshals a response body (flat, stdlib-marshaled by huma) into the
-// concrete kind via v1.NewObject.
+// concrete kind via v1.NewObject; a kind funcd does not define is an add-on's object, which carries its kind.
 func decodeObject(kind v1.Kind, body []byte) (v1.Object, error) {
 	obj, ok := v1.NewObject(kind)
 	if !ok {
-		return nil, fault.Invalidf("sdk", "unknown kind %q", kind)
+		if _, addon := descriptorFor(kind); !addon {
+			return nil, fault.Invalidf("sdk", "unknown kind %q", kind)
+		}
+		obj = &v1.AddonObject{}
 	}
 	if err := json.Unmarshal(body, obj); err != nil {
 		return nil, fault.Internalf("sdk", "decode %s: %v", kind, err)
@@ -567,7 +574,10 @@ func decodeDocument(doc *yamlv3.Node) (v1.Object, error) {
 		return nil, fault.Invalidf("sdk.DecodeManifest", "manifest is missing 'kind'")
 	}
 	obj, ok := v1.NewObject(tm.Kind)
-	if !ok {
+	switch {
+	case !ok && v1.IsAddonKind(string(tm.Kind)):
+		obj = &v1.AddonObject{} // an add-on's kind: the server says whether an Addon registers it (ADR-0332)
+	case !ok:
 		return nil, fault.Invalidf("sdk.DecodeManifest", "unknown kind %q", tm.Kind)
 	}
 	quoteTextScalars(doc, reflect.TypeOf(obj))

@@ -489,3 +489,29 @@ func TestAggregator_HostSpellingsAreOneClaim(t *testing.T) {
 		})
 	}
 }
+
+// An add-on object's entry takes the rank after the Lake's (ADR-0332 Decision 5): on a same-name tie for one claim, the
+// Lake keeps it and the add-on object reports RouteConflict, and the claim it holds alone keeps its path rules.
+func TestAggregator_AddonObjectRankedAfterTheLake(t *testing.T) {
+	t.Parallel()
+	rtr := router.New()
+	a := router.NewAggregator(rtr, nil, nil, "", nil)
+	set(t, a, "routes")
+	lake := withHost(upstreamEntry("a", "x", "/q", "http://lake"), "h")
+	addon := withHost(upstreamEntry("a", "x", "/q", "http://engine"), "h")
+	addon.Owner.Kind = v1.KindAddonObject
+	addon.Rules[0].KeepPath, addon.Rules[0].PrivatePaths = true, []string{"/q/private"}
+
+	require.Empty(t, set(t, a, "lake/a/x", lake)[0].Reason)
+	v := set(t, a, "addon/a/x", addon)[0]
+	require.Equal(t, "RouteConflict", v.Reason)
+	require.Contains(t, v.Message, "Lake a/x")
+
+	set(t, a, "lake/a/x")
+	require.Empty(t, set(t, a, "addon/a/x", addon)[0].Reason)
+	m, ok := rtr.Resolve("h", "/q/ping", "GET")
+	require.True(t, ok)
+	require.Equal(t, "http://engine", m.Upstream)
+	require.True(t, m.KeepPath)
+	require.Equal(t, []string{"/q/private"}, m.PrivatePaths)
+}

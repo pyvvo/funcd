@@ -136,6 +136,8 @@ func principalMeta(obj PrincipalObject) (v1.NamespaceName, v1.ResourceGroupName)
 		return o.Namespace, o.ResourceGroup
 	case *v1.Lake:
 		return o.Namespace, o.ResourceGroup
+	case *v1.AddonObject:
+		return o.Namespace, o.ResourceGroup
 	default:
 		return "", ""
 	}
@@ -157,8 +159,10 @@ func principalUID(p auth.EntityRef) (cedartypes.EntityUID, error) {
 		return identityUID(p.Namespace, p.Name), nil
 	case v1.KindLake:
 		return lakeUID(p.Namespace, p.Name), nil
+	case v1.KindAddonObject:
+		return addonObjectUID(p.Namespace, p.Name), nil
 	default:
-		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function, Lake, S3Identity, Identity)", p.Type)
+		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function, Lake, AddonObject, S3Identity, Identity)", p.Type)
 	}
 }
 

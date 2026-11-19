@@ -75,6 +75,8 @@ func kindRank(k v1.Kind) (int, bool) {
 		return 0, true
 	case v1.KindLake:
 		return 1, true
+	case v1.KindAddonObject: // ranked after the Lake (ADR-0332 Decision 5)
+		return 2, true
 	default:
 		return 0, false
 	}

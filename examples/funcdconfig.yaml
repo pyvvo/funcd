@@ -261,6 +261,11 @@ log:
 #   callTimeout: 30s              # bound of one context.sql call (ADR-0233), also the engine's db_timeout. default: 30s
 #   changeFeedPort: 7075          # where the engines post their changes (ADR-0235). default: 7075 on the bridge address, a free port on loopback (ADR-0260)
 
+# --- addons: add-ons an admin registers, built outside funcd (ADR-0332) --------------------------
+# addons:
+#   registries: []                # the registries an Addon's image may come from, its host (ghcr.io); empty refuses every Addon. default: []
+#   maxObjectsPerNamespace: 20    # add-on object count cap per namespace, all add-ons together; negative ⇒ no cap. default: 20
+
 # --- volumes: Function volumes (ADR-0262) -------------------------------------------------------
 # volumes:
 #   capacity: 10Gi                # the one volume image on containerd, preallocated at <dataDir>/volumes.img; Ki/Mi/Gi/Ti (ADR-0266). default: 0, volumes off

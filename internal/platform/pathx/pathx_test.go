@@ -34,3 +34,12 @@ func TestHasPrefix(t *testing.T) {
 		require.Equal(t, tc.want, HasPrefix(tc.p, tc.prefix), "HasPrefix(%q, %q)", tc.p, tc.prefix)
 	}
 }
+
+func TestContainsDotDot(t *testing.T) {
+	t.Parallel()
+	for p, want := range map[string]bool{
+		"/a/b": false, "/a/../b": true, "/..": true, `\..\a`: true, "/a..b": false, "/a/..b/c": false, "..": true, "": false,
+	} {
+		require.Equal(t, want, ContainsDotDot(p), p)
+	}
+}

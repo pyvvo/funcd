@@ -119,6 +119,8 @@ const (
 	defaultBucketsPerNamespace = 100
 	// defaultSQLDatabasesPerNamespace is the per-namespace SQLDatabase count cap when unset (ADR-0232).
 	defaultSQLDatabasesPerNamespace = 20
+	// defaultAddonObjectsPerNamespace is the per-namespace add-on object count cap when unset (ADR-0332 Decision 2).
+	defaultAddonObjectsPerNamespace = 20
 	// The workflow engine tunables when WithWorkflow is not given: the daemon config's workflow.* defaults
 	// (ADR-0094, internal/platform/config), so a hung step fails the same way in dev and in production.
 	defaultWorkflowStepTimeout  = 300 * time.Second
@@ -312,6 +314,14 @@ type config struct {
 	lakeProvider provider.Runtime
 	// sqlProvider overrides the SQLDatabase engine runtime (ADR-0232); nil ⇒ the production runtime.
 	sqlProvider provider.Runtime
+	// addonRuntime overrides the add-on engines' runtime, and addonModes are the runtime.mode values it serves
+	// (ADR-0332 Decision 3, ADR-0334); nil ⇒ the production runtime, serving containerd on a containerd server.
+	addonRuntime provider.Runtime
+	addonModes   []string
+	// addonRegistries are addons.registries, the registries an Addon's image may come from (ADR-0332 Decision 6);
+	// addonMaxObjects is addons.maxObjectsPerNamespace, 0 ⇒ the default (20), negative disables the cap.
+	addonRegistries []string
+	addonMaxObjects int
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
 	sqlCallTimeout time.Duration
 	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075 with a
@@ -513,6 +523,7 @@ type Platform struct {
 	blob       *blobProvider
 	sql        *sqlProvider
 	lake       *lakeProvider
+	addon      *addonProvider
 	eventing   *eventingProvider
 	secrets    *secretsProvider
 	invoke     *invokeProvider
@@ -544,9 +555,10 @@ func New(opts ...Option) (_ *Platform, err error) {
 	// (#94).
 	p.exec, p.kv, p.blob, p.sql, p.lake = &executor{cfg: cfg}, &kvProvider{cfg: cfg}, &blobProvider{cfg: cfg},
 		&sqlProvider{cfg: cfg}, &lakeProvider{cfg: cfg}
+	p.addon = &addonProvider{cfg: cfg}
 	p.eventing, p.secrets, p.invoke = &eventingProvider{cfg: cfg}, &secretsProvider{cfg: cfg}, &invokeProvider{cfg: cfg}
-	p.phases = lifecycle.New(append(append([]lifecycle.Provider{p.exec, p.kv, p.blob, p.sql, p.lake, p.eventing, p.secrets},
-		hookless()...), p.invoke)...)
+	p.phases = lifecycle.New(append(append([]lifecycle.Provider{p.exec, p.kv, p.blob, p.sql, p.lake, p.addon, p.eventing,
+		p.secrets}, hookless()...), p.invoke)...)
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
 	defer func() {
 		if err != nil {
@@ -667,7 +679,8 @@ func (p *Platform) buildControlPlane() error {
 		// PEP proxy that calls it is not yet wired here — see TODO(ADR-0137) in internal/services/lake/reconcile.go.
 		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.LakeCapability(),
 			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapabilityWithWriters(writerLister)},
-		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.LakePrincipalSource()},
+		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.LakePrincipalSource(),
+			cedarauth.AddonObjectPrincipalSource()},
 	)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar capability registry")
@@ -787,6 +800,9 @@ func (p *Platform) buildControlPlane() error {
 	}
 	if err := p.lake.build(lakeDeps{authz: cedarPDP, master: master, floor: p.floor, secrets: p.secrets.resolver,
 		routes: edgeAgg, s3: p.blob.injection, ctrl: ctrl}); err != nil {
+		return err
+	}
+	if err := p.addon.build(addonDeps{secrets: p.secrets.resolver, routes: edgeAgg, ctrl: ctrl}); err != nil {
 		return err
 	}
 	if err := p.invoke.build(invokeDeps{authz: cedarPDP}); err != nil {
@@ -1794,7 +1810,40 @@ func (e *executor) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 			e.egressWorkers.Remove(ip)
 		}
 	}
+	e.indexAddonEngines(ctx)
 	return live
+}
+
+// indexAddonEngines puts the running add-on engines' addresses in the gateway's engine index, which no rule reaches
+// (ADR-0332 Decision 3). A failed read keeps the index as it was.
+func (e *executor) indexAddonEngines(ctx context.Context) {
+	if e.egressEngines == nil {
+		return
+	}
+	res, err := e.cfg.store.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{})
+	if err != nil {
+		return
+	}
+	namespaces := map[v1.NamespaceName]bool{}
+	for _, o := range res.Items {
+		namespaces[o.GetNamespace()] = true
+	}
+	engines := map[netip.Addr]auth.EntityRef{}
+	for ns := range namespaces {
+		insts, lerr := e.cfg.runtime.List(ctx, ns)
+		if lerr != nil {
+			return
+		}
+		for _, in := range insts {
+			if in.OwnerKind != v1.KindAddonObject || in.State != runtime.StateRunning {
+				continue
+			}
+			if ip, perr := netip.ParseAddr(in.IP); perr == nil {
+				engines[ip] = auth.EntityRef{Type: v1.KindAddonObject, Namespace: in.Namespace, Name: in.Name}
+			}
+		}
+	}
+	e.egressEngines.Replace(engines)
 }
 
 // enqueueAll enqueues every object of kind in the store.

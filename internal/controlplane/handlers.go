@@ -198,6 +198,10 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.Restore:
 		o.TypeMeta = tm
+	case *v1.Addon:
+		o.TypeMeta = tm
+	case *v1.AddonObject:
+		o.TypeMeta = tm
 	}
 }
 
@@ -356,6 +360,13 @@ func jsonFields(obj v1.Object) (map[string]json.RawMessage, error) {
 // as an unversioned replace does; with rv it answers 409 at once. With no Delete admission, store.Delete takes rv
 // as the precondition ("" ⇒ none) and nothing is read.
 func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteGuarded(ctx, kind, ns, name, rv, nil)
+}
+
+// deleteGuarded is deleteObjIf with guard run on the stored object before admission, as replaceObjIf runs its own: a
+// guard reads Old, so the delete is conditional on Old's version.
+func (h *storeHandlers) deleteGuarded(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string,
+	guard func(context.Context, v1.Object) error) error {
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
 	}
@@ -367,7 +378,7 @@ func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.Nam
 		return err
 	}
 	defer unlock()
-	if !h.admit.Handles(kind.GVK(), admission.Delete) {
+	if guard == nil && !h.admit.Handles(kind.GVK(), admission.Delete) {
 		return h.store.Delete(ctx, kind.GVK(), ns, name, rv)
 	}
 	_, err = retryOwnRead(func() (v1.Object, bool, error) {
@@ -377,6 +388,11 @@ func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.Nam
 		}
 		if err := staleVersion(kind, ns, name, rv, old); err != nil {
 			return nil, false, err
+		}
+		if guard != nil {
+			if err := guard(ctx, old); err != nil {
+				return nil, false, err
+			}
 		}
 		id, _ := middleware.IdentityFrom(ctx)
 		if _, err := h.admit.Admit(ctx, admission.Request{
@@ -803,7 +819,8 @@ type crudKind interface {
 		v1.Namespace | v1.ResourceGroup | v1.Route |
 		v1.Role | v1.RolesAssignment | v1.KVStore | v1.Bucket | v1.Lake | v1.SQLDatabase | v1.Policy |
 		v1.EgressPolicy | v1.Invocation | v1.RuntimeClass | v1.WorkerNode | v1.Gateway | v1.Workflow | v1.WorkflowRun |
-		v1.Sensor | v1.Site | v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore
+		v1.Sensor | v1.Site | v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore |
+		v1.Addon | v1.AddonObject
 }
 
 type objectPtr[T crudKind] interface {

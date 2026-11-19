@@ -41,6 +41,9 @@ type Deps struct {
 	// NodeAddrs reads the addresses on the node's interfaces, which a domain rule never reaches (ADR-0315); nil reads them
 	// from the host.
 	NodeAddrs func() ([]netip.Addr, error)
+	// Engines holds the addresses of the add-on engines, which no rule reaches: only funcd's own components connect to
+	// them (ADR-0332 Decision 3). nil holds none.
+	Engines WorkerIndex
 }
 
 // WorkerIndex resolves a worker's funcd0 source IP to the principal Ref of its owner kind (a Function or a
@@ -169,6 +172,13 @@ func decideConnect(ctx context.Context, d Deps, src netip.Addr, dst netip.AddrPo
 	if !ok {
 		rec := AuditRecord{IP: dst.Addr(), Port: dst.Port(), Allowed: false, Reason: "unknown source worker " + src.String()}
 		return auth.Decision{Allowed: false, Reason: rec.Reason}, rec, nil
+	}
+	if d.Engines != nil {
+		if _, engine := d.Engines.Lookup(dst.Addr().Unmap()); engine {
+			rec := AuditRecord{Namespace: string(ref.Namespace), Function: string(ref.Name), IP: dst.Addr(), Port: dst.Port(),
+				Allowed: false, Reason: "an add-on engine's address, which only funcd reaches"}
+			return auth.Decision{Allowed: false, Reason: rec.Reason}, rec, nil
+		}
 	}
 	attested := d.DNS.DomainsFor(src, dst.Addr())
 	if len(attested) > 0 {

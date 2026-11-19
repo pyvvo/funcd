@@ -63,6 +63,10 @@ type CompiledRule struct {
 	// never from a user-authored Route — a user backend has no Upstream arm, so the edge cannot be
 	// pointed at an arbitrary in-daemon address (no SSRF). Function/Static are then unused.
 	Upstream string
+	// KeepPath forwards an Upstream match its cleaned request path whole, the rule's path kept: an add-on engine
+	// serves under its own basePath (ADR-0332 Decision 5). PrivatePaths, under Path, are the edge's 404.
+	KeepPath     bool
+	PrivatePaths []string
 }
 
 // Match is the resolved target. StripPrefix is the matched rule's prefix the handler strips from
@@ -79,6 +83,9 @@ type Match struct {
 	// Upstream is non-empty for a node-private reverse-proxy backend (ADR-0138): the data-plane
 	// reverse-proxies to it (no activator hop, no Function resolve). Trusted in-daemon target only.
 	Upstream string
+	// KeepPath and PrivatePaths are the matched rule's (ADR-0332 Decision 5).
+	KeepPath     bool
+	PrivatePaths []string
 }
 
 // compiled is one flattened matcher row (host + rule), sorted longest-path-first.
@@ -91,6 +98,8 @@ type compiled struct {
 	function  v1.ObjectName
 	static    *v1.StaticBackend
 	upstream  string
+	keepPath  bool
+	private   []string
 	auth      v1.AuthMode
 }
 
@@ -121,6 +130,8 @@ func (t *table) Program(_ context.Context, entries []Entry, reserved []string) e
 				function:  r.Function,
 				static:    r.Static,
 				upstream:  r.Upstream,
+				keepPath:  r.KeepPath,
+				private:   r.PrivatePaths,
 				auth:      auth,
 			})
 		}
@@ -164,7 +175,8 @@ func (t *table) Resolve(host, path, method string) (Match, bool) {
 		if !row.exact {
 			strip = row.path
 		}
-		return Match{Namespace: row.namespace, Function: row.function, StripPrefix: strip, Path: row.path, Auth: row.auth, Static: row.static, Upstream: row.upstream}, true
+		return Match{Namespace: row.namespace, Function: row.function, StripPrefix: strip, Path: row.path, Auth: row.auth, Static: row.static, Upstream: row.upstream,
+			KeepPath: row.keepPath, PrivatePaths: row.private}, true
 	}
 	return Match{}, false
 }

@@ -448,6 +448,15 @@ type Config struct {
 		ChangeFeedPort int `json:"changeFeedPort,omitempty" env:"FUNCD_SQL_CHANGE_FEED_PORT" validate:"min=0,max=65535" doc:"The port where funcd takes the row changes that the SQL database engines post, which EventSources of kind sql turn into events. funcd listens on its bridge address under the containerd runtime, else on loopback. 0 means 7075 on the bridge address, and a free port chosen at start on loopback."`
 	} `json:"sql,omitempty"`
 
+	// Addons is the add-ons an admin registers (ADR-0332): Registries lists the registries an Addon's image may come
+	// from, its host after docker.io normalization, the empty default refusing every Addon (Decision 6);
+	// MaxObjectsPerNamespace is the per-namespace add-on object count cap at admission, 0 ⇒ the default (20), a
+	// negative value no cap (Decision 2).
+	Addons struct {
+		Registries             []string `json:"registries,omitempty" env:"FUNCD_ADDONS_REGISTRIES" envSeparator:"," doc:"The registries that an Addon's image may come from, each the image's host, such as ghcr.io, with docker.io for an image that names none. Empty, the default, refuses every Addon. A registry taken out of the list stops no engine, and refuses the Addon's next change."`
+		MaxObjectsPerNamespace int      `json:"maxObjectsPerNamespace,omitempty" env:"FUNCD_ADDONS_MAX_OBJECTS_PER_NAMESPACE" doc:"The most objects of add-ons' kinds that one namespace may hold, all add-ons together: a create past it gets 400. 0 means 20, and a negative value means no cap."`
+	} `json:"addons,omitempty"`
+
 	// Volumes turns the Functions' volumes on (ADR-0262 Decision 3): CapacityBytes is the size of the one volume image
 	// on the containerd runtime, preallocated at <storage.dataDir>/volumes.img; 0 ⇒ volumes off. Capacity is the same
 	// size with a binary unit, "64Gi" (ADR-0266); at most one of the two is set.

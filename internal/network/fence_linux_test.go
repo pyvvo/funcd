@@ -42,7 +42,35 @@ func TestScenarioFenceRefusesOtherDestinations(t *testing.T) {
 	require.Equal(t, []byte{0x23, 0x28}, port, "rule 2 matches the gateway's port")
 
 	require.Len(t, fenceRules([]netip.AddrPort{}), 2, "an empty list allows no new outbound connection")
-	require.Error(t, FenceNetns("/nonexistent", []netip.AddrPort{netip.MustParseAddrPort("[::1]:9000")}), "an IPv6 endpoint is refused")
+	require.Error(t, FenceNetns("/nonexistent", []netip.AddrPort{netip.MustParseAddrPort("[::1]:9000")}, nil), "an IPv6 endpoint is refused")
+}
+
+// The input chain accepts loopback, then established or related traffic, then IPv4 from each admit address, funcd's
+// bridge address, and nothing else: its drop policy refuses a connection from any other worker (ADR-0332 Decision 3).
+// The packet-level effect is the addon-rauthy lane's.
+func TestFenceAdmitsOnlyLoopbackAndTheBridgeAddress(t *testing.T) {
+	bridge := netip.MustParseAddr("10.63.0.1")
+	rules := admitRules([]netip.Addr{bridge})
+	require.Len(t, rules, 3)
+	for i, r := range rules {
+		v, ok := r[len(r)-1].(*expr.Verdict)
+		require.True(t, ok && v.Kind == expr.VerdictAccept, "rule %d ends in accept", i)
+	}
+	require.Equal(t, expr.MetaKeyIIF, rules[0][0].(*expr.Meta).Key, "rule 0 accepts what comes in on loopback")
+	require.IsType(t, &expr.Ct{}, rules[1][0], "rule 1 accepts established or related traffic")
+	var src []byte
+	for _, e := range rules[2] {
+		if p, ok := e.(*expr.Payload); ok {
+			require.Equal(t, uint32(srcOffset), p.Offset, "rule 2 reads the source address")
+		}
+		if c, ok := e.(*expr.Cmp); ok && len(c.Data) == 4 {
+			src = c.Data
+		}
+	}
+	require.Equal(t, []byte{10, 63, 0, 1}, src, "rule 2 matches the bridge address")
+
+	require.Len(t, admitRules([]netip.Addr{}), 2, "an empty list admits loopback alone")
+	require.Error(t, FenceNetns("/nonexistent", []netip.AddrPort{}, []netip.Addr{netip.MustParseAddr("::1")}), "an IPv6 source is refused")
 }
 
 // ipv6Tree makes a tree shaped as /proc/sys/net/ipv6, each link's disable_ipv6 reading 0.

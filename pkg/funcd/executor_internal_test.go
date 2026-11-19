@@ -43,6 +43,7 @@ func TestPhases_ListTheProvidersWithTheirHooks(t *testing.T) {
 		"blob: start, reclaim, stop, quotas, admissions, dependencies, facets, backups",
 		"sql: reclaim, run, stop, quotas, admissions, dependencies, facets, backups",
 		"lake: before stop, backups",
+		"addon: admissions",
 		"eventing: run",
 		"secrets: dependencies, facets",
 		"config: ",

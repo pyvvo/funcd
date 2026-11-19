@@ -329,6 +329,7 @@ func (r *engineRuntime) workerSpec(spec ProviderSpec, replica int) containerrt.W
 		Mounts:    append(r.storageMounts(spec), r.scratch.mounts(spec)...),
 
 		EgressOnly: spec.EgressOnly,
+		HostOnly:   spec.HostOnly,
 	}
 }
 

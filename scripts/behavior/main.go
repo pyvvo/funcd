@@ -62,6 +62,7 @@ func chapters() []chapter {
 		{"Functions", []string{"internal/function", "internal/pooling", "internal/artifact", "internal/contract", "internal/contractcheck", "internal/revhold"}, []string{"functions"}},
 		{"Calls", []string{"internal/edge", "internal/gateway", "internal/dataplane", "internal/activator", "internal/invoke", "internal/route", "internal/site"}, []string{"server", "invoke", "site"}},
 		{"Services", []string{"internal/kvstore", "internal/blob", "internal/sql", "internal/lake", "internal/services", "internal/provider"}, []string{"kvstore", "blob", "s3gateway", "lake", "sql"}},
+		{"Addons", []string{"internal/services/addon"}, []string{"addons"}},
 		{"Eventing", []string{"internal/bus", "internal/eventing", "internal/sensor", "internal/workflow", "internal/expr"}, []string{"workflow", "eventing"}},
 		{"Apps", []string{"internal/app"}, []string{"app"}},
 		{"Disaster recovery", []string{"internal/backup", "internal/restore", "internal/services/backup", "internal/platform/hold", "internal/snapshot"}, []string{"backup", "workloadBackup"}},

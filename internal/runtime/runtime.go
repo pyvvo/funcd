@@ -103,6 +103,9 @@ type WorkerSpec struct {
 	// EgressOnly, when non-nil (empty included), limits the worker's new outbound connections to TCP to these
 	// endpoints (containerd; ADR-0269). nil means no fence.
 	EgressOnly []netip.AddrPort
+	// HostOnly admits new inbound connections to the worker only from loopback and funcd's bridge address
+	// (containerd; ADR-0332 Decision 3).
+	HostOnly bool
 }
 
 // Instance is the observed state of one worker.

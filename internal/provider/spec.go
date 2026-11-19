@@ -101,6 +101,9 @@ type ProviderSpec struct {
 	Scratch *ScratchSpec
 	// EgressOnly is copied to the engine's WorkerSpec: nil means no fence (ADR-0269).
 	EgressOnly []netip.AddrPort
+	// HostOnly admits new connections to the engine only from loopback and funcd's bridge address; copied to the
+	// WorkerSpec, as EgressOnly is (ADR-0332 Decision 3).
+	HostOnly bool
 	// MaxAge, when positive, makes Converge replace a running engine older than it, so a new one carries a fresh key
 	// pair (ADR-0270). 0 ⇒ never replaced for age.
 	MaxAge time.Duration

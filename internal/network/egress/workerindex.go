@@ -42,3 +42,15 @@ func (w *MemoryWorkerIndex) Lookup(ip netip.Addr) (auth.EntityRef, bool) {
 	ref, ok := w.m[ip]
 	return ref, ok
 }
+
+// Replace makes the index hold exactly m, as one change: the add-on engines' addresses are taken whole from each
+// look at the runtime (ADR-0332 Decision 3).
+func (w *MemoryWorkerIndex) Replace(m map[netip.Addr]auth.EntityRef) {
+	next := make(map[netip.Addr]auth.EntityRef, len(m))
+	for ip, ref := range m {
+		next[ip] = ref
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.m = next
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/platform/pathx"
 )
 
 const op = "edge.static"
@@ -161,7 +162,7 @@ func resolveKey(prefix, index, dec string) (key string, bad bool) {
 		dec = "/"
 	}
 	// Reject a `..` segment BEFORE path.Clean collapses it — a stated rejection, not a silent fix.
-	if containsDotDot(dec) {
+	if pathx.ContainsDotDot(dec) {
 		return "", true
 	}
 	isDir := strings.HasSuffix(dec, "/")
@@ -246,20 +247,6 @@ func etagMatches(ifNoneMatch, etag string) bool {
 	want := strings.TrimPrefix(etag, "W/")
 	for _, part := range strings.Split(ifNoneMatch, ",") {
 		if strings.TrimPrefix(strings.TrimSpace(part), "W/") == want {
-			return true
-		}
-	}
-	return false
-}
-
-// containsDotDot reports whether any path segment is exactly "..", the traversal defense (B1),
-// mirroring net/http's own containsDotDot.
-func containsDotDot(p string) bool {
-	if !strings.Contains(p, "..") {
-		return false
-	}
-	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
-		if seg == ".." {
 			return true
 		}
 	}

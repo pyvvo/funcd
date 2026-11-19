@@ -38,6 +38,7 @@ type executor struct {
 	cfg *config
 
 	egressWorkers   *egress.MemoryWorkerIndex // src-IP → Ref, filled by the containerd runtime (ADR-0117 §5); nil unless egress is on
+	egressEngines   *egress.MemoryWorkerIndex // the add-on engines' addresses, which the gateway never dials (ADR-0332); nil unless egress is on
 	egressForwarder egress.Forwarder
 	egressGateway   egress.Gateway
 	volumes         volume.Manager         // the Functions' volumes (ADR-0262); nil ⇒ off
@@ -129,7 +130,7 @@ func (e *executor) buildEgress(authz auth.Authorizer) error {
 		c.logger.Warn("the egress dns forwarder listens on loopback, which worker containers cannot reach: give funcd its " +
 			"bridge address (WithBridgeAddress), else no lookup is answered")
 	}
-	e.egressWorkers = egress.NewMemoryWorkerIndex()
+	e.egressWorkers, e.egressEngines = egress.NewMemoryWorkerIndex(), egress.NewMemoryWorkerIndex()
 	fwd := egress.NewForwarder(
 		netip.AddrPortFrom(bridge, c.dnsForwarderPort),
 		c.dnsUpstream,
@@ -145,6 +146,7 @@ func (e *executor) buildEgress(authz auth.Authorizer) error {
 		Authz:       authz,
 		Audit:       egressAuditSink{logger: c.logger.With("component", "egress.audit")},
 		Logger:      c.logger.With("component", "egress.gateway"),
+		Engines:     e.egressEngines,
 	})
 	return nil
 }

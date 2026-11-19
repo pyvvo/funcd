@@ -38,6 +38,8 @@ func RegisterRoutes(api huma.API, h Handlers) {
 	registerWorkflow(api, h)
 	registerWorkflowRun(api, h)
 	registerSensor(api, h)
+	registerAddon(api, h)
+	registerAddonObjects(api, h)
 }
 
 // ---- shared input types ----

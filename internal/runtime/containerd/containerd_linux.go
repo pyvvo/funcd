@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,6 +32,8 @@ import (
 	"github.com/containerd/containerd/v2/contrib/seccomp"
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
@@ -39,6 +42,7 @@ import (
 	"github.com/moby/sys/mountinfo"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
+	"oras.land/oras-go/v2/registry/remote/credentials"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -117,6 +121,10 @@ type Config struct {
 
 	// Egress is server.network.egress: each worker's eth0 gets no IPv6 before its task starts (ADR-0318).
 	Egress bool
+
+	// BridgeAddress is funcd's address on the bridge (ADR-0238), the one source a host-only worker admits besides
+	// loopback (ADR-0332 Decision 3); invalid ⇒ the subnet's network address + 1.
+	BridgeAddress netip.Addr
 }
 
 // worker tracks the per-instance bookkeeping the port needs but containerd does
@@ -639,17 +647,43 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 }
 
 // writeNetns writes what a worker's netns holds before its task starts: with egress on, no IPv6 on its eth0 (ADR-0318),
-// and an engine's fence (ADR-0269).
+// and an engine's fence (ADR-0269), which for a host-only worker admits only loopback and funcd's bridge address
+// (ADR-0332 Decision 3). A host-only worker without an egress fence is refused, so no inbound rule is ever left out.
 func (d *driver) writeNetns(netnsPath string, spec runtime.WorkerSpec) error {
+	const op = "runtime.containerd.writeNetns"
 	if d.cfg.Egress {
 		if err := network.DisableWorkerIPv6(netnsPath); err != nil {
 			return err
 		}
 	}
-	if spec.EgressOnly != nil {
-		return network.FenceNetns(netnsPath, spec.EgressOnly)
+	if spec.EgressOnly == nil {
+		if spec.HostOnly {
+			return fault.Invalidf(op, "a host-only worker needs an egress fence")
+		}
+		return nil
 	}
-	return nil
+	var admit []netip.Addr
+	if spec.HostOnly {
+		bridge, err := d.bridgeAddress()
+		if err != nil {
+			return err
+		}
+		admit = []netip.Addr{bridge}
+	}
+	return network.FenceNetns(netnsPath, spec.EgressOnly, admit)
+}
+
+// bridgeAddress is funcd's address on the bridge: Config.BridgeAddress, else the subnet's network address + 1, as
+// ADR-0238 Decision 1 defaults it.
+func (d *driver) bridgeAddress() (netip.Addr, error) {
+	if d.cfg.BridgeAddress.IsValid() {
+		return d.cfg.BridgeAddress, nil
+	}
+	sub, err := netip.ParsePrefix(d.cfg.SubnetCIDR)
+	if err != nil {
+		return netip.Addr{}, fault.Invalidf("runtime.containerd.bridgeAddress", "subnet %q: %v", d.cfg.SubnetCIDR, err)
+	}
+	return sub.Masked().Addr().Next(), nil
 }
 
 // reclaim deletes the container and snapshot that hold a worker's name when this driver runs no worker under it.
@@ -1284,7 +1318,7 @@ func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.
 		return nil, fault.Wrapf(runtime.ErrImageUnavailable, fault.NotFound, op, "runtime image %q is not embedded; set runtime.containerd.imageOverride for its runtime to pull it", ref)
 	}
 	image, err = d.client.Pull(nctx, name, containerd.WithPullUnpack,
-		containerd.WithPullSnapshotter(d.snapshotter()))
+		containerd.WithPullSnapshotter(d.snapshotter()), containerd.WithResolver(credentialResolver()))
 	if err != nil {
 		if imageAbsent(err) {
 			return nil, fault.Wrapf(fmt.Errorf("%w: %w", runtime.ErrImageUnavailable, err), fault.NotFound, op, "pull image %q", ref)
@@ -1292,6 +1326,36 @@ func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.
 		return nil, mapErr(err, op, "pull image %q", ref)
 	}
 	return image, nil
+}
+
+// credentialResolver resolves and pulls with the Docker credential store that internal/artifact reads (ADR-0332
+// Implementation plan): a private image's registry is logged in to on the host, and an image whose registry the store
+// holds nothing for is pulled anonymously.
+func credentialResolver() remotes.Resolver {
+	return docker.NewResolver(docker.ResolverOptions{
+		Hosts: docker.ConfigureDefaultRegistries(docker.WithAuthorizer(docker.NewDockerAuthorizer(
+			docker.WithAuthCreds(registryCreds())))),
+	})
+}
+
+// registryCreds reads a registry host's login from the Docker credential store, as containerd's authorizer asks for
+// it: a user and its password, or no user and an identity token. With no store, every host is anonymous.
+func registryCreds() func(host string) (string, string, error) {
+	store, err := credentials.NewStoreFromDocker(credentials.StoreOptions{})
+	if err != nil {
+		return func(string) (string, string, error) { return "", "", nil }
+	}
+	read := credentials.Credential(store)
+	return func(host string) (string, string, error) {
+		c, err := read(context.Background(), host)
+		if err != nil {
+			return "", "", err
+		}
+		if c.Username == "" {
+			return "", c.RefreshToken, nil
+		}
+		return c.Username, c.Password, nil
+	}
 }
 
 // ociOpts builds the conservative OCI spec for a worker: its image's config, then sandboxOpts, then the seccomp

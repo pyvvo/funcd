@@ -71,6 +71,25 @@ func WithSQLChangeFeedPort(port int) Option {
 	return func(c *config) error { c.sqlChangeFeedPort = port; return nil }
 }
 
+// WithAddonRuntime runs the add-on engines on r, which serves the runtime.mode values modes (ADR-0332 Decision 3,
+// ADR-0334): an object whose Addon runs on none of them waits Pending, RuntimeUnavailable. Without it the production
+// runtime runs them on a containerd server, and a process server runs none. Tests and funcdctl dev inject theirs.
+func WithAddonRuntime(r provider.Runtime, modes ...string) Option {
+	return func(c *config) error { c.addonRuntime, c.addonModes = r, modes; return nil }
+}
+
+// WithAddonRegistries sets addons.registries, the registries an Addon's image may come from (ADR-0332 Decision 6);
+// none, the default, refuses every Addon.
+func WithAddonRegistries(registries ...string) Option {
+	return func(c *config) error { c.addonRegistries = registries; return nil }
+}
+
+// WithAddonObjectQuota sets the per-namespace cap on the objects of the add-ons' kinds, all add-ons together, enforced
+// at admission (ADR-0332 Decision 2, addons.maxObjectsPerNamespace). 0 ⇒ the default (20); a negative value disables it.
+func WithAddonObjectQuota(maxPerNamespace int) Option {
+	return func(c *config) error { c.addonMaxObjects = maxPerNamespace; return nil }
+}
+
 // WithSQLProviderRuntime overrides the SQLDatabase engine runtime (ADR-0232); the production runtime supervises the
 // rqlite container, tests and `funcdctl dev` (ADR-0237) inject their own. It must implement provider.Volumes.
 func WithSQLProviderRuntime(r provider.Runtime) Option {

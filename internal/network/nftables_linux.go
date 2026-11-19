@@ -310,6 +310,13 @@ func matchDstAddr(addr [4]byte) []expr.Any {
 	}
 }
 
+func matchSrcAddr(addr [4]byte) []expr.Any {
+	return []expr.Any{
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: srcOffset, Len: 4},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: addr[:]},
+	}
+}
+
 // matchIPv4 matches an IPv4 packet, in a table of the inet family.
 func matchIPv4() []expr.Any {
 	return []expr.Any{

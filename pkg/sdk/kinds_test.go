@@ -20,7 +20,7 @@ import (
 func TestKindDescriptorCoversAllKinds(t *testing.T) {
 	t.Parallel()
 	for _, k := range v1.AllKinds() {
-		if _, ok := kindDescriptors[k]; !ok {
+		if _, ok := kindDescriptors[k]; !ok && k != v1.KindAddonObject {
 			t.Errorf("kind %q has no kindDescriptor (route plural missing)", k)
 		}
 	}
@@ -37,6 +37,9 @@ func TestSDKKindPaths_MatchServerRoutes(t *testing.T) {
 	// labels, then put the templates back.
 	route := strings.NewReplacer("/namespaces/ns/", "/namespaces/{namespace}/")
 	for _, k := range v1.AllKinds() {
+		if k == v1.KindAddonObject {
+			continue // served under its add-on's kind: TestAddonKindPaths
+		}
 		col, err := c.collectionURL(k, "ns")
 		if err != nil {
 			t.Fatalf("collectionURL(%s): %v", k, err)
@@ -92,12 +95,47 @@ func TestKindFromToken(t *testing.T) {
 			t.Errorf("KindFromToken(%q) = %q,%v; want %q,true", token, got, ok, want)
 		}
 	}
-	if _, ok := KindFromToken("frobnicate"); ok {
-		t.Errorf("KindFromToken(unknown) should be !ok")
+	// ADR-0332 Decision 2: a token that names no kind of funcd's is an add-on's, and the server says whether an Addon
+	// registers it; a token that is no kind name nor a lower-case word names nothing.
+	if got, ok := KindFromToken("frobnicate"); !ok || got != "frobnicate" {
+		t.Errorf("KindFromToken(frobnicate) = %q,%v; want an add-on's token", got, ok)
 	}
-	// ADR-0261: the kind before the rename is no token any more.
-	if _, ok := KindFromToken("catalogservice"); ok {
-		t.Errorf("KindFromToken(catalogservice) should be !ok")
+	for _, token := range []string{"Foo-Bar", "x", "9lives"} {
+		if _, ok := KindFromToken(token); ok {
+			t.Errorf("KindFromToken(%q) should be !ok", token)
+		}
+	}
+	// ADR-0261: the kind before the rename is no token of the Lake's any more.
+	if got, _ := KindFromToken("catalogservice"); got == v1.KindLake {
+		t.Errorf("KindFromToken(catalogservice) is the Lake")
+	}
+}
+
+// ADR-0332 Decision 2: an add-on's kind, typed as its kind name, its singular or its plural, is addressed at its plural
+// in a namespace, and a response of it decodes as an add-on object that carries its kind.
+func TestAddonKindPaths(t *testing.T) {
+	t.Parallel()
+	c := &Client{baseURL: "http://funcd"}
+	for _, token := range []string{"IdentityProvider", "identityprovider", "identityproviders"} {
+		k, ok := KindFromToken(token)
+		if !ok {
+			t.Fatalf("KindFromToken(%q) is !ok", token)
+		}
+		col, err := c.collectionURL(k, "team")
+		if err != nil || col != "http://funcd/apis/funcd.io/v1alpha1/namespaces/team/identityproviders" {
+			t.Errorf("collectionURL(%q) = %q, %v", token, col, err)
+		}
+	}
+	obj, err := decodeObject("identityproviders", []byte(`{"apiVersion":"funcd.io/v1alpha1","kind":"IdentityProvider",`+
+		`"metadata":{"name":"login","namespace":"team"},"spec":{"kind":"IdentityProvider"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o, ok := obj.(*v1.AddonObject); !ok || o.GroupVersionKind().Kind != "IdentityProvider" {
+		t.Errorf("decodeObject = %#v, want an add-on object of kind IdentityProvider", obj)
+	}
+	if _, err := c.collectionURL("identityproviders", ""); err == nil {
+		t.Error("an add-on's kind is namespaced")
 	}
 }
 

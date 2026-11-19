@@ -1,0 +1,17 @@
+# The addon-rauthy lane's test keys for rauthy (ADR-0332 Decision 4): its object binds this Secret, and the Addon's
+# secretKeys name the keys that reach the engine. Test values made for the lane, which no other system holds.
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: rauthy-keys
+  namespace: default
+  resourceGroup: rg1
+spec:
+  type: Opaque
+  data:
+    HQL_SECRET_RAFT: NWVKMG1hdmdhVWNkaTZYZ0RKYi1ZQWtGSzJhLVhHcGpZc1lyZ2F2VlBHalQ1NDNo
+    HQL_SECRET_API: dVVrUmRjZHZEbS12bk03UTc5N25VMER3MjY3UlhOTXJuUUw0NndZdC1LVWs4YVR6
+    ENC_KEYS: azEvR2tRRG1RTGtpQkNpTWRiYWFTaWpDUUQ1QVM1Y0E2czc4MUxrYWw4ZWtnVT0=
+    ENC_KEY_ACTIVE: azE=
+    BOOTSTRAP_ADMIN_EMAIL: YWRtaW5AbG9naW4uZXhhbXBsZS5jb20=
+    BOOTSTRAP_ADMIN_PASSWORD_PLAIN: YTV0VEY0NFV6YjhKY20zdXM2U0twUUdKWWdsOUJ1V1g=

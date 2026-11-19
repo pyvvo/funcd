@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -700,4 +701,29 @@ func TestScenarioIssuedEnvReplacesNoEngine(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rt.created, 3, "gaining a pair replaces the engine")
 	require.Equal(t, "AK-2", rt.created[2].Env["AWS_ACCESS_KEY_ID"])
+}
+
+// ADR-0332 Decision 3: a spec's fence, its endpoints and whether only funcd reaches the engine, is the worker's, and a
+// change of either replaces a running engine (#1195).
+func TestConvergeCopiesTheFenceToTheWorker(t *testing.T) {
+	host, port, closeFn := engineServer(t, 200)
+	defer closeFn()
+	rt := newFakeRuntime(host, port)
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindAddonObject})
+	require.NoError(t, err)
+
+	spec := specFor(host, port, nil)
+	spec.EgressOnly, spec.HostOnly = []netip.AddrPort{}, true
+	_, err = pr.Converge(context.Background(), spec)
+	require.NoError(t, err)
+	require.Len(t, rt.created, 1)
+	require.NotNil(t, rt.created[0].EgressOnly)
+	require.Empty(t, rt.created[0].EgressOnly, "no endpoint")
+	require.True(t, rt.created[0].HostOnly, "only funcd reaches the engine")
+
+	spec.HostOnly = false
+	_, err = pr.Converge(context.Background(), spec)
+	require.NoError(t, err)
+	require.Len(t, rt.created, 2, "another inbound fence replaces the engine")
+	require.False(t, rt.created[1].HostOnly)
 }

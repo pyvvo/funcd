@@ -181,6 +181,30 @@ func TestScenarioDecideFlow(t *testing.T) {
 	require.False(t, dec.Allowed, "an unknown source worker is denied+audited")
 }
 
+// An add-on engine's address is refused before the PDP is asked, so a rule that would permit it permits nothing
+// (ADR-0332 Decision 3): fakeAuthz allows every attested api.x.com, and the engine's address is a global one here so
+// that a domain rule could reach it.
+func TestDecideRefusesAnAddonEngine(t *testing.T) {
+	t.Parallel()
+	worker := netip.MustParseAddr("10.63.0.5")
+	engine := netip.MustParseAddr("93.184.216.40")
+	workers, engines := NewMemoryWorkerIndex(), NewMemoryWorkerIndex()
+	workers.Add(worker, auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "etl"})
+	engines.Add(engine, auth.EntityRef{Type: v1.KindAddonObject, Namespace: "acme", Name: "login"})
+	d := Deps{Workers: workers, DNS: fakeDNS{engine: {"api.x.com"}}, Authz: fakeAuthz{}, Engines: engines}
+
+	dec, rec, err := decideConnect(context.Background(), d, worker, netip.AddrPortFrom(engine, 8080), "api.x.com")
+	require.NoError(t, err)
+	require.False(t, dec.Allowed, "an add-on engine's address is refused")
+	require.False(t, rec.Allowed)
+	require.Equal(t, "acme", rec.Namespace, "the refusal is audited for the caller")
+
+	engines.Remove(engine)
+	dec, _, err = decideConnect(context.Background(), d, worker, netip.AddrPortFrom(engine, 8080), "api.x.com")
+	require.NoError(t, err)
+	require.True(t, dec.Allowed, "the address is no engine's once the engine is gone")
+}
+
 // fnMeta holds Function etl of namespace acme for the real PDP.
 type fnMeta struct{}
 

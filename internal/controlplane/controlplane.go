@@ -105,6 +105,20 @@ type Handlers interface {
 	ReplaceInvocation(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, inv v1.Invocation) (v1.Invocation, error)
 	DeleteInvocation(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
 
+	// Addon (cluster-scoped, ADR-0332)
+	GetAddon(ctx context.Context, name v1.ObjectName) (v1.Addon, error)
+	CreateAddon(ctx context.Context, a v1.Addon) (v1.Addon, error)
+	ListAddons(ctx context.Context) ([]v1.Addon, error)
+	ReplaceAddon(ctx context.Context, name v1.ObjectName, a v1.Addon) (v1.Addon, error)
+	DeleteAddon(ctx context.Context, name v1.ObjectName, rv string) error
+
+	// The objects of the add-ons' kinds (namespaced, ADR-0332), at their kind's plural
+	ListAddonObjects(ctx context.Context, ns v1.NamespaceName, plural string) ([]v1.AddonObject, error)
+	CreateAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, o v1.AddonObject) (v1.AddonObject, error)
+	GetAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name v1.ObjectName) (v1.AddonObject, error)
+	ReplaceAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name v1.ObjectName, o v1.AddonObject) (v1.AddonObject, error)
+	DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name v1.ObjectName, rv string) error
+
 	// RuntimeClass (cluster-scoped)
 	GetRuntimeClass(ctx context.Context, name v1.ObjectName) (v1.RuntimeClass, error)
 	CreateRuntimeClass(ctx context.Context, rc v1.RuntimeClass) (v1.RuntimeClass, error)

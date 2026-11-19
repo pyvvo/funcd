@@ -9,7 +9,7 @@ import (
 )
 
 // FenceNetns needs Linux network namespaces (ADR-0269).
-func FenceNetns(string, []netip.AddrPort) error {
+func FenceNetns(string, []netip.AddrPort, []netip.Addr) error {
 	return fault.Unavailablef("network.FenceNetns", "a netns fence requires linux")
 }
 
