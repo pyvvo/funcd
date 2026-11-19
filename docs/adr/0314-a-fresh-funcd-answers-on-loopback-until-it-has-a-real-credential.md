@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-11-05), review passed with three minors, folded in ([report](../reviews/adr-0314-implementation-claude-opus-5-5.md)); Reviewing (2026-11-05); Accepted (2026-11-05), the decider delegated acceptance to the session driving this work ("I'll let you accept
   the proposed ADR"), with Decisions 3 and 6 confirmed; judged once: no Blocker, one Major (the list below), folded in
+- **Superseded in part by**: [ADR-0334](0334-funcdctl-dev-runs-add-on-images.md) (2026-11-19) — Decisions 2, 5 and 6: each refusal of `funcd.DevToken` also covers `funcd.DevAdminToken`.
 - **Date**: 2026-11-05
 - **Deciders**: green-0-rabbit
 - **Tags**: auth, config, daemon, defaults

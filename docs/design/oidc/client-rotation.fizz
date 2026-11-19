@@ -1,64 +1,86 @@
 ---
-# The edge's sign-in client against its rotation and a provider that purges it (ADR-0336). A registrar pass that
-# finds the rotation not yet observed updates the client (RFC 7592 PUT): the provider issues a new secret and refuses
-# the old one at once. The pass writes the answer into the client Secret, then records the rotation as observed. A
-# pass that finds the stored client gone (purged, or never stored) registers a new one and writes it. The registrar
-# may crash between any two steps of a pass; the next pass starts over from the stored state. A sign-in reads the
-# Secret, exchanges its code with what it read, and when the provider refuses the client, reads the Secret once more
-# and exchanges again. Environment: the provider answers each call; a Secret write is atomic; a pass runs again after
-# a crash (the supervision period). Left out: the callbacks' update, which is the same PUT.
-deadlock_detection: false
+# The edge's sign-in client against its rotation, an added host, and a provider that purges it or is restored
+# (ADR-0336). A pass reads the spec's rotate and the wanted callbacks, then reads the client (RFC 7592 GET). When the
+# client is gone it registers a new one (POST). When the read's secret differs from the stored one, the wanted
+# callbacks differ from status.callbacks or from the read's redirect URIs, or rotate is above observedRotate, it
+# updates the client (PUT): the provider issues a new secret and refuses the old one at once. The pass writes the
+# answer into the client Secret, then records the callbacks and the rotate value it acted on. The registrar may crash
+# between any two steps of a pass; the next pass starts over from what is stored. The user adds one host and raises
+# rotate once, and a Backup copies the provider once, each at any step; a Restore puts that copy back. A sign-in reads
+# the Secret, exchanges its code with what it read, and when the provider refuses the client, reads the Secret once
+# more and exchanges again. Every action is atomic. Environment: the provider answers every call; a read answers with
+# the client's current secret and redirect URIs (RFC 7592 section 3); the registration token stays valid; a Secret
+# write is atomic; a pass runs again after a crash (the supervision period).
 options:
-  max_concurrent_actions: 2
-  max_actions: 14
+  max_concurrent_actions: 1
+  max_actions: 19
   crash_on_yield: false
 ---
 # diagram: reg
-# mutant observe-first: liveness
+# mutant record-before-put: liveness
+# mutant record-live: liveness
+# mutant read-store: liveness
 # mutant no-reread: NoSignInFailsWithTheCurrentClientStored
 
-# observe-first: the pass records the rotation as observed before it writes the new secret, so a crash between them
-#   leaves the refused secret stored for good.
+# record-before-put: the pass records the callbacks and rotate before its PUT, so a crash between the two loses the
+#   rotation for good.
+# record-live: the pass records the live rotate, so a raise during the pass is never served.
+# read-store: a read's new secret is stored instead of rotated away, so a Restore brings back a secret rotated away.
 # no-reread: a refused exchange retries with the secret the sign-in first read.
 MUTANT = ""
 
 action Init:
     client = 1
     secret = 1
+    pcb = 1
     sc = 1
     ss = 1
-    rotate = 1
+    scb = 1
     observed = 0
+    want = 1
+    rotate = 0
+    floor = 0
     reg = "idle"
+    aw = 0
+    ar = 0
     ac = 0
     asec = 0
     nextc = 2
     nexts = 2
+    backed = False
+    bc = 0
+    bs = 0
+    bcb = 0
     faults = 0
     sin = "idle"
     rc = 0
     rs = 0
     bad = False
 
-atomic fair action Put:
+atomic fair action Read:
     require reg == "idle"
-    require sc == client and observed < rotate
-    secret = nexts
-    nexts += 1
-    ac = client
-    asec = secret
-    if MUTANT == "observe-first":
-        reg = "observe"
-    else:
-        reg = "store"
+    known = sc == client
+    stale = known and secret != ss
+    if stale and MUTANT == "read-store":
+        ss = secret
+        stale = False
+    drift = known and pcb != want
+    if not known or stale or drift or want != scb or rotate > observed:
+        aw = want
+        ar = rotate
+        if MUTANT == "record-before-put":
+            reg = "record"
+        else:
+            reg = "act"
 
-atomic fair action Register:
-    require reg == "idle"
-    require sc != client
-    client = nextc
-    nextc += 1
+atomic fair action Act:
+    require reg == "act"
+    if sc != client:
+        client = nextc
+        nextc += 1
     secret = nexts
     nexts += 1
+    pcb = aw
     ac = client
     asec = secret
     reg = "store"
@@ -67,23 +89,37 @@ atomic fair action Store:
     require reg == "store"
     sc = ac
     ss = asec
-    if MUTANT == "observe-first" or observed == rotate:
+    ac = 0
+    asec = 0
+    if MUTANT == "record-before-put":
+        aw = 0
+        ar = 0
         reg = "idle"
     else:
-        reg = "observe"
+        reg = "record"
 
-atomic fair action Observe:
-    require reg == "observe"
-    observed = rotate
-    if MUTANT == "observe-first":
-        reg = "store"
+atomic fair action Record:
+    require reg == "record"
+    scb = aw
+    if MUTANT == "record-live":
+        observed = rotate
     else:
+        observed = ar
+    if MUTANT == "record-before-put":
+        reg = "act"
+    else:
+        aw = 0
+        ar = 0
         reg = "idle"
 
 atomic action RegistrarCrash:
     require reg != "idle"
     require faults < 1
     reg = "idle"
+    aw = 0
+    ar = 0
+    ac = 0
+    asec = 0
     faults += 1
 
 atomic action Purge:
@@ -91,6 +127,31 @@ atomic action Purge:
     require client != 0
     client = 0
     faults += 1
+
+atomic action Backup:
+    require not backed
+    backed = True
+    bc = client
+    bs = secret
+    bcb = pcb
+
+atomic action Restore:
+    require faults < 1
+    require backed
+    require client != bc or secret != bs or pcb != bcb
+    client = bc
+    secret = bs
+    pcb = bcb
+    faults += 1
+
+atomic action HostAdded:
+    require want == 1
+    want = 2
+
+atomic action RotateRaised:
+    require rotate == 0
+    rotate = 1
+    floor = nexts
 
 atomic action SignInReads:
     require sin == "idle"
@@ -120,4 +181,6 @@ always assertion NoSignInFailsWithTheCurrentClientStored:
     return not bad
 
 always eventually assertion TheSecretConverges:
-    return reg == "idle" and sc == client and ss == secret and observed == rotate
+    stored = reg == "idle" and sc == client and ss == secret
+    applied = pcb == want and scb == want and observed == rotate
+    return stored and applied and ss >= floor

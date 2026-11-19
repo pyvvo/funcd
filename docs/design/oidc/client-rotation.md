@@ -7,16 +7,19 @@
 title: client-rotation (reg)
 ---
 stateDiagram-v2
-    state "idle" as s0
-    state "observe" as s1
-    state "store" as s2
-    [*] --> s0
-    s0 --> s0 : Purge, SignInExchanges, SignInReads, SignInRetries
-    s0 --> s2 : Put, Register
-    s1 --> s0 : Observe, RegistrarCrash
-    s1 --> s1 : Purge, SignInExchanges, SignInReads, SignInRetries
-    s2 --> s0 : RegistrarCrash, Store
-    s2 --> s1 : Store
-    s2 --> s2 : Purge, SignInExchanges, SignInReads, SignInRetries
-    s0 --> [*]
+    state "act" as s0
+    state "idle" as s1
+    state "record" as s2
+    state "store" as s3
+    [*] --> s1
+    s0 --> s0 : Backup, HostAdded, Purge, Restore, RotateRaised, SignInExchanges, SignInReads, SignInRetries
+    s0 --> s1 : RegistrarCrash
+    s0 --> s3 : Act
+    s1 --> s0 : Read
+    s1 --> s1 : Backup, HostAdded, Purge, Read, Restore, RotateRaised, SignInExchanges, SignInReads, SignInRetries
+    s2 --> s1 : Record, RegistrarCrash
+    s2 --> s2 : Backup, HostAdded, Purge, Restore, RotateRaised, SignInExchanges, SignInReads, SignInRetries
+    s3 --> s1 : RegistrarCrash
+    s3 --> s2 : Store
+    s3 --> s3 : Backup, HostAdded, Purge, Restore, RotateRaised, SignInExchanges, SignInReads, SignInRetries
 ```

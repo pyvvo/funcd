@@ -5,6 +5,7 @@
 - **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — Decisions 1 and 5: an empty host answers on the namespace host (`default`: every host but reserved ones); Decision 3: HostRequired only for `default`, and HostReserved beats the (namespace, name) order; Decisions 6.2 and 6.3: `/function` on a namespace host belongs to that namespace.
 - **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 2: `defaultExposure` decides every kind's default address; Decision 6.3: the by-name gate is per Function (`ingress.enabled`).
 - **Superseded in part by**: [ADR-0316](0316-a-functions-health-paths-are-funcds-own.md) (2026-11-05) — Decision 6.2: the edge forwards a remainder unless it lies under `/health/`.
+- **Superseded in part by**: [ADR-0335](0335-the-edge-signs-users-in-with-an-openid-connect-provider.md) (2026-11-19) — Decision 6.1: the front door answers `/.auth/` first.
 - **Date**: 2026-07-08
 - **Implemented**: 2026-07-08
 - **Deciders**: green-0-rabbit
