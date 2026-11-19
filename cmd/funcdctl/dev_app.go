@@ -27,7 +27,6 @@ import (
 	"github.com/pyvvo/funcd/internal/app/template"
 	"github.com/pyvvo/funcd/internal/artifact"
 	sqlembedengine "github.com/pyvvo/funcd/internal/sql/embedengine"
-	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -84,6 +83,7 @@ type devAppSession struct {
 	settle  devSettle // holds a reload until the inputs stop changing
 	live    *devLiveReload
 	applied []v1.Object // the --apply documents applied last
+	admin   *sdk.Client // dev's admin client, which applies the Addons and deletes them and their objects (ADR-0334)
 	out     io.Writer
 	logger  *slog.Logger
 	// cancelFollow stops the follow of the revision applied last; the boot sets it first, then only the watcher.
@@ -187,11 +187,11 @@ func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger
 			<-inst.runErr
 		}
 	}()
-	client, err := sdk.New(inst.controlURL, sdk.WithToken(funcd.DevToken))
+	client, admin, err := devClients(inst.controlURL)
 	if err != nil {
 		return nil, err
 	}
-	inst.client = client
+	inst.client, s.admin = client, admin
 	start := time.Now()
 	r, err := s.apply(ctx, op, client, d)
 	if err != nil {
@@ -199,7 +199,7 @@ func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger
 	}
 	if plan.storeDir != "" {
 		// a --persist restart deletes what an earlier session applied that the --apply files no longer hold (Decision 7)
-		if _, err = pruneStale(ctx, client, slices.Concat(d.docs, d.secrets), logger); err != nil {
+		if _, err = pruneStale(ctx, client, admin, slices.Concat(d.docs, d.secrets), logger); err != nil {
 			return nil, fault.Wrapf(err, fault.KindOf(err), op, "prune the documents an earlier session applied")
 		}
 	}
@@ -1058,7 +1058,7 @@ func appDevEnvName(op, dir string, cfg devConfig) (string, error) {
 // it all applied, it deletes what the last apply held that d no longer does (Decision 7).
 func (s *devAppSession) apply(ctx context.Context, op string, c *sdk.Client, d devAppDesired) (devApply, error) {
 	if len(d.docs) > 0 {
-		if err := applyOrdered(ctx, op, c, d.docs); err != nil {
+		if err := applyOrdered(ctx, op, c, s.admin, d.docs); err != nil {
 			return devApply{}, err
 		}
 	}
@@ -1066,7 +1066,7 @@ func (s *devAppSession) apply(ctx context.Context, op string, c *sdk.Client, d d
 	if err != nil {
 		return devApply{}, err
 	}
-	s.applied = pruneRemoved(ctx, c, s.applied, slices.Concat(d.docs, d.secrets), true, s.logger)
+	s.applied = pruneRemoved(ctx, c, s.admin, s.applied, slices.Concat(d.docs, d.secrets), true, s.logger)
 	return r, nil
 }
 

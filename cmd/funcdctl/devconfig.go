@@ -55,6 +55,13 @@ type devFileKeys struct {
 	// Watch and LiveReload are App-only keys of the file alone (ADR-0255 Decision 1).
 	Watch      []devWatchEntry `yaml:"watch"`
 	LiveReload bool            `yaml:"liveReload"`
+	// Addons holds addons.runtime, a key of the file alone in both modes (ADR-0334 Decision 1).
+	Addons devFileAddons `yaml:"addons"`
+}
+
+// devFileAddons is dev.addons: runtime forces the container engine the add-on engines run on.
+type devFileAddons struct {
+	Runtime string `yaml:"runtime"`
 }
 
 // devWatchEntry is a watch command dev starts and supervises (ADR-0255 Contracts).
@@ -90,7 +97,7 @@ var watchNameFormat = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // devFileKeyNames are the keys dev takes.
 func devFileKeyNames() []string {
 	return []string{"dir", "values", "build", "hooks", "apply", "persist", "persistTo", "gport", "s3port", "cport", "env", "envFile",
-		"platform", "watch", "liveReload"}
+		"platform", "watch", "liveReload", "addons"}
 }
 
 // devPlatformKeys are the FuncdConfig keys platform takes (Decision 4).
@@ -219,9 +226,17 @@ func decodeDevFile(op string, data []byte) (devFileKeys, error) {
 				return keys, err
 			}
 		}
+		if k == "addons" {
+			if err := checkAddonsKeys(op, dev.Content[i+1]); err != nil {
+				return keys, err
+			}
+		}
 	}
 	if err := dev.Decode(&keys); err != nil {
 		return keys, fault.Invalidf(op, "%s: dev: %v", devConfigFile, err)
+	}
+	if r := keys.Addons.Runtime; r != "" && r != devAddonsDocker && r != devAddonsContainerd {
+		return keys, fault.Invalidf(op, "%s: dev.addons.runtime %q is not %s or %s", devConfigFile, r, devAddonsDocker, devAddonsContainerd)
 	}
 	if err := checkWatchEntries(op, keys.Watch); err != nil {
 		return keys, err
@@ -272,6 +287,22 @@ func checkWatchKeys(op string, n *yamlv3.Node) error {
 			if k := entry.Content[j].Value; !slices.Contains([]string{"name", "run", "dir"}, k) {
 				return fault.Invalidf(op, "%s: dev.watch[%d]: unknown key %s", devConfigFile, i, k)
 			}
+		}
+	}
+	return nil
+}
+
+// checkAddonsKeys refuses an addons that is not a mapping and a key under it other than runtime.
+func checkAddonsKeys(op string, n *yamlv3.Node) error {
+	if n.Tag == "!!null" {
+		return nil
+	}
+	if n.Kind != yamlv3.MappingNode {
+		return fault.Invalidf(op, "%s: dev.addons is not a mapping", devConfigFile)
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if k := n.Content[i].Value; k != "runtime" {
+			return fault.Invalidf(op, "%s: unknown key dev.addons.%s", devConfigFile, k)
 		}
 	}
 	return nil
@@ -430,6 +461,7 @@ func resolveDevRun(op, start string, args []string, flags *pflag.FlagSet, cfg *d
 	if !changed("persist") {
 		cfg.persist = k.Persist
 	}
+	cfg.addonsRuntime = k.Addons.Runtime
 	if !changed("persist-to") {
 		// The default .funcd-dev is a path of the file too, so it lands beside the file wherever dev runs from.
 		to := k.PersistTo
@@ -568,6 +600,7 @@ func changedDevKeys(a, b devFileKeys) []string {
 		{"platform.funclog.segmentMaxAge", a.Platform.Funclog.SegmentMaxAge == b.Platform.Funclog.SegmentMaxAge},
 		{"platform.volumes.measureInterval", a.Platform.Volumes.MeasureInterval == b.Platform.Volumes.MeasureInterval},
 		{"watch", slices.Equal(a.Watch, b.Watch)}, {"liveReload", a.LiveReload == b.LiveReload},
+		{"addons.runtime", a.Addons.Runtime == b.Addons.Runtime},
 	} {
 		if !c.same {
 			out = append(out, c.key)
