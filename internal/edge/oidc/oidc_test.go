@@ -1,12 +1,17 @@
 package oidc
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +19,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/edge/router"
+	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/testkit/oidcprovider"
 )
 
@@ -411,4 +417,46 @@ func TestCallbackMadeUpStateCookies(t *testing.T) {
 	h.gate.mu.Lock()
 	defer h.gate.mu.Unlock()
 	require.Empty(t, h.gate.logged, "no made-up cookie leaves a record")
+}
+
+// readCounter is a store that counts its reads of OIDCProviders.
+type readCounter struct {
+	store.Store
+	reads atomic.Int64
+}
+
+func (s *readCounter) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	if gvk == v1.KindOIDCProvider.GVK() {
+		s.reads.Add(1)
+	}
+	return s.Store.Get(ctx, gvk, ns, name)
+}
+
+// A callback reads its first maxStateCookies state cookies, each provider once: many copies of one provider's name
+// cost one read, and a state cookie past the first few is not read (ADR-0335 Decision 4).
+func TestCallbackReadsAFewStateCookies(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, harnessOptions{})
+	h.withClient(nil)
+	counter := &readCounter{Store: h.st}
+	g := New(Deps{Store: counter, CallbackURL: func(host string) string { return "https://" + host + callbackPath },
+		HTTPS: true, BackChannel: h.idp.Transport(), Addons: h.addons, Logger: slog.New(slog.DiscardHandler)})
+	callback := func(cookies string) int {
+		r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://"+appHost+callbackPath+"?state=s&code=c", nil)
+		r.Header.Set("Cookie", cookies)
+		w := httptest.NewRecorder()
+		g.Auth(w, r)
+		return w.Code
+	}
+	many := strings.TrimSuffix(strings.Repeat("__Host-funcd_auth.staging.sso=AAAA; ", 100), "; ")
+	require.Equal(t, http.StatusUnauthorized, callback(many))
+	require.Equal(t, int64(1), counter.reads.Load(), "one read for one provider")
+
+	counter.reads.Store(0)
+	var names []string
+	for i := range maxStateCookies + 3 {
+		names = append(names, fmt.Sprintf("__Host-funcd_auth.ns%d.p=AAAA", i))
+	}
+	require.Equal(t, http.StatusUnauthorized, callback(strings.Join(names, "; ")))
+	require.Equal(t, int64(maxStateCookies), counter.reads.Load(), "only the first few state cookies are read")
 }

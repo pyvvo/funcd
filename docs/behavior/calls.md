@@ -135,6 +135,7 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. A
 | `keyMaxAge` | 24h | `internal/edge/oidc/keyset.go` |
 | `keyRefetchInterval` | 1m | `internal/edge/oidc/keyset.go` |
 | `maxCookieBytes` | 4096 | `internal/edge/oidc/oidc.go` |
+| `maxStateCookies` | 4 | `internal/edge/oidc/oidc.go` |
 | `randomBytes` | 32 | `internal/edge/oidc/oidc.go` |
 | `stateTTL` | 10m | `internal/edge/oidc/oidc.go` |
 | `sessionKeyBytes` | 32 | `internal/edge/oidc/provider.go` |

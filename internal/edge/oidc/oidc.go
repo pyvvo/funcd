@@ -64,6 +64,9 @@ const (
 	stateTTL       = 10 * time.Minute
 	maxCookieBytes = 4096
 	randomBytes    = 32
+	// maxStateCookies is how many state cookies a callback reads: a browser holds one per provider it is signing in
+	// with at once.
+	maxStateCookies = 4
 )
 
 // scopes are what the sign-in asks the provider for (ADR-0335 Decision 4).
@@ -647,18 +650,26 @@ func (g *Gate) signInCallback(w http.ResponseWriter, r *http.Request) {
 
 // stateOf is the provider of the call's state cookie that opens and holds state, with the cookie's name and data;
 // v is nil when none does. A cookie opens only under the session key and the client of a provider the store holds,
-// so a cookie that names no provider is one that does not open. An error is the provider of a cookie that opened,
-// which cannot finish the sign-in.
+// so a cookie that names no provider is one that does not open; it reads the first maxStateCookies state cookies, each
+// provider once. An error is the provider of a cookie that opened, which cannot finish the sign-in.
 func (g *Gate) stateOf(r *http.Request, state string) (*view, string, stateData, error) {
 	if state == "" {
 		return nil, "", stateData{}, nil
 	}
+	sealers, tried := map[providerKey]*view{}, 0
 	for _, c := range r.Cookies() {
 		k, ok := g.parseCookie(c.Name, stateCookie)
 		if !ok {
 			continue
 		}
-		sealer := g.sealerOf(r.Context(), k)
+		if tried++; tried > maxStateCookies {
+			break
+		}
+		sealer, read := sealers[k]
+		if !read {
+			sealer = g.sealerOf(r.Context(), k)
+			sealers[k] = sealer
+		}
 		if sealer == nil {
 			continue
 		}
