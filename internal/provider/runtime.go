@@ -72,6 +72,7 @@ const defaultProbeTimeout = 2 * time.Second
 
 // engineRuntime is the in-process driver of the provider Runtime port.
 type engineRuntime struct {
+	EngineFiles // an engine's files under its storage directory (ADR-0333 Decision 6)
 	rt          containerrt.Runtime
 	ownerKind   v1.Kind
 	gateway     gateway.Gateway // may be nil (internal-only deployment)
@@ -117,6 +118,7 @@ func NewRuntime(d Deps) (Runtime, error) {
 		now = time.Now
 	}
 	return &engineRuntime{
+		EngineFiles: NewEngineFiles(d.StorageRoot, d.OwnerKind),
 		rt:          d.Runtime,
 		ownerKind:   d.OwnerKind,
 		gateway:     d.Gateway,

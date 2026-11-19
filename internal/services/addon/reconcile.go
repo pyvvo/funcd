@@ -26,7 +26,9 @@ import (
 // schema, the Addon runs on none of the runtime's modes, its env does not evaluate, or a bound Secret is missing or
 // forbidden. Otherwise it converges one engine with the Addon's image, port, probe and storage and the object's
 // resources, fenced with no endpoint and admitting only funcd, and programs the object's edge entry once it is Ready.
-// A deleted object loses its entry and its engine.
+// While an in-place Restore's mark stands, it starts the engine with restore.env, removes the copy once that engine is
+// Ready, then starts it without restore.env and clears the mark once that one is Ready (ADR-0333 Decision 4). A
+// deleted object loses its entry, its engine and then its storage.
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	const op = "services.addon.Reconcile"
 	obj, err := r.store.Get(ctx, req.GVK, req.Namespace, req.Name)
@@ -39,6 +41,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	o, ok := obj.(*v1.AddonObject)
 	if !ok {
 		return controller.Result{}, fault.Internalf(op, "object %s/%s is not an AddonObject", req.Namespace, req.Name)
+	}
+	if err := r.remember(ctx, o); err != nil {
+		return controller.Result{}, err
 	}
 	a, err := r.addonOf(ctx, o.Spec.Kind)
 	if err != nil {
@@ -58,6 +63,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	env, err := RenderEnv(a.Spec.Env, map[string]json.RawMessage{configDoc: configOf(o)}, schemas(a.Spec.Config))
 	if err != nil {
 		return r.hold(ctx, o, reasonEnvInvalid, err.Error(), 0)
+	}
+	step, err := r.restoreStep(ctx, a, o)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	if step == restoreLoading {
+		renv, err := restoreEnv(a, o)
+		if err != nil {
+			return r.hold(ctx, o, reasonEnvInvalid, err.Error(), 0)
+		}
+		maps.Copy(env, renv)
 	}
 	bound, err := r.secretEnv(ctx, a, o)
 	switch fault.KindOf(err) {
@@ -89,6 +105,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		o.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg,
 			ObservedGeneration: o.Generation})
 	}
+	moved, err := r.restoreMoves(ctx, a, o, step, cerr == nil && st.Ready)
+	if err != nil {
+		return controller.Result{}, err
+	}
 	if err := r.syncEntry(ctx, a, o, st); err != nil {
 		return controller.Result{}, err
 	}
@@ -98,10 +118,30 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	switch {
 	case cerr != nil:
 		return controller.Result{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "converge the engine of %s/%s", o.Namespace, o.Name)
+	case moved:
+		return controller.Result{Requeue: true}, nil
 	case !st.Ready:
 		return controller.Result{RequeueAfter: r.enginePoll}, nil
 	}
 	return controller.Result{RequeueAfter: r.period}, nil
+}
+
+// restoreMoves moves an in-place Restore's mark on once the engine of this pass is Ready: after an engine started with
+// restore.env, the copy goes, then the mark turns Loaded, and the next pass starts the engine without restore.env; after
+// that one, the mark goes. It reports a mark turned Loaded.
+func (r *Reconciler) restoreMoves(ctx context.Context, a *v1.Addon, o *v1.AddonObject, step restoreStep, ready bool) (bool, error) {
+	switch {
+	case !ready || step == restoreNone:
+		return false, nil
+	case step == restoreLoaded:
+		o.Status.Restore = nil
+		return false, nil
+	}
+	if err := r.clearCopy(ctx, a, o); err != nil {
+		return false, err
+	}
+	o.Status.Restore.State = v1.AddonRestoreLoaded
+	return true, nil
 }
 
 // addonOf is the Addon that registers kind, whatever its name; nil when none does.
@@ -278,7 +318,8 @@ func (r *Reconciler) hold(ctx context.Context, o *v1.AddonObject, reason, messag
 	return controller.Result{RequeueAfter: requeue}, nil
 }
 
-// deleted retracts a deleted object's edge entry and stops its engine; both are idempotent.
+// deleted retracts a deleted object's edge entry and stops its engine, then reclaims its storage as its deletion says,
+// retain when this process never saw it (ADR-0333 Decision 5); each step is idempotent.
 func (r *Reconciler) deleted(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	const op = "services.addon.deleted"
 	if r.routes != nil {
@@ -286,9 +327,14 @@ func (r *Reconciler) deleted(ctx context.Context, ns v1.NamespaceName, name v1.O
 			return fault.Wrapf(err, fault.KindOf(err), op, "clear the edge entry of %s/%s", ns, name)
 		}
 	}
-	if err := r.prov.Teardown(ctx, provider.ProviderRef{Namespace: ns, Name: name}); err != nil {
+	ref := provider.ProviderRef{Namespace: ns, Name: name}
+	if err := r.prov.Teardown(ctx, ref); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "stop the engine of %s/%s", ns, name)
 	}
+	if err := r.reclaim(ctx, ref, r.deletionOf(ref)); err != nil {
+		return err
+	}
+	r.forget(ref)
 	return nil
 }
 

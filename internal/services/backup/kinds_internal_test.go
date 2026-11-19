@@ -3,8 +3,11 @@ package backup
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"github.com/stretchr/testify/require"
@@ -18,9 +21,11 @@ import (
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
 	storemem "github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/fakeaddon"
 	"github.com/pyvvo/funcd/internal/testkit/s3stub"
 )
 
@@ -237,4 +242,51 @@ func TestNew_RefusesAKindServedTwice(t *testing.T) {
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 		require.ErrorContains(t, err, want)
 	}
+}
+
+// addonCopy is a copy of the IdentityProvider login of orders, from a snapshot its engine wrote, and of a KVStore.
+func addonCopy(t *testing.T) (*v1.Backup, keySecrets, *fakeaddon.Runtime) {
+	t.Helper()
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	for _, o := range []v1.Object{
+		&v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}, ObjectMeta: v1.ObjectMeta{Name: "rauthy"},
+			Spec: v1.AddonSpec{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"},
+				Image:    "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809",
+				Storage:  &v1.AddonStorage{Path: "/app/data"},
+				Snapshot: &v1.AddonSnapshot{Path: "/app/data/backups"}}},
+		&v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject},
+			ObjectMeta: v1.ObjectMeta{Name: "login", Namespace: "orders", ResourceGroup: "app"}, Spec: v1.AddonObjectSpec{Kind: "IdentityProvider"}},
+	} {
+		_, err := st.Create(ctx, o)
+		require.NoError(t, err)
+	}
+	rt := fakeaddon.New(t)
+	snaps := filepath.Join(rt.Dir(provider.ProviderRef{Namespace: "orders", Name: "login"}), "backups")
+	require.NoError(t, os.MkdirAll(snaps, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(snaps, "backup_1.json"), []byte("{}"), 0o600))
+	at := time.Now().Add(-time.Minute)
+	require.NoError(t, os.Chtimes(filepath.Join(snaps, "backup_1.json"), at, at))
+	kv := memory.New()
+	require.NoError(t, kv.Put(ctx, "orders/orders-state/t/1", []byte("one")))
+	b, secrets := kindsCopy(t, []workload.Member{{Kind: "IdentityProvider", Name: "login"}, {Kind: v1.KindKVStore, Name: "orders-state"}},
+		workload.Addons(st, rt), workload.KVStores(nil, kv.(interface{ SnapshotPrefix(string) snapshot.Source }).SnapshotPrefix, nil))
+	return b, secrets, rt
+}
+
+// ADR-0333 Decision 2, superseding ADR-0311 Decision 6 in part: an add-on's kind is served by Addons, so a member of
+// such a kind that names no add-on object of that kind fails MemberNotFound; a funcd kind that no member kind serves
+// still fails by its name.
+func TestRestore_AnAddonKindNamingNoObjectIsMemberNotFound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	b, secrets, rt := addonCopy(t)
+	rs, err := New(Deps{Store: store.New(storemem.New()), Secrets: secrets, Kinds: []workload.MemberKind{workload.Addons(store.New(storemem.New()), rt)}})
+	require.NoError(t, err)
+
+	reason, err := rs.Restores.load(ctx, restoreOf(v1.RestoreMember{Kind: "IdentityProvider", Name: "login", InPlace: true}), b)
+	require.Equal(t, ReasonMemberNotFound, reason, "%v", err)
+	reason, err = rs.Restores.load(ctx, restoreOf(v1.RestoreMember{Kind: v1.KindKVStore, Name: "orders-state", InPlace: true}), b)
+	require.Equal(t, reasonFailed, reason)
+	require.ErrorContains(t, err, "no member kind serves KVStore")
 }

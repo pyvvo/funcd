@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -132,4 +133,78 @@ func TestAddonObjectValidate(t *testing.T) {
 	o = identityProvider()
 	o.Spec.Ingress.Auth = &RouteAuth{Mode: AuthOpen}
 	require.NoError(t, o.Validate(), "the open mode")
+}
+
+// rauthyCopies is rauthy's Addon with hiqlite's snapshot and restore folders (ADR-0333 Decision 1).
+func rauthyCopies() *Addon {
+	a := rauthyAddon()
+	a.Spec.Snapshot = &AddonSnapshot{Path: "/app/data/state_machine/backups"}
+	a.Spec.Restore = &AddonRestore{Path: "/app/data/restore", Env: map[string]string{"HQL_BACKUP_RESTORE": `${{ "file:" + restore.file }}`}}
+	return a
+}
+
+// The path rules of snapshot and restore (ADR-0333 Decision 1): each a folder under storage.path, kept apart, and a
+// restore.timeout from 1 s to 1 h, 10 min unset.
+func TestAddonValidateCopies(t *testing.T) {
+	a := rauthyCopies()
+	require.NoError(t, a.Validate())
+	require.Equal(t, "state_machine/backups", a.Spec.StorageDir(a.Spec.Snapshot.Path))
+	require.Equal(t, "restore", a.Spec.StorageDir(a.Spec.Restore.Path))
+	require.Equal(t, 10*time.Minute, a.Spec.Restore.EffectiveTimeout())
+	for _, d := range []Duration{MinAddonRestoreTimeout, MaxAddonRestoreTimeout} {
+		a.Spec.Restore.Timeout = d
+		require.NoError(t, a.Validate(), "%s is a bound", d)
+		require.Equal(t, time.Duration(d), a.Spec.Restore.EffectiveTimeout())
+	}
+
+	for name, edit := range map[string]func(s *AddonSpec){
+		"a snapshot without storage":     func(s *AddonSpec) { s.Storage, s.Restore = nil, nil },
+		"a restore without storage":      func(s *AddonSpec) { s.Storage, s.Snapshot = nil, nil },
+		"a snapshot at storage.path":     func(s *AddonSpec) { s.Snapshot.Path = "/app/data" },
+		"a snapshot outside storage":     func(s *AddonSpec) { s.Snapshot.Path = "/var/backups" },
+		"a snapshot beside storage":      func(s *AddonSpec) { s.Snapshot.Path = "/app/data2/backups" },
+		"a snapshot ending in /":         func(s *AddonSpec) { s.Snapshot.Path = "/app/data/backups/" },
+		"a relative snapshot":            func(s *AddonSpec) { s.Snapshot.Path = "backups" },
+		"a restore with ..":              func(s *AddonSpec) { s.Restore.Path = "/app/data/../restore" },
+		"one folder for both":            func(s *AddonSpec) { s.Restore.Path = s.Snapshot.Path },
+		"a restore inside the snapshot":  func(s *AddonSpec) { s.Restore.Path = s.Snapshot.Path + "/restore" },
+		"a snapshot inside the restore":  func(s *AddonSpec) { s.Snapshot.Path = s.Restore.Path + "/backups" },
+		"a restore.env key that is bad":  func(s *AddonSpec) { s.Restore.Env = map[string]string{"A=B": "x"} },
+		"a restore.timeout under 1s":     func(s *AddonSpec) { s.Restore.Timeout = Duration(500 * time.Millisecond) },
+		"a restore.timeout over 1h":      func(s *AddonSpec) { s.Restore.Timeout = Duration(2 * time.Hour) },
+		"a negative restore.timeout":     func(s *AddonSpec) { s.Restore.Timeout = -Duration(time.Second) },
+		"a storage.path a copy is under": func(s *AddonSpec) { s.Storage.Path = "/app/data/state_machine" },
+	} {
+		a := rauthyCopies()
+		edit(&a.Spec)
+		err := a.Validate()
+		require.Error(t, err, name)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+	}
+
+	a = rauthyCopies()
+	a.Spec.Storage.Path = "/app/data/"
+	require.NoError(t, a.Validate(), "a storage.path ending in / holds the same folders")
+	require.Equal(t, "restore", a.Spec.StorageDir(a.Spec.Restore.Path))
+}
+
+func TestAddonObjectDeletion(t *testing.T) {
+	for _, d := range []DeletionPolicy{"", DeletionRetain, DeletionDelete} {
+		o := identityProvider()
+		o.Spec.Deletion = d
+		require.NoError(t, o.Validate(), "%q", d)
+	}
+	o := identityProvider()
+	o.Spec.Deletion = "keep"
+	require.Equal(t, fault.Invalid, fault.KindOf(o.Validate()))
+}
+
+// A snapshot's or a copy's file name is one path segment (ADR-0333 Decision 6).
+func TestIsAddonFile(t *testing.T) {
+	for _, ok := range []string{"backup_node_1_1700000000.sqlite", "a", "0.db", "x-y_z.1"} {
+		require.True(t, IsAddonFile(ok), ok)
+	}
+	for _, bad := range []string{"", ".hidden", "..", "a/b", "-x", "_x", "a b", "a\x00", "été"} {
+		require.False(t, IsAddonFile(bad), bad)
+	}
 }

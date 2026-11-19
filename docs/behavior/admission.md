@@ -67,6 +67,9 @@ New words: Schema, Refused, DryRun, Store.
 
 | Value | Default | From |
 |---|---|---|
+| `DefaultAddonRestoreTimeout` | 10m | `api/types/v1alpha1/addon.go` |
+| `MaxAddonRestoreTimeout` | 1h | `api/types/v1alpha1/addon.go` |
+| `MinAddonRestoreTimeout` | 1s | `api/types/v1alpha1/addon.go` |
 | `maxPort` | 65535 | `api/types/v1alpha1/addon.go` |
 | `maxAppConfigMapNameLength` | 52 | `api/types/v1alpha1/app.go` |
 | `maxAppNameLength` | 52 | `api/types/v1alpha1/app.go` |

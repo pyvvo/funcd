@@ -107,7 +107,7 @@ func (b *base) onTarget(ctx context.Context, s *v1.BackupSchedule, f func(blob.B
 	if err != nil {
 		return err
 	}
-	target, err := openTarget(ctx, s.Spec.Target.URL, key)
+	target, err := b.openTarget(ctx, s.Spec.Target.URL, key)
 	if err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"mime"
+	"net/netip"
 	neturl "net/url"
 	"os"
 	"path/filepath"
@@ -77,6 +78,9 @@ type OpenOptions struct {
 	// client bounds what it reads of an answer but an object's content (cappedAnswers); s3:// only, and not with
 	// CredentialsFile.
 	Static *StaticKey
+	// Refuse is asked before each connection with the address it dials, a name resolved; an error refuses that
+	// connection, with no retry. s3:// with a credentials file or a static key only.
+	Refuse func(ctx context.Context, addr netip.AddrPort) error
 }
 
 // StaticKey is an AWS access key, its secret and an optional session token.
@@ -91,6 +95,9 @@ func OpenWith(ctx context.Context, url string, opts OpenOptions) (blob.Bucket, e
 			return nil, err
 		}
 		return newS3Bucket(&bucket{b: b, s3: true}, url), nil
+	}
+	if opts.Refuse != nil {
+		return nil, fault.Invalidf(op, "a dial refusal applies with a credentials file or a static key only")
 	}
 	b, err := gcblob.OpenBucket(ctx, url)
 	if err != nil {
@@ -135,6 +142,9 @@ func openS3With(ctx context.Context, url string, opts OpenOptions) (*gcblob.Buck
 	s3opts, bopts, err := s3URLOptions(q)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "open %q", url)
+	}
+	if opts.Refuse != nil {
+		s3opts = append(s3opts, func(o *awss3.Options) { o.HTTPClient = refusing(o.HTTPClient, opts.Refuse) })
 	}
 	if opts.Static != nil {
 		s3opts = append(s3opts, func(o *awss3.Options) {

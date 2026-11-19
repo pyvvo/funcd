@@ -875,3 +875,42 @@ addon-rauthy:
     developer: addon-rauthy-lane-developer
   # Only an admin registers an Addon, so the suite applies every manifest itself, and waits for login.
   venom: e2e/addon-rauthy.venom.yml
+
+addon-rauthy-restore:
+  description: rauthy, an add-on built outside funcd, backed up from its own hiqlite snapshots to an S3 server in the VM and restored in place on real containerd (ADR-0333) — a client registered before the Backup is kept and one after it is gone, through two engine starts under the hold; then funcd is killed while rauthy starts with restore.env, and the next start ends the Restore Interrupted, keeps the hold, and runs rauthy without restore.env.
+  # rauthy's Addon is rauthy/addon.yaml of pyvvo/funcd-addons; the lane's IdentityProvider, its backups and its daemon
+  # config are funcd's fixtures, the S3 server's key and the workload Secrets the todo App's test fixtures. versitygw
+  # (Apache-2.0), the S3 server, is built for the VM at the app-todo lane's pinned version, in a writable copy.
+  module: github.com/pyvvo/funcd-addons
+  dir: rauthy
+  copy: true
+  build:
+    - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.9.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" versitygw
+  stage:
+    - addon.yaml
+    - versitygw
+    - from: e2e/fixtures/addon-rauthy-funcdconfig.yaml
+      to: funcdconfig.yaml
+    - from: e2e/fixtures/addon-rauthy-keys.yaml
+      to: rauthy-keys.yaml
+    - from: e2e/fixtures/addon-rauthy-restore-login.yaml
+      to: login.yaml
+    - from: e2e/fixtures/addon-rauthy-restore-client.json
+      to: client.json
+    - from: e2e/fixtures/addon-rauthy-restore-backup.yaml
+      to: backup.yaml
+    - from: e2e/fixtures/addon-rauthy-restore-b1.yaml
+      to: b1.yaml
+    - from: e2e/fixtures/addon-rauthy-restore-in-place.yaml
+      to: restore-in-place.yaml
+    - from: apps/todo/dr/versitygw.env
+      module: github.com/pyvvo/funcd-functions
+      to: dr/versitygw.env
+    - from: apps/todo/dr/workload-secrets.yaml
+      module: github.com/pyvvo/funcd-functions
+      to: dr/workload-secrets.yaml
+  tokens:
+    admin: addon-rauthy-restore-lane-admin
+    developer: addon-rauthy-restore-lane-developer
+  # Only an admin registers an Addon and restores in place, so the suite applies every manifest itself.
+  venom: e2e/addon-rauthy-restore.venom.yml

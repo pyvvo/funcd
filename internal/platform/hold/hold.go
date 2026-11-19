@@ -68,9 +68,9 @@ type busy struct {
 
 // Evidence is what the hold shows the operator (Decisions 1, 8): GET …/hold returns it, `funcdctl hold status` prints
 // it. Report is restore.json as written; runs and dead letters are <ns>/<name> and <ns>/<id>; Pending is, per
-// <ns>/<source>, the blob keys per event a release replays; Orphans, BucketOrphans and SQLOrphans (ADR-0232) are
-// data no object names, which the reclaims would drop; FunctionsNotReady are <ns>/<name>; Namespaces are the
-// per-namespace markers.
+// <ns>/<source>, the blob keys per event a release replays; Orphans, BucketOrphans, SQLOrphans (ADR-0232) and
+// AddonOrphans (ADR-0333) are data no object names, which the reclaims would drop; FunctionsNotReady are <ns>/<name>;
+// Namespaces are the per-namespace markers.
 type Evidence struct {
 	Held              bool                      `json:"held" doc:"True while the platform is held: its timers, blob sources, Sensors, runs, rollouts, backups and sweeps wait for the release."`
 	Marker            *Marker                   `json:"marker,omitempty" doc:"Why the platform is held, and since when; absent when it is not held."`
@@ -83,17 +83,19 @@ type Evidence struct {
 	Orphans           []string                  `json:"orphans,omitempty" doc:"The KV data that no object names: the prefix of each KVStore that does not exist, as <namespace>/<store>/, and of each table that its KVStore no longer declares, as <namespace>/<store>/<table>/. To keep that data, apply its object while the platform is held."`
 	BucketOrphans     []string                  `json:"bucketOrphans,omitempty" doc:"The Buckets that do not exist and whose objects funcd still holds, each as <namespace>/<name>."`
 	SQLOrphans        []string                  `json:"sqlOrphans,omitempty" doc:"The SQL databases that do not exist and whose directory funcd still holds, each as <namespace>/<name>."`
+	AddonOrphans      []string                  `json:"addonOrphans,omitempty" doc:"The add-on objects that do not exist and whose storage funcd still holds, each as <namespace>/<name>."`
 	VolumeOrphans     []string                  `json:"volumeOrphans,omitempty" doc:"The local volumes that no stored Function declares, each as <namespace>/<function>/<volume>."`
 	FunctionsNotReady []string                  `json:"functionsNotReady,omitempty" doc:"The Functions whose phase is not Ready, each as <namespace>/<name>."`
 	Namespaces        []NamespaceHold           `json:"namespaces,omitempty" doc:"The holds of single namespaces, one for each reason that holds a namespace."`
-	// Quarantine is the data the start-up reclaims moved aside instead of deleting it, held or not (ADR-0288).
-	Quarantine []QuarantineEntry `json:"quarantine,omitempty" doc:"The data that a start moved into the quarantine, since no object named it, held or not."`
+	// Quarantine is the data the start-up reclaims moved aside instead of deleting it, and the storage of add-on objects
+	// deleted with deletion retain, held or not (ADR-0288, ADR-0333 Decision 5).
+	Quarantine []QuarantineEntry `json:"quarantine,omitempty" doc:"The data that a start moved into the quarantine, since no object named it, and the storage of the add-on objects deleted with deletion retain, held or not."`
 }
 
 // QuarantineEntry is one object's quarantined data (ADR-0288 Decision 4): a volume's Name is its Function. State is
 // moving, kept or returning; Until is when the sweep may delete a kept entry.
 type QuarantineEntry struct {
-	Kind      v1.Kind          `json:"kind" doc:"The kind of the object whose data the entry holds: KVStore, Bucket, SQLDatabase, or Function for a local volume."`
+	Kind      v1.Kind          `json:"kind" doc:"The kind of the object whose data the entry holds: KVStore, Bucket, SQLDatabase, Function for a local volume, or AddonObject for an add-on object's storage."`
 	Namespace v1.NamespaceName `json:"namespace" doc:"The object's namespace."`
 	Name      v1.ObjectName    `json:"name" doc:"The object's name; for a volume, its Function's."`
 	Volume    v1.ObjectName    `json:"volume,omitempty" doc:"With kind Function, the name of the local volume."`

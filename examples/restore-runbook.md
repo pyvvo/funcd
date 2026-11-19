@@ -54,14 +54,19 @@ operator reads the evidence and releases the hold.
 
    Each restored run that was not finished stays paused: `funcdctl workflow resume` runs it from its record,
    `funcdctl workflow cancel` ends it. Dead letters stay parked until replayed. At the next start after the release,
-   the data no object names (a KV store, a Bucket, a SQL database, a `deletion: delete` Function volume) moves into
-   the quarantine for `storage.quarantineRetention` (168h by default) instead of being deleted, and `funcdctl hold
-   status` lists it with its until (ADR-0288). Apply, while held, the objects whose data stays: then nothing moves.
+   the data no object names (a KV store, a Bucket, a SQL database, a `deletion: delete` Function volume, an add-on
+   object's storage) moves into the quarantine for `storage.quarantineRetention` (168h by default) instead of being
+   deleted, and `funcdctl hold status` lists it with its until (ADR-0288). Apply, while held, the objects whose data
+   stays: then nothing moves. An add-on object deleted with `deletion: retain`, the default, also moves its storage
+   there at its delete (ADR-0333).
    To bring a quarantined KV store, Bucket or volume back, apply its object again, then
    `funcdctl quarantine return <kvstore|bucket|volume> <ns>/<name>[/<volume>]`, which returns it only into an empty
    object. A SQL database comes back by hand: apply the SQLDatabase and wait for Ready, stop funcd, replace its
    directory, `<dataDir>/providers/sqldatabase/<ns>/<name>`, with the entry's
-   `<dataDir>/providers/.quarantine/sqldatabase/<ns>/<name>/<since>`, then start funcd.
+   `<dataDir>/providers/.quarantine/sqldatabase/<ns>/<name>/<since>`, then start funcd. An add-on object's storage
+   comes back the same way: apply the object again and wait for Ready, stop funcd, replace its directory,
+   `<dataDir>/providers/addonobject/<ns>/<name>`, with the entry's
+   `<dataDir>/providers/.quarantine/addonobject/<ns>/<name>/<since>`, keeping the entry's owner, then start funcd.
 8. **Hand each app namespace to its owner.** A namespace with a BackupSchedule stays held (reason `data`) after
    `hold release`, and its schedules take no slot, until its owner restores its data and runs
    `funcdctl hold release --namespace <ns>` ([workload-backup.md](workload-backup.md#after-a-platform-restore)).

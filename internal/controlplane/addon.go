@@ -72,7 +72,8 @@ type AddonRules struct {
 // funcd's nor another Addon's, without case: that one reads every Addon, so it is marked, and two creates take the
 // cluster-scoped admission lock (ADR-0147) and cannot register one plural. Every write keeps its kind, names an image
 // from a listed registry, passes its config schema through the contract profile and has each env value a literal or
-// one ${{ }} expression that the schema types: a change takes no lock, and its kind, kept, keeps its plural unique.
+// one ${{ }} expression that the schema types, restore.env's reading restore.file too (ADR-0333 Decision 1): a change
+// takes no lock, and its kind, kept, keeps its plural unique.
 func NewAddonAdmissions(r AddonRules) []admission.Admission {
 	return []admission.Admission{addonUnique{r}, addonRules{r}}
 }
@@ -140,6 +141,9 @@ func (a addonRules) Admit(_ context.Context, req admission.Request) (v1.Object, 
 	}
 	if err := addonsvc.CheckEnv(ad.Spec.Env, ad.Spec.Config); err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "spec.env")
+	}
+	if err := addonsvc.CheckRestoreEnv(ad.Spec.Restore, ad.Spec.Config); err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "spec.restore.env")
 	}
 	return req.Object, nil
 }

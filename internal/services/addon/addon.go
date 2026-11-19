@@ -2,19 +2,23 @@
 // image, on the add-on runtime funcd's own engines use (ADR-0087), fenced so that it reaches nothing and only funcd
 // reaches it (ADR-0269, Decision 3), with the environment its Addon renders over the object's config and the listed
 // keys of its bound Secrets (Decision 4), and its edge entry under the Addon's basePath (Decision 5). An object waits
-// Pending, with no engine, while its Addon is gone or no longer fits it (ADR-0121 Decision 2).
+// Pending, with no engine, while its Addon is gone or no longer fits it (ADR-0121 Decision 2). An in-place Restore's
+// copy loads through two engine starts, and a deleted object's storage is removed or quarantined (ADR-0333).
 package addon
 
 import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/edge/router"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -64,6 +68,16 @@ type Deps struct {
 	SupervisionPeriod    time.Duration
 	ReferentPollInterval time.Duration
 	EnginePollInterval   time.Duration
+	// Files places and removes a Restore's copy in an engine's storage (ADR-0333 Decision 6); nil reaches none.
+	Files workload.AddonFiles
+	// Volumes removes or quarantines a deleted object's storage (ADR-0231, ADR-0288); nil keeps none.
+	Volumes provider.Volumes
+	// Hold is the platform's: while it is held, no storage is removed or moved (ADR-0231 Decision 4). nil is never held.
+	Hold hold.Gate
+	// QuarantinePeriod is storage.quarantineRetention, the until a quarantine move logs; Now dates each move (ADR-0288).
+	// Now nil ⇒ time.Now.
+	QuarantinePeriod time.Duration
+	Now              func() time.Time
 }
 
 // Reconciler is the controller.Reconciler for AddonObject.
@@ -78,6 +92,20 @@ type Reconciler struct {
 	period       time.Duration
 	referentPoll time.Duration
 	enginePoll   time.Duration
+	files        workload.AddonFiles
+	volumes      provider.Volumes
+	gate         hold.Gate
+	quarantine   time.Duration
+	now          func() time.Time
+
+	mu   sync.Mutex
+	seen map[provider.ProviderRef]seenObject // each object's UID and deletion policy at its last pass
+}
+
+// seenObject is what a pass saw of an object that its deletion needs once the object is gone.
+type seenObject struct {
+	uid      v1.UID
+	deletion v1.DeletionPolicy
 }
 
 // NewReconciler builds the add-on object reconciler.
@@ -94,12 +122,21 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		logger = slog.Default()
 	}
 	period := orDefault(d.SupervisionPeriod, controller.SupervisionPeriod)
+	gate, now := d.Hold, d.Now
+	if gate == nil {
+		gate = hold.Never
+	}
+	if now == nil {
+		now = time.Now
+	}
 	return &Reconciler{
 		store: d.Store, prov: d.Provider, secrets: d.Secrets, routes: d.Routes,
 		modes: d.Modes, serverMode: d.ServerMode, logger: logger.With("component", "services.addon.reconciler"),
 		period:       period,
 		referentPoll: orDefault(d.ReferentPollInterval, defaultPollInterval),
 		enginePoll:   min(orDefault(d.EnginePollInterval, defaultPollInterval), period),
+		files:        d.Files, volumes: d.Volumes, gate: gate, quarantine: d.QuarantinePeriod, now: now,
+		seen: map[provider.ProviderRef]seenObject{},
 	}, nil
 }
 
