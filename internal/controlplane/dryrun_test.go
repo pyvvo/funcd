@@ -145,6 +145,9 @@ func sample(k v1.Kind, name v1.ObjectName) v1.Object {
 		x.Spec.Buckets, x.Spec.Bindings = []v1.BucketEntry{{Name: "b"}}, v1.SiteBindings{Blob: []v1.BlobRef{{Bucket: "b", Prefix: "p"}}}
 	case *v1.Identity:
 		x.Spec.Type = v1.IdentityTypeExternal
+	case *v1.OIDCProvider:
+		x.Spec = v1.OIDCProviderSpec{Issuer: "https://login.example.com", SessionSecret: "s",
+			Client: v1.OIDCProviderClient{CredentialsSecret: "c"}}
 	case *v1.BackupSchedule:
 		x.Spec = v1.BackupScheduleSpec{Schedule: "@daily", Scope: v1.BackupScope{App: "a"},
 			Target:     v1.BackupTarget{URL: "s3://b", CredentialsSecret: "c"},

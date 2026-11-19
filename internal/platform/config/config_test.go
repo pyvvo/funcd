@@ -505,6 +505,9 @@ func validateMatrix() []matrixField {
 			{"", true}, {"selfsigned", true}, {"provided", true}, {"acme", true},
 			{"letsencrypt", false}, {"ACME", false},
 		}},
+		{"server.edgePublicScheme", func(c *config.Config, v string) { c.Server.EdgePublicScheme = v }, []vc{
+			{"", true}, {"http", true}, {"https", true}, {"HTTPS", false}, {"wss", false},
+		}},
 		{"server.limits.key", func(c *config.Config, v string) { c.Server.Limits.Key = v }, []vc{
 			{"", true}, {"clientIP", true}, {"function", true}, {"clientip", false}, {"header", false},
 		}},

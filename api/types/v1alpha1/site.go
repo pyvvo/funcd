@@ -285,6 +285,9 @@ func (s *Site) Validate() error {
 	if err := ing.validate(op, "spec.ingress"); err != nil {
 		return err
 	}
+	if err := ing.ValidateOIDCHost(op, "spec.ingress", s.Namespace); err != nil {
+		return err
+	}
 	mount := s.EffectivePath()
 	seenPath := make(map[string]bool, len(ing.Rules))
 	for i, r := range ing.Rules {
@@ -293,6 +296,9 @@ func (s *Site) Validate() error {
 		}
 		if r.Path == "/" {
 			return fault.Invalidf(op, "spec.ingress.rules[%d].path must not be \"/\" (the bundle is served there)", i)
+		}
+		if UnderAuthPath(r.Path) {
+			return fault.Invalidf(op, "spec.ingress.rules[%d].path %q lies under %s, the edge's own path on every host", i, r.Path, AuthPath)
 		}
 		if r.Path == mount {
 			return fault.Invalidf(op, "spec.ingress.rules[%d].path %q collides with the bundle mount %q (spec.ingress.path, or its default)", i, r.Path, mount)

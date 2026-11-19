@@ -100,3 +100,27 @@ func TestFunctionIngress_ForeignRouteIsNotOwned(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "/yours", obj.(*v1.Route).Spec.Rules[0].Path, "a foreign Route is left untouched")
 }
+
+// ADR-0335 Decision 10: a Function whose ingress.auth names no OIDCProvider is IngressReady=False, ProviderNotFound,
+// with an address of its own or by name; the provider's arrival maps back to it.
+func TestFunctionIngressProviderNotFound(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.createFn(t, "api", 0, false)
+	h.setIngress(t, "api", &v1.Ingress{Host: "api.example.com", Auth: &v1.RouteAuth{Mode: v1.AuthOIDC, Provider: "sso"}})
+	h.reconcile(t, "api")
+	c, ok := h.ingressReady(t, "api")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, c.Status)
+	require.Equal(t, "ProviderNotFound", c.Reason)
+
+	p := &v1.OIDCProvider{TypeMeta: v1.TypeMeta{APIVersion: v1.KindOIDCProvider.GVK().APIVersion(), Kind: v1.KindOIDCProvider}}
+	p.Name, p.Namespace, p.ResourceGroup = "sso", "default", "rg1"
+	p.Spec = v1.OIDCProviderSpec{Issuer: "https://login.example.com", SessionSecret: "s", Client: v1.OIDCProviderClient{CredentialsSecret: "c"}}
+	require.Len(t, h.r.MapOIDCProvider(context.Background(), p), 1, "the provider's events re-run the Function")
+	_, err := h.st.Create(context.Background(), p)
+	require.NoError(t, err)
+	h.reconcile(t, "api")
+	c, _ = h.ingressReady(t, "api")
+	require.Equal(t, "RouteNotReady", c.Reason, "the provider exists: the Route decides")
+}

@@ -73,6 +73,10 @@ type Config struct {
 			MaxInFlight  int    `json:"maxInFlight,omitempty" env:"FUNCD_LIMITS_MAX_IN_FLIGHT" validate:"min=0" doc:"The most requests that the data plane serves at once; one more gets 503. 0 turns the cap off."`
 			MaxKeys      int    `json:"maxKeys,omitempty" env:"FUNCD_LIMITS_MAX_KEYS" validate:"min=1" doc:"The most keys whose rate the data plane tracks at once. It has no off switch."`
 		} `json:"limits,omitempty"`
+		// EdgePublicScheme and EdgePublicPort build the edge sign-in's callback URLs (ADR-0335 Decision 9) behind a
+		// proxy that terminates TLS or listens on another port.
+		EdgePublicScheme string `json:"edgePublicScheme,omitempty" env:"FUNCD_EDGE_PUBLIC_SCHEME" validate:"omitempty,oneof=http https" doc:"The scheme browsers reach the data plane with, which the edge's sign-in callbacks use: https behind a proxy that terminates TLS makes them https, with Secure __Host- cookies. server.tls.enabled makes them https too. Empty means http."`
+		EdgePublicPort   int    `json:"edgePublicPort,omitempty" env:"FUNCD_EDGE_PUBLIC_PORT" validate:"min=0,max=65535" doc:"The port browsers reach the data plane on, which the edge's sign-in callbacks use; the scheme's own port, 443 or 80, is left out. 0 means the data plane's bound port, or none when only server.edgePublicScheme makes the scheme https."`
 		// Edge authn PEP (ADR-0113, F77): enable per-target auth-stance enforcement on the data plane.
 		Auth struct {
 			Edge bool `json:"edge,omitempty" env:"FUNCD_AUTH_EDGE" doc:"When true, the data plane authenticates a call to a target whose stance is authenticated with the control plane's credentials, and authorizes it with its policies. When false, such a call gets 401. An open target answers either way."`
@@ -500,6 +504,7 @@ func defaults() Config {
 	c.Server.ListenAddr = "127.0.0.1:8080"
 	c.Server.DataPlaneAddr = "127.0.0.1:0"
 	c.Server.BaseDomain = "localhost"
+	c.Server.EdgePublicScheme = "http"
 	c.Server.Limits.MaxKeys = 4096
 	c.Server.ShutdownTimeout = "15s"
 	c.Server.Network.WorkerSyncInterval = "2s"

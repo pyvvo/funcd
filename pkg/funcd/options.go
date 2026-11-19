@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/http"
 	"net/netip"
 	"reflect"
 	"regexp"
@@ -769,6 +770,39 @@ func WithLimits(cfg limit.Config) Option {
 // it, the built-in DevToken needs a data plane on loopback (ADR-0314).
 func WithEdgeAuth() Option {
 	return func(c *config) error { c.edgeAuthEnabled = true; return nil }
+}
+
+// WithEdgePublicScheme sets server.edgePublicScheme (ADR-0335 Decision 9): https behind a proxy that terminates TLS
+// makes the edge sign-in's callbacks https, with Secure __Host- cookies. "" is http.
+func WithEdgePublicScheme(scheme string) Option {
+	return func(c *config) error {
+		if scheme != "" && scheme != "http" && scheme != "https" {
+			return fault.Invalidf("funcd.WithEdgePublicScheme", "server.edgePublicScheme %q must be http or https", scheme)
+		}
+		c.edgePublicScheme = scheme
+		return nil
+	}
+}
+
+// WithEdgePublicPort sets server.edgePublicPort (ADR-0335 Decision 9), the port of the edge sign-in's callbacks; 0 is
+// the data plane's bound port, or none when only WithEdgePublicScheme makes them https.
+func WithEdgePublicPort(port int) Option {
+	return func(c *config) error {
+		if port < 0 || port > maxPort {
+			return fault.Invalidf("funcd.WithEdgePublicPort", "server.edgePublicPort %d is not a port", port)
+		}
+		c.edgePublicPort = port
+		return nil
+	}
+}
+
+// maxPort is the largest TCP port.
+const maxPort = 65535
+
+// WithOIDCBackChannel replaces the transport the edge sign-in reaches a provider outside funcd with, which otherwise
+// reaches https at globally reachable addresses only (ADR-0335 Decision 7): a test's provider listens on loopback.
+func WithOIDCBackChannel(rt http.RoundTripper) Option {
+	return func(c *config) error { c.oidcBackChannel = rt; return nil }
 }
 
 // WithEdgeObservability enables edge observability (ADR-0114, F76): RED metrics + an edge trace span

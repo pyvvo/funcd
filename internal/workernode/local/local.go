@@ -26,6 +26,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/edge/oidc"
 )
 
 const (
@@ -304,6 +305,7 @@ func serveFetch(w http.ResponseWriter, r *http.Request, caller Ref, identity aut
 	}
 	header := r.Header.Clone()
 	header.Del(MemberHeader)
+	oidc.Strip(header) // only the edge's sign-in sets the principal headers (ADR-0335 Decision 8)
 	reply, err := inv.Fetch(withTraceparent(r.Context(), r.Header.Get(traceparentHeader)), target, FetchRequest{
 		Method: r.Method, Path: "/" + path, RawQuery: r.URL.RawQuery, Header: header, Body: body,
 	}, timeout)

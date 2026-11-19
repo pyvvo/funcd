@@ -34,6 +34,7 @@ type StubHandlers struct {
 	lakes            map[string]v1.Lake
 	sqlDatabases     map[string]v1.SQLDatabase
 	identities       map[string]v1.Identity
+	oidcProviders    map[string]v1.OIDCProvider
 	roles            map[string]v1.Role
 	rolesAssignments map[string]v1.RolesAssignment
 	sites            map[string]v1.Site
@@ -73,6 +74,7 @@ func NewStubHandlers() *StubHandlers {
 		lakes:            make(map[string]v1.Lake),
 		sqlDatabases:     make(map[string]v1.SQLDatabase),
 		identities:       make(map[string]v1.Identity),
+		oidcProviders:    make(map[string]v1.OIDCProvider),
 		roles:            make(map[string]v1.Role),
 		rolesAssignments: make(map[string]v1.RolesAssignment),
 		sites:            make(map[string]v1.Site),
@@ -679,6 +681,26 @@ func (s *StubHandlers) ReplaceIdentity(_ context.Context, ns v1.NamespaceName, n
 
 func (s *StubHandlers) DeleteIdentity(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	return stubDelete(s, s.identities, "Identity", nsKey(ns, name))
+}
+
+func (s *StubHandlers) GetOIDCProvider(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.OIDCProvider, error) {
+	return stubGet(s, s.oidcProviders, "OIDCProvider", nsKey(ns, name))
+}
+
+func (s *StubHandlers) CreateOIDCProvider(_ context.Context, p v1.OIDCProvider) (v1.OIDCProvider, error) {
+	return stubPut(s, s.oidcProviders, "OIDCProvider", nsKey(p.Namespace, p.Name), p, false)
+}
+
+func (s *StubHandlers) ListOIDCProviders(_ context.Context, ns v1.NamespaceName) ([]v1.OIDCProvider, error) {
+	return stubList(s, s.oidcProviders, ns)
+}
+
+func (s *StubHandlers) ReplaceOIDCProvider(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, p v1.OIDCProvider) (v1.OIDCProvider, error) {
+	return stubPut(s, s.oidcProviders, "OIDCProvider", nsKey(ns, name), p, true)
+}
+
+func (s *StubHandlers) DeleteOIDCProvider(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
+	return stubDelete(s, s.oidcProviders, "OIDCProvider", nsKey(ns, name))
 }
 
 func (s *StubHandlers) GetRole(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Role, error) {

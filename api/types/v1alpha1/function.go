@@ -239,6 +239,9 @@ func (f *Function) Validate() error {
 	if err := f.Spec.Ingress.validate("Function.Validate", "spec.ingress"); err != nil {
 		return err
 	}
+	if err := f.Spec.Ingress.ValidateOIDCHost("Function.Validate", "spec.ingress", f.Namespace); err != nil {
+		return err
+	}
 	// A path under /function/ would shadow a sibling's by-name address (ADR-0241 Decision 3).
 	if ing := f.Spec.Ingress; ing != nil && (ing.Path == "/function" || strings.HasPrefix(ing.Path, "/function/")) {
 		return fault.Invalidf("Function.Validate", "spec.ingress.path %q must not be /function or under it", ing.Path)

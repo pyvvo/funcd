@@ -79,6 +79,7 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindBackup:          {"backups", true},          // ADR-0222, F111
 	v1.KindRestore:         {"restores", true},         // ADR-0222, F111
 	v1.KindAddon:           {"addons", false},          // ADR-0332, F258
+	v1.KindOIDCProvider:    {"oidcproviders", true},    // ADR-0335, F261
 }
 
 // kindAliases are short CLI tokens (kubectl-style) for a few common kinds.

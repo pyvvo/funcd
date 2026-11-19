@@ -25,7 +25,15 @@ type encryptor struct {
 // NewAESEncryptor returns an AES-256-GCM store.Encryptor. key must be exactly 32 bytes
 // (a misconfigured key must not silently weaken crypto).
 func NewAESEncryptor(key []byte) (store.Encryptor, error) {
-	const op = "secrets.aesgcm.NewAESEncryptor"
+	gcm, err := newGCM("secrets.aesgcm.NewAESEncryptor", key)
+	if err != nil {
+		return nil, err
+	}
+	return &encryptor{gcm: gcm}, nil
+}
+
+// newGCM is AES-256-GCM under key, which must be exactly 32 bytes.
+func newGCM(op string, key []byte) (cipher.AEAD, error) {
 	if len(key) != keyLen {
 		return nil, fault.Invalidf(op, "key must be %d bytes (AES-256), got %d", keyLen, len(key))
 	}
@@ -37,28 +45,56 @@ func NewAESEncryptor(key []byte) (store.Encryptor, error) {
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "new gcm")
 	}
-	return &encryptor{gcm: gcm}, nil
+	return gcm, nil
 }
 
 // Encrypt seals plaintext with a fresh random nonce, returning nonce||ciphertext.
 func (e *encryptor) Encrypt(_ context.Context, plaintext []byte) ([]byte, error) {
-	nonce := make([]byte, e.gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, "secrets.aesgcm.Encrypt", "read nonce")
-	}
-	// Seal appends the ciphertext to the nonce (dst == nonce), yielding nonce||ciphertext.
-	return e.gcm.Seal(nonce, nonce, plaintext, nil), nil
+	return seal(e.gcm, "secrets.aesgcm.Encrypt", plaintext, nil)
 }
 
 // Decrypt splits the nonce, authenticates, and returns the plaintext; tamper → fault.Invalid.
 func (e *encryptor) Decrypt(_ context.Context, data []byte) ([]byte, error) {
-	const op = "secrets.aesgcm.Decrypt"
-	ns := e.gcm.NonceSize()
+	return open(e.gcm, "secrets.aesgcm.Decrypt", data, nil)
+}
+
+// Seal is plaintext sealed under the 32-byte key with additionalData bound to it, as nonce||ciphertext, a fresh random
+// nonce each call (ADR-0335 Decision 5).
+func Seal(key, plaintext, additionalData []byte) ([]byte, error) {
+	const op = "secrets.aesgcm.Seal"
+	gcm, err := newGCM(op, key)
+	if err != nil {
+		return nil, err
+	}
+	return seal(gcm, op, plaintext, additionalData)
+}
+
+// Open is Seal's plaintext. Another key, other additional data or a changed byte is fault.Invalid.
+func Open(key, sealed, additionalData []byte) ([]byte, error) {
+	const op = "secrets.aesgcm.Open"
+	gcm, err := newGCM(op, key)
+	if err != nil {
+		return nil, err
+	}
+	return open(gcm, op, sealed, additionalData)
+}
+
+func seal(gcm cipher.AEAD, op string, plaintext, additionalData []byte) ([]byte, error) {
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "read nonce")
+	}
+	// Seal appends the ciphertext to the nonce (dst == nonce), yielding nonce||ciphertext.
+	return gcm.Seal(nonce, nonce, plaintext, additionalData), nil
+}
+
+func open(gcm cipher.AEAD, op string, data, additionalData []byte) ([]byte, error) {
+	ns := gcm.NonceSize()
 	if len(data) < ns {
 		return nil, fault.Invalidf(op, "ciphertext too short (%d < nonce %d)", len(data), ns)
 	}
 	nonce, ciphertext := data[:ns], data[ns:]
-	plaintext, err := e.gcm.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, additionalData)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "decrypt/authenticate (tampered or wrong key)")
 	}

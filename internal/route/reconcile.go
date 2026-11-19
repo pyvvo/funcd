@@ -1,7 +1,8 @@
 // Package route reconciles the Route resource (ADR-0110, F79): it validates each Route's
 // backends, Sets every backend-valid Route on the edge aggregator, which applies the claim rules
-// (Disabled, ReservedPath, HostRequired, HostReserved, RouteConflict) across every edge source (ADR-0176, ADR-0240,
-// ADR-0241), and sets Ready/NotReady and status.host from the aggregator's verdicts.
+// (Disabled, ReservedPath, HostRequired, HostReserved, RouteConflict, ProviderConflict) across every edge source
+// (ADR-0176, ADR-0240, ADR-0241, ADR-0335), and sets Ready/NotReady and status.host from the aggregator's verdicts. A
+// Route whose oidc stance names no OIDCProvider is Set refused, so it keeps its claims and answers 503 (ADR-0335).
 package route
 
 import (
@@ -109,7 +110,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "program edge router")
 	}
 	for _, v := range verdicts {
-		results[routeKey{v.Owner.Namespace, v.Owner.Name}] = evalResult{ready: v.Reason == "", reason: v.Reason, message: v.Message, host: v.Host}
+		key := routeKey{v.Owner.Namespace, v.Owner.Name}
+		res := evalResult{ready: v.Reason == "", reason: v.Reason, message: v.Message, host: v.Host}
+		if prev, refused := results[key]; refused && res.ready {
+			res.ready, res.reason, res.message, res.backendMissing = false, prev.reason, prev.message, true
+		}
+		results[key] = res
 	}
 	for _, rt := range routes {
 		if !applyStatus(rt, results[routeKey{rt.Namespace, rt.Name}]) {
@@ -167,9 +173,45 @@ func (r *Reconciler) evaluate(ctx context.Context) ([]*v1.Route, map[routeKey]ev
 			results[routeKey{rt.Namespace, rt.Name}] = evalResult{backendMissing: true, reason: reason, message: message}
 			continue
 		}
-		entries = append(entries, compile(rt, sites))
+		entry := compile(rt, sites)
+		missing, err := r.missingProvider(ctx, rt)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if missing != "" {
+			// ADR-0335 Decision 10: the entry keeps its claims and answers 503 on its paths.
+			entry.Refused = router.ReasonProviderNotFound
+			results[routeKey{rt.Namespace, rt.Name}] = evalResult{backendMissing: true, reason: router.ReasonProviderNotFound,
+				message: fmt.Sprintf("auth.provider %q names no OIDCProvider of namespace %s", missing, rt.Namespace)}
+		}
+		entries = append(entries, entry)
 	}
 	return routes, results, entries, nil
+}
+
+// missingProvider returns the first OIDCProvider a rule's stance, else its Route's, names that rt's namespace does not
+// hold, "" when each exists (ADR-0335 Decision 10). A non-NotFound store error is propagated.
+func (r *Reconciler) missingProvider(ctx context.Context, rt *v1.Route) (v1.ObjectName, error) {
+	checked := map[v1.ObjectName]bool{}
+	for i := range rt.Spec.Rules {
+		auth := rt.Spec.Rules[i].Auth
+		if auth == nil {
+			auth = rt.Spec.Auth
+		}
+		name, _, ok := auth.OIDC()
+		if !ok || checked[name] {
+			continue
+		}
+		checked[name] = true
+		_, err := r.store.Get(ctx, v1.KindOIDCProvider.GVK(), rt.Namespace, name)
+		switch {
+		case fault.KindOf(err) == fault.NotFound:
+			return name, nil
+		case err != nil:
+			return "", fault.Wrapf(err, fault.KindOf(err), op, "get OIDCProvider %s/%s", rt.Namespace, name)
+		}
+	}
+	return "", nil
 }
 
 // firstBackendProblem returns the NotReady reason+message for the first rule whose backend does not
@@ -275,8 +317,8 @@ func (r *Reconciler) resolveSites(ctx context.Context, rt *v1.Route) (map[v1.Obj
 
 // siteRules are the rows a site rule compiles into (ADR-0242 Decision 2): the bundle at the rule's path and, when the
 // Site has one, its config.json at <path>/config.json, Exact, for the rule's methods within GET and HEAD.
-func siteRules(rule *v1.RouteRule, served servedSite, auth v1.AuthMode) []router.CompiledRule {
-	out := []router.CompiledRule{{Path: rule.Path, Methods: methodSet(rule.Methods), Auth: auth, Static: served.bundle}}
+func siteRules(rule *v1.RouteRule, served servedSite, auth v1.AuthMode, oidc *router.OIDCAuth) []router.CompiledRule {
+	out := []router.CompiledRule{{Path: rule.Path, Methods: methodSet(rule.Methods), Auth: auth, OIDC: oidc, Static: served.bundle}}
 	if served.config == nil {
 		return out
 	}
@@ -290,7 +332,7 @@ func siteRules(rule *v1.RouteRule, served servedSite, auth v1.AuthMode) []router
 		return out
 	}
 	cfg := strings.TrimSuffix(rule.Path, "/") + "/" + v1.SiteRuntimeConfigFile
-	return append(out, router.CompiledRule{Path: cfg, Exact: true, Methods: methods, Auth: auth, Static: served.config})
+	return append(out, router.CompiledRule{Path: cfg, Exact: true, Methods: methods, Auth: auth, OIDC: oidc, Static: served.config})
 }
 
 func methodSet(ms []v1.HTTPMethod) map[string]bool {
@@ -316,7 +358,7 @@ func compile(rt *v1.Route, sites map[v1.ObjectName]servedSite) router.Entry {
 			if rule.Auth != nil {
 				auth = rule.Auth.Mode
 			}
-			siteRows = append(siteRows, siteRules(rule, sites[rule.Backend.Site], auth)...)
+			siteRows = append(siteRows, siteRules(rule, sites[rule.Backend.Site], auth, router.OIDCOf(rule.Auth))...)
 			continue
 		}
 		mset := methodSet(rule.Methods)
@@ -330,6 +372,7 @@ func compile(rt *v1.Route, sites map[v1.ObjectName]servedSite) router.Entry {
 			Methods:  mset,
 			Function: rule.Backend.Function,
 			Auth:     ruleAuth,
+			OIDC:     router.OIDCOf(rule.Auth),
 			Static:   rule.Backend.Static,
 		})
 	}
@@ -345,5 +388,39 @@ func compile(rt *v1.Route, sites map[v1.ObjectName]servedSite) router.Entry {
 		Owner:     router.Owner{Kind: v1.KindRoute, Namespace: rt.Namespace, Name: rt.Name},
 		Owned:     owned.IsOwned(rt),
 		Enabled:   rt.Spec.Enabled,
+		OIDC:      router.OIDCOf(rt.Spec.Auth),
 	}
+}
+
+// MapOIDCProvider maps an OIDCProvider event to the Routes of its namespace whose stance names it, so a Route refused
+// for ProviderNotFound serves once the provider exists (ADR-0335 Decision 10).
+func MapOIDCProvider(st store.Store) controller.MapFunc {
+	return func(ctx context.Context, obj v1.Object) []controller.Request {
+		meta := obj.GetObjectMeta()
+		list, err := st.List(ctx, v1.KindRoute.GVK(), store.ListOptions{Namespace: meta.Namespace})
+		if err != nil {
+			return nil
+		}
+		var reqs []controller.Request
+		for _, o := range list.Items {
+			rt, ok := o.(*v1.Route)
+			if ok && namesProvider(rt, meta.Name) {
+				reqs = append(reqs, controller.Request{GVK: v1.KindRoute.GVK(), Namespace: rt.Namespace, Name: rt.Name})
+			}
+		}
+		return reqs
+	}
+}
+
+// namesProvider reports whether rt's stance or one of its rules' names provider.
+func namesProvider(rt *v1.Route, provider v1.ObjectName) bool {
+	if p, _, ok := rt.Spec.Auth.OIDC(); ok && p == provider {
+		return true
+	}
+	for i := range rt.Spec.Rules {
+		if p, _, ok := rt.Spec.Rules[i].Auth.OIDC(); ok && p == provider {
+			return true
+		}
+	}
+	return false
 }
