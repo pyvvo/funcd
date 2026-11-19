@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/snapshot"
+	"github.com/pyvvo/funcd/internal/store"
+	storemem "github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/internal/testkit/s3stub"
 )
 
@@ -30,6 +33,32 @@ type volumeTar struct{ VolumeLoader }
 
 func (volumeTar) Source(context.Context, v1.NamespaceName, v1.ObjectName, v1.ObjectName) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("a tar")), nil
+}
+
+// snapshotFile is an AddonFiles whose Newest is an engine's snapshot; the test calls nothing else.
+type snapshotFile struct{ AddonFiles }
+
+func (snapshotFile) Newest(context.Context, v1.NamespaceName, v1.ObjectName, string, time.Duration) (string, io.ReadCloser, error) {
+	return "backup_1.sqlite", io.NopCloser(strings.NewReader("SQLite format 3\x00")), nil
+}
+
+// addonStore holds rauthy's Addon and the IdentityProvider login of orders.
+func addonStore(t *testing.T) store.Store {
+	t.Helper()
+	st := store.New(storemem.New())
+	for _, o := range []v1.Object{
+		&v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}, ObjectMeta: v1.ObjectMeta{Name: "rauthy"},
+			Spec: v1.AddonSpec{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"},
+				Image:    "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809",
+				Storage:  &v1.AddonStorage{Path: "/app/data"},
+				Snapshot: &v1.AddonSnapshot{Path: "/app/data/backups"}}},
+		&v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject},
+			ObjectMeta: v1.ObjectMeta{Name: "login", Namespace: "orders", ResourceGroup: "app"}, Spec: v1.AddonObjectSpec{Kind: "IdentityProvider"}},
+	} {
+		_, err := st.Create(context.Background(), o)
+		require.NoError(t, err)
+	}
+	return st
 }
 
 // TestKinds_ParseReadsWhatWriteWrote (ADR-0311 Decision 1): each kind's Parse names the member, and a Lake's attempt,
@@ -56,6 +85,7 @@ func TestKinds_ParseReadsWhatWriteWrote(t *testing.T) {
 		Lakes(nil, shared, prefix, catalogs, nil),
 		Databases(nil, sqlFile{}),
 		Volumes(nil, volumeTar{}),
+		Addons(addonStore(t), snapshotFile{}),
 	}
 	members := []Member{
 		{Kind: v1.KindKVStore, Name: "orders-state"},
@@ -63,12 +93,13 @@ func TestKinds_ParseReadsWhatWriteWrote(t *testing.T) {
 		{Kind: v1.KindLake, Name: "lake", Location: v1.LakeLocation{Bucket: "lake-files", Prefix: "lake"}},
 		{Kind: v1.KindSQLDatabase, Name: "todo-db"},
 		{Kind: v1.KindFunction, Name: "cart", Volume: "state"},
+		{Kind: "IdentityProvider", Name: "login"},
 	}
 	s := s3stub.New(t, nil)
 	target, err := gocloud.OpenWith(ctx, s.URL(), gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDOWNER", Secret: "s"}})
 	require.NoError(t, err)
 	for i, k := range kinds {
-		require.Equal(t, members[i].Kind, k.Kind())
+		require.True(t, Serves(k, members[i].Kind))
 		path := fmt.Sprintf("orders/b%d-uid/", i)
 		mf, err := k.Write(ctx, &writer{o: Options{Target: target, Path: path}, buf: make([]byte, 0, backup.PartBytes)}, "orders", members[i])
 		require.NoError(t, err, "%s", k.Kind())

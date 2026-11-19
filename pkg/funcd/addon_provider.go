@@ -6,11 +6,13 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/edge/oidc"
 	"github.com/pyvvo/funcd/internal/edge/router"
+	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/provider"
 	addonsvc "github.com/pyvvo/funcd/internal/services/addon"
 	"github.com/pyvvo/funcd/internal/store"
@@ -18,16 +20,20 @@ import (
 
 // addonProvider is the add-ons an admin registers (ADR-0332): one engine per object of an add-on's kind, run by its
 // own add-on runtime beside the Lake's and the SQL database's (ADR-0087), with the Addon rules and the object count cap
-// at admission.
+// at admission. Its objects are backup members, copied from their engines' own snapshots, and its boot quarantines the
+// storage of the objects no longer stored (ADR-0333).
 type addonProvider struct {
 	cfg        *config
 	reconciler *addonsvc.Reconciler
-	reserved   []string // the path segments funcd serves, which no add-on's plural may be
+	reserved   []string            // the path segments funcd serves, which no add-on's plural may be
+	files      workload.AddonFiles // the engines' files, when the runtime reaches them; nil otherwise
 }
 
 var (
-	_ describer     = (*addonProvider)(nil)
-	_ admissionHook = (*addonProvider)(nil)
+	_ describer           = (*addonProvider)(nil)
+	_ admissionHook       = (*addonProvider)(nil)
+	_ backupHook          = (*addonProvider)(nil)
+	_ lifecycle.Reclaimer = (*addonProvider)(nil)
 )
 
 // addonDeps are the parts the add-on provider is built over: what secrets and the edge built before it, and the
@@ -54,8 +60,20 @@ func (s *addonProvider) Admissions(r admission.StoreReader) []admission.Admissio
 		admission.NewAddonObjectQuotaAdmission(r, cmp.Or(c.addonMaxObjects, defaultAddonObjectsPerNamespace)))
 }
 
+// BackupKinds is the one member kind of every add-on object, through the runtime's file access (ADR-0333 Decision 2).
+func (s *addonProvider) BackupKinds() []workload.MemberKind {
+	return []workload.MemberKind{workload.Addons(s.cfg.store, s.files)}
+}
+
+// Reclaim quarantines the storage of every add-on object no longer stored, unless the platform is held (ADR-0307,
+// ADR-0333 Decision 5).
+func (s *addonProvider) Reclaim(ctx context.Context) error {
+	return s.reconciler.ReclaimOrphans(ctx, s.cfg.quarantineNow())
+}
+
 // build builds the engine runtime, which runs containerd's engines, or the runtime WithAddonRuntime gives with its
-// modes, and the reconciler, which watches the Addons and the Secrets its objects bind.
+// modes, and the reconciler, which watches the Addons, the Secrets its objects bind and the Restores that load them. A
+// runtime that is also workload.AddonFiles and provider.Volumes reaches the engines' files and storage (ADR-0333).
 func (s *addonProvider) build(d addonDeps) error {
 	const op = "funcd.New"
 	c := s.cfg
@@ -77,10 +95,13 @@ func (s *addonProvider) build(d addonDeps) error {
 	if c.imageFor != nil {
 		serverMode = v1.AddonRuntimeContainerd
 	}
+	s.files, _ = engineRuntime.(workload.AddonFiles)
+	volumes, _ := engineRuntime.(provider.Volumes)
 	rec, err := addonsvc.NewReconciler(addonsvc.Deps{
 		Store: c.store, Provider: engineRuntime, Secrets: d.secrets, Routes: d.routes, Modes: modes, ServerMode: serverMode,
 		Logger: c.logger, SupervisionPeriod: c.pacing.SupervisionPeriod, ReferentPollInterval: c.pacing.ReferentPollInterval,
-		EnginePollInterval: c.pacing.EnginePollInterval,
+		EnginePollInterval: c.pacing.EnginePollInterval, Files: s.files, Volumes: volumes, Hold: c.gate(),
+		QuarantinePeriod: c.quarantinePeriodOrDefault(), Now: c.quarantineNow,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build the add-on object reconciler")
@@ -91,6 +112,7 @@ func (s *addonProvider) build(d addonDeps) error {
 	d.ctrl.Watches(v1.KindAddon.GVK(), rec.MapAddon)
 	d.ctrl.Watches(v1.KindSecret.GVK(), rec.MapSecret)
 	d.ctrl.Watches(v1.KindOIDCProvider.GVK(), rec.MapOIDCProvider)
+	d.ctrl.Watches(v1.KindRestore.GVK(), rec.MapRestore)
 	return nil
 }
 

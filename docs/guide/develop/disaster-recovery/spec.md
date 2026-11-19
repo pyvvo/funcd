@@ -41,7 +41,7 @@ This page lists the spec and status fields of Backup, BackupSchedule and Restore
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `bytes` | integer | The size of the member's sealed copy on the target, in bytes. |
-| `kind` | string, required | The member's kind: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume. |
+| `kind` | string, required | The member's kind: KVStore, Bucket, Lake, SQLDatabase, Function for a Function's local volume, or an add-on's kind for an add-on object. |
 | `name` | string, required, a DNS-1123 label | The member's name: the store's, or for a volume, its Function's. |
 | `volume` | string, a DNS-1123 label | With kind Function, the name of the Function's local volume that the member is. |
 
@@ -60,7 +60,7 @@ This page lists the spec and status fields of Backup, BackupSchedule and Restore
 | `encryption` | object, [`BackupSchedule.spec.encryption`](#backupschedulespecencryption) | The age recipients that seal the member files of each Backup. It is required: a schedule with fewer than 2 recipients is refused. |
 | `paused` | boolean | While true, the schedule creates no Backup and rpoRisk stays false; a Backup created by hand still runs. Once it is false again, the slots missed meanwhile collapse into one Backup. |
 | `schedule` | string, required | The cron slots at which the schedule creates a Backup: 5 fields (minute hour day-of-month month day-of-week) or a macro such as @daily, in timeZone. Slots missed during downtime, a pause or a hold collapse into one Backup, and a slot that comes while one of the schedule's Backups is Pending or Running creates none. |
-| `scope` | object, [`BackupSchedule.spec.scope`](#backupschedulespecscope), required | The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases and volumes, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App. |
+| `scope` | object, [`BackupSchedule.spec.scope`](#backupschedulespecscope), required | The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases, volumes and addons, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App. |
 | `target` | object, [`BackupSchedule.spec.target`](#backupschedulespectarget), required | Where each Backup writes its copy: an S3 bucket and the Secret of its write key. |
 | `timeZone` | string | The IANA time zone of schedule, such as Europe/Paris; UTC when empty. |
 | `ttl` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How long funcd keeps each Backup's record after its creation; 0s or unset means 720h. Only the record goes: the copy stays on the target until the target's own lifecycle rule expires it. A Backup may set a shorter spec.ttl, never a longer one. |
@@ -75,12 +75,13 @@ This page lists the spec and status fields of Backup, BackupSchedule and Restore
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `addons` | array of string values, each a DNS-1123 label | Add-on objects of the namespace to copy, by name, whatever their kind, each once: each copy is the newest snapshot that the object's engine wrote under its Addon's snapshot.path, copied as it is. An object whose Addon declares no snapshot, or whose engine has written none yet, fails the Backup with reason NoSnapshot. |
 | `app` | string, a DNS-1123 label | An App of the namespace: each Backup copies the stores of its kv, buckets, lakes and sql entries, ref entries included, and the local volumes of the Functions it declares. Set it alone, with no other scope field. |
 | `buckets` | array of string values, each a DNS-1123 label | Buckets of the namespace to copy, by name, each once. A Bucket's copy holds none of the data of the Lakes located on its prefixes: each of them is copied as a member of its own. |
 | `databases` | array of string values, each a DNS-1123 label | SQLDatabases of the namespace to copy, by name, each once. A database whose engine is not Ready fails the Backup with reason EngineNotReady. |
 | `kvStores` | array of string values, each a DNS-1123 label | KVStores of the namespace to copy, by name, each once. |
 | `lakes` | array of string values, each a DNS-1123 label | Lakes of the namespace to copy, by name, each once. A Lake located on a prefix of a listed Bucket is copied without being named here. A Lake that deletes files during each of a run's copies, as a busy one may, fails the Backup with reason LakeUnstable, and so does a Bucket that brings it in. |
-| `resourceGroup` | string, a DNS-1123 label | A resource group of the namespace: each Backup copies its KVStores, Buckets, Lakes and SQLDatabases, but not its Functions' local volumes. Set it alone, with no other scope field. |
+| `resourceGroup` | string, a DNS-1123 label | A resource group of the namespace: each Backup copies its KVStores, Buckets, Lakes and SQLDatabases, and its add-on objects whose Addon declares a snapshot, but not its Functions' local volumes. Set it alone, with no other scope field. |
 | `volumes` | array of string values | Local volumes of the namespace's Functions to copy, each as &lt;function&gt;/&lt;name&gt;, both DNS-1123 labels, and listed once. A volume is read live, file by file, so its copy is not a single point in time. |
 
 ### `BackupSchedule.spec.target`
@@ -126,7 +127,7 @@ This page lists the spec and status fields of Backup, BackupSchedule and Restore
 | `as` | string, a DNS-1123 label | The destination: the name of an existing, empty store of the member's kind in the namespace, or for a volume, of a Function whose local volume of that name is empty. A SQLDatabase is empty with no table, view, index or trigger and no Function binding it. Exactly one of as, asLocation and inPlace; a Lake takes asLocation or inPlace. |
 | `asLocation` | object, [`Restore.spec.members[].asLocation`](#restorespecmembersaslocation) | For a Lake: the bucket and prefix that receive its copy, where no Lake is located and nothing is stored yet; a Lake located there afterwards reads it. The bucket must exist and may not be one this Restore restores in place. Exactly one of as, asLocation and inPlace. |
 | `inPlace` | boolean | Load the member back into its own store, replacing its data; a Function's volume is loaded only when empty or named by its Function's DataMissing condition. The Restore then needs update on the Namespace, as an admin has, and another in-place Restore of the namespace is refused until it ends. It first takes the export Backup that status.export names, which needs the restored Backup's schedule, then holds the namespace while it loads: a failed load keeps the hold until funcdctl hold release --namespace. Exactly one of as, asLocation and inPlace. |
-| `kind` | string, required | The member's kind, as the Backup's status.members lists it: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume. |
+| `kind` | string, required | The member's kind, as the Backup's status.members lists it: KVStore, Bucket, Lake, SQLDatabase, Function for a Function's local volume, or an add-on's kind for an add-on object, which takes inPlace only. |
 | `name` | string, required, a DNS-1123 label | The member's name, as the Backup's status.members lists it: the store's, or for a volume, its Function's. A member the copy does not hold fails the Restore with reason MemberNotFound. |
 | `volume` | string, a DNS-1123 label | With kind Function, which needs it, the name of the Function's local volume that the member is. Any other kind takes none. |
 

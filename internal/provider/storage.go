@@ -31,7 +31,11 @@ var _ Volumes = (*engineRuntime)(nil)
 // storageDir is ref's directory under the runtime's root: <root>/<lower(owner kind)>/<ns>/<name>. Both name parts are
 // validated DNS labels, so the path cannot leave the root.
 func (r *engineRuntime) storageDir(ref ProviderRef) string {
-	return filepath.Join(r.kindRoot(), string(ref.Namespace), string(ref.Name))
+	return storageDir(r.storageRoot, r.ownerKind, ref)
+}
+
+func storageDir(root string, kind v1.Kind, ref ProviderRef) string {
+	return filepath.Join(root, strings.ToLower(string(kind)), string(ref.Namespace), string(ref.Name))
 }
 
 func (r *engineRuntime) kindRoot() string {

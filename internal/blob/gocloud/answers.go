@@ -3,11 +3,15 @@ package gocloud
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"slices"
+	"syscall"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go/middleware"
@@ -26,6 +30,35 @@ const maxListBytes = 16 << 20
 // listPageCharge is the least a page spends of maxListBytes, so pages with no key end too. A fill of 1000 pages of a key each
 // spends 4 MiB of it.
 const listPageCharge = 4 << 10
+
+// refusing is hc dialing through refuse, which is asked each connection's address once its name is resolved; a refused
+// connection fails with no retry. A client that is not buildable is replaced by a buildable one, so no connection
+// escapes refuse.
+func refusing(hc awss3.HTTPClient, refuse func(context.Context, netip.AddrPort) error) awss3.HTTPClient {
+	bc, ok := hc.(*awshttp.BuildableClient)
+	if !ok {
+		bc = awshttp.NewBuildableClient()
+	}
+	return bc.WithDialerOptions(func(d *net.Dialer) {
+		d.ControlContext = func(ctx context.Context, _, address string, _ syscall.RawConn) error {
+			addr, err := netip.ParseAddrPort(address)
+			if err != nil {
+				return refused{fault.Wrapf(err, fault.Invalid, "gocloud.refusing", "the address %q", address)}
+			}
+			if err := refuse(ctx, netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port())); err != nil {
+				return refused{err}
+			}
+			return nil
+		}
+	})
+}
+
+// refused is a connection refuse refused: the S3 client does not retry it.
+type refused struct{ error }
+
+func (refused) RetryableError() bool { return false }
+
+func (r refused) Unwrap() error { return r.error }
 
 // cappedAnswers is a static key's HTTP client. It bounds its answers here, below the S3 client, which reads an error's body
 // whole before its caller sees the error. An object's content is its reader's to bound.

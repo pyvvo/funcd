@@ -74,7 +74,9 @@ func WithSQLChangeFeedPort(port int) Option {
 
 // WithAddonRuntime runs the add-on engines on r, which serves the runtime.mode values modes (ADR-0332 Decision 3,
 // ADR-0334): an object whose Addon runs on none of them waits Pending, RuntimeUnavailable. Without it the production
-// runtime runs them on a containerd server, and a process server runs none. Tests and funcdctl dev inject theirs.
+// runtime runs them on a containerd server, and a process server runs none. Tests and funcdctl dev inject theirs. An r
+// that is also workload.AddonFiles copies and places the engines' files, and one that is also provider.Volumes
+// reclaims or quarantines a deleted object's storage (ADR-0333).
 func WithAddonRuntime(r provider.Runtime, modes ...string) Option {
 	return func(c *config) error { c.addonRuntime, c.addonModes = r, modes; return nil }
 }

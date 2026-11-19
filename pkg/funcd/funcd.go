@@ -85,6 +85,7 @@ import (
 	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
 	"github.com/pyvvo/funcd/internal/sensor"
 	"github.com/pyvvo/funcd/internal/services"
+	addonsvc "github.com/pyvvo/funcd/internal/services/addon"
 	backupsvc "github.com/pyvvo/funcd/internal/services/backup"
 	blobsvc "github.com/pyvvo/funcd/internal/services/blob"
 	identitysvc "github.com/pyvvo/funcd/internal/services/identity"
@@ -1978,12 +1979,13 @@ func LakeData(key string) (prefix string, ok bool) {
 
 // registerWorkloadBackups builds the BackupSchedule, Backup and Restore reconcilers (ADR-0222) over the member kinds the
 // providers serve (ADR-0311), in list order, and registers them: a Backup's change requeues its schedule and the
-// Restores that read or wait for it.
+// Restores that read or wait for it. A target is never an add-on engine's address (ADR-0332 Decision 3).
 func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets backupsvc.SecretReader) error {
 	c := p.cfg
 	d := backupsvc.Deps{
 		Store: c.store, Secrets: secrets, StoreURL: c.blobStoreURL, Limits: c.workloadBackupLimits,
 		Period: c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
+		Engines: addonsvc.Engines{Store: c.store},
 	}
 	for _, h := range lifecycle.Each[backupHook](p.phases) {
 		d.Kinds = append(d.Kinds, h.BackupKinds()...)
@@ -2120,6 +2122,12 @@ func (h holdPlatform) BucketOrphans(ctx context.Context) ([]v1.ObjectRef, error)
 
 func (h holdPlatform) SQLOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
 	return h.p.sql.reconciler.Orphans(ctx)
+}
+
+// AddonOrphans are the add-on objects whose storage has no object, which a start not held quarantines (ADR-0333
+// Decision 5, ADR-0231 Decision 4).
+func (h holdPlatform) AddonOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
+	return h.p.addon.reconciler.Orphans(ctx)
 }
 
 func (h holdPlatform) VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error) {

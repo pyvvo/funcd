@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"context"
 	"log/slog"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -42,6 +43,10 @@ const (
 	ReasonEngineNotReady = "EngineNotReady"
 	// ReasonNamespaceHeld is an in-place Restore whose namespace already carries a restore marker.
 	ReasonNamespaceHeld = "NamespaceHeld"
+	// ReasonNoSnapshot is a Backup of an add-on object with no snapshot to copy, and ReasonRestoreTimedOut an in-place
+	// Restore of one whose engine did not take the copy within restore.timeout (ADR-0333).
+	ReasonNoSnapshot      = "NoSnapshot"
+	ReasonRestoreTimedOut = "RestoreTimedOut"
 	// reasonFailed is a run's failure no other reason names; its message carries the cause.
 	reasonFailed = "Failed"
 	// reasonBackupNotReady is a Restore's Backup that is missing or Failed.
@@ -79,8 +84,12 @@ type Hold interface {
 type Deps struct {
 	Store   store.Store
 	Secrets SecretReader
-	// Kinds are the member kinds a Backup copies and a Restore loads, each served once (ADR-0311).
+	// Kinds are the member kinds a Backup copies and a Restore loads, each served once (ADR-0311), a member's found
+	// through workload.Serves (ADR-0333 Decision 2).
 	Kinds []workload.MemberKind
+	// Engines tells an add-on engine's address, which a target never is: a connection to one is refused (ADR-0332
+	// Decision 3). nil refuses none.
+	Engines EngineIndex
 	// Limits bound one listing of a target and one copy; a zero field is its default.
 	Limits workload.Limits
 	// Hold nil is a platform never held, whose in-place Restore holds nothing.
@@ -96,6 +105,11 @@ type Deps struct {
 	Logger *slog.Logger
 }
 
+// EngineIndex tells whether addr is an add-on engine's address.
+type EngineIndex interface {
+	Engine(ctx context.Context, addr netip.AddrPort) (bool, error)
+}
+
 // Reconcilers are the three kinds' reconcilers, sharing one base.
 type Reconcilers struct {
 	Schedules *ScheduleReconciler
@@ -106,7 +120,6 @@ type Reconcilers struct {
 // base is what every reconciler reads.
 type base struct {
 	d        Deps
-	kinds    map[v1.Kind]workload.MemberKind // d.Kinds by the kind each serves
 	log      *slog.Logger
 	runs     metric.Int64Counter
 	duration metric.Float64Histogram
@@ -142,17 +155,17 @@ func New(d Deps) (*Reconcilers, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	kinds := make(map[v1.Kind]workload.MemberKind, len(d.Kinds))
+	kinds := make(map[v1.Kind]bool, len(d.Kinds))
 	for i, k := range d.Kinds {
 		if k == nil {
 			return nil, fault.Invalidf(op, "member kind %d is nil", i)
 		}
-		if _, twice := kinds[k.Kind()]; twice {
+		if kinds[k.Kind()] {
 			return nil, fault.Invalidf(op, "two member kinds serve %s", k.Kind())
 		}
-		kinds[k.Kind()] = k
+		kinds[k.Kind()] = true
 	}
-	b := &base{d: d, kinds: kinds, log: log.With("component", "backup.workload"), active: map[v1.ObjectRef]bool{},
+	b := &base{d: d, log: log.With("component", "backup.workload"), active: map[v1.ObjectRef]bool{},
 		risk: map[v1.ObjectRef]bool{}, warned: map[v1.ObjectRef]bool{}, synced: map[v1.ObjectRef]time.Time{}}
 	var err error
 	if b.runs, err = d.Meter.Int64Counter("funcd.backup.runs"); err != nil {
@@ -252,9 +265,26 @@ func (b *base) staticKey(ctx context.Context, ns v1.NamespaceName, name v1.Objec
 	return k, nil
 }
 
-// openTarget opens a Backup's target URL with key, the only credential source.
-func openTarget(ctx context.Context, url string, key gocloud.StaticKey) (blob.Bucket, error) {
-	return gocloud.OpenWith(ctx, url, gocloud.OpenOptions{Static: &key})
+// openTarget opens a Backup's target URL with key, the only credential source; a connection to an add-on engine's
+// address is refused.
+func (b *base) openTarget(ctx context.Context, url string, key gocloud.StaticKey) (blob.Bucket, error) {
+	opts := gocloud.OpenOptions{Static: &key}
+	if b.d.Engines != nil {
+		opts.Refuse = b.refuse
+	}
+	return gocloud.OpenWith(ctx, url, opts)
+}
+
+// refuse refuses a connection to addr when it is an add-on engine's address: a backup target is never one.
+func (b *base) refuse(ctx context.Context, addr netip.AddrPort) error {
+	engine, err := b.d.Engines.Engine(ctx, addr)
+	if err != nil {
+		return err
+	}
+	if engine {
+		return fault.Forbiddenf("backup.target", "%s is an add-on engine's address, which a backup target never is", addr)
+	}
+	return nil
 }
 
 // setReady writes the Ready condition at generation gen.

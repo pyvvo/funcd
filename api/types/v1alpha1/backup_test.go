@@ -107,6 +107,15 @@ func TestBackupScheduleValidate(t *testing.T) {
 		"databases and app": {func(s *BackupSchedule) {
 			s.Spec.Scope = BackupScope{Databases: []ObjectName{"todo-db"}, App: "orders"}
 		}, "sets 2 forms"},
+		"add-on objects by name": {func(s *BackupSchedule) { s.Spec.Scope = BackupScope{Addons: []ObjectName{"login", "echo"}} }, ""},
+		"add-on objects beside stores": {func(s *BackupSchedule) {
+			s.Spec.Scope = BackupScope{KVStores: []ObjectName{"a"}, Addons: []ObjectName{"login"}}
+		}, ""},
+		"repeated add-on object": {func(s *BackupSchedule) { s.Spec.Scope = BackupScope{Addons: []ObjectName{"login", "login"}} }, "addons[1] repeats"},
+		"bad add-on object name": {func(s *BackupSchedule) { s.Spec.Scope = BackupScope{Addons: []ObjectName{"Login"}} }, "addons[0]"},
+		"add-on objects and app": {func(s *BackupSchedule) {
+			s.Spec.Scope = BackupScope{Addons: []ObjectName{"login"}, App: "orders"}
+		}, "sets 2 forms"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -143,7 +152,12 @@ func TestRestoreValidate(t *testing.T) {
 		"no target":          {base(RestoreMember{Kind: KindBucket, Name: "b"}), "sets 0 targets"},
 		"lake as":            {base(RestoreMember{Kind: KindLake, Name: "lake", As: "x"}), "takes asLocation or inPlace"},
 		"store asLocation":   {base(RestoreMember{Kind: KindKVStore, Name: "s", AsLocation: &LakeLocation{Bucket: "b", Prefix: "p"}}), "takes as or inPlace"},
-		"other kind":         {base(RestoreMember{Kind: KindWorkflow, Name: "f", InPlace: true}), "want KVStore, Bucket, Lake, SQLDatabase or Function"},
+		"other kind":         {base(RestoreMember{Kind: KindWorkflow, Name: "f", InPlace: true}), "want KVStore, Bucket, Lake, SQLDatabase, Function or an add-on's kind"},
+		"add-on in place":    {base(RestoreMember{Kind: "IdentityProvider", Name: "login", InPlace: true}), ""},
+		"add-on as":          {base(RestoreMember{Kind: "IdentityProvider", Name: "login", As: "other"}), "restores in place only"},
+		"add-on asLocation":  {base(RestoreMember{Kind: "IdentityProvider", Name: "login", AsLocation: &LakeLocation{Bucket: "b", Prefix: "p"}}), "restores in place only"},
+		"add-on volume":      {base(RestoreMember{Kind: "IdentityProvider", Name: "login", Volume: "v", InPlace: true}), "takes no volume"},
+		"no add-on's form":   {base(RestoreMember{Kind: "identityprovider", Name: "login", InPlace: true}), "or an add-on's kind"},
 		"function no volume": {base(RestoreMember{Kind: KindFunction, Name: "f", InPlace: true}), "names its local volume"},
 		"volume on a store":  {base(RestoreMember{Kind: KindKVStore, Name: "s", Volume: "v", InPlace: true}), "takes no volume"},
 		"volume as":          {base(RestoreMember{Kind: KindFunction, Name: "cart", Volume: "state", As: "cart2"}), ""},

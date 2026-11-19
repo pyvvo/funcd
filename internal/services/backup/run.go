@@ -169,7 +169,7 @@ func (r *BackupReconciler) copy(ctx context.Context, b *v1.Backup) (string, erro
 	if err != nil {
 		return reasonFailed, err
 	}
-	target, err := openTarget(ctx, s.Spec.Target.URL, key)
+	target, err := r.openTarget(ctx, s.Spec.Target.URL, key)
 	if err != nil {
 		return reasonFailed, err
 	}
@@ -186,6 +186,8 @@ func (r *BackupReconciler) copy(ctx context.Context, b *v1.Backup) (string, erro
 		return ReasonLakeUnstable, err
 	case errors.Is(err, workload.ErrEngineNotReady):
 		return ReasonEngineNotReady, err
+	case errors.Is(err, workload.ErrNoSnapshot):
+		return ReasonNoSnapshot, err
 	case err != nil:
 		return reasonFailed, err
 	}

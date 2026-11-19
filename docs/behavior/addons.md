@@ -10,7 +10,7 @@ stateDiagram-v2
     Pending --> Pending : held, or the engine does not answer its readiness path yet
     Pending --> Ready : the engine answers 200
     Ready --> Pending : its Addon goes or no longer fits, a Secret goes or is forbidden, or a probe fails
-    Ready --> Stopping : deleted or held, or a changed Secret, Addon or object replaces the engine
+    Ready --> Stopping : deleted or held, or a changed Secret, Addon or object, or an in-place Restore, replaces the engine
     Pending --> Stopping : deleted or held
     Stopping --> Pending : a new engine starts
     Stopping --> [*] : deleted, or funcd stops
@@ -18,7 +18,8 @@ stateDiagram-v2
 
 An admin's Addon registers a kind and the engine image of its objects; each object of that kind runs one engine on the add-on
 runtime, as a Lake's does, and is stored as an AddonObject. A held object has no engine and no edge entry. `Stopping` is no phase: a
-status keeps its last one until the pass ends. New words: Stopping.
+status keeps its last one until the pass ends. An in-place Restore's two engine starts:
+[restore-start](../design/addon/restore-start.md). New words: Stopping.
 
 | Where | What happens | Time | You see | Status | Source |
 |---|---|---|---|---|---|
@@ -38,6 +39,9 @@ status keeps its last one until the pass ends. New words: Stopping.
 | An object behind an `oidc` stance | Its own `ingress.auth` signs callers in through an OIDCProvider of its namespace, with `ingress.host` in `default`; while the provider is missing, the entry keeps its claim, refused | until the provider exists | `IngressReady=False`, `ProviderNotFound`; 503 | decided | ADR-0335 Decision 10, `TestAddonObjectProviderNotFound` |
 | An Addon's basePath at or under `/.auth` | Refused, since the edge answers `/.auth/` on every host | none | 400 naming `spec.basePath` | **differs** | ADR-0335 Decision 3 says 422, `TestAddonValidate` |
 | A private path at the edge | 404 however it is spelled, and so is a path with a `..` segment or whose cleaned form leaves basePath; funcd reaches a private path at the engine's own address | none | 404 | decided | ADR-0332 Decision 5, `TestScenarioAddonPrivatePath` |
+| Deleting an add-on object | Once its engine is gone, `deletion: delete` removes its storage, and `retain`, the default, moves it into the quarantine, from which it comes back by hand with funcd stopped; neither while held | `storage.quarantineRetention` 168 h | `funcdctl hold status` lists the entry | decided | ADR-0333 Decision 5, `TestScenarioAddonDeletion` |
+| A start | Not held, it quarantines the storage of each add-on object no longer stored, whatever its deletion, so a new one of that name starts empty; held, it lists them | the start | `moved the data of an AddonObject with no object into the quarantine`; `addonOrphans` | decided | ADR-0333 Decision 5, ADR-0231 Decision 4, `TestEveryReclaimHasHoldEvidence` |
+| A crash before a restore start | hiqlite cannot remove its crash marker, so the engine never starts with `restore.env`: the Restore times out, and its clear restarts the engine without it | `restore.timeout` | `RestoreTimedOut`; the namespace stays held | accepted | ADR-0333 Consequences, `TestScenarioAddonRestoreTimeout` |
 | A registry taken out of `addons.registries` | Stops no engine: the reconciler reads no registry list, and the Addon's next change is refused | none | 400 on the next change | decided | ADR-0332 Decision 6, `TestAddonRegistryRemovedStopsNoEngine` |
 
 <!-- generated values, do not edit: just behavior-values -->

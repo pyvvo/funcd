@@ -22,17 +22,20 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/lifecycle"
+	"github.com/pyvvo/funcd/internal/testkit/fakeaddon"
 	"github.com/pyvvo/funcd/internal/testkit/s3stub"
 	"github.com/pyvvo/funcd/internal/volume"
 )
 
-// kindsRig is the backup rig of ADR-0311's guards, with SQL databases on fileEngines and Function volumes: a member of
-// every kind the providers serve, each holding data (KVStore orders-state, Bucket lake-files with Lake lake on its
-// prefix lake, SQLDatabase todo-db and Function cart's volume state), and a catalog on orders-files that no member
+// kindsRig is the backup rig of ADR-0311's guards, with SQL databases on fileEngines, Function volumes and add-on objects
+// on fakeaddon's engines: a member of every kind the providers serve, each holding data (KVStore orders-state, Bucket
+// lake-files with Lake lake on its prefix lake, SQLDatabase todo-db, Function cart's volume state and the
+// IdentityProvider login, whose engine wrote a snapshot of its data), and a catalog on orders-files that no member
 // names. fns are more Functions with an empty volume state, and dbs more empty databases.
 type kindsRig struct {
 	*wbRig
 	engines *fileEngines
+	addons  *fakeaddon.Runtime
 	leaves  map[string]string // each volume's directory, by <function>/<volume>
 }
 
@@ -44,13 +47,15 @@ func kindsMembers() []v1.RestoreMember {
 		{Kind: v1.KindLake, Name: "lake"},
 		{Kind: v1.KindSQLDatabase, Name: "todo-db"},
 		{Kind: v1.KindFunction, Name: "cart", Volume: "state"},
+		{Kind: "IdentityProvider", Name: "login"},
 	}
 }
 
 func newKindsRig(t *testing.T, shared blob.Bucket, fns, dbs []v1.ObjectName, setup func(r *wbRig)) *kindsRig {
 	t.Helper()
-	engines := newFileEngines(t)
-	opts := []Option{WithSQLProviderRuntime(engines), WithFunctionVolumes(volume.Options{Root: t.TempDir()}, false)}
+	engines, addons := newFileEngines(t), fakeaddon.New(t)
+	opts := []Option{WithSQLProviderRuntime(engines), WithFunctionVolumes(volume.Options{Root: t.TempDir()}, false),
+		WithAddonRuntime(addons, v1.AddonRuntimeContainerd)}
 	if shared != nil {
 		opts = append(opts, WithBlob(shared))
 	}
@@ -67,6 +72,7 @@ func newKindsRig(t *testing.T, shared blob.Bucket, fns, dbs []v1.ObjectName, set
 		for _, name := range dbs {
 			r.seed(&v1.SQLDatabase{TypeMeta: tmeta(v1.KindSQLDatabase), ObjectMeta: ordersMeta(string(name))})
 		}
+		r.seed(fakeAddon("fake", "IdentityProvider", 0), addonObject("login", "IdentityProvider"))
 		for _, name := range fns {
 			r.seed(&v1.Function{TypeMeta: tmeta(v1.KindFunction), ObjectMeta: ordersMeta(string(name)), Spec: v1.FunctionSpec{
 				Runtime: "nodejs22", Handler: "handle", Image: "file:///nonexistent.mjs",
@@ -81,7 +87,10 @@ func newKindsRig(t *testing.T, shared blob.Bucket, fns, dbs []v1.ObjectName, set
 		r.waitSQLReady(name)
 	}
 	engines.engine(t, "todo-db").set(func(e *fileEngine) { e.data = []byte("SQLite format 3\x00milk") })
-	k := &kindsRig{wbRig: r, engines: engines, leaves: map[string]string{}}
+	r.waitAddon("login", func(o *v1.AddonObject) bool { return o.Status.Phase == v1.PhaseReady })
+	require.NoError(t, os.WriteFile(filepath.Join(addons.Dir(loginEngine()), "data.json"), []byte(`{"client-a":"before"}`), 0o600))
+	addons.Engine(loginEngine()).Snapshot(fakeSnapshots)
+	k := &kindsRig{wbRig: r, engines: engines, addons: addons, leaves: map[string]string{}}
 	for _, name := range fns {
 		dir, err := r.p.exec.volumes.Reserve(r.ctx, volume.ID{Namespace: "orders", Function: name, Name: "state"},
 			r.getFunctionUID(name), 1<<20, v1.DeletionRetain)
@@ -91,14 +100,15 @@ func newKindsRig(t *testing.T, shared blob.Bucket, fns, dbs []v1.ObjectName, set
 	require.NoError(t, os.WriteFile(filepath.Join(k.leaves["cart/state"], "orders.sqlite"), []byte("rows"), 0o600))
 	k.create(k.dev, k.schedule("kinds-nightly", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
 		s.Scope = v1.BackupScope{KVStores: []v1.ObjectName{"orders-state"}, Buckets: []v1.ObjectName{"lake-files"},
-			Lakes: []v1.ObjectName{"lake"}, Databases: []v1.ObjectName{"todo-db"}, Volumes: []string{"cart/state"}}
+			Lakes: []v1.ObjectName{"lake"}, Databases: []v1.ObjectName{"todo-db"}, Volumes: []string{"cart/state"},
+			Addons: []v1.ObjectName{"login"}}
 	}))
 	return k
 }
 
 // stores is what orders' stores hold, by place: each object under s3/orders/ and lake-catalogs/orders/ with its type
 // and metadata, each KV key under orders/, each database's file ("" for one its engine counts empty, as Empty leaves
-// it) and each file of a volume.
+// it), each file of a volume and login's items.
 func (k *kindsRig) stores() map[string]string {
 	k.t.Helper()
 	out := map[string]string{}
@@ -130,6 +140,7 @@ func (k *kindsRig) stores() map[string]string {
 		}
 		out["sql:"+string(ref.Namespace)+"/"+string(ref.Name)] = string(f)
 	}
+	out["addon:orders/login"] = fmt.Sprint(k.addons.Engine(loginEngine()).Items())
 	for vol, dir := range k.leaves {
 		require.NoError(k.t, filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
@@ -151,16 +162,16 @@ func (k *kindsRig) stores() map[string]string {
 func TestKinds_RoundTripLeavesTheStoresAsTheyWere(t *testing.T) {
 	t.Parallel()
 	k := newKindsRig(t, nil, nil, nil, func(r *wbRig) { r.put("orders/orders-state-r/t/9", "no member names it") })
-	var served, members []v1.Kind
+	var served []workload.MemberKind
 	for _, h := range lifecycle.Each[backupHook](k.p.phases) {
-		for _, kind := range h.BackupKinds() {
-			served = append(served, kind.Kind())
-		}
+		served = append(served, h.BackupKinds()...)
 	}
-	for _, m := range kindsMembers() {
-		members = append(members, m.Kind)
+	members := kindsMembers()
+	require.Len(t, members, len(served), "a member per kind the providers serve")
+	for _, kind := range served {
+		require.True(t, slices.ContainsFunc(members, func(m v1.RestoreMember) bool { return workload.Serves(kind, m.Kind) }),
+			"a member of the kind %s serves", kind.Kind())
 	}
-	require.ElementsMatch(t, served, members, "a member of every kind the providers serve")
 	k.create(k.dev, k.backupObj("b1", "kinds-nightly"))
 	k.waitBackup("b1", v1.RunSucceeded)
 	want := k.stores()
@@ -184,7 +195,7 @@ func TestKinds_RoundTripLeavesTheStoresAsTheyWere(t *testing.T) {
 	for _, m := range ms {
 		restore("alone-"+strings.ToLower(string(m.Kind)), m)
 	}
-	restore("all", ms[0], ms[2], ms[1], ms[3], ms[4])
+	restore("all", ms[0], ms[2], ms[1], ms[3], ms[4], ms[5])
 }
 
 // scenario: every-kind-round-trips-the-whole-store, its failures — a Restore of every kind into as targets is refused
@@ -309,6 +320,8 @@ func TestRestore_RefusesAMemberWithAnotherFileCount(t *testing.T) {
 		{inPlace(v1.KindSQLDatabase, "todo-db", ""), 2, "todo-db"},
 		{inPlace(v1.KindFunction, "cart", "state"), 0, "cart/state"},
 		{inPlace(v1.KindFunction, "cart", "state"), 2, "cart/state"},
+		{inPlace("IdentityProvider", "login", ""), 0, "login"},
+		{inPlace("IdentityProvider", "login", ""), 2, "login"},
 	} {
 		t.Run(fmt.Sprintf("%s %d files, in place %v", c.member.Kind, c.count, c.member.InPlace), func(t *testing.T) {
 			t.Parallel()

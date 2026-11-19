@@ -96,6 +96,12 @@ components:
           description: What the object's engine uses.
         config:
           description: The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object.
+        deletion:
+          description: "What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way."
+          enum:
+            - retain
+            - delete
+          type: string
         ingress:
           $ref: "#/components/schemas/Ingress"
           description: Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused.
@@ -134,12 +140,66 @@ components:
             - Failed
             - Terminating
           type: string
+        restore:
+          $ref: "#/components/schemas/AddonRestoreState"
+          description: "The in-place Restore whose copy the engine loads: it goes once an engine started without restore.env is Ready, or once that Restore has failed or is gone. While it stands, the namespace is held."
       type: object
     AddonReadiness:
       additionalProperties: false
       properties:
         path:
           description: The path that funcd sends GET to on the engine's port. The object turns Ready once it answers 200.
+          type: string
+      required:
+        - path
+      type: object
+    AddonRestore:
+      additionalProperties: false
+      properties:
+        env:
+          additionalProperties:
+            type: string
+          description: "The environment of the start that loads the copy, laid over env. Each value is a literal, or a single ${{ }} expression over config and restore, such as ${{ \"file:\" + restore.file }}: restore.file is the copy's path in the engine."
+          type: object
+        path:
+          description: "The folder in the engine where funcd puts the copy that the next start loads: under storage.path, and neither snapshot.path nor inside it. funcd empties it before it writes the copy, and removes the copy once the engine that loaded it is Ready."
+          type: string
+        timeout:
+          description: How long an in-place Restore waits for the engine to load the copy and start again without restore.env, from 1s to 1h; unset is 10m. Past it, the Restore fails with reason RestoreTimedOut and the namespace stays held.
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
+      required:
+        - path
+      type: object
+    AddonRestoreState:
+      additionalProperties: false
+      properties:
+        file:
+          description: The copy's file name in the Addon's restore.path.
+          type: string
+        restore:
+          description: The Restore that placed the copy.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        state:
+          description: Loading while the engine starts with restore.env to load the copy; Loaded once the copy is gone, while the engine starts again without restore.env.
+          enum:
+            - Loading
+            - Loaded
+          type: string
+      required:
+        - restore
+        - file
+        - state
+      type: object
+    AddonSnapshot:
+      additionalProperties: false
+      properties:
+        path:
+          description: "The folder in the engine where it writes its copies: under storage.path, and neither restore.path nor inside it. A Backup copies the newest regular file there whose name does not end in ~ and that has not changed for 2 s, as it is."
           type: string
       required:
         - path
@@ -181,6 +241,9 @@ components:
         readiness:
           $ref: "#/components/schemas/AddonReadiness"
           description: How funcd learns that an object's engine is ready.
+        restore:
+          $ref: "#/components/schemas/AddonRestore"
+          description: How the engine loads a copy at its start, which an in-place Restore of an object puts in place. Unset, an object of the add-on cannot be restored.
         runtimes:
           description: The runtime.mode values that the engine runs on. Only containerd is admitted, which is also the default, since the process runtime runs no image. On a server whose mode the list lacks, each object waits in Pending with RuntimeUnavailable.
           items:
@@ -197,6 +260,9 @@ components:
           type:
             - array
             - "null"
+        snapshot:
+          $ref: "#/components/schemas/AddonSnapshot"
+          description: Where the engine writes its own consistent copies, which a Backup of an object copies. Unset, a Backup that names an object of the add-on fails with reason NoSnapshot, and a resourceGroup scope leaves the add-on's objects out.
         storage:
           $ref: "#/components/schemas/AddonStorage"
           description: A directory that outlives each object's engine, kept across a replaced engine and funcd's restarts. Unset, the engine keeps nothing.
@@ -605,7 +671,7 @@ components:
                 type: string
               scope:
                 $ref: "#/components/schemas/BackupScope"
-                description: "The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases and volumes, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App."
+                description: "The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases, volumes and addons, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App."
               target:
                 $ref: "#/components/schemas/BackupTarget"
                 description: "Where each Backup writes its copy: an S3 bucket and the Secret of its write key."
@@ -1938,7 +2004,7 @@ components:
           format: int64
           type: integer
         kind:
-          description: "The member's kind: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume."
+          description: "The member's kind: KVStore, Bucket, Lake, SQLDatabase, Function for a Function's local volume, or an add-on's kind for an add-on object."
           type: string
         name:
           description: "The member's name: the store's, or for a volume, its Function's."
@@ -1989,7 +2055,7 @@ components:
           type: string
         scope:
           $ref: "#/components/schemas/BackupScope"
-          description: "The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases and volumes, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App."
+          description: "The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases, volumes and addons, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App."
         target:
           $ref: "#/components/schemas/BackupTarget"
           description: "Where each Backup writes its copy: an S3 bucket and the Secret of its write key."
@@ -2062,6 +2128,16 @@ components:
     BackupScope:
       additionalProperties: false
       properties:
+        addons:
+          description: "Add-on objects of the namespace to copy, by name, whatever their kind, each once: each copy is the newest snapshot that the object's engine wrote under its Addon's snapshot.path, copied as it is. An object whose Addon declares no snapshot, or whose engine has written none yet, fails the Backup with reason NoSnapshot."
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
         app:
           description: "An App of the namespace: each Backup copies the stores of its kv, buckets, lakes and sql entries, ref entries included, and the local volumes of the Functions it declares. Set it alone, with no other scope field."
           maxLength: 63
@@ -2109,7 +2185,7 @@ components:
             - array
             - "null"
         resourceGroup:
-          description: "A resource group of the namespace: each Backup copies its KVStores, Buckets, Lakes and SQLDatabases, but not its Functions' local volumes. Set it alone, with no other scope field."
+          description: "A resource group of the namespace: each Backup copies its KVStores, Buckets, Lakes and SQLDatabases, and its add-on objects whose Addon declares a snapshot, but not its Functions' local volumes. Set it alone, with no other scope field."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -2745,6 +2821,13 @@ components:
     Evidence:
       additionalProperties: false
       properties:
+        addonOrphans:
+          description: The add-on objects that do not exist and whose storage funcd still holds, each as <namespace>/<name>.
+          items:
+            type: string
+          type:
+            - array
+            - "null"
         bucketOrphans:
           description: The Buckets that do not exist and whose objects funcd still holds, each as <namespace>/<name>.
           items:
@@ -2808,7 +2891,7 @@ components:
           description: For each blob EventSource, as <namespace>/<name>, how many objects of each event the release fires, since the source has not seen them yet.
           type: object
         quarantine:
-          description: The data that a start moved into the quarantine, since no object named it, held or not.
+          description: The data that a start moved into the quarantine, since no object named it, and the storage of the add-on objects deleted with deletion retain, held or not.
           items:
             $ref: "#/components/schemas/QuarantineEntry"
           type:
@@ -4665,7 +4748,7 @@ components:
       additionalProperties: false
       properties:
         kind:
-          description: "The kind of the object whose data the entry holds: KVStore, Bucket, SQLDatabase, or Function for a local volume."
+          description: "The kind of the object whose data the entry holds: KVStore, Bucket, SQLDatabase, Function for a local volume, or AddonObject for an add-on object's storage."
           type: string
         name:
           description: The object's name; for a volume, its Function's.
@@ -4862,7 +4945,7 @@ components:
           description: "Load the member back into its own store, replacing its data; a Function's volume is loaded only when empty or named by its Function's DataMissing condition. The Restore then needs update on the Namespace, as an admin has, and another in-place Restore of the namespace is refused until it ends. It first takes the export Backup that status.export names, which needs the restored Backup's schedule, then holds the namespace while it loads: a failed load keeps the hold until funcdctl hold release --namespace. Exactly one of as, asLocation and inPlace."
           type: boolean
         kind:
-          description: "The member's kind, as the Backup's status.members lists it: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume."
+          description: "The member's kind, as the Backup's status.members lists it: KVStore, Bucket, Lake, SQLDatabase, Function for a Function's local volume, or an add-on's kind for an add-on object, which takes inPlace only."
           type: string
         name:
           description: "The member's name, as the Backup's status.members lists it: the store's, or for a volume, its Function's. A member the copy does not hold fails the Restore with reason MemberNotFound."
