@@ -411,7 +411,8 @@ func (r *Reconciler) callbacks(ctx context.Context, p *v1.OIDCProvider) ([]strin
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list the add-on objects of %s", ns)
 	}
 	for _, a := range addons {
-		if a.Ingress != nil && names(a.Ingress.Stance()) {
+		// An add-on object's entry is off only with ingress.enabled false (ADR-0332 Decision 5).
+		if a.Ingress != nil && (a.Ingress.Enabled == nil || *a.Ingress.Enabled) && names(a.Ingress.Stance()) {
 			hosts[canonicalHost(cmpOr(a.Ingress.Host, nsHost))] = true
 		}
 	}

@@ -415,7 +415,7 @@ func (h *harness) nsObject() *v1.Namespace {
 	return obj.(*v1.Namespace)
 }
 
-// ADR-0336 Decision 5: a callback names its host as the gate sends it, in lower case, and a Route that is off adds
+// ADR-0336 Decision 2: a callback names its host as the gate sends it, in lower case, and a Route that is off adds
 // none: one a workload owns, with enabled unset, is off in an explicit namespace.
 func TestOidcCallbacksNameEachServedHostAsTheGateDoes(t *testing.T) {
 	t.Parallel()
@@ -432,4 +432,17 @@ func TestOidcCallbacksNameEachServedHostAsTheGateDoes(t *testing.T) {
 
 	p := h.pass(sso)
 	require.Equal(t, []string{appCallback, "https://b.example.com" + callbackPath}, p.Status.Callbacks)
+}
+
+// ADR-0336 Decision 2: an add-on object whose ingress is off, enabled false, adds no callback (ADR-0332 Decision 5).
+func TestOidcCallbacksSkipAnAddonObjectThatIsOff(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, harnessOptions{})
+	h.withRegistration(false, nil)
+	h.registered()
+	off := false
+	h.addons.set(AddonObject{Name: "wiki", Ingress: &v1.Ingress{Host: "wiki.example.com", Enabled: &off, Auth: oidcStance(sso)}})
+	h.addons.set(AddonObject{Name: "docs", Ingress: &v1.Ingress{Host: "docs.example.com", Auth: oidcStance(sso)}})
+	p := h.pass(sso)
+	require.Equal(t, []string{appCallback, "https://docs.example.com" + callbackPath}, p.Status.Callbacks)
 }
