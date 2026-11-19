@@ -72,6 +72,34 @@ func TestCredentialLanesNeverUseTheDevToken(t *testing.T) {
 	require.NotZero(t, checked, "a lane runs with static credentials")
 }
 
+// An assertion that holds ": " outside quotes is a YAML mapping, not a string: one such line kept the suite
+// addon-rauthy-signin from parsing, and two in addon-rauthy-restore reached Venom as maps, which failed them.
+func TestVenomAssertionsAreStrings(t *testing.T) {
+	suites, err := filepath.Glob(filepath.Join("..", "e2e", "*.venom.yml"))
+	require.NoError(t, err)
+	require.NotEmpty(t, suites)
+	for _, path := range suites {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var suite struct {
+			Testcases []struct {
+				Name  string `yaml:"name"`
+				Steps []struct {
+					Assertions []yaml.Node `yaml:"assertions"`
+				} `yaml:"steps"`
+			} `yaml:"testcases"`
+		}
+		require.NoError(t, yaml.Unmarshal(raw, &suite), path)
+		for _, tc := range suite.Testcases {
+			for _, step := range tc.Steps {
+				for _, a := range step.Assertions {
+					require.Equal(t, yaml.ScalarNode, a.Kind, "%s:%d (%s): quote an assertion that holds \": \"", path, a.Line, tc.Name)
+				}
+			}
+		}
+	}
+}
+
 // lanes.sh checked out every spec at .claude/worktrees/lane-<lane> and first removed whatever was there, so a second
 // run for another branch and the same lane deleted the first run's checkout under its running lane ("failed to get
 // current directory"). Here the first run's lane starts the second run, then checks that its own checkout survived.

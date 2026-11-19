@@ -25,9 +25,11 @@ testcases:
       - type: exec
         script: |
           limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
-            funcdctl apply -f /opt/lane/addon.yaml -f /opt/lane/rauthy-signin-whoami-addon.yaml
+            sh -c 'funcdctl apply -f /opt/lane/addon.yaml && funcdctl apply -f /opt/lane/rauthy-signin-whoami-addon.yaml'
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied Addon/rauthy"
+          - result.systemout ShouldContainSubstring "applied Addon/whoami"
       - type: exec
         script: |
           limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \

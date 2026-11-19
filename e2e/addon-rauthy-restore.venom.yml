@@ -143,7 +143,7 @@ testcases:
           {{.avmsh}} 'funcdctl hold status'
         info: "hold status → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
-          - result.systemout ShouldNotContainSubstring "restore: login-rewind"
+          - 'result.systemout ShouldNotContainSubstring "restore: login-rewind"'
 
   # As app-todo B12 does for a load, but funcd's process gets SIGKILL, as a crash: the engine then ends with no grace,
   # leaving hiqlite's crash marker, which a start without restore.env passes.
@@ -208,4 +208,4 @@ testcases:
         info: "the release → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldNotContainSubstring "restore: login-killed"
+          - 'result.systemout ShouldNotContainSubstring "restore: login-killed"'
