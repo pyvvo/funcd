@@ -15,7 +15,7 @@ An operator lists the add-on's registry, `ghcr.io` for rauthy, in `addons.regist
 add-on from a release, piping its manifest to `funcdctl apply -f -`:
 
 ```sh
-curl -fsSL https://github.com/pyvvo/funcd-addons/releases/download/v0.1.0/rauthy.yaml | funcdctl apply -f -
+curl -fsSL https://github.com/pyvvo/funcd-addons/releases/download/v0.1.1/rauthy.yaml | funcdctl apply -f -
 ```
 
 A user writes the Secret its objects bind with its plugin, then declares an identity provider:
