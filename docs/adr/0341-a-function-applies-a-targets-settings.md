@@ -1,6 +1,7 @@
 # ADR-0341: A settings kind's Function applies a target's settings, called from the target's pass
 
-- **Status**: Proposed (2026-11-21), rounds 1 and 2 of an independent judge folded
+- **Status**: Accepted (2026-11-22), by the decider ("I accept all ADR"), after three rounds of an independent judge, every Blocker and Major
+  folded
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, reconcile, functions
@@ -20,10 +21,12 @@
 
 A settings object (ADR-0340) runs no engine: it holds a setting that the engine of its target keeps, such as the
 password policy that rauthy keeps for its whole instance. Something must put it into the engine, and put it back when
-someone changes it there or when the object goes. The decider chose, on 2026-11-21, a reconcile loop that funcd runs
-and a Function per kind, named as a Workflow step names its Function: funcd computes what each target should hold and
-writes each object's status, and the Function, which alone knows the engine's API, applies it. Callers: the add-on
-reconciler, the kind's Function and whoever reads the objects' status. Experiment 0026 built the loop on rauthy and measured it.
+someone changes it there or when the object goes. The decider chose, on 2026-11-21, a reconcile loop that funcd runs and
+a Function per kind: funcd computes what each target should hold and writes each object's status, and the Function,
+which alone knows the engine's API, applies it. On 2026-11-22 the decider named that Function as a Workflow step names
+its own, `function.ref`, and let a target name its own per kind, so one template deployed twice in a namespace ships a
+Function for each copy. Callers: the add-on reconciler, the kind's Function and whoever reads the objects' status.
+Experiment 0026 built the loop on rauthy and measured it.
 
 ## Scenarios
 
@@ -53,9 +56,13 @@ reconciler, the kind's Function and whoever reads the objects' status. Experimen
   is made for it.
 - `scenario: settings-function-change` — *When* the Function gets a new revision, or the alias it binds `login` under
   changes, *Then* the next pass of `login` sends its list again.
-- `scenario: settings-function-per-target` — *Given* the template deployed twice in `shop`, as `web-auth` and
-  `admin-auth`, whose IdentityProviders name their own Functions in `spec.functions`, *When* each App's policy is
-  applied, *Then* each target's list goes to its own App's Function, and a target that names none gets the kind's.
+- `scenario: settings-function-per-target` — *Given* rauthy's App template deployed twice in `shop`, as `web-auth`
+  and `admin-auth`, whose IdentityProviders name their own Functions in `spec.functions`, and a third IdentityProvider
+  `ops-login` that names none, *When* a policy is applied for each, *Then* each App's target's list goes to its own
+  App's Function, and `ops-login`'s goes to the kind's `rauthy-settings`.
+- `scenario: settings-functions-refused` — *When* an IdentityProvider's `spec.functions` names a kind that its Addon
+  does not declare, names one kind twice, or, in an App, names a Function the App does not declare, *Then* it gets 400
+  naming the entry, and nothing is stored.
 
 ## Scope
 
@@ -73,6 +80,8 @@ state.
 - Level-triggered: each call carries the whole desired state of one target, so a lost call, a missed deletion or a
   restart is repaired by the next one.
 - Reuse the App hooks' way of calling a Function (ADR-0214) and the rule that a binding is the grant (ADR-0338).
+- The decider's ruling of 2026-11-22: the kind's Function takes a Workflow step's shape, `function.ref`, and a target
+  may name its own per kind in `spec.functions`.
 
 ## Alternatives considered
 
@@ -102,10 +111,10 @@ state.
    Function's current revision and the alias that binds the target. The pass requeues the target at the next
    due time when that comes before its supervision period (ADR-0142).
 2. **The call** runs on a goroutine of its own, and its end requeues the target, as an App hook's call does (ADR-0214
-   Decision 6); it records no Invocation, and `addons.settingsTimeout` bounds it, not the Function's `spec.timeout`:
-   the bound frees the target's step, so the platform sets it, as `sql.callTimeout` bounds a SQL call.
-   Its Function is Decision 3's, called through the invoker the hooks use, as the new caller `invoke.AddonSettings`. The CloudEvent's type is `funcd.addon.settings`, its source
-   `funcd://<namespace>/addon/<target>`, and its data:
+   Decision 6); it records no Invocation, and `addons.settingsTimeout` bounds it, not the Function's `spec.timeout`: the
+   bound frees the target's step, so the platform sets it, as `sql.callTimeout` bounds a SQL call. Its Function is
+   Decision 3's, called through the invoker the hooks use, as the new caller `invoke.AddonSettings`. The CloudEvent's
+   type is `funcd.addon.settings`, its source `funcd://<namespace>/addon/<target>`, and its data:
 
    ```json
    {"kind": "RauthyPasswordPolicy", "cause": "change",
@@ -116,14 +125,18 @@ state.
    The answer is `{"results": [{"name", "ok", "reason", "message"}]}`, at most 1 MiB, the local API's bound on a
    call's answer (`maxInvokeBytes`); a larger one fails the call. A result for an object not in the list is ignored,
    and for an object named twice the last one counts.
-3. **The Function.** The kind's `function.ref` (ADR-0340) names a Function of the target's namespace, as a Workflow
-   step's `function.ref` names one (ADR-0094, `api/types/v1alpha1/workflow.go:118`): funcd neither creates nor changes
-   it, and the objects wait while it is missing. A target may name its own for a kind in `spec.functions`, entries of
-   `kind` and `ref`, which an App's template sets per copy as it names its other parts, so two copies of a template in
-   one namespace each ship and call their own; a target that names none uses the kind's. `spec.functions` is refused
-   with 400 on a settings object, and for a kind that is not a settings kind of the target's Addon. The binding is the
-   grant: the Function reaches the engine only through ADR-0338, it must bind the target in `bindings.addon`, and that
-   entry's alias goes in the call. With no such entry nothing is called for the target.
+3. **The Function.** The kind's `function.ref`, which ADR-0340 requires, names a Function of the target's namespace,
+   as a Workflow step's `function.ref` names one (ADR-0094, `api/types/v1alpha1/workflow.go:118`): funcd neither
+   creates nor changes it, and the objects wait while it is missing. A Function whose protocol is http fails the call,
+   as the hooks' invoker refuses one (ADR-0243 Decision 5). A target may name its own for a kind in `spec.functions`,
+   entries of `kind` and `ref`, which an App's template sets per copy as it names its other parts, so two copies of a
+   template in one namespace each ship and call their own; a target that names none uses the kind's. The control plane
+   refuses with 400, naming the entry, a `spec.functions` on a settings object, an entry whose kind is not a settings
+   kind of the target's Addon as it is now, two entries for one kind, and, in an App's part, a `ref` that names no
+   Function the App declares, by name or by `ref` (the `app-parts` admission, as for `bindings.secret`, ADR-0337
+   Decision 3). The binding is the grant: the Function reaches the engine only through ADR-0338, it must bind the
+   target in `bindings.addon`, and that entry's alias goes in the call. With no such entry nothing is called for the
+   target.
 4. **The status.** funcd writes each object of the list from the answer, at the uid and generation it sent, unless the
    object's uid or spec changed since, for which the next call answers. `ok: true` is Ready True with no reason, phase
    Ready, and `observedGeneration` the generation sent. `ok: false` is Ready False with the result's reason,
@@ -235,16 +248,18 @@ func (i *HTTPInvoker) InvokeReply(ctx context.Context, ns v1.NamespaceName, fn v
 
 | Consumes | Exposes |
 |---|---|
-| the Addon's `settings` (ADR-0340); the Function's `bindings.addon` (ADR-0338) and its current revision; the target's `spec.functions` | the call of Decision 2; `invoke.AddonSettings` |
+| the Addon's `settings` (ADR-0340); the Function's `bindings.addon` (ADR-0338) and its current revision | the call of Decision 2; `invoke.AddonSettings`; the add-on object's `spec.functions` |
 | `addons.settingsTimeout` | the reasons `Progressing`, `ReconcileFailed`, `NoResult`, `AddonNotFound`, `TargetNotFound`, `TargetNotReady`, `FunctionNotFound`, `FunctionNotBound` |
 
 ## Implementation plan
 
 - `internal/services/addon`: `settings.go` with the step, the in-memory state, `MapSettings` (a settings object to its
-  target, a target to its objects), a watch of Functions to the settings objects their kinds name, the status writes;
-  `reconcile.go` calls the step after a Ready pass and routes a settings object to its own pass. Experiment 0026's
-  `funcd.patch` holds a working draft, without the uid, the Function in the digest, `spec.functions`, `Progressing` and the waits after
-  an answer.
+  target, a target to its objects), a watch of Functions to the settings objects whose kind's Function, or whose
+  target's own, each is, the status writes; `reconcile.go` calls the step after a Ready pass and routes a settings
+  object to its own pass. Experiment 0026's `funcd.patch` holds a working draft, without the uid, the Function in the
+  digest, `spec.functions`, `Progressing` and the waits after an answer.
+- `api/types/v1alpha1`: `AddonObjectSpec.Functions` and `AddonObjectFunction`; `internal/controlplane`: the
+  target-side refusals of Decision 3, in the add-on object's admission and in `app-parts`.
 - `internal/sensor`: `InvokeReply`; `internal/invoke`: `AddonSettings`. `pkg/funcd`: the settings caller over the hooks'
   invoker, the watches, the key.
 - Docs: the add-ons pages (a settings kind and its Function, with rauthy's password policy), the behavior rows.

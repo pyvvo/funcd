@@ -1,6 +1,7 @@
 # ADR-0339: An add-on's versions are revisions, and each object pins the one it runs
 
-- **Status**: Proposed (2026-11-21), rounds 1 to 3 of an independent judge folded
+- **Status**: Accepted (2026-11-22), by the decider ("I accept all ADR"), after three rounds of an independent judge, every Blocker and Major
+  folded
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, revisions, apps, upgrades

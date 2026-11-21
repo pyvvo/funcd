@@ -1,6 +1,7 @@
 # ADR-0340: An Addon declares settings kinds, whose objects funcd checks at admission
 
-- **Status**: Proposed (2026-11-21), rounds 1 to 3 of an independent judge folded
+- **Status**: Accepted (2026-11-22), by the decider ("I accept all ADR"), after four rounds of an independent judge, every Blocker and Major
+  folded
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, admission, kinds, expressions
@@ -36,7 +37,7 @@ reconciler that reads them. Experiment 0026 built the kind on rauthy.
 - `scenario: settings-object-schema` — *When* an object's `spec.config` breaks the kind's schema, *Then* it gets 422
   naming the property.
 - `scenario: settings-object-no-engine` — *When* an object sets `spec.bindings`, `spec.ingress`, `spec.resources`,
-  `spec.deletion` or `spec.functions`, *Then* it gets 400: the object runs no engine.
+  `spec.deletion` or `spec.functions`, *Then* it gets 400: the object runs no engine and is no target.
 - `scenario: settings-count-per-target` — *Given* the policy `strict` that names the IdentityProvider `login`, *When* a
   second policy names `login`, *Then* it gets 400 naming `strict` and `count.perTarget`.
 - `scenario: settings-count-per-namespace` — *Given* a kind with `count.perNamespace: 2` and two objects of it in
@@ -86,8 +87,9 @@ settings object is checked against the Addon as it is now).
 
 1. **The declaration.** `AddonSpec.settings` lists kinds, each with `kind` (a kind name, as `spec.kind` is), `target`
    (a string field under `spec.config` that names the object's target, an object of the Addon's `spec.kind` in the same
-   namespace), `resync` (from 1s to 24h, 10m when unset), `function.ref` (a Function of the object's namespace, named as a Workflow step names its Function,
-   ADR-0341), `schema` (the JSON Schema of `spec.config`, in the contract profile) and `constraints`.
+   namespace), `resync` (from 1s to 24h, 10m when unset), `function.ref`, required (the kind's Function, of the
+   object's namespace, named as a Workflow step names its Function, ADR-0341), `schema` (the JSON Schema of
+   `spec.config`, in the contract profile) and `constraints`.
 2. **Registration.** The Addon admissions of ADR-0332 Decision 1 cover every kind the Addon adds: on a create and on an
    update, no settings kind may be a kind of funcd's, another kind of the Addon, or a kind of another Addon, compared
    by plural, and the answer is 400 for funcd's kind or the Addon's own, 409 for another Addon's. An update now takes
@@ -100,7 +102,7 @@ settings object is checked against the Addon as it is now).
    served at that kind's plural by the add-on routes and rights of ADR-0332 Decision 2, with no new route. Its
    `spec.config` fits the kind's schema, or the write gets 422 naming the property. `spec.bindings`, `spec.ingress`,
    `spec.resources`, `spec.deletion` and a target's `spec.functions` (ADR-0341) are refused with 400: it runs no
-   engine.
+   engine and is no target.
 4. **Constraints.** The admission `addon-settings` runs on a settings object's create and replace, under the
    namespace's admission lock (ADR-0147), and refuses with 400, in this order: a replace that changes a field of
    `immutable`; a `count.perTarget` reached by the namespace's other objects of the kind that name the same target, or

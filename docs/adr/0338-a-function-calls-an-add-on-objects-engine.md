@@ -1,7 +1,7 @@
 # ADR-0338: A Function calls an add-on object's engine through funcd
 
-- **Status**: Proposed (2026-11-19), rounds 1 to 4 of an independent judge folded, with the decider's choices of
-  2026-11-21
+- **Status**: Accepted (2026-11-22), by the decider ("I accept all ADR"), after four rounds of an independent judge, every Blocker and Major
+  folded
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, local-api, shims, auth, network

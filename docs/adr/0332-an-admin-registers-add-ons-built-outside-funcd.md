@@ -5,6 +5,10 @@
   (2026-11-19), by the decider's standing go-ahead for FEAT-0018 ("go ahead, don't wait for
   me", "until we ship entirely the new feature"), after three rounds of an independent judge (a subagent), every
   Blocker and Major folded
+- **Superseded in part by**: [ADR-0338](0338-a-function-calls-an-add-on-objects-engine.md) (2026-11-22) — Decision 3 (funcd reaches an engine for a Function that binds its object, through the add-on facet and proxy).
+- **Superseded in part by**: [ADR-0339](0339-an-add-ons-versions-are-revisions-each-object-pins.md) (2026-11-22) — Decision 3 (an object's engine runs its pinned revision, not the Addon's spec of the pass).
+- **Superseded in part by**: [ADR-0340](0340-an-addon-declares-settings-kinds.md) (2026-11-22) — Decisions 1, 2 and 3 (an Addon adds settings kinds, an update takes the cluster-scoped lock; a settings object runs no engine, outside the engines' cap, with a pass of its own).
+- **Superseded in part by**: [ADR-0341](0341-a-function-applies-a-targets-settings.md) (2026-11-22) — Decisions 2 and 3 (an add-on object gains `spec.functions`; the pass of a Ready object gains the settings step).
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, provider, api, edge, cedar
