@@ -2,10 +2,11 @@
 # An Addon's revisions and the objects that pin them (ADR-0339 Decisions 1 to 5). An admin updates the Addon; the
 # Addon's pass stamps a revision for its latest generation and makes it current. A standalone object pins the current
 # revision at its first pass and at each new generation. An App's revision records the current revision, or, when its
-# spec is that of a kept revision that was current once (a rollback), that revision's record. The revision is Applied
-# once its pre-hooks are done and its parts are written, and a later pass that stops turns that False again. A part
-# pins the record of the newest Applied revision whose number is above the one it follows, and never goes back. The
-# App switches to a revision once it is Applied and its part pins its record, and then its post-hooks run. The App
+# spec is that of a kept revision that was current once (a rollback), that revision's record; its hook input's `from`
+# is what the part runs at the stamp. The revision is Applied once its pre-hooks are done and its parts are written,
+# and a later pass that stops turns that False again. A part moves only to the record of the App's latest revision,
+# once it is Applied and above the one the part follows, and never goes back. The App switches to a revision once it
+# is Applied and its part pins its record, and then its post-hooks run. The App
 # keeps its current revision and its newest two. The Addon's pass, which requeues itself while a revision is not
 # current, removes a revision that is not current, that no object pins and that no kept App revision records.
 # Environment: every pass is one step of the controller's one worker (pkg/funcd/funcd.go:767); the writes of the admin
@@ -23,8 +24,11 @@ options:
 # mutant retire-current: PinsExist
 # mutant never-retire: liveness
 # mutant follow-current: NoMoveByItself
-# mutant newest-applied: NoMoveByItself
+# mutant newest-applied: MovesOnlyToTheLatestApplied
 # mutant switch-early: PostHooksSeeTheNewEngine
+# mutant follow-superseded: MovesOnlyToTheLatestApplied
+# mutant move-early: MovesOnlyToTheLatestApplied
+# mutant from-current: HooksSeeTheMove
 
 # split-pass: an object's pass reads the current revision in one step and pins it in another, as two workers would.
 # ignore-records: the Addon's pass removes a revision that a kept App revision records.
@@ -33,6 +37,9 @@ options:
 # follow-current: a standalone object follows the Addon's current revision with no new generation.
 # newest-applied: a part follows the newest Applied App revision, even one below the one it follows.
 # switch-early: the App switches before its part pins the revision's record.
+# follow-superseded: a part moves to any newer Applied revision, a superseded one too, while the latest's pre-hooks run.
+# move-early: a part moves to the latest revision before it is Applied, while its pre-hooks run.
+# from-current: the hook input's from is the App's current revision's record, not what the part runs.
 MUTANT = ""
 
 action Init:
@@ -45,7 +52,7 @@ action Init:
     s_pin = 0
     s_next = 0
     edits = 0
-    apps = [{"n": 1, "record": 1, "applied": True, "once": True}]
+    apps = [{"n": 1, "record": 1, "from": 0, "applied": True, "once": True}]
     app_current = 1
     stamps = 0
     rollbacks = 0
@@ -54,7 +61,7 @@ action Init:
     p_pin = 0
 
 atomic action Update:
-    require updates < 2
+    require updates < 1
     updates += 1
     generation += 1
 
@@ -90,18 +97,29 @@ atomic fair action ObjectPin:
     s_seen = s_gen
     s_next = 0
 
+# What the part runs at a stamp, the hook input's from; the round-2 text's current revision's record for the mutant.
+func hook_from():
+    if MUTANT == "from-current":
+        for a in apps:
+            if a["n"] == app_current:
+                return a["record"]
+    return p_pin
+
 # A new App revision: a changed spec records the current revision.
 atomic action AppStamp:
     require stamps < 2
     stamps += 1
-    apps.append({"n": apps[-1]["n"] + 1, "record": current, "applied": False, "once": False})
+    f = hook_from()
+    apps.append({"n": apps[-1]["n"] + 1, "record": current, "from": f, "applied": False, "once": False})
 
-# A rollback: the spec of the oldest kept revision that was current once, and that revision's record.
+# A rollback: the spec of a kept revision that was current once, the current one included, and its record.
 atomic action AppRollback:
     require rollbacks < 1
-    require apps[0]["once"] and apps[0]["n"] != app_current
+    i = oneof range(len(apps))
+    require apps[i]["once"]
     rollbacks += 1
-    apps.append({"n": apps[-1]["n"] + 1, "record": apps[0]["record"], "applied": False, "once": False})
+    f = hook_from()
+    apps.append({"n": apps[-1]["n"] + 1, "record": apps[i]["record"], "from": f, "applied": False, "once": False})
 
 # The latest revision's pre-hooks are done and its parts written.
 atomic fair action AppApply:
@@ -130,15 +148,19 @@ atomic fair action AppPrune:
     require apps[0]["n"] != app_current
     apps.pop(0)
 
-# The part's pass.
+# The part's pass: it moves to the latest revision once that is Applied (the mutants pick another).
 atomic fair action PartPass:
-    best = 0
-    record = 0
-    for a in apps:
-        if a["applied"] and a["n"] > best:
-            best = a["n"]
-            record = a["record"]
-    require best != 0
+    best = apps[-1]["n"]
+    record = apps[-1]["record"]
+    if MUTANT == "newest-applied" or MUTANT == "follow-superseded":
+        best = 0
+        for a in apps:
+            if a["applied"] and a["n"] > best:
+                best = a["n"]
+                record = a["record"]
+        require best != 0
+    elif MUTANT != "move-early":
+        require apps[-1]["applied"]
     if MUTANT == "newest-applied":
         require best != p_app
     else:
@@ -179,6 +201,19 @@ transition assertion PostHooksSeeTheNewEngine(before, after):
     for a in after.apps:
         if a["n"] == after.app_current and after.p_pin != a["record"]:
             return False
+    return True
+
+transition assertion MovesOnlyToTheLatestApplied(before, after):
+    if after.p_app == before.p_app:
+        return True
+    return after.p_app == after.apps[-1]["n"] and after.apps[-1]["applied"]
+
+transition assertion HooksSeeTheMove(before, after):
+    if after.p_app == before.p_app or before.p_app == 0:
+        return True
+    for a in after.apps:
+        if a["n"] == after.p_app:
+            return a["from"] == before.p_pin and a["record"] == after.p_pin
     return True
 
 always eventually assertion UnusedAreRemoved:

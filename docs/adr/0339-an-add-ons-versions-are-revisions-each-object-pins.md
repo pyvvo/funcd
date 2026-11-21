@@ -1,6 +1,6 @@
 # ADR-0339: An add-on's versions are revisions, and each object pins the one it runs
 
-- **Status**: Proposed (2026-11-21), round 1 of an independent judge folded
+- **Status**: Proposed (2026-11-21), rounds 1 and 2 of an independent judge folded
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, revisions, apps, upgrades
@@ -41,8 +41,13 @@ the admin who updates an Addon, the developers whose objects run it, and the App
   run once the part runs `rauthy-2`.
 - `scenario: addon-revision-no-step-back` — *Given* that part on `rauthy-2`, *When* a later pass of the same AppRevision
   stops, or an older AppRevision is pruned, *Then* the part stays on `rauthy-2`.
+- `scenario: addon-revision-superseded` — *Given* `web-auth-2` Applied and superseded by `web-auth-3`, whose pre-hooks
+  run, *Then* the part keeps the engine it runs until `web-auth-3` is Applied, and then pins `web-auth-3`'s record.
 - `scenario: addon-revision-app-rollback` — *When* `web-auth` is rolled back to its revision that ran `rauthy-1`, *Then*
   the new AppRevision records `rauthy-1`, and the part pins `rauthy-1` again once it is Applied.
+- `scenario: addon-revision-rollback-after-failure` — *Given* `web-auth-2` failed its deadline while the part runs
+  `rauthy-2`, *When* `web-auth` is rolled back to `web-auth-1`, *Then* the hook input of `web-auth-3` names
+  IdentityProvider from `rauthy-2` to `rauthy-1`, and the part pins `rauthy-1` once `web-auth-3` is Applied.
 - `scenario: addon-revision-retired` — *Given* `rauthy-1`, which no object pins and no kept AppRevision records,
   *Then* it is removed; the current revision is never removed.
 - `scenario: addon-revision-read-only` — *When* anyone sends `POST`, `PUT` or `DELETE` to the AddonRevision routes,
@@ -92,14 +97,18 @@ the Addon as it is now (ADR-0340).
    parts, set at its stamp: for a spec equal to that of a kept revision that was current once (ADR-0214's rollback
    test), that revision's records; otherwise each kind's current revision. A part follows its App's revisions forward
    only: its `status.appRevision` (new) names the App revision whose record it pins, and its pass moves it to the record
-   of the newest AppRevision whose number is higher and whose `Applied` is True. A later pass that stops, or a pruned
-   revision, moves nothing.
+   of the App's latest AppRevision once that revision's `Applied` is True and its number is higher. A superseded
+   revision is never a target, and a later pass that stops, or a pruned revision, moves nothing. A revision's number
+   comes from its name, `<app>-<number>` (ADR-0200 Decision 1), so a pruned one still compares. Until its first pin, a
+   part is `Pending` with `Progressing`. An AppRevision's status change requeues the App's add-on parts.
 4. **The App waits for its parts.** A part counts as Ready for `ChildrenReady` (ADR-0200 Decision 5, after ADR-0199
    Decision 5) only once its `status.appRevision` is the App's latest revision, so the switch (Decision 6) comes after
    the part runs the new engine. The App's pre-hooks run before `Applied` turns True (ADR-0214), so they see the old
    engine, and its post-hooks, after the switch, see the new one. A part's status change requeues its App.
 5. **The hooks are told.** `AppHookInput` gains `addonRevisions`, one `{kind, from, to}` per add-on kind whose revision
-   the App's revision changes: `from` the current revision's record, `to` this revision's.
+   the App's revision changes: `from` the revision the App's parts of that kind run at the stamp, their
+   `status.addonRevision`, which a failed upgrade may have moved past the current revision's record; `to` this
+   revision's record.
 6. **Removal.** The Addon reconciler removes a revision that is not current, that no add-on object pins, and that no
    kept AppRevision records, and requeues itself after its supervision period (ADR-0142) while a revision that is not
    current remains. Each pass, the Addon's, an object's and the App's, is one step of the controller's one worker
@@ -118,20 +127,23 @@ the Addon as it is now (ADR-0340).
   | `PinsExist` | always | `scenario: addon-revision-retired`, `scenario: addon-revision-new-object` | `TestScenarioAddonRevisionRetired` |
   | `RecordsExist` | always | `scenario: addon-revision-app-rollback` | `TestScenarioAddonRevisionAppRollback` |
   | `NoMoveByItself` | transition | `scenario: addon-revision-no-move`, `scenario: addon-revision-no-step-back` | `TestScenarioAddonRevisionNoStepBack` |
+  | `MovesOnlyToTheLatestApplied` | transition | `scenario: addon-revision-superseded`, `scenario: addon-revision-app-upgrade` | `TestScenarioAddonRevisionSuperseded` |
+  | `HooksSeeTheMove` | transition | `scenario: addon-revision-rollback-after-failure` | `TestScenarioAddonRevisionRollbackAfterFailure` |
   | `PostHooksSeeTheNewEngine` | transition | `scenario: addon-revision-app-upgrade` | `TestScenarioAddonRevisionAppUpgrade` |
   | `UnusedAreRemoved` | always eventually | `scenario: addon-revision-retired` | `TestScenarioAddonRevisionRetired` |
 
-- **Bounds**: one Addon, one standalone object, one App with one part; 2 updates, 1 edit, 2 App stamps, 1 rollback, 1
-  stopped pass, the App's current revision and its newest two kept; 1 concurrent action (each pass is one step of the
-  one worker); 28 actions.
+- **Bounds**: one Addon, one standalone object, one App with one part; 1 update, 1 edit, 2 App stamps, 1 rollback to
+  any kept revision that was current once, 1 stopped pass, the App's current revision and its newest two kept; 1
+  concurrent action (each pass is one step of the one worker); 28 actions.
 - **Faults**: a later pass of the latest AppRevision that stops; the history's pruning; the writes of the admin and
   the users between passes.
 - **Environment**: the controller's one worker serializes the passes. The mutant `split-pass`, a pass that reads and
   pins in two steps, as two workers would, pins a removed revision: a second worker needs this decision again.
 - **Mutants**: `split-pass` and `retire-current` fail `PinsExist`; `ignore-records` fails `RecordsExist`;
-  `follow-current` and `newest-applied` fail `NoMoveByItself`; `switch-early` fails `PostHooksSeeTheNewEngine`;
-  `never-retire` fails `UnusedAreRemoved`.
-- **Result**: pass, 37,823 states, 26.9 s, FizzBee v0.5.4; wider (3 updates, 32 actions): pass, 144,426 states.
+  `follow-current` fails `NoMoveByItself`; `newest-applied`, `follow-superseded` and `move-early` fail
+  `MovesOnlyToTheLatestApplied`; `from-current` fails `HooksSeeTheMove`; `switch-early` fails
+  `PostHooksSeeTheNewEngine`; `never-retire` fails `UnusedAreRemoved`.
+- **Result**: pass, 49,793 states, 31.6 s, FizzBee v0.5.4; wider (2 updates): pass, 263,287 states, 200.9 s.
 - **Left to tests**: the engines the pins start and replace, several kinds per App, the hooks' calls, dev's rule.
 
 ## Behavior rows
@@ -211,7 +223,7 @@ type AppHookAddonRevision struct {
 
 - [ ] An Addon's change stamps a revision and moves no engine on a server.
 - [ ] An engine is built only from its object's pinned revision.
-- [ ] A part moves only forward, with an Applied App revision of a higher number, and a rollback takes back the older
+- [ ] A part moves only forward, to its App's latest revision once it is Applied, and a rollback takes back the older
       records.
 - [ ] `ChildrenReady` and the switch wait for the part's pin; the hook input names each kind's move.
 - [ ] No pinned, recorded or current revision is ever removed; an unused one is, without another change.
@@ -231,6 +243,8 @@ type AppHookAddonRevision struct {
 ## Open questions
 
 - A standalone object pinned to an older revision by hand: the decider left it to an App for now.
+- Dev's rule (Decision 7) departs from "a newer revision moves no object" and from the hooks around a move: the
+  decider's ruling goes into the Constraints before acceptance.
 
 ## References
 

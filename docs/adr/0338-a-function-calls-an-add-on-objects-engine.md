@@ -117,7 +117,8 @@ the paths a binding may call; how funcd itself reaches engines (ADR-0336).
 3. **The proxy, for any HTTP SDK.** A node-private add-on proxy, as the Lake's (ADR-0137), listens where a worker
    reaches funcd's gateways. Each `bindings.addon` entry gives the worker `FUNCD_ADDON_<ALIAS>_URL`, the proxy's base
    URL for that alias, `http://<proxy>/addon/<alias>`, the facet's path, and `FUNCD_ADDON_<ALIAS>_TOKEN`, derived per
-   Function as its lake token is (ADR-0306 Decision 7) but under a label of its own, so the two tokens differ.
+   Function as its lake token is (ADR-0306 Decision 7) but with a key of its own, so neither proxy verifies the other's
+   token.
    A request carries the token in `X-Funcd-Addon-Token`; the proxy resolves it to the Function, then makes Decision 2's
    checks and call, and the token header, an `X-Funcd-*` one, never reaches the engine.
 4. **Limits.** `addons.callTimeout`, a positive duration, as `sql.callTimeout` is, with empty meaning 10s; the request's
@@ -159,10 +160,10 @@ the paths a binding may call; how funcd itself reaches engines (ADR-0336).
 
 ## Design model
 
-`docs/design/addon/restore-start.fizz` (ADR-0333) holds as it is: its guard on `Write` is that a write reaches the
-engine only while the namespace is not held, and Decisions 2 and 3 make both paths refuse a held namespace, so each is
-one more writer under that guard. This ADR commits the spec's mutant `skip-hold`, a writer that skips the guard, which
-fails `NoAckedWriteRolledBack`; the spec passes (69 states, FizzBee v0.5.4). The rest of the
+`docs/design/addon/restore-start.fizz` (ADR-0333) holds: its guard on `Write` is that a write reaches the engine only
+while the namespace is not held, and Decisions 2 and 3 make both paths refuse a held namespace, so each is one more
+writer under that guard. This ADR adds the spec's mutant `skip-hold`, a writer that skips the guard, which fails
+`NoAckedWriteRolledBack`, and names the two paths in its header; the spec passes (69 states, FizzBee v0.5.4). The rest of the
 decision is a stateless request through funcd, with no lifecycle and no retry; who may reach an engine is a static
 rule held by tests and a lane case.
 
@@ -198,6 +199,11 @@ interface AddonClient {
 ```
 
 ```python
+class AddonResponse:
+    status: int
+    headers: list[tuple[str, str]]
+    body: bytes
+
 def fetch(self, alias: str, path: str, method: str = "GET", headers: dict[str, str] | None = None,
           body: bytes | None = None) -> AddonResponse: ...
 ```
@@ -237,6 +243,8 @@ when { principal has addonBindings && principal.addonBindings.contains(resource)
 
 ## Review checklist
 
+- [ ] An App's Function binds only an object its App declares, by `name` or `ref`; a standalone Function binds any
+      add-on object of its namespace.
 - [ ] Both paths answer only for an alias of the caller's own bindings, Cedar decides each call, and a held namespace
       is refused.
 - [ ] A path the edge refuses for the object is refused here; no redirect is followed.

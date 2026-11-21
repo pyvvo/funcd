@@ -7,7 +7,8 @@
 # Restore lifts the hold once an engine runs without restore.env. It can end first, keeping the hold: funcd crashes
 # (the next start ends it Interrupted) or the wait passes restore.timeout (RestoreTimedOut); then the copy and the
 # mark are cleared. An engine may crash at any time; the reconciler starts the next one from the spec. A write
-# reaches the engine through the edge only while it runs and the namespace is not held (ADR-0290).
+# reaches the engine through the edge, or through the add-on facet and proxy (ADR-0338), only while it runs and the
+# namespace is not held (ADR-0290).
 # Environment: the runtime replaces an engine with SIGTERM and its grace (ADR-0277), so hiqlite removes its crash
 # marker first, as at funcd's own stop; after funcd's crash, the next start's boot sweep kills the engine with no
 # grace, so the marker stands. An engine starts from the current spec, never with an old container's env. An engine's

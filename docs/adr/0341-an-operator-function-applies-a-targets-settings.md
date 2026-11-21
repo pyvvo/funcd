@@ -93,7 +93,8 @@ and one config key. Out: the kinds, their schema and their constraints (ADR-0340
    operator Function's current revision and the alias that binds the target. The pass requeues the target at the next
    due time when that comes before its supervision period (ADR-0142).
 2. **The call** runs on a goroutine of its own, and its end requeues the target, as an App hook's call does (ADR-0214
-   Decision 6); it records no Invocation, and `addons.operatorTimeout` bounds it, not the Function's `spec.timeout`.
+   Decision 6); it records no Invocation, and `addons.operatorTimeout` bounds it, not the Function's `spec.timeout`:
+   the bound frees the target's step, so the platform sets it, as `sql.callTimeout` bounds a SQL call.
    Its Function is the kind's `operator.function` in the target's namespace, called through the invoker the hooks use,
    as the new caller `invoke.AddonSettings`. The CloudEvent's type is `funcd.addon.settings`, its source
    `funcd://<namespace>/addon/<target>`, and its data:
@@ -117,8 +118,9 @@ and one config key. Out: the kinds, their schema and their constraints (ADR-0340
    the error. A new or edited object is `Pending` with `Progressing` until the answer for its generation. Each pass of a
    settings object checks what its calls need, and whenever one is missing, before its first answer or after, the
    object is `Pending` with, in this order: `AddonNotFound` (no Addon declares its kind), `TargetNotFound`,
-   `TargetNotReady`, `OperatorNotFound` or `OperatorNotBound`. A change of its target, of its operator Function or of
-   its Addon requeues it.
+   `TargetNotReady`, `OperatorNotFound` or `OperatorNotBound`. When the missing piece comes back, the object is
+   `Pending` with `Progressing` until the next answer, and that write requeues its target. A change of its target, of
+   its operator Function or of its Addon requeues it.
 5. **The retry.** A failed call is due again after 1 s, then twice as long after each failure, at most 5 min or the
    resync, whichever is shorter. A change of the list sends at once.
 6. **Deletion.** A deleted object is left out of the next list, and the operator puts back what the engine holds

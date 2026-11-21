@@ -106,14 +106,15 @@ revisions (ADR-0339); settings kinds (ADR-0340); a namespaced Addon.
    3 compares App specs, by `json.Marshal` of each typed spec: `unchanged Addon/<name>`. One whose spec differs: it
    updates that Addon, keeping its name, `updated Addon/<name>` (a new revision, ADR-0339). After a create or an update,
    deploy waits until the Addon's `status.currentRevision` names the revision of the generation it wrote, so the App's
-   new revision records it, also with `--no-wait`; an interrupt stops that wait and applies no App. A refused create
+   new revision records it, unless its spec is that of a kept revision (ADR-0339 Decision 3); it waits also with
+   `--no-wait`, and an interrupt stops that wait and applies no App. A refused create
    or update exits 1 and applies no App. A 403 (a developer): an advisory pre-check lists the kind's plural in the
    namespace, and a 404 exits 1, applying nothing, also with `--dry-run`:
    `Addon rauthy is not registered: an admin deploys this template first`; the App's admission still decides. Any other
    answer exits 1, applying nothing. With `--dry-run`, an admin's deploy sends the create or the update it would send
    with `sdk.DryRun()`, and nothing when the specs agree; it sends the App's dry run only when the kind is served, and
    otherwise prints `the App's dry run needs Addon/<name> registered` and exits 0, or 1 on a refusal (ADR-0220 Decision
-   7). After an update's dry run, the App's checks its config against the stored schema, not the template's. No deploy and no App's deletion deletes an Addon on a server; an admin does
+   7). After an update's dry run, the App's dry run checks its config against the stored schema, not the template's. No deploy and no App's deletion deletes an Addon on a server; an admin does
    (`funcdctl delete addon <name>`). Under `funcdctl dev`, the Addon follows `addon.yaml`: dev applies it with its admin
    token before the App and again on each reload that changes it, and its prune deletes it when the file goes
    (ADR-0334 Decision 5, ADR-0253 Decision 9); there, every add-on object follows its Addon's current revision
@@ -128,8 +129,8 @@ revisions (ADR-0339); settings kinds (ADR-0340); a namespaced Addon.
    deploy's lines name the add-on kind (`IdentityProvider/rauthy-login`), not the stored `AddonObject`. `deletion` is
    the object's own (ADR-0333), not ADR-0199's `retain` of a store.
 4. **Readiness.** A part is Ready as ADR-0199 Decision 5's other parts: its `Ready` condition True at its generation,
-   which the add-on reconciler writes (`internal/services/addon/reconcile.go:100-110`), and, by ADR-0339 Decision 3,
-   pinned to its App's latest record.
+   which the add-on reconciler writes (`internal/services/addon/reconcile.go:100-110`), and, by ADR-0339 Decision 4,
+   once its `status.appRevision` is the App's latest revision.
 5. **Ownership, prune and GC.** Each part carries the App's controller reference, and ADR-0199 Decision 4's ownership
    check (`ChildNotOwned`) refuses an object another App controls. `gc.Pairs()` gains `(App, AddonObject)`. Prune
    deletes a dropped entry; its engine goes and its data follows its `deletion`.
@@ -153,7 +154,8 @@ one client; prune and GC follow ADR-0199's pairs; the App writes nothing while a
 - **apps.md**: "An App's `addons` part" (Ready at its generation and its record; 400 from `app-parts`), "A revision
   drops an `addons` entry", "An App's backup scope" (its add-on parts), all `decided`; "An App deleted" (`apps.md:52`)
   changes: its add-on parts go, and the Addon stays.
-- **disaster-recovery.md**: "Add-on objects in a Backup" (`disaster-recovery.md:44`) changes: `scope.app` copies them.
+- **disaster-recovery.md**: "A Backup copies an add-on object" (`disaster-recovery.md:44`) changes: `scope.app` copies
+  them.
 - **funcdctl.md**: "`app deploy` of a template with an Addon" (create, unchanged or update by kind; a developer's
   pre-check; `--dry-run`), "`app render` of a template with an Addon" (the App alone), `decided`.
 - **funcdctl-dev.md**: "Registering an Addon under dev" gains the template's `addon.yaml`.
@@ -217,6 +219,8 @@ addons:
 - [ ] `Load` accepts one `addon.yaml` and refuses a second document or a namespaced one; render prints the App alone.
 - [ ] A developer's deploy reads no Addon field and applies nothing when the kind is not served.
 - [ ] An admin's deploy finds the Addon by kind, and on a server nothing but an admin's delete removes one.
+- [ ] Deploy applies the App only once the Addon's `status.currentRevision` names the generation it wrote, with
+      `--no-wait` too.
 - [ ] An `addons` part is admitted against its Addon, Ready at its generation and its record, and collected with its
       App.
 - [ ] `app delete` and `status.children` handle add-on parts by their kinds; `scope.app` copies them.

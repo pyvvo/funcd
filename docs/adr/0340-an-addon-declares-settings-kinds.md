@@ -8,7 +8,7 @@
   Function applies), with ADR-0341
 - **Supersedes (in part)**, with back-links at acceptance:
   [ADR-0332](0332-an-admin-registers-add-ons-built-outside-funcd.md) Decision 1 (an Addon adds settings kinds beside
-  its kind, under the same plural rules: Decisions 1 and 2), Decision 2 (a settings object is an AddonObject that runs
+  its kind, under the same plural rules, and an update takes the cluster-scoped admission lock: Decisions 1 and 2), Decision 2 (a settings object is an AddonObject that runs
   no engine, outside the engines' cap: Decisions 3 and 6) and Decision 3 (the reconciler gives a settings object a pass
   of its own, which ADR-0341 decides: Decision 3).
 - **Relates to**: [ADR-0341](0341-an-operator-function-applies-a-targets-settings.md) (the loop that applies the
@@ -51,7 +51,8 @@ reconciler that reads them. Experiment 0026 built the kind on rauthy.
 - `scenario: settings-concurrent-creates` — *When* two policies that name `login` are created at once, *Then* one is
   stored and the other gets 400.
 - `scenario: settings-object-cap` — *Given* a namespace that holds `addons.maxSettingsPerNamespace` settings objects,
-  *When* one more is created, *Then* it gets 400 naming the key, and an IdentityProvider can still be created there.
+  *When* one more is created, *Then* it gets 400 naming the key, and an IdentityProvider can still be created there;
+  *given* a namespace with `addons.maxObjectsPerNamespace` engines, a settings object is still admitted.
 
 ## Scope
 
@@ -89,8 +90,11 @@ settings object is checked against the Addon as it is now).
    ADR-0341), `schema` (the JSON Schema of `spec.config`, in the contract profile) and `constraints`.
 2. **Registration.** The Addon admissions of ADR-0332 Decision 1 cover every kind the Addon adds: on a create and on an
    update, no settings kind may be a kind of funcd's, another kind of the Addon, or a kind of another Addon, compared
-   by plural, and the answer is 400 for funcd's kind or the Addon's own, 409 for another Addon's. Each schema is
-   required, passes the contract profile, types `target` as a string and lists it under `required`; each field of
+   by plural, and the answer is 400 for funcd's kind or the Addon's own, 409 for another Addon's. An update now takes
+   the cluster-scoped admission lock, as a create does (ADR-0147 Decision 2), so two updates cannot add one kind. Each
+   schema is
+   required, passes the contract profile, types `target` as a string and lists it, and each level above it, under
+   `required`; each field of
    `unique` and `immutable` resolves to a declared field of one type; each rule checks against its documents
    (Decision 5). An Addon's change applies to the next writes, as ADR-0332 Decision 1 says of its schema.
 3. **Storage and routes.** A settings object is stored as an `AddonObject` whose `spec.kind` is the settings kind, and
@@ -109,9 +113,10 @@ settings object is checked against the Addon as it is now).
    (ADR-0166). A rule that evaluates false refuses the write with its `message`; one that fails to evaluate refuses it
    too.
 6. **The cap.** Settings objects do not count toward `addons.maxObjectsPerNamespace`, which bounds engines (ADR-0332
-   Decision 2), and the `addonobject-quota` admission counts only objects that run an engine.
-   `addons.maxSettingsPerNamespace` bounds a namespace's settings objects of every kind together, under the same lock:
-   0 means 200, and a negative value is refused at load.
+   Decision 2): the `addonobject-quota` admission counts only objects that run an engine, and refuses only the create
+   of one. `addons.maxSettingsPerNamespace` bounds a namespace's settings objects of every kind together, under the
+   same lock: 0 means 200, and a negative value sets no cap, as for `addons.maxObjectsPerNamespace`. A negative count
+   in `constraints` is refused when the Addon is applied.
 
 ## Design model
 
@@ -124,7 +129,8 @@ ADR-0341's model, `docs/design/addon/settings.fizz`.
 
 - **addons.md**: "A settings kind" (served at its plural, no engine), "A settings object's write" (422 for the
   schema, 400 for an engine field, a constraint or a rule), both `decided`; "An Addon's kind" (`addons.md:26`) changes:
-  it covers every kind an Addon adds, on an update too, so a replace can get the 409.
+  it covers every kind an Addon adds, on an update too, so a replace can get the 409; "An Addon's change"
+  (`addons.md:30`) changes: an update takes the cluster-scoped lock.
 - **limits.md**: `addons.maxSettingsPerNamespace`; "Add-on objects in a namespace" (`limits.md:59`) changes: it counts
   only the objects that run an engine.
 
@@ -230,8 +236,9 @@ settings:
 - An engine's setting gets a kind, a schema and refusals before it runs, with or without an App.
 - Constraints are checked against the Addon as it is now: a narrower schema refuses the next write of an object stored
   before, and the loop still sends the stored object.
-- Every write of an add-on object, an engine object's too, takes its namespace's admission lock, since the lock is
-  decided per kind and operation (`internal/controlplane/handlers.go:52`): writes of one namespace serialize.
+- Every create and replace of an add-on object, an engine object's too, takes its namespace's admission lock, since
+  the lock is decided per kind and operation (`internal/controlplane/handlers.go:52`); a delete takes none. Writes of
+  one namespace serialize, and so do all Addon updates.
 - A settings object shares the add-on objects' one name per namespace (ADR-0332 Decision 2): a policy named `login`
   gets 409 beside the IdentityProvider `login`.
 - A change of `spec.settings` alone replaces no engine: an engine's fingerprint covers only its worker spec
