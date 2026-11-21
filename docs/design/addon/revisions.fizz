@@ -1,0 +1,128 @@
+---
+# An Addon's revisions and the objects that pin them (ADR-0339 Decisions 1 to 5). An admin updates the Addon; the
+# Addon's pass stamps a revision for its new generation and makes it current. A standalone object pins the current
+# revision at its first pass and at each new generation. An App's revision records the current revision, or, when its
+# spec is an older revision's (a rollback), that revision's record; the App keeps its newest two revisions, and its
+# apply writes the record onto its part, whose pass pins it. The Addon's pass removes a revision that is not current,
+# that no object pins or carries, and that no kept App revision records.
+# Environment: every pass is one step of the controller's one worker (pkg/funcd/funcd.go:767), so the Addon's pass,
+# an object's pass and the App's pass never interleave; the admin's and the user's writes come through the API at any
+# time. Left out: several Addons, objects and kinds, the engines the pins start, and the App's hooks.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 24
+  crash_on_yield: false
+---
+# diagram: current
+# mutant split-pass: PinsExist
+# mutant ignore-records: RecordsExist
+# mutant retire-current: PinsExist
+# mutant never-retire: liveness
+
+# split-pass: an object's pass reads the current revision in one step and pins it in another, as two workers would.
+# ignore-records: the Addon's pass removes a revision that a kept App revision records.
+# retire-current: the Addon's pass removes the current revision too.
+# never-retire: the Addon's pass removes nothing.
+MUTANT = ""
+
+action Init:
+    generation = 1
+    current = 1
+    revs = set([1])
+    updates = 0
+    s_gen = 1
+    s_seen = 0
+    s_pin = 0
+    s_next = 0
+    edits = 0
+    records = [1]
+    stamps = 0
+    rollbacks = 0
+    carried = 0
+    p_pin = 0
+
+atomic action Update:
+    require updates < 2
+    updates += 1
+    generation += 1
+
+atomic fair action Stamp:
+    require current != generation
+    revs.add(generation)
+    current = generation
+
+atomic action Edit:
+    require edits < 1
+    edits += 1
+    s_gen += 1
+
+atomic fair action ObjectPass:
+    require MUTANT != "split-pass"
+    require s_seen != s_gen
+    s_pin = current
+    s_seen = s_gen
+
+atomic fair action ObjectRead:
+    require MUTANT == "split-pass"
+    require s_seen != s_gen
+    require s_next == 0
+    s_next = current
+
+atomic fair action ObjectPin:
+    require MUTANT == "split-pass"
+    require s_next != 0
+    s_pin = s_next
+    s_seen = s_gen
+    s_next = 0
+
+# A new App revision: the spec changed, so it records the current revision; the App keeps its newest two.
+atomic action AppStamp:
+    require stamps < 2
+    stamps += 1
+    records.append(current)
+    if len(records) > 2:
+        records.pop(0)
+
+# A rollback: the new revision's spec is the older kept revision's, so it records that revision's record.
+atomic action AppRollback:
+    require rollbacks < 1
+    require len(records) == 2
+    rollbacks += 1
+    records.append(records[0])
+    records.pop(0)
+
+# The App's apply writes the latest record onto its part.
+atomic fair action AppApply:
+    require carried != records[-1]
+    carried = records[-1]
+
+atomic fair action PartPass:
+    require carried != 0
+    require p_pin != carried
+    p_pin = carried
+
+atomic fair action Retire:
+    require MUTANT != "never-retire"
+    r = oneof revs
+    if MUTANT != "retire-current":
+        require r != current
+    require r != s_pin and r != p_pin and r != carried
+    if MUTANT != "ignore-records":
+        require r not in records
+    revs.remove(r)
+
+always assertion PinsExist:
+    return (s_pin == 0 or s_pin in revs) and (p_pin == 0 or p_pin in revs)
+
+always assertion RecordsExist:
+    for r in records:
+        if r not in revs:
+            return False
+    return True
+
+always eventually assertion UnusedAreRemoved:
+    for r in revs:
+        if r != current and r != s_pin and r != p_pin and r != carried and r not in records:
+            return False
+    return True
