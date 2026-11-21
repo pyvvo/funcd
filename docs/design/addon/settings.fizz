@@ -2,9 +2,9 @@
 # The settings step of an add-on target's pass (ADR-0341 Decisions 1 to 5), for one target, one settings kind and
 # one settings object. The user creates, edits, deletes and creates again the object: as the store does, an edit
 # raises its generation, and a new object gets a new uid at generation 1, so funcd names each sent object by both. funcd's
-# pass sends the operator the full list of the target's objects when no call is in flight and the list differs from
+# pass sends the kind's Function the full list of the target's objects when no call is in flight and the list differs from
 # that of the last call that ended, that call failed, the resync fired, or funcd knows no call since its start. The
-# operator applies the list to the engine, its default when the list is empty, or fails (an error or the timeout).
+# Function applies the list to the engine, its default when the list is empty, or fails (an error or the timeout).
 # funcd writes the object's status from the answer, at the generation it sent, unless the object changed since.
 # Someone may change the engine's settings at its own API (a drift). funcd may stop and start again: it keeps what it
 # knows of the calls in memory only, and its stop cuts the call in flight, which never answers.
@@ -29,7 +29,7 @@ options:
 # mutant state-survives-stop: liveness
 
 # no-inflight-guard: a pass sends while a call is in flight.
-# ready-at-send: funcd reports the object Ready when it sends the list, before the operator answers.
+# ready-at-send: funcd reports the object Ready when it sends the list, before the Function answers.
 # stale-answer: an answer marks the object Ready at its current generation, though it sent an older one.
 # no-uid: funcd tells sent objects apart by their generation alone, so an object created again under its name looks
 #   unchanged.
@@ -113,7 +113,7 @@ atomic fair action Pass:
         if gen > 0:
             ready = want
 
-# The operator applies the list it got, or fails.
+# The Function applies the list it got, or fails.
 atomic fair action Apply:
     require len(calls) > 0
     require calls[0]["state"] == "sent"

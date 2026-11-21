@@ -4,14 +4,14 @@
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, admission, kinds, expressions
-- **Realizes**: [FEAT-0019/F266](../feat/0019-feat-addon-apps.md) (an add-on adds settings kinds that an operator
-  Function applies), with ADR-0341
+- **Realizes**: [FEAT-0019/F266](../feat/0019-feat-addon-apps.md) (an add-on adds settings kinds that a Function
+  applies), with ADR-0341
 - **Supersedes (in part)**, with back-links at acceptance:
   [ADR-0332](0332-an-admin-registers-add-ons-built-outside-funcd.md) Decision 1 (an Addon adds settings kinds beside
   its kind, under the same plural rules, and an update takes the cluster-scoped admission lock: Decisions 1 and 2),
   Decision 2 (a settings object is an AddonObject that runs no engine, outside the engines' cap: Decisions 3 and 6)
   and Decision 3 (the reconciler gives a settings object a pass of its own, which ADR-0341 decides: Decision 3).
-- **Relates to**: [ADR-0341](0341-an-operator-function-applies-a-targets-settings.md) (the loop that applies the
+- **Relates to**: [ADR-0341](0341-a-function-applies-a-targets-settings.md) (the loop that applies the
   objects), [ADR-0147](0147-atomic-admission-and-nested-call-cap.md) (the namespace's admission lock),
   [ADR-0095](0095-reference-engine-typed-paths-predicates.md) and [ADR-0166](0166-workflow-branch-and-void-typing.md)
   (`${{ }}` conditions and optional roots)
@@ -21,7 +21,7 @@
 Some engines keep a setting behind their own API, and some keep it for their whole instance: rauthy has one password
 policy, set with `PUT /auth/v1/password_policy`. The decider chose, on 2026-11-21, to give such a setting a kind of its
 own, as a Kubernetes CRD has an operator: the admin's Addon declares the kind beside its own, a user applies objects of
-it with or without an App, and funcd checks each write against the kind's schema and constraints before an operator
+it with or without an App, and funcd checks each write against the kind's schema and constraints before its
 Function applies it (ADR-0341). Callers: the admin who writes the Addon, the developers who write the objects, and the
 reconciler that reads them. Experiment 0026 built the kind on rauthy.
 
@@ -35,8 +35,8 @@ reconciler that reads them. Experiment 0026 built the kind on rauthy.
   Addon, on a create or an update, *Then* it gets 409; and nothing is stored.
 - `scenario: settings-object-schema` — *When* an object's `spec.config` breaks the kind's schema, *Then* it gets 422
   naming the property.
-- `scenario: settings-object-no-engine` — *When* an object sets `spec.bindings`, `spec.ingress`, `spec.resources` or
-  `spec.deletion`, *Then* it gets 400: the object runs no engine.
+- `scenario: settings-object-no-engine` — *When* an object sets `spec.bindings`, `spec.ingress`, `spec.resources`,
+  `spec.deletion` or `spec.functions`, *Then* it gets 400: the object runs no engine.
 - `scenario: settings-count-per-target` — *Given* the policy `strict` that names the IdentityProvider `login`, *When* a
   second policy names `login`, *Then* it gets 400 naming `strict` and `count.perTarget`.
 - `scenario: settings-count-per-namespace` — *Given* a kind with `count.perNamespace: 2` and two objects of it in
@@ -86,7 +86,7 @@ settings object is checked against the Addon as it is now).
 
 1. **The declaration.** `AddonSpec.settings` lists kinds, each with `kind` (a kind name, as `spec.kind` is), `target`
    (a string field under `spec.config` that names the object's target, an object of the Addon's `spec.kind` in the same
-   namespace), `resync` (from 1s to 24h, 10m when unset), `operator.function` (a Function of the object's namespace,
+   namespace), `resync` (from 1s to 24h, 10m when unset), `function.ref` (a Function of the object's namespace, named as a Workflow step names its Function,
    ADR-0341), `schema` (the JSON Schema of `spec.config`, in the contract profile) and `constraints`.
 2. **Registration.** The Addon admissions of ADR-0332 Decision 1 cover every kind the Addon adds: on a create and on an
    update, no settings kind may be a kind of funcd's, another kind of the Addon, or a kind of another Addon, compared
@@ -99,7 +99,8 @@ settings object is checked against the Addon as it is now).
 3. **Storage and routes.** A settings object is stored as an `AddonObject` whose `spec.kind` is the settings kind, and
    served at that kind's plural by the add-on routes and rights of ADR-0332 Decision 2, with no new route. Its
    `spec.config` fits the kind's schema, or the write gets 422 naming the property. `spec.bindings`, `spec.ingress`,
-   `spec.resources` and `spec.deletion` are refused with 400: it runs no engine.
+   `spec.resources`, `spec.deletion` and a target's `spec.functions` (ADR-0341) are refused with 400: it runs no
+   engine.
 4. **Constraints.** The admission `addon-settings` runs on a settings object's create and replace, under the
    namespace's admission lock (ADR-0147), and refuses with 400, in this order: a replace that changes a field of
    `immutable`; a `count.perTarget` reached by the namespace's other objects of the kind that name the same target, or
@@ -148,13 +149,14 @@ type AddonSettings struct {
 	Kind        string           `json:"kind"`
 	Target      string           `json:"target"`           // e.g. spec.config.provider
 	Resync      Duration         `json:"resync,omitempty"` // 1s to 24h; 10m when unset
-	Operator    AddonOperator    `json:"operator"`
+	Function    AddonSettingsFunction `json:"function"`
 	Schema      json.RawMessage  `json:"schema"`
 	Constraints AddonConstraints `json:"constraints,omitzero"`
 }
 
-type AddonOperator struct {
-	Function ObjectName `json:"function"`
+// AddonSettingsFunction names the kind's Function, as a Workflow step's function.ref does (ADR-0094).
+type AddonSettingsFunction struct {
+	Ref ObjectName `json:"ref"`
 }
 
 type AddonConstraints struct {
@@ -180,8 +182,8 @@ settings:
   - kind: RauthyPasswordPolicy
     target: spec.config.provider
     resync: 5m
-    operator:
-      function: rauthy-operator
+    function:
+      ref: rauthy-settings
     schema:
       type: object
       additionalProperties: false

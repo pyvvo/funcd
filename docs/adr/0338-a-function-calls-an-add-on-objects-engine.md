@@ -16,13 +16,13 @@
   proxy and its derived token), [ADR-0085](0085-s3-in-platform-identity-funcd-keypair.md) (the S3 endpoint and key
   pair an SDK uses), [ADR-0330](0330-each-local-api-route-declares-its-error-causes.md) (causes),
   [ADR-0248](0248-stores-at-the-root.md) (the root-entry rule), [ADR-0308](0308-store-providers-plug-into-quotas-admissions-and-the-dependency-check.md)
-  (the dependency check), ADR-0337 (an App holds the object), ADR-0341 (an operator Function uses the binding),
+  (the dependency check), ADR-0337 (an App holds the object), ADR-0341 (a settings kind's Function uses the binding),
   [ADR-0141](0141-repo-split-pyvvo-pinned-language-modules.md) (shim releases)
 
 ## Context & Need
 
 An add-on's engine keeps some settings behind its own API: rauthy sets its password policy only with
-`PUT /auth/v1/password_policy` and an API key. A Function, an App's or a settings kind's operator (ADR-0341), must
+`PUT /auth/v1/password_policy` and an API key. A Function, an App's or a settings kind's (ADR-0341), must
 reach that API, but no workload reaches an engine: its input chain admits only funcd, and no funcd proxy that acts for a
 workload connects to it (ADR-0332 Decision 3). The worker-node local API already reaches engines for workloads
 (`ctx.sql`, ADR-0233) and passes a request through as written (`ctx.fetch`, ADR-0243 Decision 6). An add-on may also
@@ -255,7 +255,7 @@ when { principal has addonBindings && principal.addonBindings.contains(resource)
 
 ## Consequences
 
-- An add-on's App or operator applies and repairs its engine's settings, with no new network path to the engine.
+- An add-on's App or a settings kind's Function applies and repairs its engine's settings, with no new network path to the engine.
 - funcd checks only who may reach the engine; what a caller may change stays the engine's own rule, such as rauthy's
   API key with `Secrets` update rights.
 - Each call adds one local hop through funcd, and a call during a Restore fails with 503 and `Retry-After`, for the

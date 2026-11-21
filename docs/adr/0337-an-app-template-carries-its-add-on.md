@@ -228,7 +228,7 @@ addons:
 
 ## Consequences
 
-- An add-on and its operator half ship as one artifact, with nothing new to package.
+- An add-on and the Functions that configure it ship as one artifact, with nothing new to package.
 - A developer sees only whether the kind is served, not which revision runs, until it reads `status.addonRevision`.
 - An admin's deploy writes the Addon before the App's admission runs: an App it refuses leaves the new revision in
   place, which moves no engine.

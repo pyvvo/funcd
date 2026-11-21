@@ -1,16 +1,17 @@
-# ADR-0341: An operator Function applies a target's settings, called from the target's pass
+# ADR-0341: A settings kind's Function applies a target's settings, called from the target's pass
 
 - **Status**: Proposed (2026-11-21), rounds 1 and 2 of an independent judge folded
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
-- **Tags**: addons, reconcile, operators, functions
-- **Realizes**: [FEAT-0019/F266](../feat/0019-feat-addon-apps.md) (an add-on adds settings kinds that an operator
-  Function applies), with ADR-0340
+- **Tags**: addons, reconcile, functions
+- **Realizes**: [FEAT-0019/F266](../feat/0019-feat-addon-apps.md) (an add-on adds settings kinds that a Function
+  applies), with ADR-0340
 - **Supersedes (in part)**, with back-links at acceptance:
-  [ADR-0332](0332-an-admin-registers-add-ons-built-outside-funcd.md) Decision 3 (the pass of a Ready object gains the
-  settings step: Decision 1).
+  [ADR-0332](0332-an-admin-registers-add-ons-built-outside-funcd.md) Decision 2 (an add-on object gains
+  `spec.functions`: Decision 3) and Decision 3 (the pass of a Ready object gains the settings step: Decision 1).
 - **Relates to**: [ADR-0340](0340-an-addon-declares-settings-kinds.md) (the kinds and their admission),
-  [ADR-0338](0338-a-function-calls-an-add-on-objects-engine.md) Decision 1 (the binding the operator uses),
+  [ADR-0338](0338-a-function-calls-an-add-on-objects-engine.md) Decision 1 (the binding the Function uses),
+  [ADR-0094](0094-workflow-engine-core.md) (a Workflow step's `function.ref`, the shape a kind's Function takes),
   [ADR-0214](0214-app-hooks.md) Decision 6 (a Function called on a goroutine that requeues its owner),
   [ADR-0015](0015-controller-engine.md) (the controller), [ADR-0142](0142-supervision-by-periodic-re-convergence.md)
   (the supervision period), [ADR-0272](0272-a-design-model-checks-lifecycle-and-concurrency-decisions.md)
@@ -20,15 +21,15 @@
 A settings object (ADR-0340) runs no engine: it holds a setting that the engine of its target keeps, such as the
 password policy that rauthy keeps for its whole instance. Something must put it into the engine, and put it back when
 someone changes it there or when the object goes. The decider chose, on 2026-11-21, a reconcile loop that funcd runs
-and an operator that is a Function: funcd computes what each target should hold and writes each object's status, and
-the Function, which alone knows the engine's API, applies it. Callers: the add-on reconciler, the operator Function and
-whoever reads the objects' status. Experiment 0026 built the loop on rauthy and measured it.
+and a Function per kind, named as a Workflow step names its Function: funcd computes what each target should hold and
+writes each object's status, and the Function, which alone knows the engine's API, applies it. Callers: the add-on
+reconciler, the kind's Function and whoever reads the objects' status. Experiment 0026 built the loop on rauthy and measured it.
 
 ## Scenarios
 
-- `scenario: settings-apply` — *Given* the IdentityProvider `login` Ready and the Function `rauthy-operator`, which
+- `scenario: settings-apply` — *Given* the IdentityProvider `login` Ready and the Function `rauthy-settings`, which
   binds `login` as `idp`, *When* a developer creates the RauthyPasswordPolicy `strict` that names `login`, *Then*
-  `strict` is `Pending` with `Progressing`, the operator gets a call whose list holds `strict`, rauthy enforces its
+  `strict` is `Pending` with `Progressing`, the Function gets a call whose list holds `strict`, rauthy enforces its
   policy, and `strict` reports Ready at its generation.
 - `scenario: settings-edit` — *When* `strict` changes, *Then* the next call carries its new generation, and its Ready
   condition follows the answer to that call.
@@ -37,31 +38,36 @@ whoever reads the objects' status. Experiment 0026 built the loop on rauthy and 
   marks nothing Ready.
 - `scenario: settings-drift` — *Given* `strict` applied, *When* someone changes the policy at rauthy's own API, *Then*
   the next resync sends the list again, and rauthy holds `strict`'s policy again.
-- `scenario: settings-delete` — *When* `strict` is deleted, *Then* the next call carries an empty list, and the operator
+- `scenario: settings-delete` — *When* `strict` is deleted, *Then* the next call carries an empty list, and the Function
   puts rauthy's default policy back.
-- `scenario: settings-hung-operator` — *Given* a call that does not answer, *When* another add-on object is applied,
-  *Then* its engine turns Ready as fast as with no call running, the call ends at `addons.operatorTimeout`, `strict`
+- `scenario: settings-hung-function` — *Given* a call that does not answer, *When* another add-on object is applied,
+  *Then* its engine turns Ready as fast as with no call running, the call ends at `addons.settingsTimeout`, `strict`
   reports `ReconcileFailed`, and funcd calls again after a backoff.
 - `scenario: settings-restart` — *Given* funcd stops while a call runs, *When* it starts again, *Then* the first pass of
   `login` sends its list, with cause `start`.
-- `scenario: settings-operator-refuses` — *When* the answer holds `ok: false` for `strict` with a reason, *Then*
+- `scenario: settings-function-refuses` — *When* the answer holds `ok: false` for `strict` with a reason, *Then*
   `strict` reports that reason; *when* it leaves `strict` out, *Then* `strict` reports `NoResult`.
-- `scenario: settings-waits` — *Given* no IdentityProvider `login`, one not Ready, no Function `rauthy-operator`, one
+- `scenario: settings-waits` — *Given* no IdentityProvider `login`, one not Ready, no Function `rauthy-settings`, one
   that does not bind `login`, or no Addon that declares the kind, *Then* `strict` is `Pending` with `TargetNotFound`,
-  `TargetNotReady`, `OperatorNotFound`, `OperatorNotBound` or `AddonNotFound`, even after an earlier Ready, and no call
+  `TargetNotReady`, `FunctionNotFound`, `FunctionNotBound` or `AddonNotFound`, even after an earlier Ready, and no call
   is made for it.
-- `scenario: settings-operator-change` — *When* the operator Function gets a new revision, or the alias it binds `login`
-  under changes, *Then* the next pass of `login` sends its list again.
+- `scenario: settings-function-change` — *When* the Function gets a new revision, or the alias it binds `login` under
+  changes, *Then* the next pass of `login` sends its list again.
+- `scenario: settings-function-per-target` — *Given* the template deployed twice in `shop`, as `web-auth` and
+  `admin-auth`, whose IdentityProviders name their own Functions in `spec.functions`, *When* each App's policy is
+  applied, *Then* each target's list goes to its own App's Function, and a target that names none gets the kind's.
 
 ## Scope
 
 In: the step in a target's pass, the call and its answer, the objects' status, the resync, the retry, the start rule,
-and one config key. Out: the kinds, their schema and their constraints (ADR-0340); how the operator reaches the engine
-(ADR-0338's binding); a call per object; calls over a stream; storing the calls' state.
+the target's `spec.functions`, and one config key. Out: the kinds, their schema and their constraints (ADR-0340); how
+the Function reaches the engine (ADR-0338's binding); a call per object; calls over a stream; storing the calls'
+state.
 
 ## Constraints & Decision drivers
 
-- funcd never learns an engine's API: the operator applies, and funcd only computes the list and writes the status.
+- funcd never learns an engine's API: the kind's Function applies, and funcd only computes the list and writes the
+  status.
 - The controller runs one worker (`pkg/funcd/funcd.go:767`, `internal/controller/controller.go:84-87`), so no pass may
   wait on a Function.
 - Level-triggered: each call carries the whole desired state of one target, so a lost call, a missed deletion or a
@@ -71,12 +77,15 @@ and one config key. Out: the kinds, their schema and their constraints (ADR-0340
 ## Alternatives considered
 
 - **A call per object, with an apply and a delete event.** Rejected: an engine such as rauthy holds one policy per
-  instance, so the operator needs the other objects anyway, and a delete event that is lost is never repaired. The full
+  instance, so the Function needs the other objects anyway, and a delete event that is lost is never repaired. The full
   list per target, as Metacontroller's sync hook sends a parent's children, repairs any loss at the next call.
 - **The call inside the pass.** Rejected, as measured: experiment 0026's control held a second engine until the call's
   timeout, while the call on its own goroutine left it at its baseline.
-- **An operator image, as a Kubernetes operator.** Rejected by the decider: a Function needs no image or runtime of its
-  own, deploys as any Function does, and Cedar already governs what it reaches.
+- **An image of its own, as a Kubernetes operator.** Rejected by the decider: a Function needs no image or runtime of
+  its own, deploys as any Function does, and Cedar already governs what it reaches.
+- **One Function per kind and namespace, with no per-target name.** Rejected: a template deployed twice in a namespace
+  could not ship a Function for each copy, since one name serves the namespace and an App's Function binds only its
+  own App's objects (ADR-0338 Decision 1).
 - **Store what was sent.** Rejected: a start must send again anyway, since the engine may have changed meanwhile, and
   the experiment's restart check showed that a state kept in memory loses nothing.
 - **funcd reads the engine's settings back to find a drift.** Rejected: funcd would learn the engine's API, and
@@ -90,13 +99,12 @@ and one config key. Out: the kinds, their schema and their constraints (ADR-0340
    digest differs from that of the last call that ended (`change`); or that call failed and its backoff ended
    (`retry`); or the kind's `resync` elapsed since it ended (`resync`). The first that holds names the call. The digest
    holds each object's name, uid and generation, the target's address and how many times it turned Ready, and the
-   operator Function's current revision and the alias that binds the target. The pass requeues the target at the next
+   Function's current revision and the alias that binds the target. The pass requeues the target at the next
    due time when that comes before its supervision period (ADR-0142).
 2. **The call** runs on a goroutine of its own, and its end requeues the target, as an App hook's call does (ADR-0214
-   Decision 6); it records no Invocation, and `addons.operatorTimeout` bounds it, not the Function's `spec.timeout`:
+   Decision 6); it records no Invocation, and `addons.settingsTimeout` bounds it, not the Function's `spec.timeout`:
    the bound frees the target's step, so the platform sets it, as `sql.callTimeout` bounds a SQL call.
-   Its Function is the kind's `operator.function` in the target's namespace, called through the invoker the hooks use,
-   as the new caller `invoke.AddonSettings`. The CloudEvent's type is `funcd.addon.settings`, its source
+   Its Function is Decision 3's, called through the invoker the hooks use, as the new caller `invoke.AddonSettings`. The CloudEvent's type is `funcd.addon.settings`, its source
    `funcd://<namespace>/addon/<target>`, and its data:
 
    ```json
@@ -108,8 +116,14 @@ and one config key. Out: the kinds, their schema and their constraints (ADR-0340
    The answer is `{"results": [{"name", "ok", "reason", "message"}]}`, at most 1 MiB, the local API's bound on a
    call's answer (`maxInvokeBytes`); a larger one fails the call. A result for an object not in the list is ignored,
    and for an object named twice the last one counts.
-3. **The binding is the grant.** The operator calls the engine only through ADR-0338: it must bind the target in
-   `bindings.addon`, and that entry's alias goes in the call. With no such entry nothing is called for the target.
+3. **The Function.** The kind's `function.ref` (ADR-0340) names a Function of the target's namespace, as a Workflow
+   step's `function.ref` names one (ADR-0094, `api/types/v1alpha1/workflow.go:118`): funcd neither creates nor changes
+   it, and the objects wait while it is missing. A target may name its own for a kind in `spec.functions`, entries of
+   `kind` and `ref`, which an App's template sets per copy as it names its other parts, so two copies of a template in
+   one namespace each ship and call their own; a target that names none uses the kind's. `spec.functions` is refused
+   with 400 on a settings object, and for a kind that is not a settings kind of the target's Addon. The binding is the
+   grant: the Function reaches the engine only through ADR-0338, it must bind the target in `bindings.addon`, and that
+   entry's alias goes in the call. With no such entry nothing is called for the target.
 4. **The status.** funcd writes each object of the list from the answer, at the uid and generation it sent, unless the
    object's uid or spec changed since, for which the next call answers. `ok: true` is Ready True with no reason, phase
    Ready, and `observedGeneration` the generation sent. `ok: false` is Ready False with the result's reason,
@@ -118,17 +132,17 @@ and one config key. Out: the kinds, their schema and their constraints (ADR-0340
    the error. A new or edited object is `Pending` with `Progressing` until the answer for its generation. Each pass of a
    settings object checks what its calls need, and whenever one is missing, before its first answer or after, the
    object is `Pending` with, in this order: `AddonNotFound` (no Addon declares its kind), `TargetNotFound`,
-   `TargetNotReady`, `OperatorNotFound` or `OperatorNotBound`. When the missing piece comes back, the object is
-   `Pending` with `Progressing` until the next answer, and that write requeues its target. A change of its target, of
-   its operator Function or of its Addon requeues it.
+   `TargetNotReady`, `FunctionNotFound` or `FunctionNotBound` (both new). When the missing piece comes back, the
+   object is `Pending` with `Progressing` until the next answer, and that write requeues its target. A change of its
+   target, of its Function or of its Addon requeues it.
 5. **The retry.** A failed call is due again after 1 s, then twice as long after each failure, at most 5 min or the
    resync, whichever is shorter. A change of the list sends at once.
-6. **Deletion.** A deleted object is left out of the next list, and the operator puts back what the engine holds
+6. **Deletion.** A deleted object is left out of the next list, and the Function puts back what the engine holds
    without it. The objects of a deleted target are `Pending` with `TargetNotFound`, and nothing is called.
 7. **A start.** What funcd knows of the calls lives in memory, so the first pass of each target after a start sends its
    list, and a target that turns Ready again gets its list again. funcd's stop cuts a call in flight, and funcd writes
    nothing from it.
-8. **The key.** `addons.operatorTimeout` bounds each call: a positive duration, 30s when empty.
+8. **The key.** `addons.settingsTimeout` bounds each call: a positive duration, 30s when empty.
 
 ## Design model
 
@@ -138,9 +152,9 @@ and one config key. Out: the kinds, their schema and their constraints (ADR-0340
 
   | Assertion | Kind | Protects | Oracle test |
   |---|---|---|---|
-  | `OneCallAtATime` | always | `scenario: settings-hung-operator` | `TestScenarioSettingsHungOperator` |
+  | `OneCallAtATime` | always | `scenario: settings-hung-function` | `TestScenarioSettingsHungFunction` |
   | `ReadyMeansApplied` | always | `scenario: settings-edit`, `scenario: settings-recreate`, `scenario: settings-restart` | `TestScenarioSettingsRecreate` |
-  | `Converges` | always eventually | `scenario: settings-drift`, `scenario: settings-delete`, `scenario: settings-hung-operator` | `TestScenarioSettingsDrift` |
+  | `Converges` | always eventually | `scenario: settings-drift`, `scenario: settings-delete`, `scenario: settings-hung-function` | `TestScenarioSettingsDrift` |
 
 - **Bounds**: one target, one kind, one object; 3 writes (a create, an edit or a create again), 1 delete, 1 drift, 1
   failed call, 1 stop, 2 resyncs; 1 concurrent action (every step is atomic: a pass runs on the one worker, and the
@@ -153,15 +167,16 @@ and one config key. Out: the kinds, their schema and their constraints (ADR-0340
   `ReadyMeansApplied`; `no-retry`, `no-resync` and `state-survives-stop` fail `Converges`.
 - **Result**: pass, 29,622 states, 8.3 s, FizzBee v0.5.4; wider (4 writes, 52 actions): pass, 86,883 states.
 - **Left to tests**: several targets and kinds, the resync's period and the backoff's length, a restarted engine that
-  lost its settings (the readiness count), the operator's revision in the digest, the answer's size; the scenario
+  lost its settings (the readiness count), the Function's revision in the digest, the answer's size; the scenario
   tests and the lane case hold them.
 
 ## Behavior rows
 
 - **addons.md**: "A settings object's status" (the reasons of Decision 4), "A target's settings after funcd starts"
   (sent again), "A settings object deleted" (left out of the next list), "A setting changed at the engine's own API"
-  (put back at the next resync), "A failed operator call" (retried with a backoff), all `decided`.
-- **limits.md**: `addons.operatorTimeout`.
+  (put back at the next resync), "A failed settings call" (retried with a backoff), "A target's own Function for a
+  settings kind" (`spec.functions`), all `decided`.
+- **limits.md**: `addons.settingsTimeout`.
 
 ## Temporary workarounds
 
@@ -170,8 +185,16 @@ None.
 ## Contracts
 
 ```go
-// Operator calls a settings kind's operator Function with one target's list (internal/services/addon).
-type Operator interface {
+// AddonObjectSpec.Functions: a target's own Function for a settings kind (ADR-0341 Decision 3).
+Functions []AddonObjectFunction `json:"functions,omitempty"`
+
+type AddonObjectFunction struct {
+	Kind string     `json:"kind"`
+	Ref  ObjectName `json:"ref"`
+}
+
+// SettingsCaller calls a settings kind's Function with one target's list (internal/services/addon).
+type SettingsCaller interface {
 	Call(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, call SettingsCall) (SettingsReply, error)
 }
 
@@ -212,21 +235,21 @@ func (i *HTTPInvoker) InvokeReply(ctx context.Context, ns v1.NamespaceName, fn v
 
 | Consumes | Exposes |
 |---|---|
-| the Addon's `settings` (ADR-0340); the operator's `bindings.addon` (ADR-0338) and its current revision | the call of Decision 2; `invoke.AddonSettings` |
-| `addons.operatorTimeout` | the reasons `Progressing`, `ReconcileFailed`, `NoResult`, `AddonNotFound`, `TargetNotFound`, `TargetNotReady`, `OperatorNotFound`, `OperatorNotBound` |
+| the Addon's `settings` (ADR-0340); the Function's `bindings.addon` (ADR-0338) and its current revision; the target's `spec.functions` | the call of Decision 2; `invoke.AddonSettings` |
+| `addons.settingsTimeout` | the reasons `Progressing`, `ReconcileFailed`, `NoResult`, `AddonNotFound`, `TargetNotFound`, `TargetNotReady`, `FunctionNotFound`, `FunctionNotBound` |
 
 ## Implementation plan
 
 - `internal/services/addon`: `settings.go` with the step, the in-memory state, `MapSettings` (a settings object to its
   target, a target to its objects), a watch of Functions to the settings objects their kinds name, the status writes;
   `reconcile.go` calls the step after a Ready pass and routes a settings object to its own pass. Experiment 0026's
-  `funcd.patch` holds a working draft, without the uid, the operator in the digest, `Progressing` and the waits after
+  `funcd.patch` holds a working draft, without the uid, the Function in the digest, `spec.functions`, `Progressing` and the waits after
   an answer.
-- `internal/sensor`: `InvokeReply`; `internal/invoke`: `AddonSettings`. `pkg/funcd`: the operator caller over the hooks'
+- `internal/sensor`: `InvokeReply`; `internal/invoke`: `AddonSettings`. `pkg/funcd`: the settings caller over the hooks'
   invoker, the watches, the key.
-- Docs: the add-ons pages (a settings kind and its operator Function, with rauthy's password policy), the behavior rows.
+- Docs: the add-ons pages (a settings kind and its Function, with rauthy's password policy), the behavior rows.
 - Tests: one per Scenario, named after it, in `internal/services/addon` and `pkg/funcd`, the oracle markers of the
-  Design model, `just check-specs`. Real platform: a case of the lane `addon-rauthy` with the operator Function of
+  Design model, `just check-specs`. Real platform: a case of the lane `addon-rauthy` with the Function of
   pyvvo/funcd-addons, which applies a policy, repairs a drift at rauthy's API and resends after funcd's restart.
 - Done: `just ci` green, the scenarios and the lane case passing.
 
@@ -235,28 +258,26 @@ func (i *HTTPInvoker) InvokeReply(ctx context.Context, ns v1.NamespaceName, fn v
 - [ ] No pass waits on a call; one call at most runs per target and kind.
 - [ ] Each call carries the full list of its target, and a deleted object is left out of the next one.
 - [ ] A status is written only from an answer, at the uid and generation sent, and never for an object changed since.
-- [ ] An object whose target, operator, binding or Addon is missing is `Pending`, even after an earlier Ready.
-- [ ] The operator reaches the engine only through its own binding of the target.
+- [ ] An object whose target, Function, binding or Addon is missing is `Pending`, even after an earlier Ready.
+- [ ] The Function reaches the engine only through its own binding of the target; a target's `spec.functions` names
+      its Function for that target only.
 - [ ] A start sends each target's list again; nothing about the calls is stored.
-- [ ] `addons.operatorTimeout` is a config key; the reasons of Decision 4 are each tested.
+- [ ] `addons.settingsTimeout` is a config key; the reasons of Decision 4 are each tested.
 
 ## Consequences
 
 - A setting the engine keeps is declared once, applied by the call that follows the change, and repaired at the next
   resync after a drift.
-- An operator that binds a target owns that setting: with no object, the list is empty, and at each start and resync
-  the operator puts the engine's default back, even when nobody declared a value.
-- Every target with settings costs one call per resync, sent with no change: a short resync is load on the operator
+- A Function that binds a target owns that setting: with no object, the list is empty, and at each start and resync
+  the Function puts the engine's default back, even when nobody declared a value.
+- Every target with settings costs one call per resync, sent with no change: a short resync is load on the Function
   and the engine, so it is the kind's to choose.
-- The operator must apply the whole list idempotently, and decide what the engine holds without a deleted object.
+- The Function must apply the whole list idempotently, and decide what the engine holds without a deleted object.
 - A start sends every list once, so a server with many targets makes that many calls at start.
-- Each target and kind holds one goroutine while its call runs, at most `addons.operatorTimeout`.
+- Each target and kind holds one goroutine while its call runs, at most `addons.settingsTimeout`.
 
 ## Open questions
 
-- An operator per App: a kind names one Function per namespace, and an App's Function binds only what its App declares
-  (ADR-0338), so one template deployed twice in a namespace cannot ship an operator for each copy. The decider's
-  answer goes into this ADR before acceptance.
 - A reply that streams results, or a call per object for kinds with very many objects: a follow-up ADR when a kind
   needs it.
 

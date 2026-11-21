@@ -6,7 +6,7 @@
 - **Defines**: an **add-on apps epoch**: an add-on ships as one App template that carries its Addon, the objects of
   its kind and the Functions that configure its engine, so an add-on built outside funcd keeps its engine's own
   settings, such as rauthy's password policy, and repairs them when they drift. An Addon's changes are revisions that
-  each object pins, and an Addon may add settings kinds, whose objects an operator Function applies. Follows
+  each object pins, and an Addon may add settings kinds, whose objects a Function applies. Follows
   FEAT-0018, which made add-ons an engine and a manifest.
 
 ## Initial need
@@ -30,27 +30,27 @@ ADR was drafted: reuse the App framework rather than a new add-on template; the 
 chart carries its CRDs; a Function reaches an add-on's engine through funcd, as it reaches a SQL database. On
 2026-11-21 the decider added two rows: an Addon's versions are revisions that each object pins, as a Function's are,
 so a newer Addon moves no engine by itself; and a setting the engine keeps, such as the password policy, is an object
-of a settings kind that the Addon adds, applied by an operator Function and usable without an App, as experiment 0026
+of a settings kind that the Addon adds, applied by the kind's Function and usable without an App, as experiment 0026
 measured.
 
 ## Features
 
 F263 comes first: an App that holds the add-on's objects is what F264's Functions bind. F265 follows F263, whose
-deploy updates an Addon. F266 builds on F264: its operator Function reaches the engine through F264's binding.
+deploy updates an Addon. F266 builds on F264: the kind's Function reaches the engine through F264's binding.
 
 | # | Feature | Builds on | ADR(s) | Status |
 |---|---|---|---|---|
 | F263 | **An add-on ships as an App template**: an App template carries its Addon and the objects of the add-on's kind; an admin's deploy registers the Addon before the App, as written, a developer's deploy only checks that its kind is served, the App owns its objects, whose kind must be registered, and the Addon outlives every App | FEAT-0018 F258 | [ADR-0337](../adr/0337-an-app-template-carries-its-add-on.md) | adr |
 | F264 | **A Function calls an add-on object's engine**: a Function binds an add-on object of its namespace and calls the engine through funcd, with the shim's client or any HTTP SDK, as it calls a SQL database or a Bucket | F263 | [ADR-0338](../adr/0338-a-function-calls-an-add-on-objects-engine.md) | adr |
 | F265 | **An add-on's versions are revisions**: each change of an Addon is a revision, each object runs the revision it pins, a newer revision moves no object, and an edit of the object or a new revision of its App moves it; a revision no object and no kept App revision uses is removed | F263 | [ADR-0339](../adr/0339-an-add-ons-versions-are-revisions-each-object-pins.md) | adr |
-| F266 | **An add-on adds settings kinds that an operator Function applies**: an Addon declares kinds whose objects run no engine, each naming its target object, checked at admission against a schema and built-in constraints; funcd sends a target's full list of them to the kind's operator Function, which applies them through the engine, repairs drift at each resync and rolls a deleted one back | F264 | [ADR-0340](../adr/0340-an-addon-declares-settings-kinds.md), [ADR-0341](../adr/0341-an-operator-function-applies-a-targets-settings.md) | adr |
+| F266 | **An add-on adds settings kinds that a Function applies**: an Addon declares kinds whose objects run no engine, each naming its target object, checked at admission against a schema and built-in constraints; funcd sends a target's full list of them to the kind's Function, named by `function.ref` as a Workflow step names one, or to the target's own, which applies them through the engine, repairs drift at each resync and rolls a deleted one back | F264 | [ADR-0340](../adr/0340-an-addon-declares-settings-kinds.md), [ADR-0341](../adr/0341-a-function-applies-a-targets-settings.md) | adr |
 
 ## How it lands on funcd (high level)
 
 Nothing new to package: an add-on's App template is an App template with one more file, its Addon, and the App gains a
 section for the add-on's objects. The engine call is the add-on provider's own facet of the worker-node local API,
 beside those that `ctx.sql` (ADR-0233), `ctx.kv` and `ctx.blob` use. A settings kind is one more kind an Addon serves,
-and its operator is a Function of the namespace. rauthy, in `pyvvo/funcd-addons`, is the worked example.
+and its Function is a Function of the namespace. rauthy, in `pyvvo/funcd-addons`, is the worked example.
 
 ## Out of scope
 
