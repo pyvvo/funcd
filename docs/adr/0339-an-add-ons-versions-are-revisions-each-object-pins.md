@@ -1,6 +1,6 @@
 # ADR-0339: An add-on's versions are revisions, and each object pins the one it runs
 
-- **Status**: Proposed (2026-11-21)
+- **Status**: Proposed (2026-11-21), round 1 of an independent judge folded
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, revisions, apps, upgrades
@@ -8,10 +8,12 @@
 - **Supersedes (in part)**, with back-links at acceptance:
   [ADR-0332](0332-an-admin-registers-add-ons-built-outside-funcd.md) Decision 3 (an object's engine runs its pinned
   revision, not the Addon's spec of the pass: Decision 2); [ADR-0200](0200-app-revisions.md) Decision 3 (a stamp
-  records each add-on kind's revision: Decision 3).
+  records each add-on kind's revision: Decision 3), Decision 5 (`ChildrenReady` waits for a part's pin: Decision 4) and
+  Decision 6 (the switch waits for it too: Decision 4); [ADR-0214](0214-app-hooks.md) Decision 2 (the hook input names
+  each add-on kind's move: Decision 5).
 - **Relates to**: [ADR-0020](0020-function-contract-lifecycle.md) and [ADR-0172](0172-revision-integrity.md) (a
-  Revision's name), [ADR-0214](0214-app-hooks.md) (hooks around the apply), ADR-0337 (the deploy that updates an Addon),
-  [ADR-0272](0272-a-design-model-checks-lifecycle-and-concurrency-decisions.md)
+  Revision's name), ADR-0337 (the deploy that updates an Addon), [ADR-0199](0199-app-resource.md) Decision 5 (a part's
+  readiness), [ADR-0272](0272-a-design-model-checks-lifecycle-and-concurrency-decisions.md)
 
 ## Context & Need
 
@@ -35,27 +37,32 @@ the admin who updates an Addon, the developers whose objects run it, and the App
 - `scenario: addon-revision-new-object` — *When* an object is created, *Then* it pins the current revision.
 - `scenario: addon-revision-app-upgrade` — *Given* the App `web-auth`, whose part `web-auth-login` pins `rauthy-1`,
   *When* the App's spec changes after the Addon moved to `rauthy-2`, *Then* its new AppRevision records `rauthy-2`,
-  its pre-hooks run while the part runs `rauthy-1`, and its post-hooks run once the part runs `rauthy-2`.
-- `scenario: addon-revision-app-rollback` — *When* `web-auth` is rolled back to that earlier revision, *Then* the part
-  pins `rauthy-1` again.
+  its pre-hooks get `rauthy-1` to `rauthy-2` in their input and run while the part runs `rauthy-1`, and its post-hooks
+  run once the part runs `rauthy-2`.
+- `scenario: addon-revision-no-step-back` — *Given* that part on `rauthy-2`, *When* a later pass of the same AppRevision
+  stops, or an older AppRevision is pruned, *Then* the part stays on `rauthy-2`.
+- `scenario: addon-revision-app-rollback` — *When* `web-auth` is rolled back to its revision that ran `rauthy-1`, *Then*
+  the new AppRevision records `rauthy-1`, and the part pins `rauthy-1` again once it is Applied.
 - `scenario: addon-revision-retired` — *Given* `rauthy-1`, which no object pins and no kept AppRevision records,
   *Then* it is removed; the current revision is never removed.
-- `scenario: addon-revision-read-only` — *When* anyone creates, replaces or deletes an AddonRevision through the API,
-  *Then* the route does not exist; an admin lists and reads them.
+- `scenario: addon-revision-read-only` — *When* anyone sends `POST`, `PUT` or `DELETE` to the AddonRevision routes,
+  *Then* the answer is 405 with `Allow: GET`, as for a Revision; an admin lists and reads them.
+- `scenario: addon-revision-dev` — *Given* `funcdctl dev` running a template, *When* a reload changes `addon.yaml`,
+  *Then* the App's part runs the new revision.
 
 ## Scope
 
-In: the revision kind and its stamp, the pin, how an App's revision moves its parts, the removal, and the reads. Out:
-the deploy that updates an Addon (ADR-0337); what an engine does with data of an older version, which is the App's
-hooks' job; a revision chosen by hand on a standalone object; settings kinds, which follow the Addon as it is now
-(ADR-0340).
+In: the revision kind and its stamp, the pin, how an App's revision moves its parts and tells its hooks, the removal,
+the reads, and dev's rule. Out: the deploy that updates an Addon (ADR-0337); what an engine does with data of an older
+version, which is the App's hooks' job; a revision chosen by hand on a standalone object; settings kinds, which follow
+the Addon as it is now (ADR-0340).
 
 ## Constraints & Decision drivers
 
 - No version field: a revision is named after the Addon's generation, as a Function's Revision is (ADR-0020).
 - A newer revision moves no engine: an admin's change must not restart other namespaces' engines.
 - Upgrade and rollback belong to the App, whose hooks own data compatibility (ADR-0214).
-- Reuse: the Revision's naming and read-only API (ADR-0172), the AppRevision's stamp and conditions (ADR-0200).
+- Reuse: the Revision's naming and read-only API (ADR-0172), the AppRevision's stamp, conditions and switch (ADR-0200).
 
 ## Alternatives considered
 
@@ -64,31 +71,41 @@ hooks' job; a revision chosen by hand on a standalone object; settings kinds, wh
 - **Every engine follows the Addon, as today.** Rejected: one admin's change restarts every namespace's engines at
   once, with no hook and no rollback.
 - **Keep every revision.** Rejected by the decider: an Addon changed often would keep images and specs nobody runs.
-- **A pin carried in the part's metadata.** Rejected: objects have no annotations, only `tags`; the AppRevision's
-  `Applied` condition already says when the App has written its parts.
+- **A part follows its App's newest Applied revision, whatever its number.** Round 1's rule, rejected: `Applied` turns
+  False when a later pass stops (ADR-0200 Decision 5) and an Applied revision that is not current can be pruned
+  (Decision 8), so the part would step back to an older engine with no hook.
+- **A pin carried in the part's metadata.** Rejected: objects have no annotations, only `tags`; the part's own status
+  records the App revision it follows.
 
 ## Decision
 
 1. **The kind.** `AddonRevision` is cluster-scoped, with a read-only API as Revision's (ADR-0172 Decisions 1 and 2):
    list and get, for an admin. Its name is `<addon>-<generation>`, shortened as `revisionName` shortens a Revision's
    (`internal/function/function.go:2605`); its spec is `addon`, `number` (the generation) and `spec`, a frozen copy of
-   the Addon's spec. A new Addon reconciler stamps one for each generation that has none and then sets the Addon's
-   `status.currentRevision` to it; the pair `(Addon, AddonRevision)` collects them with the Addon.
+   the Addon's spec. A new Addon reconciler stamps one for the Addon's generation when it has none, so numbers may skip,
+   and then sets the Addon's `status.currentRevision`; the pair `(Addon, AddonRevision)` collects them with the Addon.
 2. **The pin.** An add-on object's `status.addonRevision` names the revision its engine runs. The add-on reconciler
    builds the engine, checks the config and renders the env from that revision's spec, not from the Addon. A
-   standalone object pins the current revision at its first pass and at each new generation. A pinned revision that is
-   gone, or an Addon with no revision yet, holds the object `Pending` with `AddonNotFound`, naming the revision.
+   standalone object pins the current revision at its first pass and at each new generation, and at no other time. A
+   pinned revision that is gone holds the object `Pending` with `AddonRevisionNotFound` (new), naming it.
 3. **An App's revision.** An AppRevision gains `spec.addonRevisions`, one `{kind, revision}` per add-on kind of its
-   parts, set at its stamp: for a spec equal to an older kept revision's (a rollback, ADR-0200 Decision 3), that
-   revision's records; otherwise each kind's current revision. A part pins the record of its App's newest AppRevision
-   whose `Applied` condition is True, and the current revision when that revision records none of its kind. The App's
-   pre-hooks run before `Applied` turns True (ADR-0214), so they see the old engine. A part counts as Ready for
-   `ChildrenReady` only once it pins its App's latest record, so the post-hooks see the new engine.
-4. **Removal.** The Addon reconciler removes a revision that is not current, that no add-on object pins, and that no
-   kept AppRevision records. Each pass, the Addon's, an object's and the App's, is one step of the controller's one
-   worker (`pkg/funcd/funcd.go:767`), so a pass that reads the current revision pins it before any removal runs.
-5. **Watches.** An AddonRevision's or an AppRevision's change requeues the objects that pin it or whose App it belongs
-   to, and an object's change requeues its Addon's reconciler, which removes what nothing uses any more.
+   parts, set at its stamp: for a spec equal to that of a kept revision that was current once (ADR-0214's rollback
+   test), that revision's records; otherwise each kind's current revision. A part follows its App's revisions forward
+   only: its `status.appRevision` (new) names the App revision whose record it pins, and its pass moves it to the record
+   of the newest AppRevision whose number is higher and whose `Applied` is True. A later pass that stops, or a pruned
+   revision, moves nothing.
+4. **The App waits for its parts.** A part counts as Ready for `ChildrenReady` (ADR-0200 Decision 5, after ADR-0199
+   Decision 5) only once its `status.appRevision` is the App's latest revision, so the switch (Decision 6) comes after
+   the part runs the new engine. The App's pre-hooks run before `Applied` turns True (ADR-0214), so they see the old
+   engine, and its post-hooks, after the switch, see the new one. A part's status change requeues its App.
+5. **The hooks are told.** `AppHookInput` gains `addonRevisions`, one `{kind, from, to}` per add-on kind whose revision
+   the App's revision changes: `from` the current revision's record, `to` this revision's.
+6. **Removal.** The Addon reconciler removes a revision that is not current, that no add-on object pins, and that no
+   kept AppRevision records, and requeues itself after its supervision period (ADR-0142) while a revision that is not
+   current remains. Each pass, the Addon's, an object's and the App's, is one step of the controller's one worker
+   (`pkg/funcd/funcd.go:767`), so a pass that reads the current revision pins it before any removal runs.
+7. **Dev.** Under `funcdctl dev`, every add-on object follows its Addon's current revision, so a changed `addon.yaml`
+   runs at the next reload (ADR-0337 Decision 2): dev runs one developer's loop, with no other namespace to protect.
 
 ## Design model
 
@@ -100,24 +117,30 @@ hooks' job; a revision chosen by hand on a standalone object; settings kinds, wh
   |---|---|---|---|
   | `PinsExist` | always | `scenario: addon-revision-retired`, `scenario: addon-revision-new-object` | `TestScenarioAddonRevisionRetired` |
   | `RecordsExist` | always | `scenario: addon-revision-app-rollback` | `TestScenarioAddonRevisionAppRollback` |
+  | `NoMoveByItself` | transition | `scenario: addon-revision-no-move`, `scenario: addon-revision-no-step-back` | `TestScenarioAddonRevisionNoStepBack` |
+  | `PostHooksSeeTheNewEngine` | transition | `scenario: addon-revision-app-upgrade` | `TestScenarioAddonRevisionAppUpgrade` |
   | `UnusedAreRemoved` | always eventually | `scenario: addon-revision-retired` | `TestScenarioAddonRevisionRetired` |
 
-- **Bounds**: one Addon, one standalone object, one App with one part; 2 updates, 1 edit, 2 App stamps, 1 rollback, a
-  kept history of two App revisions; 1 concurrent action (each pass is one step of the one worker); 24 actions.
-- **Faults**: none; the writes of the admin and the users come at any point between passes.
+- **Bounds**: one Addon, one standalone object, one App with one part; 2 updates, 1 edit, 2 App stamps, 1 rollback, 1
+  stopped pass, the App's current revision and its newest two kept; 1 concurrent action (each pass is one step of the
+  one worker); 28 actions.
+- **Faults**: a later pass of the latest AppRevision that stops; the history's pruning; the writes of the admin and
+  the users between passes.
 - **Environment**: the controller's one worker serializes the passes. The mutant `split-pass`, a pass that reads and
   pins in two steps, as two workers would, pins a removed revision: a second worker needs this decision again.
 - **Mutants**: `split-pass` and `retire-current` fail `PinsExist`; `ignore-records` fails `RecordsExist`;
+  `follow-current` and `newest-applied` fail `NoMoveByItself`; `switch-early` fails `PostHooksSeeTheNewEngine`;
   `never-retire` fails `UnusedAreRemoved`.
-- **Result**: pass, 3,396 states, 1.3 s, FizzBee v0.5.4; wider (3 updates, 30 actions): pass, 13,743 states.
-- **Left to tests**: the engines the pins start and replace, several kinds per App, the hooks' calls.
+- **Result**: pass, 37,823 states, 26.9 s, FizzBee v0.5.4; wider (3 updates, 32 actions): pass, 144,426 states.
+- **Left to tests**: the engines the pins start and replace, several kinds per App, the hooks' calls, dev's rule.
 
 ## Behavior rows
 
 - **addons.md**: "An Addon's change" (a new revision; no engine moves), "Which revision an object runs" (the pin and
   what moves it), "An unused revision" (removed), all `decided`.
-- **apps.md**: "An App's revision with add-on parts" (records each kind's revision; a rollback takes back its records),
-  `decided`.
+- **apps.md**: "An App's revision with add-on parts" (records each kind's revision; the part moves forward only; a
+  rollback takes back its records; the hooks' input), `decided`.
+- **funcdctl-dev.md**: "An add-on object under dev" (follows the current revision), `decided`.
 
 ## Temporary workarounds
 
@@ -142,51 +165,66 @@ type AddonRevisionSpec struct {
 // AddonStatus.CurrentRevision: the revision a new or moved object pins.
 CurrentRevision ObjectName `json:"currentRevision,omitempty"`
 
-// AddonObjectStatus.AddonRevision: the revision the object's engine runs.
+// AddonObjectStatus: the revision the engine runs, and for an App's part the App revision whose record it pins.
 AddonRevision ObjectName `json:"addonRevision,omitempty"`
+AppRevision   ObjectName `json:"appRevision,omitempty"`
 
 // AppRevisionSpec.AddonRevisions: each add-on kind's revision for the App's parts.
 AddonRevisions []AppAddonRevision `json:"addonRevisions,omitempty"`
+
+// AppHookInput.AddonRevisions: each add-on kind whose revision this App revision changes.
+AddonRevisions []AppHookAddonRevision `json:"addonRevisions,omitempty"`
 
 type AppAddonRevision struct {
 	Kind     string     `json:"kind"`
 	Revision ObjectName `json:"revision"`
 }
+
+type AppHookAddonRevision struct {
+	Kind string     `json:"kind"`
+	From ObjectName `json:"from,omitempty"`
+	To   ObjectName `json:"to"`
+}
 ```
 
 | Consumes | Exposes |
 |---|---|
-| the Addon's generation; the AppRevision's stamp and `Applied` (ADR-0200) | `AddonRevision`, read-only; `status.currentRevision`; `status.addonRevision` |
-| the controller's one worker | the GC pair `(Addon, AddonRevision)`; `AppRevision.spec.addonRevisions` |
+| the Addon's generation; the AppRevision's stamp, `Applied` and switch (ADR-0200) | `AddonRevision`, read-only; `status.currentRevision`; `status.addonRevision`, `status.appRevision` |
+| the controller's one worker; dev's option | the GC pair `(Addon, AddonRevision)`; `spec.addonRevisions`; the hook input's `addonRevisions` |
 
 ## Implementation plan
 
-- `api/types/v1alpha1`: `AddonRevision`, the status fields, `AppAddonRevision`; the read-only routes; regenerate the
-  spec and kindref.
-- `internal/services/addon`: an Addon reconciler (stamp, current, removal); the object's pass reads its pin's revision;
-  the watches. `internal/app`: the stamp's records, the parts' readiness rule. `internal/gc`: the pair.
-- Docs: the add-ons pages (upgrading an add-on), the App pages (rollback with add-on parts), the behavior rows.
-- Tests: one per Scenario, named after it, in `internal/services/addon`, `internal/app` and `pkg/funcd`; the oracle
-  markers; `just check-specs`. Real platform: a case of the lane `addon-rauthy` that updates rauthy's Addon, sees no
-  engine replaced, then moves the App's part with a new revision and rolls it back.
+- `api/types/v1alpha1`: `AddonRevision`, the status fields, `AppAddonRevision`, `AppHookAddonRevision`; the read-only
+  routes; regenerate the spec and kindref.
+- `internal/services/addon`: an Addon reconciler (stamp, current, removal, requeue); the object's pass reads its pin's
+  revision and moves a part forward; dev's rule as an option of the reconciler, set by `funcdctl dev`.
+  `internal/app`: the stamp's records, the hook input, the parts' readiness rule, the watch on a part's status.
+  `internal/gc`: the pair.
+- Docs: the add-ons pages (upgrading an add-on), the App pages (rollback with add-on parts, the hook input), the
+  behavior rows.
+- Tests: one per Scenario, named after it, in `internal/services/addon`, `internal/app`, `cmd/funcdctl` and
+  `pkg/funcd`; the oracle markers; `just check-specs`. Real platform: a case of the lane `addon-rauthy` that updates
+  rauthy's Addon, sees no engine replaced, then moves the App's part with a new revision and rolls it back.
 - Done: `just ci` green, the scenarios and the lane case passing.
 
 ## Review checklist
 
-- [ ] An Addon's change stamps a revision and moves no engine.
+- [ ] An Addon's change stamps a revision and moves no engine on a server.
 - [ ] An engine is built only from its object's pinned revision.
-- [ ] A part moves only with its App's `Applied` revision, and a rollback takes back the older records.
-- [ ] No pinned, recorded or current revision is ever removed; an unused one is.
+- [ ] A part moves only forward, with an Applied App revision of a higher number, and a rollback takes back the older
+      records.
+- [ ] `ChildrenReady` and the switch wait for the part's pin; the hook input names each kind's move.
+- [ ] No pinned, recorded or current revision is ever removed; an unused one is, without another change.
 - [ ] AddonRevisions have no write route.
 
 ## Consequences
 
 - An admin's change reaches a namespace only when its objects are edited or its Apps move them, so versions skew
   across namespaces by design; `funcdctl get identityproviders` shows each object's `addonRevision`.
-- An older template deployed by an admin makes an older spec current, under a new number: objects that move later
-  take it.
-- A rollback works while the older AppRevision is kept (`app.revisionHistory`), since its records protect its
-  revisions.
+- An App deployed from an older template moves to the newer revision at its next revision, under the older
+  template's hooks.
+- Any re-apply of an older App spec, a manual revert or a pipeline's included, takes back that revision's records, an
+  engine downgrade; once that revision has left `app.revisionHistory`, the same spec takes the current revision.
 - Removal relies on the controller's one worker; a controller with more workers, or the multi-node control plane,
   must decide it again (the `split-pass` mutant).
 
@@ -196,5 +234,5 @@ type AppAddonRevision struct {
 
 ## References
 
-- FEAT-0019 tracker #1506.
+- FEAT-0019 feature issue [#1514](https://github.com/pyvvo/funcd/issues/1514); tracker #1506.
 - Function revisions: ADR-0020, ADR-0143, ADR-0172; App revisions: ADR-0200.

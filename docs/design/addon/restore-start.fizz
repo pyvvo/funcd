@@ -27,6 +27,7 @@ options:
 # mutant loaded-first: TheCopyIsLoaded
 # mutant never-clear: liveness
 # mutant keep-mark: liveness
+# mutant skip-hold: NoAckedWriteRolledBack
 
 # lift-early: the Restore lifts the hold once an engine loaded the copy, while that engine still runs with restore.env.
 # clear-first: the reconciler removes the copy before the engine that loads it started, so the Restore lifts the hold
@@ -35,6 +36,7 @@ options:
 #   that ran before the Restore, which never loaded the copy.
 # never-clear: the mark outlives the load, so the hold never lifts.
 # keep-mark: the mark outlives its ended Restore, so each start runs with restore.env over hiqlite's crash marker.
+# skip-hold: a writer reaches the engine while the namespace is held, as a path that skipped ADR-0290's check would.
 MUTANT = ""
 
 action Init:
@@ -136,7 +138,8 @@ atomic action Crash:
 
 atomic action Write:
     require engine == "up"
-    require not held
+    if MUTANT != "skip-hold":
+        require not held
     require data != "old"
     data = "copy+"
     acked = True

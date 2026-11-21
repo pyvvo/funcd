@@ -1,6 +1,6 @@
 # ADR-0337: An App template carries its add-on, and an App holds the add-on's objects
 
-- **Status**: Proposed (2026-11-19), rounds 1 and 2 of an independent judge folded, with the decider's choices of
+- **Status**: Proposed (2026-11-19), rounds 1 to 3 of an independent judge folded, with the decider's choices of
   2026-11-21
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
@@ -34,10 +34,11 @@ Addon's changes became revisions that move no engine (ADR-0339), so an admin's d
 
 - `scenario: addon-template-admin-install` — *Given* the rauthy template pushed as one artifact and no Addon of its
   kind, *When* an admin runs `funcdctl app deploy <ref> -n default -f values.yaml`, *Then* deploy prints
-  `created Addon/rauthy`, then applies the App, whose part `IdentityProvider/rauthy-login` turns Ready.
+  `created Addon/rauthy`, then applies the App, whose part `IdentityProvider/rauthy-login` turns Ready on `rauthy-1`.
 - `scenario: addon-template-admin-update` — *Given* a registered Addon of the template's kind, under any name, *When*
   an admin deploys, *Then* deploy prints `unchanged Addon/<name>` when the specs agree, and otherwise updates that Addon
-  and prints `updated Addon/<name>`; no engine of another App or namespace is replaced (ADR-0339).
+  and prints `updated Addon/<name>`; the App's new revision moves its part to the new revision, and no engine of
+  another App or namespace is replaced (ADR-0339).
 - `scenario: addon-template-developer-deploy` — *Given* the kind served, *When* a developer deploys the template in
   `shop`, *Then* deploy applies the App alone, and the Addon is unchanged.
 - `scenario: addon-template-developer-unregistered` — *Given* no Addon serves `identityproviders`, *When* a developer
@@ -60,7 +61,8 @@ Addon's changes became revisions that move no engine (ADR-0339), so an admin's d
   `--dry-run`, *Then* the Addon is checked by its admission and stored nowhere, deploy prints that the App's own dry
   run needs the Addon registered, and it exits 0.
 - `scenario: addon-template-dev` — *When* `funcdctl dev` runs the template, *Then* dev applies the Addon with its admin
-  token, then the App; a change to `addon.yaml` is applied again on the next reload, and removing it deletes the Addon.
+  token, then the App; a change to `addon.yaml` is applied again on the next reload, and the App's part runs it;
+  removing the file deletes the Addon.
 - `scenario: addon-app-backup` — *Given* a BackupSchedule with `scope.app: web-auth`, *Then* its Backups copy
   `web-auth-login` with the App's stores and volumes.
 
@@ -98,20 +100,24 @@ revisions (ADR-0339); settings kinds (ADR-0340); a namespaced Addon.
 1. **The file.** A template may hold `addon.yaml` beside `app.yaml`: exactly one YAML document of kind `Addon`, with
    no namespace. `Load` accepts it, so push packs it (ADR-0218 Decision 6) and dev's `loadTemplate` copies it. Render
    never evaluates it, and `funcdctl app render` prints the App alone (ADR-0217 Decision 7).
-2. **The deploy.** Before the App, `funcdctl app deploy` lists the Addons with the caller's token. An admin's list:
-   deploy finds the Addon whose kind has the template's plural, under any name. None: it creates the template's Addon,
-   `created Addon/<name>`. One whose spec agrees: `unchanged Addon/<name>`. One whose spec differs: it updates that
-   Addon, keeping its name, `updated Addon/<name>` (a new revision, ADR-0339). A 403 (a developer): an advisory
-   pre-check lists the kind's plural in the namespace, and a 404 exits 1, applying nothing:
+2. **The deploy.** When the template holds `addon.yaml`, `funcdctl app deploy` lists the Addons with the caller's
+   token before the App. An admin's list: deploy finds the Addon whose kind has the template's plural, under any name.
+   None: it creates the template's Addon, `created Addon/<name>`. One whose spec agrees, compared as ADR-0200 Decision
+   3 compares App specs, by `json.Marshal` of each typed spec: `unchanged Addon/<name>`. One whose spec differs: it
+   updates that Addon, keeping its name, `updated Addon/<name>` (a new revision, ADR-0339). After a create or an update,
+   deploy waits until the Addon's `status.currentRevision` names the revision of the generation it wrote, so the App's
+   new revision records it, also with `--no-wait`; an interrupt stops that wait and applies no App. A refused create
+   or update exits 1 and applies no App. A 403 (a developer): an advisory pre-check lists the kind's plural in the
+   namespace, and a 404 exits 1, applying nothing, also with `--dry-run`:
    `Addon rauthy is not registered: an admin deploys this template first`; the App's admission still decides. Any other
-   answer exits 1, applying nothing. With `--dry-run`, deploy sends the create or the update it would send with
-   `sdk.DryRun()`, and nothing when the specs agree or for a developer; it sends the App's dry run only when the kind
-   is served, and otherwise prints `the App's dry run needs Addon/<name> registered` and exits 0, or 1 on a refusal
-   (ADR-0220 Decision 7). After an update's dry run, the App's checks its config against the stored schema, not the
-   template's. No deploy and no App's deletion deletes an Addon on a server; an admin does
+   answer exits 1, applying nothing. With `--dry-run`, an admin's deploy sends the create or the update it would send
+   with `sdk.DryRun()`, and nothing when the specs agree; it sends the App's dry run only when the kind is served, and
+   otherwise prints `the App's dry run needs Addon/<name> registered` and exits 0, or 1 on a refusal (ADR-0220 Decision
+   7). After an update's dry run, the App's checks its config against the stored schema, not the template's. No deploy and no App's deletion deletes an Addon on a server; an admin does
    (`funcdctl delete addon <name>`). Under `funcdctl dev`, the Addon follows `addon.yaml`: dev applies it with its admin
    token before the App and again on each reload that changes it, and its prune deletes it when the file goes
-   (ADR-0334 Decision 5, ADR-0253 Decision 9).
+   (ADR-0334 Decision 5, ADR-0253 Decision 9); there, every add-on object follows its Addon's current revision
+   (ADR-0339 Decision 7), so a changed `addon.yaml` runs at that reload.
 3. **The section.** `AppSpec.addons`, after `sql` and before `functions` in `entries()`, lists entries of `name` plus
    the add-on object's spec fields (`kind`, `config`, `bindings`, `ingress`, `resources`, `deletion`), or `ref` alone
    (ADR-0199 Decisions 2 and 3; an add-on object's name is unique in its namespace across kinds). A part takes the
@@ -144,9 +150,10 @@ one client; prune and GC follow ADR-0199's pairs; the App writes nothing while a
 
 ## Behavior rows
 
-- **apps.md**: "An App's `addons` part" (Ready at its generation and its record; 400 from `app-parts`), "Deleting an App
-  that owns add-on objects" (they go, the Addon stays), "A revision drops an `addons` entry", "An App's backup scope"
-  (its add-on parts), all `decided`.
+- **apps.md**: "An App's `addons` part" (Ready at its generation and its record; 400 from `app-parts`), "A revision
+  drops an `addons` entry", "An App's backup scope" (its add-on parts), all `decided`; "An App deleted" (`apps.md:52`)
+  changes: its add-on parts go, and the Addon stays.
+- **disaster-recovery.md**: "Add-on objects in a Backup" (`disaster-recovery.md:44`) changes: `scope.app` copies them.
 - **funcdctl.md**: "`app deploy` of a template with an Addon" (create, unchanged or update by kind; a developer's
   pre-check; `--dry-run`), "`app render` of a template with an Addon" (the App alone), `decided`.
 - **funcdctl-dev.md**: "Registering an Addon under dev" gains the template's `addon.yaml`.
@@ -170,7 +177,9 @@ type AppAddon struct {
 }
 ```
 
-`internal/app/template`'s `Template` gains `Addon *v1.Addon`, nil when the template has no `addon.yaml`.
+`internal/app/template`'s `Template` gains `Addon *v1.Addon`, nil when the template has no `addon.yaml`. `AppAddon`'s
+schema describes `kind` as the part's add-on kind, which the entry sets, over `AddonObjectSpec`'s text for a stored
+object.
 
 ```yaml
 addons:
@@ -194,8 +203,8 @@ addons:
 - `internal/app`: `entries()`, the `app-parts` checks, readiness by `judge`; `internal/app/template`: `Load`.
 - `internal/controlplane/admission`: `binding-declared` for an App's add-on parts. `internal/gc`: the pair.
   `internal/backup/workload`: `Resolve` for `scope.app`.
-- `cmd/funcdctl`: deploy's list, create, update, pre-check and dry run; the delete walk; dev's `loadTemplate`, reload
-  and prune.
+- `cmd/funcdctl`: deploy's list, create, update, wait for the revision, pre-check and dry run; the delete walk; dev's
+  `loadTemplate`, reload and prune.
 - Docs: the App pages, the add-ons pages, the backup page, the behavior rows above.
 - Tests: one per Scenario, named after it, in `internal/app`, `internal/app/template`, `internal/backup/workload`,
   `cmd/funcdctl` and `pkg/funcd`; contract tests for `Validate` and `Load`. Real platform: the lane `addon-rauthy`

@@ -1,6 +1,6 @@
 # ADR-0338: A Function calls an add-on object's engine through funcd
 
-- **Status**: Proposed (2026-11-19), rounds 1 and 2 of an independent judge folded, with the decider's choices of
+- **Status**: Proposed (2026-11-19), rounds 1 to 3 of an independent judge folded, with the decider's choices of
   2026-11-21
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
@@ -55,6 +55,10 @@ per binding for any HTTP SDK.
   `X-Funcd-*` header, *Then* the engine gets none of them, and a 3xx from the engine reaches the caller unfollowed.
 - `scenario: addon-binding-missing` — *Given* a Function that binds an object that does not exist, *When* it is
   applied, *Then* it waits `Pending` with `AddonObjectNotFound`.
+- `scenario: addon-binding-undeclared` — *When* an App's Function binds an add-on object that its App declares neither
+  by `name` nor by `ref`, *Then* the App gets 400 naming the binding.
+- `scenario: addon-binding-standalone` — *When* a Function that no App holds binds an add-on object of its namespace,
+  *Then* it is admitted with no root entry.
 - `scenario: addon-fence-stays` — *When* a Function dials the engine's address itself, *Then* the egress gateway (egress
   on) or the engine's input chain (egress off) refuses it.
 
@@ -66,7 +70,8 @@ the paths a binding may call; how funcd itself reaches engines (ADR-0336).
 
 ## Constraints & Decision drivers
 
-- The fence stays closed to the network: no workload learns or dials an engine's address.
+- The fence stays closed to the network: no workload dials an engine's address. The fence, not the address's
+  secrecy, keeps workloads out: an engine's redirect may name its address.
 - Reuse the facets (ADR-0310), the pass-through (ADR-0243 Decision 6), the Lake's proxy and token (ADR-0137,
   ADR-0306), Cedar's binding pattern (ADR-0233 Decision 5) and the declared causes (ADR-0330).
 - A namespace is the trust boundary: any Function of the namespace may bind its objects.
@@ -89,17 +94,20 @@ the paths a binding may call; how funcd itself reaches engines (ADR-0336).
 ## Decision
 
 1. **The binding.** `FunctionSpec.bindings.addon` lists entries of `alias` and `object`, an add-on object of the
-   Function's namespace. An App's Function binds only an object its App declares (ADR-0248 Decision 2: `RootDeclared`
-   gains `AppSpec.addons`). A standalone Function binds any add-on object of its namespace. A missing object holds the
+   Function's namespace. An App's Function binds only an object its App declares, by `name` or by `ref` (ADR-0337
+   Decision 3; ADR-0248 Decision 2: `RootDeclared` gains `AppSpec.addons`). A standalone Function binds any add-on
+   object of its namespace, with no root entry. A missing object holds the
    Function `Pending` with `AddonObjectNotFound` (`internal/function/references.go`); an object that is not Ready, or a
    call Cedar denies, fails readiness through the dependency check (ADR-0308 Decisions 2 and 5), with `EngineNotReady`
    or `Forbidden`. The pool's access document (`accessDoc`, `internal/pooling/pooling.go:52`) includes
    `bindings.addon`. A bound object counts as in use for an App's prune (ADR-0199 Decision 6), and how its revision
    moves around an App's hooks is ADR-0339 Decision 3's.
-2. **The facet.** The add-on provider returns the facet `addon` (ADR-0310 Decisions 2 and 4), serving
+2. **The facet.** The add-on provider, `addonProvider` (`pkg/funcd/addon_provider.go:25`), returns the facet `addon`
+   (ADR-0310 Decisions 2 and 4), serving
    `/addon/{alias}/{path...}` for any method. It resolves `alias` in the caller's bindings, asks Cedar (Decision 5), and
-   refuses while the caller's namespace is held (ADR-0290 Decision 2's 503 and `Retry-After`) or while the object is not
-   Ready. It checks the decoded path as the edge does for that object (ADR-0332 Decision 5's `keptPath`: no `..`
+   refuses while the caller's namespace is held (ADR-0290 Decision 2's 503 and `Retry-After`), checked just before the
+   dial, or while the object is not Ready; a call already sent when a hold begins runs to its end, within
+   `addons.callTimeout`, as ADR-0290 leaves calls in flight out of its scope. It checks the decoded path as the edge does for that object (ADR-0332 Decision 5's `keptPath`: no `..`
    segment, under `basePath`, under no private path, so an encoded spelling of a private path is refused too), and sends
    that cleaned path from the host to the object's `status.address`, with `Host` that address. It forwards the method,
    the query, the body and the headers but the hop-by-hop ones, `X-Funcd-*`, `X-Forwarded-For`, `Forwarded`,
@@ -108,16 +116,17 @@ the paths a binding may call; how funcd itself reaches engines (ADR-0336).
    engine's answers from funcd's refusals.
 3. **The proxy, for any HTTP SDK.** A node-private add-on proxy, as the Lake's (ADR-0137), listens where a worker
    reaches funcd's gateways. Each `bindings.addon` entry gives the worker `FUNCD_ADDON_<ALIAS>_URL`, the proxy's base
-   URL for that alias, and `FUNCD_ADDON_<ALIAS>_TOKEN`, derived per Function as its lake token is (ADR-0306 Decision 7).
+   URL for that alias, `http://<proxy>/addon/<alias>`, the facet's path, and `FUNCD_ADDON_<ALIAS>_TOKEN`, derived per
+   Function as its lake token is (ADR-0306 Decision 7) but under a label of its own, so the two tokens differ.
    A request carries the token in `X-Funcd-Addon-Token`; the proxy resolves it to the Function, then makes Decision 2's
    checks and call, and the token header, an `X-Funcd-*` one, never reaches the engine.
-4. **Limits.** `addons.callTimeout`, a positive duration with empty meaning 10s, as `sql.callTimeout`; the request's
+4. **Limits.** `addons.callTimeout`, a positive duration, as `sql.callTimeout` is, with empty meaning 10s; the request's
    own context also bounds a call. `addons.callPayloadLimit`, in bytes, with 0 meaning 1 MiB, as
    `addons.maxObjectsPerNamespace` reads 0; a negative value is refused at load. It bounds the request's body and the
    answer's body, on both paths.
-5. **Cedar.** A capability `addon` with the action `addon::call` (`internal/auth`), the entity
-   `AddonObject::"<ns>/<name>"` with a `namespace` attribute, and a principal attribute `addonBindings` from
-   `spec.bindings.addon`. The capability joins `defaultRegistry` and the root registry, and `resourceUID` gains
+5. **Cedar.** A capability `addon` with the action `addon::call` (`internal/auth`) over the existing entity
+   `AddonObject::"<ns>/<name>"`, and a principal attribute `addonBindings` from `spec.bindings.addon`. The capability
+   joins `defaultRegistry` and the root registry, `cedarRegistry` (`pkg/funcd/funcd.go:705`), and `resourceUID` gains
    `KindAddonObject`. In the built-ins, a binding permits `addon::call`; operator Policies may forbid it. Both paths ask
    it on every call.
 6. **Causes** (ADR-0330), each a funcd refusal without the reply header, on both paths:
@@ -143,8 +152,8 @@ the paths a binding may call; how funcd itself reaches engines (ADR-0336).
    answer that carries the reply header, and rejects with the problem for a funcd refusal, its `retryAfter` taken from
    a 503's `Retry-After`. funcd-python adds
    `ctx.addon.fetch(alias, path, method="GET", headers=None, body=None)`, which returns an `AddonResponse` with
-   `status: int`, `headers: dict[str, str]` (names in lower case, a repeated header's values joined with `, `) and
-   `body: bytes`, and raises `RuntimeError` with the problem, and the `Retry-After` of a 503, for a funcd refusal, as
+   `status: int`, `headers: list[tuple[str, str]]` (names in lower case, in the engine's order, so a repeated
+   `Set-Cookie` stays apart) and `body: bytes`, and raises `RuntimeError` with the problem, and the `Retry-After` of a 503, for a funcd refusal, as
    `ctx.invoke` does. `kindref` gains `addon.fetch` in both languages (ADR-0330 Decision 8), and funcd pins both
    releases (ADR-0141).
 
@@ -152,8 +161,8 @@ the paths a binding may call; how funcd itself reaches engines (ADR-0336).
 
 `docs/design/addon/restore-start.fizz` (ADR-0333) holds as it is: its guard on `Write` is that a write reaches the
 engine only while the namespace is not held, and Decisions 2 and 3 make both paths refuse a held namespace, so each is
-one more writer under that guard. A scratch copy of the spec with a writer that skips the guard fails
-`NoAckedWriteRolledBack` in eight steps, and the unchanged spec passes (69 states, FizzBee v0.5.4). The rest of the
+one more writer under that guard. This ADR commits the spec's mutant `skip-hold`, a writer that skips the guard, which
+fails `NoAckedWriteRolledBack`; the spec passes (69 states, FizzBee v0.5.4). The rest of the
 decision is a stateless request through funcd, with no lifecycle and no retry; who may reach an engine is a static
 rule held by tests and a lane case.
 
@@ -211,9 +220,12 @@ when { principal has addonBindings && principal.addonBindings.contains(resource)
 - `internal/auth`, `internal/auth/cedar`: the action, the capability in both registries, `resourceUID`, the built-in,
   the Secret capability's comment on add-on objects (`capabilities.go:600`).
 - `internal/workernode/local`: `AddonFacet`, its causes, the hold check, the path check, the header filter, the reply
-  header; the ADR-0330 matrix test for it. The proxy beside the Lake's, sharing the facet's checks and call.
+  header; the ADR-0330 matrix test for it. The proxy beside the Lake's, sharing the facet's checks and call. The path
+  check is the edge's `keptPath` (`internal/dataplane/dataplane.go:465`), moved to a package both sides import.
 - `internal/function`, `internal/controlplane/admission`, `internal/pooling`, `pkg/funcd`: the existence gate,
-  `RootDeclared`, the access document, the dependency check, the env hook, the provider's facet, the two keys.
+  `RootDeclared`, the access document, the dependency check, the env hook, the provider's facet, the two keys;
+  `functionUndeclared` (`internal/controlplane/admission/bindingdeclared.go:188-190`) leaves a standalone Function's
+  `bindings.addon` alone.
 - funcd-typescript and funcd-python: `ctx.addon.fetch` and its tests, each released; funcd pins both.
 - Docs: the Functions guide (the shim's client and an SDK through the proxy), the add-ons pages, the behavior rows,
   the config reference.

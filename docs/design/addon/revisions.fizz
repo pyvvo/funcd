@@ -1,17 +1,20 @@
 ---
 # An Addon's revisions and the objects that pin them (ADR-0339 Decisions 1 to 5). An admin updates the Addon; the
-# Addon's pass stamps a revision for its new generation and makes it current. A standalone object pins the current
+# Addon's pass stamps a revision for its latest generation and makes it current. A standalone object pins the current
 # revision at its first pass and at each new generation. An App's revision records the current revision, or, when its
-# spec is an older revision's (a rollback), that revision's record; the App keeps its newest two revisions, and its
-# apply writes the record onto its part, whose pass pins it. The Addon's pass removes a revision that is not current,
-# that no object pins or carries, and that no kept App revision records.
-# Environment: every pass is one step of the controller's one worker (pkg/funcd/funcd.go:767), so the Addon's pass,
-# an object's pass and the App's pass never interleave; the admin's and the user's writes come through the API at any
-# time. Left out: several Addons, objects and kinds, the engines the pins start, and the App's hooks.
+# spec is that of a kept revision that was current once (a rollback), that revision's record. The revision is Applied
+# once its pre-hooks are done and its parts are written, and a later pass that stops turns that False again. A part
+# pins the record of the newest Applied revision whose number is above the one it follows, and never goes back. The
+# App switches to a revision once it is Applied and its part pins its record, and then its post-hooks run. The App
+# keeps its current revision and its newest two. The Addon's pass, which requeues itself while a revision is not
+# current, removes a revision that is not current, that no object pins and that no kept App revision records.
+# Environment: every pass is one step of the controller's one worker (pkg/funcd/funcd.go:767); the writes of the admin
+# and the users come through the API between passes. Left out: several Addons, objects, kinds and parts, the engines
+# the pins start, and the hooks' calls.
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
-  max_actions: 24
+  max_actions: 28
   crash_on_yield: false
 ---
 # diagram: current
@@ -19,11 +22,17 @@ options:
 # mutant ignore-records: RecordsExist
 # mutant retire-current: PinsExist
 # mutant never-retire: liveness
+# mutant follow-current: NoMoveByItself
+# mutant newest-applied: NoMoveByItself
+# mutant switch-early: PostHooksSeeTheNewEngine
 
 # split-pass: an object's pass reads the current revision in one step and pins it in another, as two workers would.
 # ignore-records: the Addon's pass removes a revision that a kept App revision records.
 # retire-current: the Addon's pass removes the current revision too.
 # never-retire: the Addon's pass removes nothing.
+# follow-current: a standalone object follows the Addon's current revision with no new generation.
+# newest-applied: a part follows the newest Applied App revision, even one below the one it follows.
+# switch-early: the App switches before its part pins the revision's record.
 MUTANT = ""
 
 action Init:
@@ -36,10 +45,12 @@ action Init:
     s_pin = 0
     s_next = 0
     edits = 0
-    records = [1]
+    apps = [{"n": 1, "record": 1, "applied": True, "once": True}]
+    app_current = 1
     stamps = 0
     rollbacks = 0
-    carried = 0
+    stops = 0
+    p_app = 0
     p_pin = 0
 
 atomic action Update:
@@ -59,7 +70,10 @@ atomic action Edit:
 
 atomic fair action ObjectPass:
     require MUTANT != "split-pass"
-    require s_seen != s_gen
+    if MUTANT == "follow-current":
+        require s_seen != s_gen or s_pin != current
+    else:
+        require s_seen != s_gen
     s_pin = current
     s_seen = s_gen
 
@@ -76,53 +90,105 @@ atomic fair action ObjectPin:
     s_seen = s_gen
     s_next = 0
 
-# A new App revision: the spec changed, so it records the current revision; the App keeps its newest two.
+# A new App revision: a changed spec records the current revision.
 atomic action AppStamp:
     require stamps < 2
     stamps += 1
-    records.append(current)
-    if len(records) > 2:
-        records.pop(0)
+    apps.append({"n": apps[-1]["n"] + 1, "record": current, "applied": False, "once": False})
 
-# A rollback: the new revision's spec is the older kept revision's, so it records that revision's record.
+# A rollback: the spec of the oldest kept revision that was current once, and that revision's record.
 atomic action AppRollback:
     require rollbacks < 1
-    require len(records) == 2
+    require apps[0]["once"] and apps[0]["n"] != app_current
     rollbacks += 1
-    records.append(records[0])
-    records.pop(0)
+    apps.append({"n": apps[-1]["n"] + 1, "record": apps[0]["record"], "applied": False, "once": False})
 
-# The App's apply writes the latest record onto its part.
+# The latest revision's pre-hooks are done and its parts written.
 atomic fair action AppApply:
-    require carried != records[-1]
-    carried = records[-1]
+    require not apps[-1]["applied"]
+    require stops < 1 or apps[-1]["n"] > app_current
+    apps[-1]["applied"] = True
 
+# A later pass of the latest revision stops, as ADR-0200 Decision 5 records.
+atomic action AppPassStops:
+    require stops < 1
+    require apps[-1]["applied"] and apps[-1]["n"] != app_current
+    stops += 1
+    apps[-1]["applied"] = False
+
+# The App switches to its latest revision once it is Applied and its part is Ready for it.
+atomic fair action AppSwitch:
+    require apps[-1]["applied"] and apps[-1]["n"] != app_current
+    if MUTANT != "switch-early":
+        require p_app == apps[-1]["n"]
+    app_current = apps[-1]["n"]
+    apps[-1]["once"] = True
+
+# ADR-0200 Decision 8: keep the current revision and the newest two.
+atomic fair action AppPrune:
+    require len(apps) > 2
+    require apps[0]["n"] != app_current
+    apps.pop(0)
+
+# The part's pass.
 atomic fair action PartPass:
-    require carried != 0
-    require p_pin != carried
-    p_pin = carried
+    best = 0
+    record = 0
+    for a in apps:
+        if a["applied"] and a["n"] > best:
+            best = a["n"]
+            record = a["record"]
+    require best != 0
+    if MUTANT == "newest-applied":
+        require best != p_app
+    else:
+        require best > p_app
+    p_app = best
+    p_pin = record
 
 atomic fair action Retire:
     require MUTANT != "never-retire"
     r = oneof revs
     if MUTANT != "retire-current":
         require r != current
-    require r != s_pin and r != p_pin and r != carried
+    require r != s_pin and r != p_pin
     if MUTANT != "ignore-records":
-        require r not in records
+        for a in apps:
+            require r != a["record"]
     revs.remove(r)
 
 always assertion PinsExist:
     return (s_pin == 0 or s_pin in revs) and (p_pin == 0 or p_pin in revs)
 
 always assertion RecordsExist:
-    for r in records:
-        if r not in revs:
+    for a in apps:
+        if a["record"] not in revs:
+            return False
+    return True
+
+transition assertion NoMoveByItself(before, after):
+    if after.s_pin != before.s_pin and before.s_pin != 0 and after.s_seen == before.s_seen:
+        return False
+    if after.p_pin != before.p_pin and after.p_app <= before.p_app:
+        return False
+    return True
+
+transition assertion PostHooksSeeTheNewEngine(before, after):
+    if after.app_current == before.app_current:
+        return True
+    for a in after.apps:
+        if a["n"] == after.app_current and after.p_pin != a["record"]:
             return False
     return True
 
 always eventually assertion UnusedAreRemoved:
     for r in revs:
-        if r != current and r != s_pin and r != p_pin and r != carried and r not in records:
+        if r == current or r == s_pin or r == p_pin:
+            continue
+        used = False
+        for a in apps:
+            if a["record"] == r:
+                used = True
+        if not used:
             return False
     return True
