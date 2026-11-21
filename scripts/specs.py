@@ -69,7 +69,7 @@ class Run:
 def verdict(output: str) -> str:
     if "PASSED: Model checker completed successfully" in output:
         return "pass"
-    if m := re.search(r"FAILED: Model checker failed\. Invariant:\s+(\S+)", output):
+    if m := re.search(r"FAILED: Model checker failed\. (?:Transition )?Invariant:\s+(\S+)", output):
         return m.group(1)
     if "FAILED: Liveness check failed" in output:
         return "liveness"

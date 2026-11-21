@@ -139,6 +139,17 @@ func TestSpecMutantFailingAnotherAssertion(t *testing.T) {
 	require.Contains(t, out, "gate.fizz mutant skip-guard: fails AtMostOneOpen, not NeverOpen")
 }
 
+// A mutant that breaks a transition assertion is named by it, as one that breaks an always assertion is.
+func TestSpecMutantFailingATransitionAssertion(t *testing.T) {
+	spec := gateSpec(t, "always assertion AtMostOneOpen:\n    return opened <= 1",
+		"transition assertion AtMostOneOpen(before, after):\n    return after.opened <= 1")
+	code, out := specs(t, "diagrams", spec)
+	require.Equal(t, 0, code, out)
+	code, out = specs(t, "check", spec)
+	require.Equal(t, 0, code, out)
+	require.Contains(t, out, "gate.fizz mutant skip-guard: fails AtMostOneOpen")
+}
+
 // A full check finds every oracle marker in the code: one that names no assertion of an existing spec fails it, and an
 // assertion with no marker is reported.
 func TestSpecOracleMarkers(t *testing.T) {
