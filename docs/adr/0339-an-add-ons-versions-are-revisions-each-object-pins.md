@@ -1,6 +1,6 @@
 # ADR-0339: An add-on's versions are revisions, and each object pins the one it runs
 
-- **Status**: Proposed (2026-11-21), rounds 1 and 2 of an independent judge folded
+- **Status**: Proposed (2026-11-21), rounds 1 to 3 of an independent judge folded
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, revisions, apps, upgrades
@@ -91,8 +91,9 @@ the Addon as it is now (ADR-0340).
    and then sets the Addon's `status.currentRevision`; the pair `(Addon, AddonRevision)` collects them with the Addon.
 2. **The pin.** An add-on object's `status.addonRevision` names the revision its engine runs. The add-on reconciler
    builds the engine, checks the config and renders the env from that revision's spec, not from the Addon. A
-   standalone object pins the current revision at its first pass and at each new generation, and at no other time. A
-   pinned revision that is gone holds the object `Pending` with `AddonRevisionNotFound` (new), naming it.
+   standalone object pins the current revision at its first pass and at each new generation, and at no other time;
+   while its Addon has no revision yet, it is `Pending` with `Progressing`. A pinned revision that is gone holds the
+   object `Pending` with `AddonRevisionNotFound` (new), naming it.
 3. **An App's revision.** An AppRevision gains `spec.addonRevisions`, one `{kind, revision}` per add-on kind of its
    parts, set at its stamp: for a spec equal to that of a kept revision that was current once (ADR-0214's rollback
    test), that revision's records; otherwise each kind's current revision. A part follows its App's revisions forward
@@ -105,10 +106,10 @@ the Addon as it is now (ADR-0340).
    Decision 5) only once its `status.appRevision` is the App's latest revision, so the switch (Decision 6) comes after
    the part runs the new engine. The App's pre-hooks run before `Applied` turns True (ADR-0214), so they see the old
    engine, and its post-hooks, after the switch, see the new one. A part's status change requeues its App.
-5. **The hooks are told.** `AppHookInput` gains `addonRevisions`, one `{kind, from, to}` per add-on kind whose revision
-   the App's revision changes: `from` the revision the App's parts of that kind run at the stamp, their
-   `status.addonRevision`, which a failed upgrade may have moved past the current revision's record; `to` this
-   revision's record.
+5. **The hooks are told.** `AppHookInput` gains `addonRevisions`, one `{kind, object, from, to}` per add-on part whose
+   revision the App's revision changes: `from` the revision the part runs at the stamp, its `status.addonRevision`,
+   which a failed upgrade may have moved past the current revision's record, so parts of one kind may differ; `to`
+   this revision's record for its kind.
 6. **Removal.** The Addon reconciler removes a revision that is not current, that no add-on object pins, and that no
    kept AppRevision records, and requeues itself after its supervision period (ADR-0142) while a revision that is not
    current remains. Each pass, the Addon's, an object's and the App's, is one step of the controller's one worker
@@ -139,7 +140,7 @@ the Addon as it is now (ADR-0340).
   the users between passes.
 - **Environment**: the controller's one worker serializes the passes. The mutant `split-pass`, a pass that reads and
   pins in two steps, as two workers would, pins a removed revision: a second worker needs this decision again.
-- **Mutants**: `split-pass` and `retire-current` fail `PinsExist`; `ignore-records` fails `RecordsExist`;
+- **Mutants**: `split-pass`, `retire-current` and `retire-pinned` fail `PinsExist`; `ignore-records` fails `RecordsExist`;
   `follow-current` fails `NoMoveByItself`; `newest-applied`, `follow-superseded` and `move-early` fail
   `MovesOnlyToTheLatestApplied`; `from-current` fails `HooksSeeTheMove`; `switch-early` fails
   `PostHooksSeeTheNewEngine`; `never-retire` fails `UnusedAreRemoved`.
@@ -193,9 +194,10 @@ type AppAddonRevision struct {
 }
 
 type AppHookAddonRevision struct {
-	Kind string     `json:"kind"`
-	From ObjectName `json:"from,omitempty"`
-	To   ObjectName `json:"to"`
+	Kind   string     `json:"kind"`
+	Object ObjectName `json:"object"`
+	From   ObjectName `json:"from,omitempty"`
+	To     ObjectName `json:"to"`
 }
 ```
 

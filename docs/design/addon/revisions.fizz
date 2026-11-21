@@ -29,6 +29,7 @@ options:
 # mutant follow-superseded: MovesOnlyToTheLatestApplied
 # mutant move-early: MovesOnlyToTheLatestApplied
 # mutant from-current: HooksSeeTheMove
+# mutant retire-pinned: PinsExist
 
 # split-pass: an object's pass reads the current revision in one step and pins it in another, as two workers would.
 # ignore-records: the Addon's pass removes a revision that a kept App revision records.
@@ -40,6 +41,7 @@ options:
 # follow-superseded: a part moves to any newer Applied revision, a superseded one too, while the latest's pre-hooks run.
 # move-early: a part moves to the latest revision before it is Applied, while its pre-hooks run.
 # from-current: the hook input's from is the App's current revision's record, not what the part runs.
+# retire-pinned: the Addon's pass removes a revision an object pins.
 MUTANT = ""
 
 action Init:
@@ -173,7 +175,8 @@ atomic fair action Retire:
     r = oneof revs
     if MUTANT != "retire-current":
         require r != current
-    require r != s_pin and r != p_pin
+    if MUTANT != "retire-pinned":
+        require r != s_pin and r != p_pin
     if MUTANT != "ignore-records":
         for a in apps:
             require r != a["record"]

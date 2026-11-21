@@ -1,6 +1,6 @@
 # ADR-0338: A Function calls an add-on object's engine through funcd
 
-- **Status**: Proposed (2026-11-19), rounds 1 to 3 of an independent judge folded, with the decider's choices of
+- **Status**: Proposed (2026-11-19), rounds 1 to 4 of an independent judge folded, with the decider's choices of
   2026-11-21
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit

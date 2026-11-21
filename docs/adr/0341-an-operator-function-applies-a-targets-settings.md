@@ -1,6 +1,6 @@
 # ADR-0341: An operator Function applies a target's settings, called from the target's pass
 
-- **Status**: Proposed (2026-11-21), round 1 of an independent judge folded
+- **Status**: Proposed (2026-11-21), rounds 1 and 2 of an independent judge folded
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, reconcile, operators, functions

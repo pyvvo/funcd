@@ -1,6 +1,6 @@
 # ADR-0340: An Addon declares settings kinds, whose objects funcd checks at admission
 
-- **Status**: Proposed (2026-11-21), round 1 of an independent judge folded
+- **Status**: Proposed (2026-11-21), rounds 1 to 3 of an independent judge folded
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, admission, kinds, expressions
@@ -8,9 +8,9 @@
   Function applies), with ADR-0341
 - **Supersedes (in part)**, with back-links at acceptance:
   [ADR-0332](0332-an-admin-registers-add-ons-built-outside-funcd.md) Decision 1 (an Addon adds settings kinds beside
-  its kind, under the same plural rules, and an update takes the cluster-scoped admission lock: Decisions 1 and 2), Decision 2 (a settings object is an AddonObject that runs
-  no engine, outside the engines' cap: Decisions 3 and 6) and Decision 3 (the reconciler gives a settings object a pass
-  of its own, which ADR-0341 decides: Decision 3).
+  its kind, under the same plural rules, and an update takes the cluster-scoped admission lock: Decisions 1 and 2),
+  Decision 2 (a settings object is an AddonObject that runs no engine, outside the engines' cap: Decisions 3 and 6)
+  and Decision 3 (the reconciler gives a settings object a pass of its own, which ADR-0341 decides: Decision 3).
 - **Relates to**: [ADR-0341](0341-an-operator-function-applies-a-targets-settings.md) (the loop that applies the
   objects), [ADR-0147](0147-atomic-admission-and-nested-call-cap.md) (the namespace's admission lock),
   [ADR-0095](0095-reference-engine-typed-paths-predicates.md) and [ADR-0166](0166-workflow-branch-and-void-typing.md)
@@ -92,11 +92,10 @@ settings object is checked against the Addon as it is now).
    update, no settings kind may be a kind of funcd's, another kind of the Addon, or a kind of another Addon, compared
    by plural, and the answer is 400 for funcd's kind or the Addon's own, 409 for another Addon's. An update now takes
    the cluster-scoped admission lock, as a create does (ADR-0147 Decision 2), so two updates cannot add one kind. Each
-   schema is
-   required, passes the contract profile, types `target` as a string and lists it, and each level above it, under
-   `required`; each field of
-   `unique` and `immutable` resolves to a declared field of one type; each rule checks against its documents
-   (Decision 5). An Addon's change applies to the next writes, as ADR-0332 Decision 1 says of its schema.
+   schema is required, passes the contract profile, types `target` as a string and lists it, and each level above it,
+   under `required`; each field of `unique` and `immutable` resolves to a declared field of one type; each rule checks
+   against its documents (Decision 5). An Addon's change applies to the next writes, as ADR-0332 Decision 1 says of
+   its schema.
 3. **Storage and routes.** A settings object is stored as an `AddonObject` whose `spec.kind` is the settings kind, and
    served at that kind's plural by the add-on routes and rights of ADR-0332 Decision 2, with no new route. Its
    `spec.config` fits the kind's schema, or the write gets 422 naming the property. `spec.bindings`, `spec.ingress`,
@@ -129,8 +128,9 @@ ADR-0341's model, `docs/design/addon/settings.fizz`.
 
 - **addons.md**: "A settings kind" (served at its plural, no engine), "A settings object's write" (422 for the
   schema, 400 for an engine field, a constraint or a rule), both `decided`; "An Addon's kind" (`addons.md:26`) changes:
-  it covers every kind an Addon adds, on an update too, so a replace can get the 409; "An Addon's change"
-  (`addons.md:30`) changes: an update takes the cluster-scoped lock.
+  it covers every kind an Addon adds, on an update too, so a replace can get the 409; "An Addon changed or deleted"
+  (`addons.md:30`) changes: an update takes the cluster-scoped lock, and a change of `spec.settings` alone replaces no
+  engine.
 - **limits.md**: `addons.maxSettingsPerNamespace`; "Add-on objects in a namespace" (`limits.md:59`) changes: it counts
   only the objects that run an engine.
 

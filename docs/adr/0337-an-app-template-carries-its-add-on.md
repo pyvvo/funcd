@@ -1,6 +1,6 @@
 # ADR-0337: An App template carries its add-on, and an App holds the add-on's objects
 
-- **Status**: Proposed (2026-11-19), rounds 1 to 3 of an independent judge folded, with the decider's choices of
+- **Status**: Proposed (2026-11-19), rounds 1 to 4 of an independent judge folded, with the decider's choices of
   2026-11-21
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
@@ -114,7 +114,8 @@ revisions (ADR-0339); settings kinds (ADR-0340); a namespaced Addon.
    answer exits 1, applying nothing. With `--dry-run`, an admin's deploy sends the create or the update it would send
    with `sdk.DryRun()`, and nothing when the specs agree; it sends the App's dry run only when the kind is served, and
    otherwise prints `the App's dry run needs Addon/<name> registered` and exits 0, or 1 on a refusal (ADR-0220 Decision
-   7). After an update's dry run, the App's dry run checks its config against the stored schema, not the template's. No deploy and no App's deletion deletes an Addon on a server; an admin does
+   7). After an update's dry run, the App's dry run checks its config against the stored schema, not the template's.
+   No deploy and no App's deletion deletes an Addon on a server; an admin does
    (`funcdctl delete addon <name>`). Under `funcdctl dev`, the Addon follows `addon.yaml`: dev applies it with its admin
    token before the App and again on each reload that changes it, and its prune deletes it when the file goes
    (ADR-0334 Decision 5, ADR-0253 Decision 9); there, every add-on object follows its Addon's current revision
