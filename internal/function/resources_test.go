@@ -43,6 +43,7 @@ func TestScenarioPastAdmissionBlocked(t *testing.T) {
 		require.Equal(t, v1.PhaseFailed, fn.Status.Phase, "%s", tc.name)
 		ready, ok := fn.Status.Conditions.Get("Ready")
 		require.True(t, ok, "%s: Ready condition is set", tc.name)
+		require.Equal(t, v1.ConditionFalse, ready.Status, "%s: Ready is false", tc.name)
 		require.Equal(t, tc.reason, ready.Reason, "%s", tc.name)
 		require.Contains(t, ready.Message, "spec.resources", "%s", tc.name)
 		require.Zero(t, h.rt.createAttempts(), "%s: no worker is created", tc.name)
