@@ -319,3 +319,21 @@ func TestFuncdCookiesReachNoBackend(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Equal(t, "theme=dark", e.last().Get("Cookie"), "only the call's other cookies reach the open rule's Function")
 }
+
+// scenario: oidc-by-name-other-host
+// ADR-0335 Decision 2 (amended 2026-11-21): a navigation by name whose namespace X-Funcd-Namespace chose gets 401, not
+// a redirect whose callback the host it used may not have; on the namespace host it is redirected to sign in.
+func TestScenarioOidcByNameOtherHost(t *testing.T) {
+	t.Parallel()
+	e := newSignInEdge(t)
+	e.provider("sso", nil, "staging.localhost")
+	seedFnIngress(t, e.st, "staging", "page", &v1.Ingress{Auth: &v1.RouteAuth{Mode: v1.AuthOIDC, Provider: "sso"}})
+
+	resp := e.call(http.MethodGet, "localhost", "/function/page", map[string]string{"Accept": "text/html", "X-Funcd-Namespace": "staging"})
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	require.Equal(t, "Bearer", resp.Header.Get("WWW-Authenticate"))
+
+	resp = e.call(http.MethodGet, "staging.localhost", "/function/page", map[string]string{"Accept": "text/html"})
+	require.Equal(t, http.StatusFound, resp.StatusCode)
+	require.Zero(t, e.reached(), "nothing wakes")
+}

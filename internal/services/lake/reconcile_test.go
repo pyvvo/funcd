@@ -837,7 +837,7 @@ type edgeHarness struct {
 	notified []router.Owner
 }
 
-func newEdgeHarness(t *testing.T, modes router.ModeFunc) *edgeHarness {
+func newEdgeHarness(t *testing.T, modes router.DefaultsFunc) *edgeHarness {
 	t.Helper()
 	h := &edgeHarness{st: store.New(storemem.New()), rtr: router.New()}
 	agg := router.NewAggregator(h.rtr, modes, func(o router.Owner) { h.notified = append(h.notified, o) }, "", nil)
@@ -946,8 +946,8 @@ func TestScenario_lake_loses_to_earlier_route(t *testing.T) {
 // the lake stays Ready and its engine keeps serving the functions bound to it.
 func TestScenario_lake_host_required_explicit(t *testing.T) {
 	ctx := context.Background()
-	h := newEdgeHarness(t, func(context.Context, v1.NamespaceName) (v1.ExposureMode, error) {
-		return v1.ExposureExplicit, nil
+	h := newEdgeHarness(t, func(context.Context, v1.NamespaceName) (router.NamespaceDefaults, error) {
+		return router.NamespaceDefaults{Mode: v1.ExposureExplicit}, nil
 	})
 	h.run(t, controller.Request{GVK: v1.KindRoute.GVK()})
 	cs := mkLake("lake")

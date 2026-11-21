@@ -5,6 +5,8 @@
   (2026-11-19), by the decider's standing go-ahead for FEAT-0018 ("go ahead, don't wait for
   me", "until we ship entirely the new feature"), after three rounds of an independent judge (a subagent), every
   Blocker and Major folded
+- **Amended in place**: 2026-11-21, by the decider on [#1510](https://github.com/pyvvo/funcd/issues/1510): the
+  client's condition is `ClientSynced`, True with no reason, as BackupSchedule's `TargetSynced` (Decision 7)
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, auth, oidc, secrets
@@ -27,10 +29,11 @@ rauthy's clients made only this way (card 5). Its callers: the OIDCProvider reco
 
 - `scenario: oidc-register`. *Given* `server.edgePublicScheme: https`, the OIDCProvider `sso` with
   `client.registration: {}` and `addon: login`, and a Route naming it on `app.example.com`, *Then* `sso` turns `Ready`
-  and the Secret `sso` holds `CLIENT_ID`, `CLIENT_SECRET`, `REGISTRATION_ACCESS_TOKEN` and `REGISTRATION_CLIENT_URI`.
+  and the Secret `sso` holds `CLIENT_ID`, `CLIENT_SECRET`, `REGISTRATION_ACCESS_TOKEN` and `REGISTRATION_CLIENT_URI`;
+  `ClientSynced` is True with no reason (amended 2026-11-21).
 - `scenario: oidc-register-unused`. *Given* no host whose stance names `sso`, *Then* it is `Pending`, `Unused`, and
   registers nothing; *When* the last host of a registered `sso` goes, *Then* it makes no call and keeps its client,
-  with `ClientUpkeep=False`, `Unused`, until a host names it again.
+  with `ClientSynced=False`, `Unused`, until a host names it again.
 - `scenario: oidc-callbacks-follow`. *When* a second host names `sso`, or inherits it from the Namespace's
   `edgeDefaults.auth`, *Then* the client's redirect URIs at the provider and `status.callbacks` hold both callbacks.
 - `scenario: oidc-rotate`. *When* `client.registration.rotate` rises, *Then* the Secret holds a new secret, the
@@ -39,9 +42,9 @@ rauthy's clients made only this way (card 5). Its callers: the OIDCProvider reco
   the answer (a crash, or a failed write, `SecretIssueFailed`), *Then* the next pass reads a secret other than the
   stored one, sends the PUT again, stores its answer and records its values, and sign-ins work.
 - `scenario: oidc-upkeep-fails-sign-ins-go-on`. *Given* `sso` `Ready`, *When* a pass's read or PUT fails, *Then* `sso`
-  stays `Ready` with `ClientUpkeep=False`, `RegistrationFailed`, and sign-ins and sessions go on.
+  stays `Ready` with `ClientSynced=False`, `RegistrationFailed`, and sign-ins and sessions go on.
 - `scenario: oidc-rotation-refused`. *Given* a provider whose PUT answer keeps the secret, *When* `rotate` rises,
-  *Then* `sso` stays `Ready` with `ClientUpkeep=False`, `RotationRefused`, `observedRotate` below `rotate` and the PUT
+  *Then* `sso` stays `Ready` with `ClientSynced=False`, `RotationRefused`, `observedRotate` below `rotate` and the PUT
   sent again once each `runtime.supervisionPeriod`, and sign-ins go on.
 - `scenario: oidc-registration-failed`. *Given* no client yet and a registration endpoint that refuses one, *Then*
   `sso` is `Pending`, `RegistrationFailed`, and its message names the HTTP status, not the answer's body.
@@ -115,15 +118,16 @@ deleting the client at the provider (left to its idle purge, card 5), a provider
    `DYN_CLIENT_CLEANUP_INACTIVE_THRESHOLD` at `90d`, which an admin may change in the Addon.
 6. **The calls.** Every call to the provider follows ADR-0335's back channel (Decision 7): https to a globally
    reachable address (ADR-0317's table), or the engine's own address with `spec.addon`, with a 10 s timeout and at
-   most 1 MiB read. A failed call is `RegistrationFailed`, on `ClientUpkeep` while a usable client exists and on
+   most 1 MiB read. A failed call is `RegistrationFailed`, on `ClientSynced` while a usable client exists and on
    `Ready` otherwise (Decision 7); its message names the HTTP status, never the answer's body.
 7. **One reconciler, two conditions.** `controller.Register` keeps one reconciler per kind, so one `Reconcile` serves
    OIDCProvider: ADR-0335 Decision 10's checks first, in its order (`ClientSecretMissing` for `credentialsSecret`
    only), a failing one setting `Ready=False` and ending the pass; then this ADR's client. A usable client is one the
    Secret holds that the provider issued and has not reported gone. While one exists, `Ready` is True (`ClientReady`);
    else False, `Pending`, with the first that holds of `SecretNotOwned`, `Unused`, `RegistrationFailed` and
-   `SecretIssueFailed`. `ClientUpkeep` is True once a pass applied the callbacks and `rotate`, else False with
-   `RegistrationFailed`, `SecretIssueFailed`, `RotationRefused` or `Unused`, and leaves `Ready` as it is.
+   `SecretIssueFailed`. `ClientSynced` is True, with no reason, once a pass applied the callbacks and `rotate`, as
+   BackupSchedule's `TargetSynced` (ADR-0287), else False with `RegistrationFailed`, `SecretIssueFailed`,
+   `RotationRefused` or `Unused`, and leaves `Ready` as it is (amended 2026-11-21; it was `ClientUpkeep`).
 
 ## Design model
 
@@ -156,7 +160,7 @@ deleting the client at the provider (left to its idle purge, card 5), a provider
 
 - **security.md**: "An OIDCProvider registers its client" (`ClientReady`; with no usable client `Ready=False`:
   `SecretNotOwned`, `Unused`, `RegistrationFailed` with the HTTP status only, `SecretIssueFailed`), "Its upkeep fails"
-  (`Ready` kept; `ClientUpkeep=False`: `RegistrationFailed`, `SecretIssueFailed`, `RotationRefused` again each
+  (`Ready` kept; `ClientSynced=False`: `RegistrationFailed`, `SecretIssueFailed`, `RotationRefused` again each
   `runtime.supervisionPeriod` 10 s, or `Unused`), "`rotate` raised" (one retry), "The provider lost the client", "A
   Restore of the add-on object" (no call while held, then a new secret), all `decided`; "Deleting an OIDCProvider" (its
   client kept until the idle purge), "An http callback through rauthy" (loopback hosts only), `accepted`.
@@ -183,7 +187,7 @@ type OIDCProviderStatus struct {
 	ObservedRotate int64    `json:"observedRotate,omitempty"`
 }
 
-const ConditionClientUpkeep = ConditionType("ClientUpkeep") // beside Ready (Decision 7)
+const ConditionClientSynced = ConditionType("ClientSynced") // beside Ready (Decision 7, amended 2026-11-21)
 
 func (p *OIDCProvider) ClientSecretName() ObjectName
 ```
@@ -207,7 +211,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 | Consumes | Exposes |
 |---|---|
 | `registration_endpoint`, `tokenSecret` | the Secret's four keys; `status.clientId`, `callbacks`, `observedRotate` |
-| the hosts' Routes, workloads, Namespaces; `runtime.supervisionPeriod`; the hold | `Ready`, `ClientUpkeep` (Decision 7) |
+| the hosts' Routes, workloads, Namespaces; `runtime.supervisionPeriod`; the hold | `Ready`, `ClientSynced` (Decision 7) |
 
 ## Implementation plan
 
@@ -229,7 +233,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
   reachable address, with a 10 s timeout and a 1 MiB cap; a failure's message holds no answer body.
 - [ ] Every answer's token is stored, a read's included; a read's other secret leads to a PUT, never to the Secret.
 - [ ] `status.callbacks` and `observedRotate` are written after the Secret, with the values the pass read at its start.
-- [ ] An upkeep failure leaves a usable client `Ready` and shows on `ClientUpkeep`; a refused rotation goes again no
+- [ ] An upkeep failure leaves a usable client `Ready` and shows on `ClientSynced`; a refused rotation goes again no
   faster than each `runtime.supervisionPeriod`; with no callback, or while the namespace is held, no call is made.
 - [ ] A gone client is registered again, no DELETE is sent, and a Secret funcd does not own is never written.
 
@@ -254,3 +258,4 @@ None.
 - Experiment 0025 (pyvvo/experiment at a0643b3c, folder `0025-addons-rauthy`): the F262 checks, `register-client`,
   `reregister`, and the rauthy registration findings.
 - The decider's card 5 (2026-11-19); RFC 7591, RFC 7592; Keycloak's client registration guide (token rotation).
+- The amendment's issue [#1510](https://github.com/pyvvo/funcd/issues/1510) (the decider's choice of 2026-11-21).

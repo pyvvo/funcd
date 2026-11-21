@@ -35,8 +35,15 @@ type Verdict struct {
 	Host string
 }
 
-// ModeFunc reads a namespace's exposure mode; a NotFound error means implicit.
-type ModeFunc func(ctx context.Context, ns v1.NamespaceName) (v1.ExposureMode, error)
+// NamespaceDefaults is what the aggregator reads of an entry's Namespace: its exposure mode (ADR-0241 Decision 2), and
+// the provider of an oidc edgeDefaults.auth, which its entries inherit (ADR-0335 Decision 3); nil for another stance.
+type NamespaceDefaults struct {
+	Mode v1.ExposureMode
+	OIDC *OIDCAuth
+}
+
+// DefaultsFunc reads a namespace's defaults; a NotFound error means implicit, with no stance.
+type DefaultsFunc func(ctx context.Context, ns v1.NamespaceName) (NamespaceDefaults, error)
 
 // NotifyFunc asks the owner's reconciler to run again. It must not block: the aggregator calls it after
 // releasing its lock, once per owner whose verdict another source's Set changed.
@@ -44,7 +51,7 @@ type NotifyFunc func(Owner)
 
 // EntrySetter contributes ONE named source's edge entries to a shared edge table (ADR-0138). Set replaces this
 // source's slice (nil/empty clears it); the implementation arbitrates the claims of every source and programs the
-// winners exactly once (ADR-0176). A validation or ModeFunc error returns (nil, err) with nothing committed. A
+// winners exactly once (ADR-0176). A validation or DefaultsFunc error returns (nil, err) with nothing committed. A
 // Program error returns (nil, err) with the source map committed, so the next Set re-programs it.
 type EntrySetter interface {
 	Set(ctx context.Context, source string, entries []Entry) ([]Verdict, error)
@@ -94,11 +101,11 @@ func kindRank(k v1.Kind) (int, bool) {
 // (ADR-0138, ADR-0176): it stores each source's entries, rules on every entry, and programs the winners. Safe for
 // concurrent use.
 type Aggregator struct {
-	p      Programmer
-	modes  ModeFunc
-	notify NotifyFunc
-	base   string
-	log    *slog.Logger
+	p        Programmer
+	defaults DefaultsFunc
+	notify   NotifyFunc
+	base     string
+	log      *slog.Logger
 
 	mu        sync.Mutex
 	sources   map[string][]Entry
@@ -106,16 +113,16 @@ type Aggregator struct {
 	verdicts  map[Owner]Verdict // as last programmed
 }
 
-// NewAggregator builds an Aggregator over the edge Router's replace-all Program. A nil modes treats every
-// namespace as implicit; a nil notify notifies no one; a baseDomain of "" means "localhost" (ADR-0240); a nil
+// NewAggregator builds an Aggregator over the edge Router's replace-all Program. A nil defaults treats every
+// namespace as implicit, with no stance; a nil notify notifies no one; a baseDomain of "" means "localhost" (ADR-0240); a nil
 // log is slog.Default.
-func NewAggregator(p Programmer, modes ModeFunc, notify NotifyFunc, baseDomain string, log *slog.Logger) *Aggregator {
+func NewAggregator(p Programmer, defaults DefaultsFunc, notify NotifyFunc, baseDomain string, log *slog.Logger) *Aggregator {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Aggregator{
 		p:        p,
-		modes:    modes,
+		defaults: defaults,
 		notify:   notify,
 		base:     baseDomain,
 		log:      log.With("component", "edge.router.aggregator"),
@@ -248,7 +255,7 @@ func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, 
 	})
 
 	reserving := a.reserving(slots)
-	modes := map[v1.NamespaceName]v1.ExposureMode{}
+	defaults := map[v1.NamespaceName]NamespaceDefaults{}
 	held := map[string][]heldClaim{}
 	providers := map[string]hostProvider{}
 	verdicts := make([]Verdict, len(slots))
@@ -256,10 +263,11 @@ func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, 
 	for _, i := range order {
 		s := &slots[i]
 		v := Verdict{Owner: s.entry.Owner, Host: s.entry.Host}
-		mode, err := a.modeOf(ctx, modes, s.entry.Namespace)
+		nd, err := a.defaultsOf(ctx, defaults, s.entry.Namespace)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
+		mode := nd.Mode
 		switch p, reserved := reservedPath(s.entry); {
 		case disabled(s.entry, mode):
 			v.Reason, v.Message = reasonDisabled, "the entry is disabled"
@@ -279,7 +287,7 @@ func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, 
 				v.Message = fmt.Sprintf("conflicts with %s %s/%s on (host, path, method)", winner.Kind, winner.Namespace, winner.Name)
 			default:
 				e := s.entry
-				if msg, conflict := providerConflict(providers, e); conflict {
+				if msg, conflict := providerConflict(providers, e, nd.OIDC); conflict {
 					v.Reason, v.Message = ReasonProviderConflict, msg
 					e.Refused = ReasonProviderConflict
 				}
@@ -346,24 +354,24 @@ func RouteDisabled(enabled *bool, owned bool, mode v1.ExposureMode) bool {
 	return owned && mode == v1.ExposureExplicit
 }
 
-// modeOf returns a namespace's exposure mode, reading each namespace at most once per arbitration.
-func (a *Aggregator) modeOf(ctx context.Context, modes map[v1.NamespaceName]v1.ExposureMode, ns v1.NamespaceName) (v1.ExposureMode, error) {
-	if a.modes == nil {
-		return v1.ExposureImplicit, nil
+// defaultsOf returns a namespace's defaults, reading each namespace at most once per arbitration.
+func (a *Aggregator) defaultsOf(ctx context.Context, read map[v1.NamespaceName]NamespaceDefaults, ns v1.NamespaceName) (NamespaceDefaults, error) {
+	if a.defaults == nil {
+		return NamespaceDefaults{Mode: v1.ExposureImplicit}, nil
 	}
-	if m, ok := modes[ns]; ok {
-		return m, nil
+	if d, ok := read[ns]; ok {
+		return d, nil
 	}
-	m, err := a.modes(ctx, ns)
+	d, err := a.defaults(ctx, ns)
 	switch {
 	case fault.KindOf(err) == fault.NotFound:
-		m = v1.ExposureImplicit
+		d = NamespaceDefaults{Mode: v1.ExposureImplicit}
 	case err != nil:
-		return "", err
+		return NamespaceDefaults{}, err
 	}
-	m = m.Normalized()
-	modes[ns] = m
-	return m, nil
+	d.Mode = d.Mode.Normalized()
+	read[ns] = d
+	return d, nil
 }
 
 // reservedPath reports the first rule of a host-less entry that would shadow the by-name /function/<name> form,
@@ -390,25 +398,30 @@ type hostProvider struct {
 	owner     Owner
 }
 
-// providerConflict reports whether e names another OIDCProvider than an earlier entry of its host, or two itself;
-// else it records what e names. An entry already refused names none.
-func providerConflict(providers map[string]hostProvider, e Entry) (string, bool) {
+// providerConflict reports whether e uses another OIDCProvider than an earlier entry of its host, or two itself;
+// else it records what e uses. A rule that sets no stance, on an entry that sets none, uses inherited, its
+// namespace's, unless it is an upstream row, which the namespace's stance never reaches (ADR-0335 Decisions 2 and
+// 3). An entry already refused uses none.
+func providerConflict(providers map[string]hostProvider, e Entry, inherited *OIDCAuth) (string, bool) {
 	if e.Refused != "" {
 		return "", false
 	}
 	var named *hostProvider
 	for _, r := range e.Rules {
 		auth, oidc := ruleStance(e, r)
+		if auth == "" && r.Upstream == "" && inherited != nil {
+			auth, oidc = v1.AuthOIDC, inherited
+		}
 		if auth != v1.AuthOIDC || oidc == nil {
 			continue
 		}
 		p := hostProvider{namespace: e.Namespace, name: oidc.Provider, owner: e.Owner}
 		if first, ok := providers[e.Host]; ok && (first.namespace != p.namespace || first.name != p.name) {
-			return fmt.Sprintf("names OIDCProvider %s/%s on host %q, where %s %s/%s names %s/%s", p.namespace, p.name,
+			return fmt.Sprintf("uses OIDCProvider %s/%s on host %q, where %s %s/%s uses %s/%s", p.namespace, p.name,
 				e.Host, first.owner.Kind, first.owner.Namespace, first.owner.Name, first.namespace, first.name), true
 		}
 		if named != nil && named.name != p.name {
-			return fmt.Sprintf("names two OIDCProviders on host %q, %s and %s", e.Host, named.name, p.name), true
+			return fmt.Sprintf("uses two OIDCProviders on host %q, %s and %s", e.Host, named.name, p.name), true
 		}
 		named = &p
 	}
