@@ -5,6 +5,10 @@
   (2026-11-19), by the decider's standing go-ahead for FEAT-0018 ("go ahead, don't wait for
   me", "until we ship entirely the new feature"), after three rounds of an independent judge (a subagent), every
   Blocker and Major folded
+- **Amended in place**: 2026-11-21, by the decider on [#1510](https://github.com/pyvvo/funcd/issues/1510): a by-name
+  navigation whose namespace `X-Funcd-Namespace` chose gets 401 (Decision 2); the refusals answer 400, and a host's
+  entries use one provider, named or inherited (Decision 3); the Namespace's condition is `EdgeDefaultsReady`, and
+  ADR-0336's is `ClientSynced` (Decision 10)
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, auth, oidc, shims
@@ -46,6 +50,13 @@ to the http Function `app` with `auth.mode: oidc` and `auth.provider: sso`, unle
 - `scenario: oidc-other-provider-session`. *Given* the OIDCProvider `public`, with `sso`'s session Secret, on
   `b.example.com`, *Then* a session sealed for `public` under `sso`'s cookie name counts as none on `app.example.com`,
   and a Route `zz` that names `public` at `/b` on that host is `ProviderConflict` and answers 503 at `/b`.
+- `scenario: oidc-inherited-provider` (amended 2026-11-21). *Given* `staging`'s `edgeDefaults.auth` with `oidc` and
+  `sso`, and its Route `shop` at `/` on `shop.example.com` with no stance, *When* its Route `zz` names `public` at `/b`
+  on that host, *Then* `zz` is `ProviderConflict` and answers 503 at `/b`.
+- `scenario: oidc-by-name-other-host` (amended 2026-11-21). *Given* `server.baseDomain: localhost` and `staging`'s
+  Function `app` with no host and `ingress.auth` naming `sso`, *When* a `GET` with `Accept: text/html` and no session
+  reaches `localhost/function/app` with `X-Funcd-Namespace: staging`, *Then* it gets 401 with
+  `WWW-Authenticate: Bearer`; on `staging.localhost` it gets 302.
 - `scenario: oidc-bearer`. *Given* `audiences` listing `api`, *Then* a token the provider signed for `api` passes with
   the principal headers and its `Authorization`, and a forged or expired one, or one for another audience, gets 401
   `invalid_token`; with no `audiences`, a Bearer token signs nobody in.
@@ -55,7 +66,8 @@ to the http Function `app` with `auth.mode: oidc` and `auth.provider: sso`, unle
 - `scenario: oidc-cross-origin`. *When* a `POST` with a session carries `Sec-Fetch-Site: same-site`, or only
   `Origin: https://b.example.com`, *Then* it gets 403; from its own origin it passes.
 - `scenario: oidc-auth-paths`. *Given* `oidc` on the rule `/api` only, *Then* a sign-in there completes at
-  `/.auth/callback`; a rule at `/.auth/x`, and a Route of `default` with `oidc` and no host, get 422.
+  `/.auth/callback`; a rule at `/.auth/x`, and a Route of `default` with `oidc` and no host, get 400 (amended
+  2026-11-21).
 - `scenario: oidc-logout`. *When* a browser opens `/.auth/logout`, *Then* every funcd session cookie of the host is
   cleared.
 - `scenario: oidc-shim-principal`. *Given* an http app (TypeScript) and a plain handler (TypeScript, Python), *Then* a
@@ -63,7 +75,8 @@ to the http Function `app` with `auth.mode: oidc` and `auth.provider: sso`, unle
 - `scenario: oidc-provider-missing`. *Given*, on `app.example.com`, an open Route `www` at `/` and a Route `admin` at
   `/admin` whose `auth.provider` names no OIDCProvider of its namespace, *Then* `admin` is `Ready=False`,
   `ProviderNotFound`, and `/admin/x` answers 503, not `www`'s backend; a Function whose `ingress.auth` names a missing
-  provider is `IngressReady=False`, `ProviderNotFound`.
+  provider is `IngressReady=False`, `ProviderNotFound`; a Namespace whose `edgeDefaults.auth` names one is
+  `EdgeDefaultsReady=False`, `ProviderNotFound`, until it exists (amended 2026-11-21).
 - `scenario: oidc-provider-not-ready`. *Given* `sso` with a 16-byte `SESSION_KEY`, a discovery naming another issuer,
   or no `addon` and an http issuer or one at `10.0.0.5`, *Then* `sso` is `Ready=False` (`SessionKeyInvalid`,
   `IssuerMismatch`, `DiscoveryFailed`) and calls on `app` get 503.
@@ -110,13 +123,18 @@ store and refresh tokens (FEAT-0018 Out of scope), signing out at the provider, 
    navigation, by `Sec-Fetch-Mode: navigate` or else `text/html` in `Accept`, gets 302; any other call 401), `401`, or
    `allow` (every method passes, with no principal). The gate runs where ADR-0113's PEP runs, for every backend: before
    the Function read on a Route row, after it on the by-name path, where the Function holds the stance (ADR-0241
-   Decision 4), and before any wake or rate token.
+   Decision 4), and before any wake or rate token. A by-name navigation whose namespace `X-Funcd-Namespace` chose,
+   rather than its host (ADR-0240 Decision 6), gets 401 under `redirect`, as `unauthenticated: 401` answers: the
+   header is a program's way in, and the callback of the host it used may be registered nowhere (amended 2026-11-21).
 3. **Hosts and `/.auth/`.** In `default`, which has no namespace host (ADR-0240 Decision 2), `Validate` refuses an
-   `oidc` stance without a host (422): on a Route without `spec.host`, in an `ingress.auth` without `ingress.host`, and
-   in `default`'s `edgeDefaults.auth`. A host's entries name one provider: the aggregator refuses one that names another
-   than an earlier entry there (ADR-0241 Decision 7's order), `ProviderConflict`, after `RouteConflict` in ADR-0240
-   Decision 5's sequence, and the entry keeps its claims (Decision 10). `/.auth/` is funcd's on every host: `Validate`
-   refuses a rule, an `ingress.path` or an Addon's `basePath` at or under it (422), and the front door answers it before
+   `oidc` stance without a host (400, as every refused spec: `fault.Invalid`, ADR-0018; amended 2026-11-21): on a Route
+   without `spec.host`, in an `ingress.auth` without `ingress.host`, and in `default`'s `edgeDefaults.auth`. A host's
+   entries use one provider, named or inherited (amended 2026-11-21): an entry's provider is the one its rules use as
+   the data plane resolves them, the rule's, else the entry's, else the Namespace's `edgeDefaults.auth`, which reaches
+   no upstream row (Decision 2). The aggregator refuses an entry whose provider differs from an earlier entry's there
+   (ADR-0241 Decision 7's order), `ProviderConflict`, after `RouteConflict` in ADR-0240 Decision 5's sequence, and the
+   entry keeps its claims (Decision 10). `/.auth/` is funcd's on every host: `Validate` refuses a rule, an
+   `ingress.path` or an Addon's `basePath` at or under it (400), and the front door answers it before
    the Route match. The provider that the state cookie names answers `/.auth/callback`, once that cookie opens and holds
    the request's `state`; `/.auth/logout` clears every funcd session cookie of the host and redirects to `/`; any
    other path there is 404.
@@ -171,12 +189,13 @@ store and refresh tokens (FEAT-0018 Out of scope), signing out at the provider, 
     provider has no usable client: with `client.registration`, none by ADR-0336 Decision 7's definition, and with
     `credentialsSecret`, a Secret that lacks `CLIENT_ID` or `CLIENT_SECRET`; or its session key is not valid,
     or its discovery and keys are neither cached nor fetchable; a provider refused with `AddonBehindProvider` has none
-    either. `Ready` does not decide it: ADR-0336 keeps `Ready=True` through a failed upkeep call, in its `ClientUpkeep`
+    either. `Ready` does not decide it: ADR-0336 keeps `Ready=True` through a failed upkeep call, in its `ClientSynced`
     condition. An `oidc` entry whose provider is missing (`ProviderNotFound`, from its own reconciler) or that the
     aggregator refuses (`ProviderConflict`) fails closed, as ADR-0113 Decision 2 does: it is `Ready=False`, keeps its
     claims and answers 503 on each of its paths, which no other rule takes. A Function or an add-on object shows
     `IngressReady=False`, `ProviderNotFound`; a Site shows `RouteNotReady`, naming its own Route's reason; a Namespace
-    shows a `ProviderNotFound` condition. Any other call whose provider is missing gets 503.
+    shows `EdgeDefaultsReady=False`, `ProviderNotFound`, removed once the provider exists (amended 2026-11-21). Any
+    other call whose provider is missing gets 503.
 
 ## Design model
 
@@ -197,11 +216,13 @@ than a day are fetched again; a token signed with a new key passes within a minu
   host" (`ProviderConflict`, 503), "A provider's signing keys" (a day at most; an unknown `kid` fetches them, once a
   minute at most); `accepted`: "`/.auth/logout`" (every funcd session cookie of the host; the provider's own
   session stays), "A session past the ID token's expiry" (sign in again; a `POST` gets 401), "A session cookie over 4096
-  bytes" (the callback's 401).
+  bytes" (the callback's 401). Amended 2026-11-21: "A second provider on a host" counts an inherited provider; new,
+  `decided`: "A by-name navigation through `X-Funcd-Namespace`" (401).
 - **calls.md**: new, `decided`, beside the `/health/` row: "A path under `/.auth/`" (the edge answers it on every host
   before the Route match); changed: "A Route that cannot serve" (an `oidc` Route refused for `ProviderNotFound` or
   `ProviderConflict` keeps its claims and answers 503); the state machine: a stance answers 302 at `Admit`, and
-  `/.auth/` is answered before `Resolve`.
+  `/.auth/` is answered before `Resolve`. Amended 2026-11-21: "A rule at or under `/.auth`, or an `oidc` stance with
+  no host in `default`" and addons.md's "An Addon's basePath at or under `/.auth`" answer 400, `decided`.
 
 ## Temporary workarounds
 
@@ -260,6 +281,13 @@ type OIDCAuth struct {
 	Provider        v1.ObjectName
 	Unauthenticated v1.Unauthenticated
 }
+// internal/edge/router (amended 2026-11-21): DefaultsFunc replaces ModeFunc in NewAggregator, nil reading implicit
+// and no stance, so the aggregator counts an entry's inherited provider (Decision 3).
+type NamespaceDefaults struct {
+	Mode v1.ExposureMode // ADR-0241 Decision 2
+	OIDC *OIDCAuth       // edgeDefaults.auth's provider when its mode is oidc, else nil
+}
+type DefaultsFunc func(ctx context.Context, ns v1.NamespaceName) (NamespaceDefaults, error)
 // internal/secrets/aesgcm, beside NewAESEncryptor: nonce || ciphertext, with additional data
 func Seal(key, plaintext, additionalData []byte) ([]byte, error)
 func Open(key, sealed, additionalData []byte) ([]byte, error)
@@ -298,13 +326,20 @@ principal?: { provider: string; id: string; name?: string; claims: Record<string
   through rauthy on containerd and reads the headers from an http app.
 - Docs: the blueprint's edge paragraph and Security model, the behavior rows, the back-links at acceptance.
 - Done: `just ci` and `just check-behavior` green, the lane case passes, both shims released.
+- Amendment (2026-11-21, #1510): `api/types/v1alpha1/oidc.go` (`ConditionClientSynced`); `internal/edge/oidc`
+  (`ClientSynced` True with no reason, `reasonApplied` removed); `internal/edge/router` and `pkg/funcd`
+  (`DefaultsFunc`; `providerConflict` counts a non-upstream entry's inherited provider); `internal/dataplane` (a
+  header-chosen by-name navigation passes the gate its `redirect` stance as `unauthenticated: 401`, so `Gate.Serve`
+  is unchanged); `e2e/addon-rauthy-signin.venom.yml`; the behavior rows. Tests: `TestScenarioOidcInheritedProvider`,
+  `TestScenarioOidcByNameOtherHost`, the Namespace in `TestScenarioOidcProviderMissing`, and the 400 in
+  `TestOIDCStanceValidate`.
 
 ## Review checklist
 
 - [ ] Every way in drops the four principal headers (public and internal calls, `/fetch/`); only the gate sets them.
 - [ ] A cookie opens only under its provider's key and additional data; a session read checks `iss`, `aud` and `exp`.
 - [ ] The front door answers `/.auth/` on every host; `Validate` refuses a path there and a host-less `oidc` stance in
-  `default`; a host's entries name one provider.
+  `default` with 400; a host's entries use one provider, named or inherited.
 - [ ] The callback checks state, nonce, PKCE and the ID token's signature, algorithm, `iss`, `aud`, `azp` and `exp`,
   and keeps only a first path of its own host.
 - [ ] A Bearer token passes only for `audiences`; a session wins over it; a call with no token gets no error code.
@@ -315,6 +350,8 @@ principal?: { provider: string; id: string; name?: string; claims: Record<string
   another origin gets 403 but for `GET`, `HEAD` and `OPTIONS`.
 - [ ] The TypeScript shim passes the four headers to an http app; both shims give `ctx.principal` its Contracts shape.
 - [ ] One `Reconcile` reports this ADR's reasons before ADR-0336's; the edge's 503 follows a usable client, not `Ready`.
+- [ ] A by-name navigation whose namespace the header chose gets 401 under `redirect`; on the namespace host, 302;
+  a Namespace naming a missing provider is `EdgeDefaultsReady=False` (amended 2026-11-21).
 
 ## Consequences
 
@@ -326,7 +363,9 @@ principal?: { provider: string; id: string; name?: string; claims: Record<string
 - A provider whose ID token makes a session cookie over 4096 bytes signs nobody in; the callback's 401 names the size.
 - A new `SESSION_KEY`, or a new client ID (ADR-0336 registers again), ends every session of the provider.
 - A second sign-in in one browser before the first ends replaces its state; the first callback gets 401.
-- `/.auth/` is funcd's on every host, and a host's entries use one provider.
+- `/.auth/` is funcd's on every host, and a host's entries use one provider, named or inherited.
+- A navigation by name through `X-Funcd-Namespace` gets 401 (amended 2026-11-21): a client that sends the header
+  signs in with a Bearer token.
 - A longer host-less rule of `default` still answers under an `oidc` host's shorter path, with its own stance
   (ADR-0176's deferred rule, `calls.md` "Two rules match").
 - A session call with an unsafe method from another origin gets 403, so an app whose pages and API sit on two hosts
@@ -339,7 +378,8 @@ principal?: { provider: string; id: string; name?: string; claims: Record<string
 
 ## References
 
-- Feature issue [#1498](https://github.com/pyvvo/funcd/issues/1498) (FEAT-0018 F261).
+- Feature issue [#1498](https://github.com/pyvvo/funcd/issues/1498) (FEAT-0018 F261); the amendment's issue
+  [#1510](https://github.com/pyvvo/funcd/issues/1510).
 - Experiment 0025 (pyvvo/experiment at a0643b3c, folder `0025-addons-rauthy`): the F261 checks and the timings
   `signin`, `call-open`, `call-session`.
 - The decider's card 4 and the header choice A (2026-11-19).

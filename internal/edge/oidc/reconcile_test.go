@@ -76,6 +76,9 @@ func TestScenarioOidcRegister(t *testing.T) {
 	p, s := h.registered()
 	require.Equal(t, []string{appCallback}, p.Status.Callbacks)
 	require.Equal(t, string(s.Spec.Data[keyClientID]), p.Status.ClientID)
+	synced := condition(p, v1.ConditionClientSynced)
+	require.Equal(t, v1.ConditionTrue, synced.Status)
+	require.Empty(t, synced.Reason, "ClientSynced is True with no reason, as TargetSynced")
 	c := h.idp.Clients()[p.Status.ClientID]
 	require.Equal(t, []string{appCallback}, c.RedirectURIs, "the client's redirect URIs are the hosts' callbacks")
 	require.Equal(t, "funcd staging sso", c.Name)
@@ -102,13 +105,13 @@ func TestScenarioOidcRegisterUnused(t *testing.T) {
 	require.Equal(t, calls, h.idp.Calls(oidcprovider.OpRead)+h.idp.Calls(oidcprovider.OpUpdate)+h.idp.Calls(oidcprovider.OpRegister),
 		"with no host, no call")
 	require.Equal(t, v1.ConditionTrue, condition(p, condReady).Status, "the client is kept")
-	require.Equal(t, ReasonUnused, condition(p, v1.ConditionClientUpkeep).Reason)
-	require.Equal(t, v1.ConditionFalse, condition(p, v1.ConditionClientUpkeep).Status)
+	require.Equal(t, ReasonUnused, condition(p, v1.ConditionClientSynced).Reason)
+	require.Equal(t, v1.ConditionFalse, condition(p, v1.ConditionClientSynced).Status)
 	require.Equal(t, s.Spec.Data, h.secret(sso).Spec.Data)
 
 	h.seed(routeOf("app", appHost, oidcStance(sso), "/"))
 	p = h.pass(sso)
-	require.Equal(t, v1.ConditionTrue, condition(p, v1.ConditionClientUpkeep).Status, "a host names it again")
+	require.Equal(t, v1.ConditionTrue, condition(p, v1.ConditionClientSynced).Status, "a host names it again")
 }
 
 // scenario: oidc-callbacks-follow
@@ -186,7 +189,7 @@ func TestScenarioOidcRotate(t *testing.T) {
 	require.NotEqual(t, old, stored, "the Secret holds a new secret")
 	require.Equal(t, stored, h.idp.Clients()[p.Status.ClientID].Secret)
 	require.Equal(t, int64(1), p.Status.ObservedRotate)
-	require.Equal(t, v1.ConditionTrue, condition(p, v1.ConditionClientUpkeep).Status)
+	require.Equal(t, v1.ConditionTrue, condition(p, v1.ConditionClientSynced).Status)
 	require.Equal(t, 2, h.idp.Calls(oidcprovider.OpToken), "the old secret was refused, the new one redeemed the code")
 }
 
@@ -240,7 +243,7 @@ func TestScenarioOidcAnswerLost(t *testing.T) {
 	p := h.pass(sso) // the PUT is answered, then the Secret write fails
 	require.Equal(t, updates+1, h.idp.Calls(oidcprovider.OpUpdate))
 	require.Equal(t, v1.ConditionTrue, condition(p, condReady).Status)
-	require.Equal(t, ReasonSecretIssueFailed, condition(p, v1.ConditionClientUpkeep).Reason)
+	require.Equal(t, ReasonSecretIssueFailed, condition(p, v1.ConditionClientSynced).Reason)
 	require.Zero(t, p.Status.ObservedRotate, "nothing is recorded before the Secret holds the answer")
 	require.NotEqual(t, string(h.secret(sso).Spec.Data[keyClientSecret]), h.idp.Clients()[p.Status.ClientID].Secret,
 		"the answer is lost")
@@ -250,7 +253,7 @@ func TestScenarioOidcAnswerLost(t *testing.T) {
 	require.Equal(t, string(h.secret(sso).Spec.Data[keyClientSecret]), h.idp.Clients()[p.Status.ClientID].Secret, "the secret converges")
 	require.Equal(t, int64(1), p.Status.ObservedRotate)
 	require.Equal(t, []string{appCallback}, p.Status.Callbacks)
-	require.Equal(t, v1.ConditionTrue, condition(p, v1.ConditionClientUpkeep).Status)
+	require.Equal(t, v1.ConditionTrue, condition(p, v1.ConditionClientSynced).Status)
 	h.signsIn()
 }
 
@@ -264,8 +267,8 @@ func TestScenarioOidcUpkeepFailsSignInsGoOn(t *testing.T) {
 	h.idp.Refuse(oidcprovider.OpRead, http.StatusServiceUnavailable)
 	p := h.pass(sso)
 	require.Equal(t, v1.PhaseReady, p.Status.Phase, "a failed read keeps a usable client Ready")
-	require.Equal(t, ReasonRegistrationFailed, condition(p, v1.ConditionClientUpkeep).Reason)
-	require.Contains(t, condition(p, v1.ConditionClientUpkeep).Message, "503")
+	require.Equal(t, ReasonRegistrationFailed, condition(p, v1.ConditionClientSynced).Reason)
+	require.Contains(t, condition(p, v1.ConditionClientSynced).Message, "503")
 	h.signsIn()
 
 	h.idp.Refuse(oidcprovider.OpRead, 0)
@@ -273,7 +276,7 @@ func TestScenarioOidcUpkeepFailsSignInsGoOn(t *testing.T) {
 	h.raiseRotate()
 	p = h.pass(sso)
 	require.Equal(t, v1.PhaseReady, p.Status.Phase, "a failed PUT keeps it Ready")
-	require.Equal(t, ReasonRegistrationFailed, condition(p, v1.ConditionClientUpkeep).Reason)
+	require.Equal(t, ReasonRegistrationFailed, condition(p, v1.ConditionClientSynced).Reason)
 	h.signsIn()
 }
 
@@ -290,7 +293,7 @@ func TestScenarioOidcRotationRefused(t *testing.T) {
 	p := h.pass(sso)
 	require.Equal(t, updates+1, h.idp.Calls(oidcprovider.OpUpdate))
 	require.Equal(t, v1.PhaseReady, p.Status.Phase)
-	require.Equal(t, ReasonRotationRefused, condition(p, v1.ConditionClientUpkeep).Reason)
+	require.Equal(t, ReasonRotationRefused, condition(p, v1.ConditionClientSynced).Reason)
 	require.Less(t, p.Status.ObservedRotate, p.Spec.Client.Registration.Rotate)
 
 	h.pass(sso)
@@ -298,7 +301,7 @@ func TestScenarioOidcRotationRefused(t *testing.T) {
 	h.clock.Advance(h.rec.period)
 	p = h.pass(sso)
 	require.Equal(t, updates+2, h.idp.Calls(oidcprovider.OpUpdate), "sent again once the period passed")
-	require.Equal(t, ReasonRotationRefused, condition(p, v1.ConditionClientUpkeep).Reason)
+	require.Equal(t, ReasonRotationRefused, condition(p, v1.ConditionClientSynced).Reason)
 	h.signsIn()
 }
 
@@ -390,7 +393,7 @@ func TestScenarioOidcRegistrationPrivate(t *testing.T) {
 	p := h.pass(sso)
 	require.Equal(t, 1, h.idp.Calls(oidcprovider.OpUpdate), "kept at the engine's own address")
 	require.Len(t, p.Status.Callbacks, 2)
-	require.Equal(t, v1.ConditionTrue, condition(p, v1.ConditionClientUpkeep).Status)
+	require.Equal(t, v1.ConditionTrue, condition(p, v1.ConditionClientSynced).Status)
 }
 
 // scenario: oidc-secret-not-owned

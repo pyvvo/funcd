@@ -26,12 +26,12 @@ func setupAggregator(t *testing.T, notify router.NotifyFunc) (context.Context, s
 	t.Helper()
 	st := store.New(memory.New())
 	rtr := router.New()
-	agg := router.NewAggregator(rtr, func(ctx context.Context, ns v1.NamespaceName) (v1.ExposureMode, error) {
+	agg := router.NewAggregator(rtr, func(ctx context.Context, ns v1.NamespaceName) (router.NamespaceDefaults, error) {
 		obj, err := st.Get(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
 		if err != nil {
-			return "", err
+			return router.NamespaceDefaults{}, err
 		}
-		return obj.(*v1.Namespace).Spec.DefaultExposure, nil
+		return router.NamespaceDefaults{Mode: obj.(*v1.Namespace).Spec.DefaultExposure}, nil
 	}, notify, "", nil)
 	rec, err := route.NewReconciler(route.Deps{Store: st, Routes: agg})
 	require.NoError(t, err)

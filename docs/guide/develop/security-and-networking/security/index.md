@@ -215,7 +215,7 @@ the callers of a Route, a rule, a workload's own address or a namespace in. In `
 
 | `unauthenticated` | A call that is not signed in |
 |---|---|
-| `redirect`, the default | A `GET` or `HEAD` navigation, with `Sec-Fetch-Mode: navigate` or else `text/html` in `Accept`, gets 302 to the provider; any other call gets 401 |
+| `redirect`, the default | A `GET` or `HEAD` navigation, with `Sec-Fetch-Mode: navigate` or else `text/html` in `Accept`, gets 302 to the provider; any other call, and a call by name whose namespace `X-Funcd-Namespace` chose, gets 401 |
 | `401` | 401 |
 | `allow` | Passes, with no principal |
 

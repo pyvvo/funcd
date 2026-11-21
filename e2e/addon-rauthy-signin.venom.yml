@@ -42,13 +42,13 @@ testcases:
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
-            funcdctl get oidcprovider sso -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];c={x[\"type\"]:x[\"reason\"] for x in s.get(\"conditions\",[])};print(c.get(\"Ready\",\"\")+\",\"+c.get(\"ClientUpkeep\",\"\")+\",\"+\" \".join(s.get(\"callbacks\",[])))"'
+            funcdctl get oidcprovider sso -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];c={x[\"type\"]:x for x in s.get(\"conditions\",[])};print(c.get(\"Ready\",{}).get(\"reason\",\"\")+\",\"+c.get(\"ClientSynced\",{}).get(\"status\",\"\")+\",\"+\" \".join(s.get(\"callbacks\",[])))"'
         retry: 60
         delay: 3
         info: "sso → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual "ClientReady,Applied,http://localhost:8081/.auth/callback"
+          - result.systemout ShouldEqual "ClientReady,True,http://localhost:8081/.auth/callback"
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '

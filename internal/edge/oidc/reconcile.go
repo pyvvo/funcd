@@ -25,7 +25,7 @@ import (
 const condReady = v1.ConditionType("Ready")
 
 // The client's reasons (ADR-0336 Decision 7): ClientReady on Ready while a usable client exists, the others on Ready
-// without one and on ClientUpkeep with one. ClientUpkeep is True with reasonApplied once a pass applied the callbacks
+// without one and on ClientSynced with one. ClientSynced is True, with no reason, once a pass applied the callbacks
 // and rotate.
 const (
 	ReasonClientReady        = "ClientReady"
@@ -34,7 +34,6 @@ const (
 	ReasonRegistrationFailed = "RegistrationFailed"
 	ReasonSecretIssueFailed  = "SecretIssueFailed"
 	ReasonRotationRefused    = "RotationRefused"
-	reasonApplied            = "Applied"
 )
 
 // ReconcilerDeps configures the OIDCProvider reconciler (ADR-0336 Contracts). Client reaches a provider outside funcd
@@ -151,7 +150,7 @@ func (r *Reconciler) pass(ctx context.Context, s *source) error {
 		id, _ := s.credentials()
 		p.Status.ClientID = id
 		ready(p)
-		p.Status.Conditions = slices.DeleteFunc(p.Status.Conditions, func(c v1.Condition) bool { return c.Type == v1.ConditionClientUpkeep })
+		p.Status.Conditions = slices.DeleteFunc(p.Status.Conditions, func(c v1.Condition) bool { return c.Type == v1.ConditionClientSynced })
 		return nil
 	}
 	return r.upkeep(ctx, s, d, address, c)
@@ -321,7 +320,7 @@ func (r *Reconciler) registerNew(ctx context.Context, u upkeepPass, why string) 
 	return nil
 }
 
-// issueFailed reports a failed Secret write: on ClientUpkeep while a usable client exists, else on Ready. A Secret
+// issueFailed reports a failed Secret write: on ClientSynced while a usable client exists, else on Ready. A Secret
 // another wrote since the pass began is SecretNotOwned.
 func (r *Reconciler) issueFailed(p *v1.OIDCProvider, usable bool, err error) error {
 	reason, msg := ReasonSecretIssueFailed, "the client could not be written to its Secret: "+err.Error()
@@ -471,9 +470,9 @@ func notReady(p *v1.OIDCProvider, reason, message string) {
 	p.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: message, ObservedGeneration: p.Generation})
 }
 
-// upkept sets ClientUpkeep: True when reason is "", else False with reason.
+// upkept sets ClientSynced: True, with no reason, when reason is "", else False with reason.
 func upkept(p *v1.OIDCProvider, reason, message string) {
-	c := v1.Condition{Type: v1.ConditionClientUpkeep, Status: v1.ConditionTrue, Reason: reasonApplied, ObservedGeneration: p.Generation}
+	c := v1.Condition{Type: v1.ConditionClientSynced, Status: v1.ConditionTrue, ObservedGeneration: p.Generation}
 	if reason != "" {
 		c.Status, c.Reason, c.Message = v1.ConditionFalse, reason, message
 	}

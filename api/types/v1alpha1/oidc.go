@@ -48,9 +48,9 @@ type OIDCProviderStatus struct {
 	ObservedRotate int64    `json:"observedRotate,omitempty" doc:"The spec.client.registration.rotate value funcd last applied: a rotation is done once it equals rotate."`
 }
 
-// ConditionClientUpkeep reports whether a pass applied the callbacks and rotate to the registered client, beside
-// Ready (ADR-0336 Decision 7).
-const ConditionClientUpkeep = ConditionType("ClientUpkeep")
+// ConditionClientSynced reports whether a pass applied the callbacks and rotate to the registered client, beside
+// Ready, as BackupSchedule's TargetSynced reports its target (ADR-0336 Decision 7).
+const ConditionClientSynced = ConditionType("ClientSynced")
 
 // GroupVersionKind returns the constant GVK for OIDCProvider.
 func (p *OIDCProvider) GroupVersionKind() GroupVersionKind { return KindOIDCProvider.GVK() }

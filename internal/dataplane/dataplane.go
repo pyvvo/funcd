@@ -208,16 +208,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveFunction(w, r, ns, v1.ObjectName(name), rest, "", true, received, op, nil)
 		return
 	}
-	s.serveByName(w, r, ns, v1.ObjectName(name), rest, received, op)
+	s.serveByName(w, r, ns, v1.ObjectName(name), rest, hostNS == "" && ns != "default", received, op)
 }
 
 // serveByName serves a public call at a Function's default address (ADR-0241 Decision 4). It reads the Function
 // first: one that is missing, off, or has an address of its own gets the namespace stance's PEP and then 404, so
 // in an authenticated namespace an anonymous caller cannot tell names apart and nothing wakes. One that is on gets
 // the PEP with its ingress.auth, else the namespace default. Like namespaceSpec's, this read takes a context that
-// cannot end.
+// cannot end. byHeader is a namespace that X-Funcd-Namespace chose rather than the host: a navigation there that
+// would be redirected to sign in gets 401, since the host's callback may be registered nowhere (ADR-0335 Decision 2).
 func (s *Server) serveByName(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName, name v1.ObjectName, rest string,
-	received time.Time, op string) {
+	byHeader bool, received time.Time, op string) {
 	obj, err := s.store.Get(context.WithoutCancel(r.Context()), v1.KindFunction.GVK(), ns, name)
 	if err != nil && fault.KindOf(err) != fault.NotFound {
 		fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "function %s/%s", ns, name))
@@ -238,6 +239,11 @@ func (s *Server) serveByName(w http.ResponseWriter, r *http.Request, ns v1.Names
 	if err != nil {
 		fault.WriteProblem(w, err)
 		return
+	}
+	if signIn != nil && byHeader && signIn.Unauthenticated != v1.Unauthenticated401 && signIn.Unauthenticated != v1.UnauthenticatedAllow {
+		a := *signIn
+		a.Unauthenticated = v1.Unauthenticated401
+		signIn = &a
 	}
 	if signIn != nil && !s.admitOIDC(w, r, ns, signIn) {
 		return

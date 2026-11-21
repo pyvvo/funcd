@@ -777,16 +777,20 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0176: it arbitrates every source's claims against the namespace exposure modes and re-runs the
 	// reconciler of each owner whose verdict another source's Set changed.
 	edgeAgg := router.NewAggregator(p.edgeRouter,
-		func(ctx context.Context, ns v1.NamespaceName) (v1.ExposureMode, error) {
+		func(ctx context.Context, ns v1.NamespaceName) (router.NamespaceDefaults, error) {
 			obj, err := c.store.Get(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
 			if err != nil {
-				return "", err
+				return router.NamespaceDefaults{}, err
 			}
 			n, ok := obj.(*v1.Namespace)
 			if !ok {
-				return "", fault.Internalf(op, "namespace %q is a %T", ns, obj)
+				return router.NamespaceDefaults{}, fault.Internalf(op, "namespace %q is a %T", ns, obj)
 			}
-			return n.Spec.DefaultExposure.Normalized(), nil
+			d := router.NamespaceDefaults{Mode: n.Spec.DefaultExposure.Normalized()}
+			if e := n.Spec.EdgeDefaults; e != nil && e.Auth != nil {
+				d.OIDC = router.OIDCOf(e.Auth.RouteAuth())
+			}
+			return d, nil
 		},
 		func(o router.Owner) {
 			ctrl.Enqueue(controller.Request{GVK: o.Kind.GVK(), Namespace: o.Namespace, Name: o.Name})

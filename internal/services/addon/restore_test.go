@@ -384,3 +384,44 @@ func TestRestoreKeepsTheMarkForACopyDatedAhead(t *testing.T) {
 	require.NotNil(t, r.object(t).Status.Restore, "the mark stays while the copy is there")
 	require.NotEmpty(t, r.copies(t), "and so does the copy")
 }
+
+// TestIssue1511_ADeletionAfterARestartFollowsTheObjectsPolicy: an object deleted after funcd restarts, before the
+// restarted reconciler's first pass over it, follows its deletion policy, held at the start or not, since the start
+// records every stored object's policy (ADR-0333 Decision 5, scenario addon-deletion).
+func TestIssue1511_ADeletionAfterARestartFollowsTheObjectsPolicy(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		deletion    v1.DeletionPolicy
+		heldAtStart bool
+		moved       bool
+	}{
+		{deletion: v1.DeletionDelete},
+		{deletion: v1.DeletionDelete, heldAtStart: true},
+		{deletion: v1.DeletionRetain, moved: true},
+	} {
+		r := newRestoreRig(t)
+		obj, err := r.st.Get(r.ctx, v1.KindAddonObject.GVK(), "default", "login")
+		require.NoError(t, err)
+		obj.(*v1.AddonObject).Spec.Deletion = c.deletion
+		_, err = r.st.Update(r.ctx, obj)
+		require.NoError(t, err)
+		r.running(t)
+		r.data(t, loginRef())
+
+		g := &heldGate{Gate: hold.Never, on: c.heldAtStart}
+		restarted, err := addon.NewReconciler(addon.Deps{Store: r.st, Provider: r.rt, Modes: []string{v1.AddonRuntimeContainerd},
+			Files: r.rt, Volumes: r.rt, Hold: g, QuarantinePeriod: time.Hour})
+		require.NoError(t, err)
+		r.r = restarted
+		require.NoError(t, r.r.ReclaimOrphans(r.ctx, time.Now()), "%+v: the start", c)
+		g.on = false
+		require.NoError(t, r.st.Delete(r.ctx, v1.KindAddonObject.GVK(), "default", "login", ""))
+		r.pass(t, "login")
+
+		_, err = os.Stat(r.rt.Dir(loginRef()))
+		require.Error(t, err, "%+v: the storage left its place", c)
+		entries, err := r.r.Quarantine().List(r.ctx)
+		require.NoError(t, err)
+		require.Equal(t, c.moved, len(entries) == 1, "%+v: a quarantine entry", c)
+	}
+}

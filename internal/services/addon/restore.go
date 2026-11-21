@@ -150,7 +150,8 @@ func (r *Reconciler) remember(ctx context.Context, o *v1.AddonObject) error {
 	return nil
 }
 
-// deletionOf is the deletion policy remember recorded of ref: retain when unknown, as after a restart.
+// deletionOf is the deletion policy remember recorded of ref: retain when unknown, as for an object gone before the
+// start remembered it.
 func (r *Reconciler) deletionOf(ref provider.ProviderRef) v1.DeletionPolicy {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -194,11 +195,23 @@ func (r *Reconciler) quarantineMove(ctx context.Context, ref provider.ProviderRe
 	return nil
 }
 
-// ReclaimOrphans moves into the quarantine, before the controller runs, the storage of every add-on object no longer
-// stored, whatever its deletion was: no start-up path deletes data (ADR-0288 Decision 1, ADR-0333 Decision 5). Each
-// entry is dated now, the start's quarantine clock. A no-op while the platform is held.
+// ReclaimOrphans runs before the controller. It remembers every stored add-on object, held or not, so a deletion
+// before the object's first pass follows its deletion policy (ADR-0333 Decision 5). Not held, it then moves into the
+// quarantine the storage of every add-on object no longer stored, whatever its deletion was: no start-up path deletes
+// data (ADR-0288 Decision 1, ADR-0333 Decision 5). Each entry is dated now, the start's quarantine clock.
 func (r *Reconciler) ReclaimOrphans(ctx context.Context, now time.Time) error {
 	const op = "services.addon.ReclaimOrphans"
+	stored, err := r.store.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "list the add-on objects")
+	}
+	for _, item := range stored.Items {
+		if o, ok := item.(*v1.AddonObject); ok {
+			if err := r.remember(ctx, o); err != nil {
+				return err
+			}
+		}
+	}
 	if r.gate.Held() {
 		return nil
 	}

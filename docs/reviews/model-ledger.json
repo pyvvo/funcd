@@ -14683,5 +14683,35 @@
     "dod_total": 18,
     "report": "docs/reviews/adr-0336-implementation-claude-opus-5-5-3.md",
     "notes": "round 3: round 2's Minors closed; the DoD miss was the lane case addon-rauthy-signin, which passed in the final lane runs"
+  },
+  {
+    "date": "2026-11-21",
+    "adr": "0335",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 9,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0335-amendment-implementation-claude-opus-5-5.md",
+    "notes": "amendment of ADR-0335 and ADR-0336 in place (#1510): ClientSynced, 400 decided, inherited providers counted, header-chosen by-name navigation 401; four mutants fail; lane addon-rauthy-signin pass; not independent (no review agents)"
+  },
+  {
+    "date": "2026-11-21",
+    "issue": "1511",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1511-fix-claude-opus-5-5.md",
+    "notes": "the start-up hook remembers every stored add-on object, held or not; revert check fails for the reported reason; held-first mutant fails; not independent (no review agents)"
   }
 ]

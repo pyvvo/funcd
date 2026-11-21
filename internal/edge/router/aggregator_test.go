@@ -215,12 +215,12 @@ func withHost(e router.Entry, host string) router.Entry {
 }
 
 // modesOf is a ModeFunc over a fixed table; a namespace outside it is NotFound (implicit).
-func modesOf(m map[v1.NamespaceName]v1.ExposureMode) router.ModeFunc {
-	return func(_ context.Context, ns v1.NamespaceName) (v1.ExposureMode, error) {
+func modesOf(m map[v1.NamespaceName]v1.ExposureMode) router.DefaultsFunc {
+	return func(_ context.Context, ns v1.NamespaceName) (router.NamespaceDefaults, error) {
 		if mode, ok := m[ns]; ok {
-			return mode, nil
+			return router.NamespaceDefaults{Mode: mode}, nil
 		}
-		return "", fault.NotFoundf("test", "namespace %q", ns)
+		return router.NamespaceDefaults{}, fault.NotFoundf("test", "namespace %q", ns)
 	}
 }
 
@@ -251,8 +251,8 @@ func TestAggregator_ValidatesBeforeCommit(t *testing.T) {
 	ctx := context.Background()
 	p := &recordingProgrammer{}
 	var modeErr error
-	a := router.NewAggregator(p, func(context.Context, v1.NamespaceName) (v1.ExposureMode, error) {
-		return v1.ExposureImplicit, modeErr
+	a := router.NewAggregator(p, func(context.Context, v1.NamespaceName) (router.NamespaceDefaults, error) {
+		return router.NamespaceDefaults{Mode: v1.ExposureImplicit}, modeErr
 	}, nil, "", nil)
 	set(t, a, "routes", fnEntry("default", "echo", "/echo"))
 	calls := p.calls()
@@ -550,4 +550,31 @@ func TestAggregator_ProviderConflictKeepsItsClaims(t *testing.T) {
 	m, _ = rtr.Resolve("app.example.com", "/x", "GET")
 	require.Empty(t, m.Refused)
 	require.Equal(t, &router.OIDCAuth{Provider: "sso"}, m.OIDC)
+}
+
+// scenario: oidc-inherited-provider
+// ADR-0335 Decision 3 (amended 2026-11-21): a rule with no stance uses its namespace's provider, so a later entry of
+// its host naming another is ProviderConflict; an upstream row never inherits, so its host keeps another provider.
+func TestScenarioOidcInheritedProvider(t *testing.T) {
+	t.Parallel()
+	rtr := router.New()
+	a := router.NewAggregator(rtr, func(context.Context, v1.NamespaceName) (router.NamespaceDefaults, error) {
+		return router.NamespaceDefaults{Mode: v1.ExposureImplicit, OIDC: &router.OIDCAuth{Provider: "sso"}}, nil
+	}, nil, "", nil)
+	shop := router.Entry{Namespace: "staging", Host: "shop.example.com", Rules: []router.CompiledRule{{Path: "/", Function: "fn"}},
+		Owner: router.Owner{Kind: v1.KindRoute, Namespace: "staging", Name: "shop"}}
+	got := map[v1.ObjectName]string{}
+	for _, v := range set(t, a, "routes", shop, oidcEntry("staging", "zz", "shop.example.com", "/b", "public"),
+		oidcEntry("staging", "zy", "lake.example.com", "/b", "public")) {
+		got[v.Owner.Name] = v.Reason
+	}
+	lake := upstreamEntry("staging", "lake", "/", "http://up")
+	lake.Auth, lake.Host = "", "lake.example.com"
+	for _, v := range set(t, a, "lake/staging/lake", lake) {
+		got[v.Owner.Name] = v.Reason
+	}
+	require.Equal(t, map[v1.ObjectName]string{"shop": "", "zz": router.ReasonProviderConflict, "zy": "", "lake": ""}, got)
+	m, ok := rtr.Resolve("shop.example.com", "/b/x", "GET")
+	require.True(t, ok)
+	require.Equal(t, router.ReasonProviderConflict, m.Refused, "zz keeps /b and answers 503")
 }
