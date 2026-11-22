@@ -85,6 +85,9 @@ scripts/agent/d just spec-diagrams     # rewrite each <topic>.md after an edit, 
 scripts/agent/d python3 scripts/specs.py check docs/design/lake/stop.fizz   # one spec
 ```
 
+A check reuses a spec's pass from `.cache/specs` while its text, the fizz command and the state budget stay the same,
+and prints `reused` in place of the time; `SPECS_CACHE= just check-specs` runs FizzBee on every spec.
+
 For a trace by hand, copy the spec to a scratch directory (`fizz` writes `<spec>.json` beside it) and run
 `fizz --output-dir out <spec>.fizz`, with `--preinit-hook 'MUTANT = "<name>"'` for a mutant. A failure prints the
 steps from `Init` to the broken state: each block names the action or thread that ran and the state after it. Retell
