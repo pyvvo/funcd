@@ -880,6 +880,8 @@ addon-rauthy:
       to: web-policy.yaml
     - from: e2e/fixtures/addon-rauthy-values.yaml
       to: values.yaml
+    - from: e2e/fixtures/addon-rauthy-probe.py
+      to: probe.py
   tokens:
     admin: addon-rauthy-lane-admin
     developer: addon-rauthy-lane-developer

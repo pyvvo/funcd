@@ -17,7 +17,7 @@
 # restarts and sets rauthy's default back once it is deleted (ADR-0340, ADR-0341, ADR-0338); an admin's deploy of
 # rauthy's App template, whose IdentityProvider's policy goes to the App's own Function (ADR-0337); and a change of the
 # Addon that replaces no engine, while the App's next revision moves its part and a rollback takes it back (ADR-0339).
-# The staged Addon's policy resync is 5 s, so the drift check waits seconds.
+# The staged Addon's policy resync is 5 s, so the drift check waits seconds; probe.py reads the policy rauthy enforces.
 name: addon-rauthy — an Addon built outside funcd, registered and run on containerd (ADR-0332, containerd lane)
 
 vars:
@@ -26,33 +26,6 @@ vars:
   devtoken: addon-rauthy-lane-developer
   admintoken: addon-rauthy-lane-admin
   ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
-  # The probe of rauthy's password policy (ADR-0341): the shortest password rauthy takes now, which a password change
-  # of a user that rauthy holds names when it is too short. It signs in with the lane's API key settings.
-  probe: |
-    import json, re, subprocess, urllib.error, urllib.request
-    out = subprocess.run(["funcdctl", "get", "identityproviders", "login", "-n", "default", "-o", "json"],
-                         capture_output=True, text=True, check=True).stdout
-    addr = json.loads(out)["status"]["address"]
-    key = "API-Key settings$LaneSettingsKey0addonRauthy0settingsFunction0testValue0000000001"
-    def call(method, path, body=None):
-        req = urllib.request.Request("http://" + addr + path, data=None if body is None else json.dumps(body).encode(),
-                                     method=method, headers={"Authorization": key, "Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=10) as r:
-                return r.status, json.loads(r.read() or b"null")
-        except urllib.error.HTTPError as e:
-            return e.code, e.read().decode()
-    st, users = call("GET", "/auth/v1/users")
-    user = next((u for u in users if u.get("email") == "probe@login.example.com"), None) if st == 200 else None
-    if user is None:
-        st, user = call("POST", "/auth/v1/users", {"email": "probe@login.example.com", "given_name": "Probe",
-                                                   "language": "en", "roles": []})
-    st, body = call("PUT", "/auth/v1/users/" + user["id"], {"email": user["email"], "given_name": user.get("given_name"),
-                    "family_name": user.get("family_name"), "language": "en", "password": "aA1!bC2@",
-                    "roles": user.get("roles") or [], "groups": None, "enabled": True, "email_verified": False,
-                    "user_expires": None, "user_values": None})
-    m = re.search(r"Minimum password length is (\d+)", str(body))
-    print("MIN=" + (m.group(1) if st == 400 and m else "?"), st, str(body)[:200])
 
 testcases:
   - name: a developer's Addon is refused, and the admin's registers IdentityProvider
@@ -206,9 +179,8 @@ testcases:
           - result.systemout ShouldEqual Ready
       - type: exec
         script: |
-          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} python3 - <<'PY'
-          {{.probe}}
-          PY
+          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            python3 /opt/lane/probe.py
         info: "probe → {{.result.systemout}}"
         assertions:
           - result.systemout ShouldStartWith "MIN=16 "
@@ -217,19 +189,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} python3 - <<'PY'
-          {{.probe}}
-          print("LOOSE", call("PUT", "/auth/v1/password_policy", {"length_min": 10, "length_max": 128,
-                "include_lower_case": None, "include_upper_case": None, "include_digits": None, "include_special": None,
-                "valid_days": None, "not_recently_used": None})[0])
-          PY
+          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            python3 /opt/lane/probe.py loose
         assertions:
           - result.systemout ShouldContainSubstring "LOOSE 200"
       - type: exec
         script: |
-          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} python3 - <<'PY'
-          {{.probe}}
-          PY
+          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            python3 /opt/lane/probe.py
         retry: 30
         delay: 1
         info: "probe → {{.result.systemout}}"
@@ -279,9 +246,8 @@ testcases:
           - result.code ShouldEqual 0
       - type: exec
         script: |
-          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} python3 - <<'PY'
-          {{.probe}}
-          PY
+          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            python3 /opt/lane/probe.py
         retry: 30
         delay: 2
         info: "probe → {{.result.systemout}}"
