@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -174,4 +177,44 @@ func TestAddonObjectAnswersMatrix(t *testing.T) {
 			method: http.MethodPut, path: identityPath + "/login", body: as("login", typed),
 			detail: "body.spec.config.issuer"}),
 	))
+}
+
+// The answers of the AddonRevision operations (ADR-0339 Decision 1): an admin reads the revisions funcd stamps, and a
+// call with no credential or a developer's is refused.
+func TestAddonRevisionAnswersMatrix(t *testing.T) {
+	t.Parallel()
+	e := newAnswerEnv(t, funcd.WithAddonRegistries("ghcr.io"))
+	registerAddons(t, e, addonFixture("rauthy", "IdentityProvider"))
+	const coll = "/apis/funcd.io/v1alpha1/addonrevisions"
+	require.Eventually(t, func() bool {
+		resp, err := ask{method: http.MethodGet, path: coll + "/rauthy-1", token: answersAdmin}.do(e.c, e.api)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 10*time.Second, 20*time.Millisecond, "the Addon's first revision is stamped")
+	row := func(op, when string, a ask) answerRow {
+		if a.token == "" && when != "carries no bearer token" {
+			a.token = answersAdmin
+		}
+		return answerRow{op: op, when: when, on: e, ask: a}
+	}
+	list, get := "listAddonRevisions", "getAddonRevision"
+	runMatrix(t, []answerRow{
+		row(list, "", ask{what: "the list", method: http.MethodGet, path: coll, detail: `"name":"rauthy-1"`}),
+		row(list, "carries no bearer token", ask{what: "no credential", method: http.MethodGet, path: coll,
+			detail: "missing bearer token"}),
+		row(list, "does not allow it", ask{what: "a developer", method: http.MethodGet, path: coll, token: answersDev,
+			detail: "may not act on cluster-scoped kind"}),
+		row(get, "", ask{what: "a revision", method: http.MethodGet, path: coll + "/rauthy-1", detail: `"name":"rauthy-1"`}),
+		row(get, "of that name exists", ask{what: "a missing revision", method: http.MethodGet, path: coll + "/nope",
+			detail: "not found"}),
+		row(get, "in the path is not", ask{what: "a name that is no DNS-1123 label", method: http.MethodGet,
+			path: coll + "/Not_A_Label", detail: "path.name"}),
+		row(get, "carries no bearer token", ask{what: "no credential", method: http.MethodGet, path: coll + "/rauthy-1",
+			detail: "missing bearer token"}),
+		row(get, "does not allow it", ask{what: "a developer", method: http.MethodGet, path: coll + "/rauthy-1",
+			token: answersDev, detail: "may not act on cluster-scoped kind"}),
+	})
 }
