@@ -75,10 +75,12 @@ ConfigMap queues the Sites that render it, and a changed Secret queues the Apps 
 in memory and holds each key once. A key that changes during its pass runs once more.
 
 One worker takes the keys in order and calls the reconciler of the key's kind. Only one pass therefore runs at a time,
-and a slow pass delays every other kind. funcd has a reconciler for 17 kinds: App, Backup, BackupSchedule, Bucket,
-EventSource, Function, Identity, KVStore, Lake, Restore, Route, SQLDatabase, Sensor, Service, Site, Workflow and
-WorkflowRun. A pass acts on the platform: it sets the edge's routes, has the Executor start or stop workers, or creates
-a store. It then writes the object's status itself, through the store, at the version it read.
+and a slow pass delays every other kind. funcd has a reconciler for 21 kinds: Addon, AddonObject, App, Backup,
+BackupSchedule, Bucket, EventSource, Function, Identity, KVStore, Lake, Namespace, OIDCProvider, Restore, Route,
+SQLDatabase, Sensor, Service, Site, Workflow and WorkflowRun. AddonObject holds the objects of every add-on's kinds, its
+settings kinds included. A pass acts on the platform: it sets the edge's routes, has the Executor start or stop workers
+or engines, or creates a store. It then writes the object's status itself, through the store, at the version it read.
+A Ready add-on object's pass also sends its settings to their kinds' Functions, on a goroutine of its own.
 
 The controller retries a failed pass for ever, first after 5 ms, then doubling the wait up to 1 s
 (`controller.retryBackoffMax`). A kind that owns running instances, such as workers, asks to run again every 10 s

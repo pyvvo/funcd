@@ -8,8 +8,8 @@ description: funcd's three platform stores, the metastore, the event store and t
 The storage layer holds funcd's own state in three platform stores. Each store is a Badger database of its own under
 `storage.dataDir`. The metastore holds every resource. The event store holds what eventing must not lose. The run
 state holds each workflow run's progress. The Functions' data is not in the storage layer: it lives in the
-[services](../services/index.mdx), KV, Blob, SQL and Lake. With `storage.mode` set to `memory`, the three stores live
-in memory and are gone when funcd stops.
+[services](../services/index.mdx), KV, Blob, SQL and Lake, and in the add-on engines' storage. With `storage.mode`
+set to `memory`, the three stores live in memory and are gone when funcd stops.
 
 ## Metastore
 
