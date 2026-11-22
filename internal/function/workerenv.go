@@ -56,11 +56,53 @@ type ownWorkloadHook interface {
 var (
 	_ ownWorkloadHook = s3Hook{}
 	_ ownWorkloadHook = lakeHook{}
+	_ ownWorkloadHook = addonHook{}
 )
 
 // workloadHooks are the workload hooks in the order their gates hold a Function (ADR-0306 Decision 2).
 func (r *Reconciler) workloadHooks() []workloadHook {
-	return []workloadHook{rootEntriesHook{r}, volumesHook{r}, configHook{r}, dataReferencesHook{r}, s3Hook{r}, lakeHook{r}}
+	return []workloadHook{rootEntriesHook{r}, volumesHook{r}, configHook{r}, dataReferencesHook{r}, s3Hook{r}, lakeHook{r},
+		addonHook{r}}
+}
+
+// AddonProxy is where a worker reaches the add-on proxy, and the token it derives per Function (ADR-0338 Decision 3).
+// Address binds the proxy at its first use and returns its host and port; nil when funcd runs no proxy.
+type AddonProxy struct {
+	Address func() (string, error)
+	Token   func(ns v1.NamespaceName, fn v1.ObjectName) string
+}
+
+// addonHook gives a Function that binds add-on objects, for each alias, the proxy's base URL for it, shared, and the
+// Function's own token there (ADR-0338 Decision 3). A missing object is the data references' gate.
+type addonHook struct{ r *Reconciler }
+
+func (h addonHook) check(_ context.Context, fn *v1.Function) (map[string]string, *gateFailure, error) {
+	p := h.r.addonProxy
+	if len(fn.Spec.Bindings.Addon) == 0 || p.Address == nil {
+		return nil, nil, nil
+	}
+	addr, err := p.Address()
+	if err != nil {
+		return nil, nil, err
+	}
+	env := make(map[string]string, len(fn.Spec.Bindings.Addon))
+	for _, b := range fn.Spec.Bindings.Addon {
+		env["FUNCD_ADDON_"+strings.ToUpper(b.Alias)+"_URL"] = "http://" + addr + "/addon/" + b.Alias
+	}
+	return env, nil, nil
+}
+
+func (h addonHook) own(fn *v1.Function) (map[string]string, func() map[string]string, *gateFailure) {
+	p := h.r.addonProxy
+	if len(fn.Spec.Bindings.Addon) == 0 || p.Address == nil || p.Token == nil {
+		return nil, nil, nil
+	}
+	token := p.Token(fn.Namespace, fn.Name)
+	env := make(map[string]string, len(fn.Spec.Bindings.Addon))
+	for _, b := range fn.Spec.Bindings.Addon {
+		env["FUNCD_ADDON_"+strings.ToUpper(b.Alias)+"_TOKEN"] = token
+	}
+	return env, nil, nil
 }
 
 // bindings resolves fn's current bindings before any worker boots, every hook's check and then their own parts: the env

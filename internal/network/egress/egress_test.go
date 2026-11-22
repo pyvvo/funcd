@@ -619,3 +619,19 @@ func TestGloballyReachableIsOutsideTheTableAndOffTheNode(t *testing.T) {
 		require.False(t, ok, "%s is the node's own address", ip)
 	}
 }
+
+// scenario: addon-fence-stays — a Function that binds an add-on object, and dials its engine's address itself, is
+// refused by the egress gateway whatever rule permits it: its binding reaches the engine through funcd only (ADR-0338
+// Decision 7). The engine's input chain, with egress off, is the lane's.
+func TestScenarioAddonFenceStays(t *testing.T) {
+	t.Parallel()
+	worker := netip.MustParseAddr("10.63.0.6")
+	engine := netip.MustParseAddr("10.63.0.9")
+	workers, engines := NewMemoryWorkerIndex(), NewMemoryWorkerIndex()
+	workers.Add(worker, auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "rauthy-settings"})
+	engines.Add(engine, auth.EntityRef{Type: v1.KindAddonObject, Namespace: "acme", Name: "login"})
+	d := Deps{Workers: workers, DNS: fakeDNS{engine: {"login.acme.internal"}}, Authz: fakeAuthz{}, Engines: engines}
+	dec, _, err := decideConnect(context.Background(), d, worker, netip.AddrPortFrom(engine, 8080), "login.acme.internal")
+	require.NoError(t, err)
+	require.False(t, dec.Allowed, "the engine of the object the Function binds is refused too")
+}

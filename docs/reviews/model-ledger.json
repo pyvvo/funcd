@@ -14758,5 +14758,20 @@
     "dod_total": 17,
     "report": "docs/reviews/adr-0339-implementation-claude-opus-5-5.md",
     "notes": "pass, not independent (the builder reviewed); 12 mutants caught, one test strengthened; specs.py reads transition assertions; the lane case and the Implemented stamps of ADR-0337 and ADR-0339 before the PR"
+  },
+  {
+    "date": "2026-11-22",
+    "adr": "0338",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 17,
+    "dod_total": 19,
+    "report": "docs/reviews/adr-0338-implementation-claude-opus-5-5.md",
+    "notes": "pass, not independent (the builder reviewed); 11 mutants caught; the review moved the hold before readiness and made the proxy bind at first use; the lane case and the guide's section before the Implemented stamp"
   }
 ]

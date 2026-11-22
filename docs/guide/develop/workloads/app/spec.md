@@ -253,6 +253,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `addon` | array of [`App.spec.functions[].bindings.addon[]`](#appspecfunctionsbindingsaddon) | The add-on objects whose engines the code calls, each under its alias: through ctx.addon.fetch, or with any HTTP client at FUNCD_ADDON\_&lt;ALIAS&gt;\_URL with the header X-Funcd-Addon-Token set to FUNCD_ADDON\_&lt;ALIAS&gt;\_TOKEN. Each call goes through funcd, which asks Cedar for addon::call and serves only the paths that the object's edge entry serves. |
 | `blob` | array of [`App.spec.functions[].bindings.blob[]`](#appspecfunctionsbindingsblob) | The Bucket prefixes the code reaches through ctx.blob, and over S3 while the S3 gateway is on, each under its alias. The binding grants reads; only the prefix's owner and the writers that a RolesAssignment names may write. A Bucket or prefix that does not exist yet holds the Function in Pending with BucketNotFound. |
 | `config` | array of string values, each a DNS-1123 label | ConfigMaps whose keys each worker gets as environment variables when it starts, a later ConfigMap's value winning for a key that both hold. A key that starts with FUNCD\_, or that a bound Secret holds, is left out; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of a ConfigMap's. A missing ConfigMap holds the Function Failed with ConfigResolveFailed. |
 | `kv` | array of [`App.spec.functions[].bindings.kv[]`](#appspecfunctionsbindingskv) | The KV tables the code reaches through ctx.kv, each under its alias. The binding grants reads; only the table's owner and the writers that a RolesAssignment names may write. A store or table that does not exist yet holds the Function in Pending with KVStoreNotFound. |
@@ -260,6 +261,13 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `links` | array of [`App.spec.functions[].bindings.links[]`](#appspecfunctionsbindingslinks) | The Functions the code calls, each under its alias: through ctx.invoke one whose protocol is cloudevent, through ctx.fetch one whose protocol is http. Each target must exist in the namespace when this Function is applied, the namespace's links form no cycle, and a Function that a link targets cannot be deleted until the link goes. |
 | `secret` | array of string values, each a DNS-1123 label | Secrets whose keys the code reads through ctx.secret, on each read and with no cache, a later Secret's value winning for a key that both hold. No value reaches the worker's environment. No worker starts while a bound Secret is missing, and a worker whose Function a Policy forbids to read one is not ready. |
 | `sql` | array of [`App.spec.functions[].bindings.sql[]`](#appspecfunctionsbindingssql) | The SQLDatabases the code queries through ctx.sql, each under its alias. The binding grants reads; only the database's owner and the writers that a RolesAssignment names may write. A database that does not exist yet holds the Function in Pending with SQLDatabaseNotFound. |
+
+### `App.spec.functions[].bindings.addon[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `alias` | string, required, a DNS-1123 label | The name the handler calls the object by: ctx.addon.fetch takes it, and the worker gets FUNCD_ADDON\_&lt;ALIAS&gt;\_URL and FUNCD_ADDON\_&lt;ALIAS&gt;\_TOKEN for an HTTP SDK. Unique in the list. |
+| `object` | string, required, a DNS-1123 label | An add-on object of the Function's namespace, declared by its App when an App holds the Function. A missing one holds the Function in Pending with AddonObjectNotFound. |
 
 ### `App.spec.functions[].bindings.blob[]`
 

@@ -68,6 +68,17 @@ func RootDeclared(kv []v1.KVStoreEntry, buckets []v1.BucketEntry, sql []v1.SQLDa
 	return d
 }
 
+// AppDeclared is what an App's root declares: RootDeclared over its sections, and the add-on objects its addons
+// entries declare by name or ref (ADR-0338 Decision 1).
+func AppDeclared(s *v1.AppSpec) *Declared {
+	d := RootDeclared(s.KV, s.Buckets, s.SQL, s.Lakes, s.ConfigMaps, s.Secrets)
+	for _, e := range s.Addons {
+		d.Add(v1.KindAddonObject, e.Name)
+		d.Add(v1.KindAddonObject, e.Ref)
+	}
+	return d
+}
+
 // --- binding-declared (ADR-0248 Decision 2, ADR-0251 Decision 2, ADR-0337 Decision 3): Create/Update on Function,
 // Workflow, Lake and an App's add-on object
 
@@ -152,8 +163,7 @@ func (a bindingDeclared) controllerDeclared(ctx context.Context, req Request) (a
 	if err != nil || obj == nil {
 		return nil, step, err
 	}
-	s := &obj.(*v1.App).Spec
-	return RootDeclared(s.KV, s.Buckets, s.SQL, s.Lakes, s.ConfigMaps, s.Secrets), step, nil
+	return AppDeclared(&obj.(*v1.App).Spec), step, nil
 }
 
 // controller is the object c names in ns at c's UID, or nil.
@@ -220,6 +230,16 @@ func functionUndeclared(s *v1.FunctionSpec, app *Declared) error {
 	}
 	if err := names(u, "spec.bindings", b.Config, b.Secret); err != nil {
 		return err
+	}
+	// An App's Function binds only the add-on objects its App declares; a standalone Function binds any of its
+	// namespace, with no root entry (ADR-0338 Decision 1).
+	for i, x := range b.Addon {
+		if app == nil {
+			break
+		}
+		if !app.Has(v1.KindAddonObject, x.Object) {
+			return fmt.Errorf("spec.bindings.addon[%d]: add-on object %q is not declared in the App's spec.addons", i, x.Object)
+		}
 	}
 	for i, c := range s.Lakes {
 		if c.Name == "" {

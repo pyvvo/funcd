@@ -574,7 +574,8 @@ func bucketUsers() []v1.Kind {
 // EventSource's spec.blob.bucket, a Route's spec.rules[].backend.static.bucket or a Site's spec.bindings.blob[0].bucket names
 // (ADR-0080), a ConfigMap a Function's or Lake's spec.bindings.config or a Site's spec.runtimeConfig.configMap names
 // (ADR-0213 Decision 5, ADR-0239), a SQLDatabase a
-// Function's spec.bindings.sql names (ADR-0236). Nothing uses an object of another kind.
+// Function's spec.bindings.sql names (ADR-0236), an add-on object a Function's spec.bindings.addon names (ADR-0338
+// Decision 1). Nothing uses an object of another kind.
 func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Object) bool) (v1.ObjectRef, bool, error) {
 	const op = "gc.InUse"
 	var kinds []v1.Kind
@@ -585,6 +586,8 @@ func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Objec
 		kinds = bucketUsers()
 	case *v1.ConfigMap:
 		kinds = []v1.Kind{v1.KindFunction, v1.KindLake, v1.KindSite}
+	case *v1.AddonObject:
+		kinds = []v1.Kind{v1.KindFunction}
 	default:
 		return v1.ObjectRef{}, false, nil
 	}
@@ -617,6 +620,9 @@ func uses(u, obj v1.Object) bool {
 	case *v1.SQLDatabase:
 		f, ok := u.(*v1.Function)
 		return ok && slices.ContainsFunc(f.Spec.Bindings.SQL, func(b v1.FunctionSQL) bool { return b.Database == name })
+	case *v1.AddonObject:
+		f, ok := u.(*v1.Function)
+		return ok && slices.ContainsFunc(f.Spec.Bindings.Addon, func(b v1.FunctionAddon) bool { return b.Object == name })
 	case *v1.Bucket:
 		return usesBucket(u, name)
 	case *v1.ConfigMap:

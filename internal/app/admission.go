@@ -83,7 +83,7 @@ func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Ob
 		}
 	}
 	s := &app.Spec
-	declared := admission.RootDeclared(s.KV, s.Buckets, s.SQL, s.Lakes, s.ConfigMaps, s.Secrets)
+	declared := admission.AppDeclared(s)
 	parts := app.Parts()
 	for i, p := range parts {
 		k := keyOf(p)

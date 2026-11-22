@@ -95,6 +95,18 @@ func WithAnyAddonRegistry() Option {
 	return func(c *config) error { c.addonAnyRegistry = true; return nil }
 }
 
+// WithAddonCallLimits bounds a Function's call of an add-on object's engine (ADR-0338 Decision 4, addons.callTimeout and
+// addons.callPayloadLimit); 0 ⇒ 10 s and 1 MiB.
+func WithAddonCallLimits(timeout time.Duration, payload int64) Option {
+	return func(c *config) error {
+		if timeout < 0 || payload < 0 {
+			return fault.Invalidf("funcd.WithAddonCallLimits", "addons.callTimeout %s and addons.callPayloadLimit %d may not be negative", timeout, payload)
+		}
+		c.addonCallTimeout, c.addonCallPayload = timeout, payload
+		return nil
+	}
+}
+
 // WithAddonsFollowingCurrent makes every add-on object follow its Addon's current revision, as funcdctl dev does: a
 // changed Addon runs at once, with no App revision to move it (ADR-0339 Decision 7).
 func WithAddonsFollowingCurrent() Option {

@@ -37,7 +37,7 @@ status keeps its last one until the pass ends. An in-place Restore's two engine 
 | An object that cannot run | Pending, with no engine or edge entry, while its Addon is gone or does not fit, its env fails, or a Secret is missing or forbidden | a lifted forbid, `controller.referentPollInterval` 2 s | `AddonNotFound`, `ConfigInvalid`, `EnvInvalid`, `SecretNotFound`, `BindingResolveFailed` | decided | ADR-0332 Decisions 3 and 4, `TestAddonSecretForbidden` |
 | An object on a process server | Its Addon runs on containerd only, which the process runtime does not run; under funcdctl dev the add-on runtime runs containerd's | none | `Pending`, `RuntimeUnavailable`, naming both modes | decided | ADR-0332 Decision 3, `TestScenarioAddonRuntimeUnavailable` |
 | An object's engine | One replica of its Addon's image, port, probe and storage, with the object's resources, fenced with no endpoint | until its readiness path answers 200 | `Ready`; else `Pending`, `EngineNotReady`, or `EngineConvergeFailed` when it cannot start | decided | ADR-0332 Decision 3, ADR-0232's reasons, `TestScenarioAddonObjectRuns`, `TestReconcileFindsTheAddonByPlural` |
-| Who reaches an engine | funcd alone: the fence admits new connections from loopback and the bridge address, and the egress gateway refuses an engine's address whatever rule permits it, from before the engine starts | none | a refused connection | decided | ADR-0332 Decision 3, `TestDecideRefusesAnAddonEngine`, `TestAddonRuntimeIndexesEachEngineBeforeItStarts` |
+| Who reaches an engine | funcd, and a Function that binds the object through it: the fence admits loopback and the bridge address, and the egress gateway refuses an engine's address whatever rule permits it, before it starts | none | a refused connection | decided | ADR-0332 Decision 3, ADR-0338 Decision 7, `TestDecideRefusesAnAddonEngine`, `TestAddonRuntimeIndexesEachEngineBeforeItStarts` |
 | An object's environment | Its pinned revision's env over its config, a non-string as its JSON, and only the `secretKeys` of its bound Secrets, read by Cedar as the object; a changed Secret, pin or object replaces the engine | the next pass | the engine's environment | decided | ADR-0332 Decision 4, ADR-0339 Decision 2, `TestScenarioAddonSecretKeys` |
 | An object's edge entry | On `ingress.host` under its Addon's basePath, kept, ranked after a Lake's; its stance is its own `ingress.auth`, open when unset, never the namespace's default. A path or the authenticated mode is refused | once Ready | `IngressReady`; 400 | **differs** | ADR-0332 Decision 5 says 422 for authenticated; `Invalid` is 400 by ADR-0148 Decision 1; `TestAddonEntryStance` |
 | An object behind an `oidc` stance | Its own `ingress.auth` signs callers in through an OIDCProvider of its namespace, with `ingress.host` in `default`; while the provider is missing, the entry keeps its claim, refused | until the provider exists | `IngressReady=False`, `ProviderNotFound`; 503 | decided | ADR-0335 Decision 10, `TestAddonObjectProviderNotFound` |
@@ -54,6 +54,8 @@ status keeps its last one until the pass ends. An in-place Restore's two engine 
 
 | Value | Default | From |
 |---|---|---|
+| `addons.callPayloadLimit` | 1MiB | config |
+| `addons.callTimeout` | 10s | config |
 | `addons.maxObjectsPerNamespace` | 20 | config |
 | `addons.maxSettingsPerNamespace` | 200 | config |
 | `addons.registries` | [] | config |

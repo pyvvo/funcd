@@ -3241,9 +3241,33 @@ components:
         - apiVersion
         - kind
       type: object
+    FunctionAddon:
+      additionalProperties: false
+      properties:
+        alias:
+          description: "The name the handler calls the object by: ctx.addon.fetch takes it, and the worker gets FUNCD_ADDON_<ALIAS>_URL and FUNCD_ADDON_<ALIAS>_TOKEN for an HTTP SDK. Unique in the list."
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        object:
+          description: An add-on object of the Function's namespace, declared by its App when an App holds the Function. A missing one holds the Function in Pending with AddonObjectNotFound.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - alias
+        - object
+      type: object
     FunctionBindings:
       additionalProperties: false
       properties:
+        addon:
+          description: "The add-on objects whose engines the code calls, each under its alias: through ctx.addon.fetch, or with any HTTP client at FUNCD_ADDON_<ALIAS>_URL with the header X-Funcd-Addon-Token set to FUNCD_ADDON_<ALIAS>_TOKEN. Each call goes through funcd, which asks Cedar for addon::call and serves only the paths that the object's edge entry serves."
+          items:
+            $ref: "#/components/schemas/FunctionAddon"
+          type:
+            - array
+            - "null"
         blob:
           description: The Bucket prefixes the code reaches through ctx.blob, and over S3 while the S3 gateway is on, each under its alias. The binding grants reads; only the prefix's owner and the writers that a RolesAssignment names may write. A Bucket or prefix that does not exist yet holds the Function in Pending with BucketNotFound.
           items:

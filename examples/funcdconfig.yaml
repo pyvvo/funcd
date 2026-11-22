@@ -268,6 +268,8 @@ log:
 #   registries: []                # the registries an Addon's image may come from, its host (ghcr.io); empty refuses every Addon. default: []
 #   maxObjectsPerNamespace: 20    # cap per namespace on the add-on objects that run an engine, all add-ons together; negative ⇒ no cap. default: 20
 #   maxSettingsPerNamespace: 200  # cap per namespace on the settings objects, every settings kind together; negative ⇒ no cap. default: 200
+#   callTimeout: 10s              # how long a Function's call of an add-on object's engine waits for the answer; past it 503. default: 10s
+#   callPayloadLimit: 1048576     # the largest request and answer body of such a call, in bytes; larger is 413. default: 1MiB
 
 # --- volumes: Function volumes (ADR-0262) -------------------------------------------------------
 # volumes:

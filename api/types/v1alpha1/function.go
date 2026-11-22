@@ -108,6 +108,12 @@ type FunctionSQL struct {
 	Database ObjectName `json:"database" doc:"The SQLDatabase to query, in the same namespace."`
 }
 
+// FunctionAddon is an entry of FunctionBindings.Addon (ADR-0338 Decision 1).
+type FunctionAddon struct {
+	Alias  string     `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The name the handler calls the object by: ctx.addon.fetch takes it, and the worker gets FUNCD_ADDON_<ALIAS>_URL and FUNCD_ADDON_<ALIAS>_TOKEN for an HTTP SDK. Unique in the list."`
+	Object ObjectName `json:"object" doc:"An add-on object of the Function's namespace, declared by its App when an App holds the Function. A missing one holds the Function in Pending with AddonObjectNotFound."`
+}
+
 // FunctionLake binds this function to a Lake it consumes (ADR-0091, F61). Declaring the
 // binding is the grant: funcd injects FUNCD_LAKE_<ALIAS>_URL/_TOKEN, and (V2) grants egress.
 type FunctionLake struct {
@@ -386,6 +392,15 @@ func (s *FunctionSpec) validateBindings(op, prefix string) error {
 		dbs = append(dbs, [2]string{b.Alias, string(b.Database)})
 	}
 	if err := checkAliasTargets(op, prefix, "sql", "database", "SQLDatabase", dbs); err != nil {
+		return err
+	}
+	// Add-on binding structural rules (ADR-0338 Decision 1): alias a DNS-1123 label, unique within Addon; object a
+	// DNS-1123 name. The object's existence is reconcile-time (AddonObjectNotFound).
+	objs := make([][2]string, 0, len(s.Bindings.Addon))
+	for _, b := range s.Bindings.Addon {
+		objs = append(objs, [2]string{b.Alias, string(b.Object)})
+	}
+	if err := checkAliasTargets(op, prefix, "addon", "object", "add-on object", objs); err != nil {
 		return err
 	}
 	// Config binding structural rules (ADR-0093): each names a ConfigMap in this namespace and

@@ -123,6 +123,7 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `kibi` | 1KiB | `internal/platform/units/units.go` |
 | `mebi` | 1MiB | `internal/platform/units/units.go` |
 | `tebi` | 1TiB | `internal/platform/units/units.go` |
+| `addonProxyHeaderTimeout` | 10s | `pkg/funcd/addon_provider.go` |
 | `feedWaitPoll` | 50ms | `pkg/funcd/binding_providers.go` |
 | `sensorDeliveryTimeout` | 30s | `pkg/funcd/binding_providers.go` |
 | `sqlFeedBootWait` | 30s | `pkg/funcd/binding_providers.go` |

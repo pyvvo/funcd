@@ -346,6 +346,9 @@ type config struct {
 	// addonFollowCurrent makes every add-on object follow its Addon's current revision (WithAddonsFollowingCurrent,
 	// ADR-0339 Decision 7).
 	addonFollowCurrent bool
+	// addonCallTimeout and addonCallPayload bound a Function's call of an engine (WithAddonCallLimits, ADR-0338).
+	addonCallTimeout time.Duration
+	addonCallPayload int64
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
 	sqlCallTimeout time.Duration
 	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075 with a
@@ -713,7 +716,8 @@ func (p *Platform) buildControlPlane() error {
 		// ADR-0137 (F102): LakeCapability makes the live PDP understand lake::query; the per-Lake
 		// PEP proxy that calls it is not yet wired here — see TODO(ADR-0137) in internal/services/lake/reconcile.go.
 		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.LakeCapability(),
-			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapabilityWithWriters(writerLister)},
+			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapabilityWithWriters(writerLister),
+			cedarauth.AddonCapability()},
 		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.LakePrincipalSource(),
 			cedarauth.AddonObjectPrincipalSource()},
 	)
@@ -842,7 +846,7 @@ func (p *Platform) buildControlPlane() error {
 		return err
 	}
 	if err := p.addon.build(addonDeps{secrets: p.secrets.resolver, routes: edgeAgg, ctrl: ctrl,
-		indexEngines: p.exec.indexAddonEngines}); err != nil {
+		indexEngines: p.exec.indexAddonEngines, authz: cedarPDP, master: master}); err != nil {
 		return err
 	}
 	p.exec.addonNamespaces = p.addon.engineNamespaces
@@ -903,6 +907,7 @@ func (p *Platform) buildControlPlane() error {
 		PoolLimit:            c.poolLimit,
 		S3Gateway:            p.blob.injection,
 		LakeMaster:           master, // ADR-0137: per-function lake token derivation (same master as S3)
+		AddonProxy:           p.addon.proxyFor(),
 		LakeExtensionDir:     c.lakeExtensionDir,
 		LakeProxies:          p.lake.proxy,
 		Secrets:              p.secrets.resolver,

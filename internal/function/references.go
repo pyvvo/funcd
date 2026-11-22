@@ -79,6 +79,17 @@ func (r *Reconciler) resolveDataReferences(ctx context.Context, fn *v1.Function)
 		}
 	}
 
+	// ADR-0338 Decision 1: every spec.bindings.addon binding names an add-on object of the namespace.
+	for _, bnd := range fn.Spec.Bindings.Addon {
+		_, gerr := r.store.Get(ctx, v1.KindAddonObject.GVK(), ns, bnd.Object)
+		switch {
+		case fault.KindOf(gerr) == fault.NotFound:
+			return true, "AddonObjectNotFound", fmt.Sprintf("spec.bindings.addon[%s] → add-on object %q not found in namespace %q; waiting", bnd.Alias, bnd.Object, ns), nil
+		case gerr != nil:
+			return false, "", "", fault.Wrapf(gerr, fault.KindOf(gerr), op, "get add-on object %q", bnd.Object)
+		}
+	}
+
 	// ADR-0233 Decision 1: every spec.bindings.sql binding names a SQLDatabase of the namespace.
 	for _, bnd := range fn.Spec.Bindings.SQL {
 		_, gerr := r.store.Get(ctx, v1.KindSQLDatabase.GVK(), ns, bnd.Database)
