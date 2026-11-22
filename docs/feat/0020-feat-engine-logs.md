@@ -28,7 +28,7 @@ container.
 
 | # | Feature | Builds on | ADR(s) | Status |
 |---|---|---|---|---|
-| F267 | **An engine's logs are read as a Function's**: every line an engine writes for an add-on object, a Lake or a SQLDatabase is kept with the Functions' logs, under the object's kind and name, and read with `funcdctl logs <kind>/<name>` by whoever may read the object; `funcdctl dev` keeps an add-on container's lines the same way | FEAT-0004 (Function logs), FEAT-0018 | [ADR-0342](../adr/0342-an-engines-output-is-kept-and-read-as-a-functions-logs.md) | adr |
+| F267 | **An engine's logs are read as a Function's**: every line an engine writes for an add-on object, a Lake or a SQLDatabase is kept with the Functions' logs, under the object's kind and name, and read with `funcdctl logs <kind>/<name>` by whoever may read the object; `funcdctl dev` keeps an add-on container's lines in its log file and its store, out of the terminal, as a `dev.watch` command's | FEAT-0004 (Function logs), FEAT-0018 | [ADR-0342](../adr/0342-an-engines-output-is-kept-and-read-as-a-functions-logs.md) | adr |
 | F268 | **An engine's metrics**: an engine's metrics reach the operator's collector under the same kind, namespace, name and replica as its logs | F267 | — | idea |
 
 ## How it lands on funcd (high level)
