@@ -14803,5 +14803,20 @@
     "dod_total": 19,
     "report": "docs/reviews/adr-0342-implementation-claude-opus-5-5.md",
     "notes": "self-review (not independent, the decider's rule); 7 scenarios, answers matrix, 10/10 mutants; lanes addon-rauthy, duckdb, sql on containerd"
+  },
+  {
+    "date": "2026-11-22",
+    "adr": "0343",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 13,
+    "dod_total": 13,
+    "report": "docs/reviews/adr-0343-implementation-claude-opus-5-5.md",
+    "notes": "self-review (not independent, the decider's rule); scenario on a built SQL engine, Lake half on the fake engine; 2/2 mutants"
   }
 ]
