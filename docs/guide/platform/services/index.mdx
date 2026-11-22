@@ -18,8 +18,11 @@ Bucket keeps its objects in files or in S3. A SQL database runs on rqlite, which
 on DuckDB with DuckLake, and keeps its files under a prefix of a Bucket. A volume is a directory of a fixed size on the
 local disk.
 
+An admin can also register add-ons, engines built outside funcd such as an OpenID Connect provider: funcd runs one
+engine per object of an add-on's kind, and a Function reaches it through funcd only.
+
 Each service has its own page: [KV](kv.md), [Bucket](bucket.md), [SQL](sql.md), [Lake](lake.md),
-[Secrets](secrets.md) and [Events](events.md).
+[Add-ons](addons.md), [Secrets](secrets.md) and [Events](events.md).
 
 ## On disk
 

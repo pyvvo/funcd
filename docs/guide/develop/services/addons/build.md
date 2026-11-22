@@ -126,6 +126,18 @@ settings:
 A settings object takes no `bindings`, `ingress`, `resources` or `deletion`. Settings objects count toward
 `addons.maxSettingsPerNamespace`, 200 by default, and not toward the engines' `addons.maxObjectsPerNamespace`.
 
+### The kind's Function
+
+The kind's Function is a Function of the target's namespace that binds the target in `spec.bindings.addon`; funcd
+creates nothing for it, and a target may name its own in `spec.functions`. funcd calls it with each target's full
+list, as a CloudEvent of type `funcd.addon.settings` whose data holds `kind`, `cause` (`start`, `change`, `retry` or
+`resync`), `target` (its `kind`, its `name` and the `alias` that binds it) and `objects` (each one's `name`, `uid`,
+`generation` and `config`). The Function applies the whole list through `ctx.addon.fetch`, idempotently, puts the
+engine's default back for an empty list, and answers `{"results": [...]}`, each result an object's `name`, `ok`, and a
+`reason` and a `message` when it is not ok, in at most 1 MiB. A call past `addons.settingsTimeout`, 30 seconds by
+default, fails, and funcd calls again after a backoff. rauthy's is
+[`settings/rauthy-settings.mjs`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/settings/rauthy-settings.mjs).
+
 ## Test it under funcdctl dev
 
 `funcdctl dev` runs an add-on's engine on the local Docker or containerd, and its admin token registers an Addon:
@@ -149,6 +161,7 @@ admin URLs. Each funcd-addons release builds the plugins for Linux and macOS and
 
 ## Publish it
 
-An add-on of funcd's lives in its own folder of funcd-addons: `addon.yaml`, `examples/`, `README.md` and
+An add-on of funcd's lives in its own folder of funcd-addons: `app/`, its App template, which holds `addon.yaml`,
+`app.yaml` and `resources/`; `settings/`, the code of its settings kinds' Function; `examples/`, `README.md` and
 `plugin/funcdctl-<addon>/`. Its CI checks every manifest (block style, an image pinned by digest, known kinds), tests
 the plugin and runs the e2e; release-please tags each release, which attaches `<addon>.yaml`.
