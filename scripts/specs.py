@@ -12,11 +12,14 @@ A spec is a FizzBee file whose front matter sets max_actions and max_concurrent_
 
 A test that checks an assertion's property carries `oracle: docs/design/<part>/<topic>.fizz#<Assertion>` above it.
 FIZZ names the fizz command (default: `fizz` from the dev shell, which the flake pins); SPECS_MAX_STATES overrides the
-state budget. The diagram is computed from
+state budget. A check keeps each spec's pass under SPECS_CACHE (default .cache/specs; empty keeps none), keyed by the
+spec's text, the fizz command, the state budget and this script, and reuses it while none of them changes; the diagram
+is compared on every check. The diagram is computed from
 the state graph FizzBee writes (proto/graph.proto in its repo): nodes_*.pb holds one JSON state per node,
 adjacency_lists_*.pb the links between them.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -30,6 +33,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MAX_STATES = int(os.environ.get("SPECS_MAX_STATES", "100000"))
+CACHE = os.environ.get("SPECS_CACHE", str(ROOT / ".cache" / "specs"))
 DIAGRAM = re.compile(r"^#\s*diagram:\s*(.+)$", re.MULTILINE)
 MUTANT = re.compile(r"^#\s*mutant\s+([\w-]+):\s*(\S+)\s*$", re.MULTILINE)
 DECLARED = re.compile(r'^MUTANT = ""\s*$', re.MULTILINE)
@@ -277,6 +281,12 @@ def check(fizz: str, spec: Path) -> bool:
     if unset:
         print(f"{name}: sets no {' or '.join(unset)}; a spec names its bounds")
         return False
+    key = inputs(fizz, text)
+    if kept := reused(key):
+        print(f"{name}: pass ({kept['states']:,} states, reused)")
+        for mutant, expected in kept["mutants"]:
+            print(f"{name} mutant {mutant}: fails {expected} (reused)")
+        return current(spec, kept["diagram"])
     run = Run(fizz, spec)
     if run.verdict != "pass":
         print(f"{name}: FAILS {run.verdict} ({run.seconds:.1f} s)\n{trace(run.output)}")
@@ -300,15 +310,47 @@ def check(fizz: str, spec: Path) -> bool:
             print(f"{name} mutant {mutant}: fails {got}, not {expected}")
             ok = False
     want, why = diagram(fizz, spec)
-    md = spec.with_suffix(".md")
     if want is None:
         print(f"{name}: {why}")
         return False
+    if ok:
+        keep(key, {"spec": str(name), "states": run.states(), "mutants": mutants, "diagram": want})
+    return current(spec, want) and ok
+
+
+def current(spec: Path, want: str) -> bool:
+    md = spec.with_suffix(".md")
     if not md.exists() or md.read_text() != want:
         print(f"{md.name}: STALE, run `just spec-diagrams`")
         return False
     print(f"{md.name}: current")
-    return ok
+    return True
+
+
+def inputs(fizz: str, text: str) -> str:
+    """The hash of what a check's result depends on: the spec's text, the fizz command, the state budget, this script."""
+    command = Path(shutil.which(fizz) or fizz).resolve()
+    parts = [text.encode(), command.read_bytes(), str(MAX_STATES).encode(), Path(__file__).read_bytes()]
+    return hashlib.sha256(b"".join(hashlib.sha256(p).digest() for p in parts)).hexdigest()
+
+
+def reused(key: str) -> dict | None:
+    if not CACHE:
+        return None
+    try:
+        return json.loads((Path(CACHE) / f"{key}.json").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def keep(key: str, entry: dict) -> None:
+    if not CACHE:
+        return
+    path = Path(CACHE) / f"{key}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{key}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(entry))
+    tmp.replace(path)
 
 
 def oracles() -> tuple[dict[tuple[str, str], list[str]], list[str]]:
