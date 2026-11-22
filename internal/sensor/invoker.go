@@ -49,26 +49,33 @@ type HTTPInvoker struct {
 // upstream (waking it if cold), POSTs the CloudEvent and runs After. A refusal, or a transport/5xx/4xx failure, is
 // Unavailable, carrying the start of the answer; the caller records it on the Invocation (never silently dropped).
 func (i *HTTPInvoker) Invoke(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, ev eventing.CloudEvent) error {
+	_, err := i.InvokeReply(ctx, ns, fn, ev, 0)
+	return err
+}
+
+// InvokeReply is Invoke that also returns a successful answer's body, which fails the call as Unavailable past limit
+// bytes; a limit of 0 reads none (ADR-0341 Decision 2: a settings Function's answer).
+func (i *HTTPInvoker) InvokeReply(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, ev eventing.CloudEvent, limit int64) ([]byte, error) {
 	ref := activator.FunctionRef{Namespace: ns, Name: fn}
 	if err := activator.RefuseHTTP(ctx, i.Protocol, ref, op); err != nil {
-		return err
+		return nil, err
 	}
 	body, err := json.Marshal(ev)
 	if err != nil {
-		return fault.Internalf(op, "marshal cloudevent: %v", err)
+		return nil, fault.Internalf(op, "marshal cloudevent: %v", err)
 	}
 	// The upstream is known only after the wake, and Before runs first, so the URL is set below.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://upstream.invalid/", bytes.NewReader(body))
 	if err != nil {
-		return fault.Internalf(op, "build request: %v", err)
+		return nil, fault.Internalf(op, "build request: %v", err)
 	}
 	req.Header.Set("Content-Type", contentTypeCE)
 	call := &invoke.Call{Caller: i.caller(), Target: ref, Request: req}
 	if rf := i.Chain.Admit(ctx, call); rf != nil {
-		return refused(ns, fn, rf)
+		return nil, refused(ns, fn, rf)
 	}
 	if rf := i.Chain.Before(ctx, call); rf != nil {
-		return refused(ns, fn, rf)
+		return nil, refused(ns, fn, rf)
 	}
 	var upstream string
 	if i.Waker != nil {
@@ -76,33 +83,43 @@ func (i *HTTPInvoker) Invoke(ctx context.Context, ns v1.NamespaceName, fn v1.Obj
 		// actions keep arriving (issue #48); a ready target returns its upstream at once.
 		up, err := i.Waker.Wake(ctx, ref)
 		if err != nil {
-			return fault.Wrapf(err, fault.KindOf(err), op, "wake %s/%s", ns, fn)
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "wake %s/%s", ns, fn)
 		}
 		upstream = up
 	} else {
 		up, ready, err := i.Endpoints.Upstream(ctx, ref)
 		if err != nil {
-			return fault.Wrapf(err, fault.KindOf(err), op, "resolve upstream for %s/%s", ns, fn)
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "resolve upstream for %s/%s", ns, fn)
 		}
 		if !ready || up == "" {
-			return fault.Unavailablef(op, "function %s/%s has no ready upstream", ns, fn)
+			return nil, fault.Unavailablef(op, "function %s/%s has no ready upstream", ns, fn)
 		}
 		upstream = up
 	}
 	target, err := url.Parse(upstream)
 	if err != nil {
-		return fault.Internalf(op, "build request: %v", err)
+		return nil, fault.Internalf(op, "build request: %v", err)
 	}
 	call.Request.URL, call.Request.Host = target, ""
 	resp, err := i.client().Do(call.Request)
 	if err != nil {
-		return fault.Wrapf(err, fault.Unavailable, op, "POST to %s/%s upstream", ns, fn)
+		return nil, fault.Wrapf(err, fault.Unavailable, op, "POST to %s/%s upstream", ns, fn)
 	}
 	defer httpx.CloseBody(resp.Body)
 	if rf := i.Chain.After(ctx, call, invoke.NewAnswer(resp)); rf != nil {
-		return refused(ns, fn, rf)
+		return nil, refused(ns, fn, rf)
 	}
-	return answerError(ns, fn, resp.StatusCode, resp.Body)
+	if err := answerError(ns, fn, resp.StatusCode, resp.Body); err != nil || limit <= 0 {
+		return nil, err
+	}
+	answer, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Unavailable, op, "read the answer of %s/%s", ns, fn)
+	}
+	if int64(len(answer)) > limit {
+		return nil, fault.Unavailablef(op, "the answer of %s/%s is larger than %d bytes", ns, fn, limit)
+	}
+	return answer, nil
 }
 
 // answerError is nil for a status below 400, else Unavailable with the start of the answer.

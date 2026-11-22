@@ -130,6 +130,22 @@ components:
             - array
             - "null"
       type: object
+    AddonObjectFunction:
+      additionalProperties: false
+      properties:
+        kind:
+          description: A settings kind of the object's Addon, named once.
+          type: string
+        ref:
+          description: A Function of the object's namespace that binds the object in its bindings.addon, which funcd calls with the object's settings objects of the kind. In an App, a Function the App declares.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - kind
+        - ref
+      type: object
     AddonObjectSpec:
       additionalProperties: false
       properties:
@@ -144,6 +160,13 @@ components:
             - retain
             - delete
           type: string
+        functions:
+          description: The object's own Function for a settings kind of its Addon, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none.
+          items:
+            $ref: "#/components/schemas/AddonObjectFunction"
+          type:
+            - array
+            - "null"
         ingress:
           $ref: "#/components/schemas/Ingress"
           description: Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused.
@@ -877,6 +900,13 @@ components:
                   - retain
                   - delete
                 type: string
+              functions:
+                description: The object's own Function for a settings kind of its Addon, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none.
+                items:
+                  $ref: "#/components/schemas/AddonObjectFunction"
+                type:
+                  - array
+                  - "null"
               ingress:
                 $ref: "#/components/schemas/Ingress"
                 description: Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused.

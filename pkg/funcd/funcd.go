@@ -349,6 +349,8 @@ type config struct {
 	// addonCallTimeout and addonCallPayload bound a Function's call of an engine (WithAddonCallLimits, ADR-0338).
 	addonCallTimeout time.Duration
 	addonCallPayload int64
+	// addonSettingsTimeout bounds a settings Function's call (WithAddonSettingsTimeout, ADR-0341); 0 ⇒ 30 s.
+	addonSettingsTimeout time.Duration
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
 	sqlCallTimeout time.Duration
 	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075 with a
@@ -1098,6 +1100,14 @@ func (p *Platform) buildControlPlane() error {
 	}
 	ctrl.Register(v1.KindApp.GVK(), appReconciler)
 	ctrl.Watches(v1.KindFunction.GVK(), appReconciler.MapStepFunction) // a Workflow part waits for its step Functions (ADR-0215)
+	// ADR-0341: a settings kind's Function is called from its target's pass through an invoker of the hooks' kind,
+	// bounded by addons.settingsTimeout; a Function's change requeues the settings objects it applies and their targets.
+	if rec := p.addon.reconciler; rec != nil {
+		rec.SetSettingsCaller(addonSettingsCaller{inv: &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act,
+			Protocol: protocolOf(c.store), Client: workerClient(calls, 0), Chain: callChain, Caller: invoke.AddonSettings}},
+			ctrl.Enqueue, c.addonSettingsTimeout)
+		ctrl.Watches(v1.KindFunction.GVK(), rec.MapFunction)
+	}
 	for _, pair := range gc.Pairs() {
 		if pair.Owner == v1.KindApp && pair.Child != v1.KindAppRevision { // a record, not a part (ADR-0200)
 			ctrl.Watches(pair.Child.GVK(), appReconciler.MapPart)

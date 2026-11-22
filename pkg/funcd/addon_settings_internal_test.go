@@ -81,13 +81,21 @@ func (e *addonEnv) create(t *testing.T, path string, obj *v1.AddonObject) (int, 
 	return e.send(t, http.MethodPost, fmt.Sprintf(path, obj.Namespace), addonDevToken, obj)
 }
 
-// replace puts obj over the stored object of its name, at the stored resourceVersion.
+// replace puts obj over the stored object of its name, at the stored resourceVersion: read again after a 409, since
+// funcd writes a settings object's status (ADR-0341 Decision 4).
 func (e *addonEnv) replace(t *testing.T, path string, obj *v1.AddonObject) (int, string) {
 	t.Helper()
-	cur, ok := e.object(t, obj.Namespace, obj.Name)
-	require.True(t, ok, "%s/%s is stored", obj.Namespace, obj.Name)
-	obj.ResourceVersion = cur.ResourceVersion
-	return e.send(t, http.MethodPut, fmt.Sprintf(path, obj.Namespace)+"/"+string(obj.Name), addonDevToken, obj)
+	for range 20 {
+		cur, ok := e.object(t, obj.Namespace, obj.Name)
+		require.True(t, ok, "%s/%s is stored", obj.Namespace, obj.Name)
+		obj.ResourceVersion = cur.ResourceVersion
+		status, detail := e.send(t, http.MethodPut, fmt.Sprintf(path, obj.Namespace)+"/"+string(obj.Name), addonDevToken, obj)
+		if status != http.StatusConflict {
+			return status, detail
+		}
+	}
+	require.Failf(t, "replace", "%s/%s conflicted 20 times", obj.Namespace, obj.Name)
+	return 0, ""
 }
 
 func created(status int) bool { return status/100 == 2 }
@@ -183,6 +191,9 @@ func TestScenarioSettingsObjectNoEngine(t *testing.T) {
 		"bindings":  func(o *v1.AddonObject) { o.Spec.Bindings.Secret = []v1.ObjectName{"rauthy-keys"} },
 		"resources": func(o *v1.AddonObject) { o.Spec.Resources.Memory = "64Mi" },
 		"deletion":  func(o *v1.AddonObject) { o.Spec.Deletion = v1.DeletionDelete },
+		"functions": func(o *v1.AddonObject) {
+			o.Spec.Functions = []v1.AddonObjectFunction{{Kind: "RauthyPasswordPolicy", Ref: "rauthy-settings"}}
+		},
 	} {
 		o := policy("default", "strict", "login", 16, 64)
 		mutate(o)

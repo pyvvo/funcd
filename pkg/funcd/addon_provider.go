@@ -3,7 +3,9 @@ package funcd
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -19,10 +21,12 @@ import (
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/edge/oidc"
 	"github.com/pyvvo/funcd/internal/edge/router"
+	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/health"
 	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/sensor"
 	addonsvc "github.com/pyvvo/funcd/internal/services/addon"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -255,6 +259,7 @@ func (s *addonProvider) build(d addonDeps) error {
 	d.ctrl.Watches(v1.KindSecret.GVK(), rec.MapSecret)
 	d.ctrl.Watches(v1.KindOIDCProvider.GVK(), rec.MapOIDCProvider)
 	d.ctrl.Watches(v1.KindRestore.GVK(), rec.MapRestore)
+	d.ctrl.Watches(v1.KindAddonObject.GVK(), rec.MapSettings)
 	return nil
 }
 
@@ -299,4 +304,33 @@ func (s *addonProvider) engineNamespaces() []v1.NamespaceName {
 		return n.Namespaces()
 	}
 	return nil
+}
+
+// settingsReplyLimit bounds a settings Function's answer as the local API bounds a call's answer, maxInvokeBytes
+// (ADR-0341 Decision 2).
+const settingsReplyLimit = 1 << 20
+
+// addonSettingsCaller calls a settings kind's Function with one target's list as a CloudEvent, through an invoker of the
+// App hooks' kind, and reads its answer (ADR-0341 Decision 2).
+type addonSettingsCaller struct{ inv *sensor.HTTPInvoker }
+
+func (a addonSettingsCaller) Call(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, call addonsvc.SettingsCall) (addonsvc.SettingsReply, error) {
+	const op = "funcd.addonSettingsCaller"
+	data, err := json.Marshal(call)
+	if err != nil {
+		return addonsvc.SettingsReply{}, fault.Internalf(op, "marshal the call: %v", err)
+	}
+	now := time.Now()
+	ev := eventing.CloudEvent{SpecVersion: "1.0", ID: fmt.Sprintf("settings-%d", now.UnixNano()),
+		Source: fmt.Sprintf("funcd://%s/addon/%s", ns, call.Target.Name), Type: "funcd.addon.settings",
+		Time: v1.NewTimestamp(now), DataContentType: "application/json", Data: data}
+	body, err := a.inv.InvokeReply(ctx, ns, fn, ev, settingsReplyLimit)
+	if err != nil {
+		return addonsvc.SettingsReply{}, err
+	}
+	var reply addonsvc.SettingsReply
+	if err := json.Unmarshal(body, &reply); err != nil {
+		return addonsvc.SettingsReply{}, fault.Unavailablef(op, "the answer of %s/%s is no settings reply: %v", ns, fn, err)
+	}
+	return reply, nil
 }

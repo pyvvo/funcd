@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -108,6 +109,15 @@ type Reconciler struct {
 
 	mu   sync.Mutex
 	seen map[provider.ProviderRef]seenObject // each object's UID and deletion policy at its last pass
+
+	// The settings step (ADR-0341): the caller of the settings Functions, the controller's Enqueue, each call's bound,
+	// and what this process knows of each target's calls.
+	settingsMu      sync.Mutex
+	caller          SettingsCaller
+	enqueue         func(controller.Request)
+	settingsTimeout time.Duration
+	settings        map[settingsKey]*settingsState
+	targets         map[provider.ProviderRef]targetSeen
 }
 
 // seenObject is what a pass saw of an object that its deletion needs once the object is gone.
@@ -144,8 +154,11 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		referentPoll: orDefault(d.ReferentPollInterval, defaultPollInterval),
 		enginePoll:   min(orDefault(d.EnginePollInterval, defaultPollInterval), period),
 		files:        d.Files, volumes: d.Volumes, gate: gate, quarantine: d.QuarantinePeriod, now: now,
-		followCurrent: d.FollowCurrent,
-		seen:          map[provider.ProviderRef]seenObject{},
+		followCurrent:   d.FollowCurrent,
+		seen:            map[provider.ProviderRef]seenObject{},
+		settingsTimeout: DefaultSettingsTimeout,
+		settings:        map[settingsKey]*settingsState{},
+		targets:         map[provider.ProviderRef]targetSeen{},
 	}, nil
 }
 
@@ -161,14 +174,17 @@ func routeSource(ns v1.NamespaceName, name v1.ObjectName) string {
 	return "addon/" + string(ns) + "/" + string(name)
 }
 
-// MapAddon maps an Addon's change to every object of its kind, in every namespace, whatever the Addon's name: an
-// object belongs to the Addon that registers its kind (ADR-0332 Decision 2), and an Addon's kind never changes.
+// MapAddon maps an Addon's change to every object of its kinds, in every namespace, whatever the Addon's name: an
+// object belongs to the Addon that registers its kind (ADR-0332 Decision 2), and an Addon's kind never changes. A
+// settings object follows its Addon too (ADR-0341 Decision 4).
 func (r *Reconciler) MapAddon(ctx context.Context, obj v1.Object) []controller.Request {
 	a, ok := obj.(*v1.Addon)
 	if !ok {
 		return nil
 	}
-	return r.objects(ctx, "", func(o *v1.AddonObject) bool { return v1.SameAddonKind(o.Spec.Kind, a.Spec.Kind) })
+	return r.objects(ctx, "", func(o *v1.AddonObject) bool {
+		return slices.ContainsFunc(a.Spec.Kinds(), func(k string) bool { return v1.SameAddonKind(o.Spec.Kind, k) })
+	})
 }
 
 // MapSecret maps a Secret's change to the objects of its namespace that bind it: a new Secret ends a SecretNotFound

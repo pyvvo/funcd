@@ -44,6 +44,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `bindings` | object, [`App.spec.addons[].bindings`](#appspecaddonsbindings) | What the object's engine uses. |
 | `config` | any JSON value | The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object. |
 | `deletion` | string, one of `retain`, `delete` | What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. |
+| `functions` | array of [`App.spec.addons[].functions[]`](#appspecaddonsfunctions) | The object's own Function for a settings kind of its Addon, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none. |
 | `ingress` | object, [`App.spec.addons[].ingress`](#appspecaddonsingress) | Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused. |
 | `kind` | string | The add-on's kind: one that an Addon registers, as the Addon writes it. A ref entry leaves it unset. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
@@ -55,6 +56,13 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `secret` | array of string values, each a DNS-1123 label | Secrets of the namespace whose keys, those that the Addon's spec.secretKeys lists, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine. |
+
+### `App.spec.addons[].functions[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `kind` | string, required | A settings kind of the object's Addon, named once. |
+| `ref` | string, required, a DNS-1123 label | A Function of the object's namespace that binds the object in its bindings.addon, which funcd calls with the object's settings objects of the kind. In an App, a Function the App declares. |
 
 ### `App.spec.addons[].ingress`
 

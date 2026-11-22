@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -62,6 +63,9 @@ func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Ob
 		return req.Object, nil
 	}
 	if err := undeclaredSecret(app); err != nil {
+		return nil, err
+	}
+	if err := undeclaredSettingsFunction(app); err != nil {
 		return nil, err
 	}
 	st := stored{r: a.r, ns: app.Namespace, lists: map[v1.Kind][]v1.Object{}}
@@ -145,6 +149,24 @@ func undeclaredSecret(app *v1.App) error {
 	for i, e := range s.Addons {
 		if err := check(fmt.Sprintf("spec.addons[%d]", i), v1.Kind(e.Kind), e.Name, e.Bindings.Secret); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// undeclaredSettingsFunction refuses the first ref in an add-on object's spec.functions that names no Function the App
+// declares, by name or by ref (ADR-0341 Decision 3), so an App's copy of a template calls its own Functions only.
+func undeclaredSettingsFunction(app *v1.App) error {
+	declared := map[v1.ObjectName]bool{}
+	for _, f := range app.Spec.Functions {
+		declared[cmp.Or(f.Name, f.Ref)] = true
+	}
+	for i, e := range app.Spec.Addons {
+		for j, f := range e.Functions {
+			if !declared[f.Ref] {
+				return fault.Invalidf(admitOp, "spec.addons[%d].functions[%d].ref: %s/%s names Function %q, which spec.functions does not declare",
+					i, j, e.Kind, cmp.Or(e.Name, e.Ref), f.Ref)
+			}
 		}
 	}
 	return nil

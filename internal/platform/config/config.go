@@ -464,6 +464,8 @@ type Config struct {
 		// CallTimeout and CallPayloadLimit bound a Function's call of an add-on object's engine (ADR-0338 Decision 4).
 		CallTimeout      string `json:"callTimeout,omitempty" env:"FUNCD_ADDONS_CALL_TIMEOUT" doc:"How long a Function's call of an add-on object's engine waits for the answer, through ctx.addon.fetch or the add-on proxy, as a positive duration such as 10s; a call past it gets 503. Empty means 10s."`
 		CallPayloadLimit int64  `json:"callPayloadLimit,omitempty" env:"FUNCD_ADDONS_CALL_PAYLOAD_LIMIT" validate:"min=0" doc:"The largest request body and the largest answer body, in bytes, of a Function's call of an add-on object's engine: a larger one gets 413. 0 means 1 MiB."`
+		// SettingsTimeout bounds a settings kind's Function's call (ADR-0341 Decision 8).
+		SettingsTimeout string `json:"settingsTimeout,omitempty" env:"FUNCD_ADDONS_SETTINGS_TIMEOUT" doc:"How long funcd waits for a settings kind's Function to answer a call with one target's settings objects, as a positive duration such as 30s: past it the call fails, each object of the call reports ReconcileFailed, and funcd calls again after a backoff. Empty means 30s."`
 	} `json:"addons,omitempty"`
 
 	// Volumes turns the Functions' volumes on (ADR-0262 Decision 3): CapacityBytes is the size of the one volume image

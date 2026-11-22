@@ -229,6 +229,9 @@ func (a addonObject) Admit(ctx context.Context, req admission.Request) (v1.Objec
 	if err := engineFields(k, o.Spec); err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "%s", o.Name)
 	}
+	if err := settingsFunctions(k, o.Spec.Functions); err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "%s", o.Name)
+	}
 	v, err := contract.Compile(k.schema())
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "compile the %s schema of Addon %q", k.name(), k.addon.Name)
@@ -593,6 +596,9 @@ func stored(k servedKind, o v1.AddonObject) (*v1.AddonObject, error) {
 	if err := engineFields(k, o.Spec); err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "%s", o.Name)
 	}
+	if err := settingsFunctions(k, o.Spec.Functions); err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "%s", o.Name)
+	}
 	v, err := contract.Compile(k.schema())
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "compile the %s schema of Addon %q", kind, k.addon.Name)
@@ -618,14 +624,32 @@ func stored(k servedKind, o v1.AddonObject) (*v1.AddonObject, error) {
 	return &out, nil
 }
 
-// engineFields refuses an engine field on an object of a settings kind (ADR-0340 Decision 3).
+// engineFields refuses an engine field, and a target's spec.functions, on an object of a settings kind (ADR-0340
+// Decision 3, ADR-0341 Decision 3).
 func engineFields(k servedKind, s v1.AddonObjectSpec) error {
 	if k.settings == nil {
 		return nil
 	}
-	if len(s.Bindings.Secret) > 0 || s.Ingress != nil || s.Resources != (v1.ResourceSpec{}) || s.Deletion != "" {
+	if len(s.Bindings.Secret) > 0 || s.Ingress != nil || s.Resources != (v1.ResourceSpec{}) || s.Deletion != "" || len(s.Functions) > 0 {
 		return fault.Invalidf("controlplane.addonObject", "a %s object runs no engine: spec.bindings, spec.ingress, "+
-			"spec.resources and spec.deletion are not allowed", k.name())
+			"spec.resources, spec.deletion and spec.functions are not allowed", k.name())
+	}
+	return nil
+}
+
+// settingsFunctions checks a target's own Functions (ADR-0341 Decision 3): each entry names a settings kind of the
+// target's Addon as it is now, once. engineFields refuses them on a settings object.
+func settingsFunctions(k servedKind, fns []v1.AddonObjectFunction) error {
+	const op = "controlplane.addonObject"
+	for i, f := range fns {
+		if k.addon.Spec.SettingsKind(f.Kind) == nil {
+			return fault.Invalidf(op, "spec.functions[%d].kind %q is no settings kind of Addon %q", i, f.Kind, k.addon.Name)
+		}
+		for j := range i {
+			if v1.SameAddonKind(fns[j].Kind, f.Kind) {
+				return fault.Invalidf(op, "spec.functions[%d].kind %q is named by spec.functions[%d] too", i, f.Kind, j)
+			}
+		}
 	}
 	return nil
 }

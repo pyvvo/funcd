@@ -418,12 +418,19 @@ type AddonObject struct {
 
 // AddonObjectSpec is what a user declares in an object of an add-on's kind.
 type AddonObjectSpec struct {
-	Kind      string              `json:"kind,omitempty" doc:"The add-on's kind, which funcd sets from the path the object is written at."`
-	Config    json.RawMessage     `json:"config,omitempty" doc:"The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object."`
-	Bindings  AddonObjectBindings `json:"bindings,omitempty" doc:"What the object's engine uses."`
-	Ingress   *Ingress            `json:"ingress,omitempty" doc:"Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused."`
-	Resources ResourceSpec        `json:"resources,omitempty" doc:"The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine."`
-	Deletion  DeletionPolicy      `json:"deletion,omitempty" doc:"What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way."`
+	Kind      string                `json:"kind,omitempty" doc:"The add-on's kind, which funcd sets from the path the object is written at."`
+	Config    json.RawMessage       `json:"config,omitempty" doc:"The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object."`
+	Bindings  AddonObjectBindings   `json:"bindings,omitempty" doc:"What the object's engine uses."`
+	Ingress   *Ingress              `json:"ingress,omitempty" doc:"Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused."`
+	Resources ResourceSpec          `json:"resources,omitempty" doc:"The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine."`
+	Deletion  DeletionPolicy        `json:"deletion,omitempty" doc:"What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way."`
+	Functions []AddonObjectFunction `json:"functions,omitempty" doc:"The object's own Function for a settings kind of its Addon, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none."`
+}
+
+// AddonObjectFunction names a target's own Function for one settings kind (ADR-0341 Decision 3).
+type AddonObjectFunction struct {
+	Kind string     `json:"kind" doc:"A settings kind of the object's Addon, named once."`
+	Ref  ObjectName `json:"ref" doc:"A Function of the object's namespace that binds the object in its bindings.addon, which funcd calls with the object's settings objects of the kind. In an App, a Function the App declares."`
 }
 
 // AddonObjectBindings are what an add-on object's engine uses (ADR-0332 Decision 4).
@@ -514,6 +521,14 @@ func (o *AddonObject) Validate() error {
 	for _, s := range o.Spec.Bindings.Secret {
 		if !dnsLabel.MatchString(string(s)) {
 			return fault.Invalidf(op, "spec.bindings.secret entry %q is not a valid DNS-1123 name", s)
+		}
+	}
+	for i, f := range o.Spec.Functions {
+		switch {
+		case !IsAddonKind(f.Kind):
+			return fault.Invalidf(op, "spec.functions[%d].kind %q is not an add-on's kind", i, f.Kind)
+		case !dnsLabel.MatchString(string(f.Ref)):
+			return fault.Invalidf(op, "spec.functions[%d].ref %q is not a valid DNS-1123 name", i, f.Ref)
 		}
 	}
 	if in := o.Spec.Ingress; in != nil {

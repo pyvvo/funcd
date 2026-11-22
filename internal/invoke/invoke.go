@@ -21,11 +21,12 @@ import (
 type Caller int
 
 const (
-	External     Caller = iota + 1 // the data-plane listener, by name or through a Route
-	FnToFn                         // a Function's own call (ADR-0064)
-	WorkflowStep                   // a workflow step (ADR-0094)
-	SensorAction                   // a Sensor's function action (ADR-0108)
-	AppHook                        // an App's lifecycle hook (ADR-0214)
+	External      Caller = iota + 1 // the data-plane listener, by name or through a Route
+	FnToFn                          // a Function's own call (ADR-0064)
+	WorkflowStep                    // a workflow step (ADR-0094)
+	SensorAction                    // a Sensor's function action (ADR-0108)
+	AppHook                         // an App's lifecycle hook (ADR-0214)
+	AddonSettings                   // a settings kind's Function, called from its target's pass (ADR-0341)
 )
 
 // String names the caller in logs and test failures.
@@ -41,6 +42,8 @@ func (c Caller) String() string {
 		return "SensorAction"
 	case AppHook:
 		return "AppHook"
+	case AddonSettings:
+		return "AddonSettings"
 	}
 	return "Caller(?)"
 }

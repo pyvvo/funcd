@@ -270,6 +270,7 @@ log:
 #   maxSettingsPerNamespace: 200  # cap per namespace on the settings objects, every settings kind together; negative ⇒ no cap. default: 200
 #   callTimeout: 10s              # how long a Function's call of an add-on object's engine waits for the answer; past it 503. default: 10s
 #   callPayloadLimit: 1048576     # the largest request and answer body of such a call, in bytes; larger is 413. default: 1MiB
+#   settingsTimeout: 30s          # how long a settings kind's Function may take to answer one target's call; past it the call fails and is retried. default: 30s
 
 # --- volumes: Function volumes (ADR-0262) -------------------------------------------------------
 # volumes:

@@ -107,6 +107,18 @@ func WithAddonCallLimits(timeout time.Duration, payload int64) Option {
 	}
 }
 
+// WithAddonSettingsTimeout bounds a settings kind's Function's call (ADR-0341 Decision 8, addons.settingsTimeout); 0 ⇒
+// 30 s.
+func WithAddonSettingsTimeout(d time.Duration) Option {
+	return func(c *config) error {
+		if d < 0 {
+			return fault.Invalidf("funcd.WithAddonSettingsTimeout", "addons.settingsTimeout %s may not be negative", d)
+		}
+		c.addonSettingsTimeout = d
+		return nil
+	}
+}
+
 // WithAddonsFollowingCurrent makes every add-on object follow its Addon's current revision, as funcdctl dev does: a
 // changed Addon runs at once, with no App revision to move it (ADR-0339 Decision 7).
 func WithAddonsFollowingCurrent() Option {
