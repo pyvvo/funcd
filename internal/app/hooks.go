@@ -60,18 +60,29 @@ func hookNames(s v1.AppSpec) []string {
 
 // hookInput is the input of a new revision's hook calls (Decision 2), nil when its spec has no hook: from is the App's
 // current revision and its version, empty on an install; the event is install without from, rollback when the spec
-// (want, as the stamp marshals it) equals that of a retained Ready revision, else upgrade.
-func hookInput(a *v1.App, to v1.ObjectName, declared v1.AppSpec, want []byte, revs []*v1.AppRevision) (*v1.AppHookInput, error) {
+// equals that of a retained Ready revision (back), else upgrade. moves are the add-on parts' moves (ADR-0339 Decision
+// 5).
+func hookInput(a *v1.App, to v1.ObjectName, declared v1.AppSpec, back *v1.AppRevision, moves []v1.AppHookAddonRevision) *v1.AppHookInput {
 	if !hasHooks(declared) {
-		return nil, nil
+		return nil
 	}
-	in := &v1.AppHookInput{Event: eventUpgrade, App: a.Name, To: to, ToVersion: declared.Version}
+	in := &v1.AppHookInput{Event: eventUpgrade, App: a.Name, To: to, ToVersion: declared.Version, AddonRevisions: moves}
 	if a.Status.CurrentRevision == "" {
 		in.Event = eventInstall
-		return in, nil
+		return in
 	}
 	in.From, in.FromVersion = a.Status.CurrentRevision, a.Status.Version
-	for _, rev := range revs {
+	if back != nil {
+		in.Event = eventRollback
+	}
+	return in
+}
+
+// rolledBack is the newest retained revision that was current once, Ready, whose spec is want, as the stamp marshals
+// it, nil when none is (ADR-0214 Decision 2's rollback test).
+func rolledBack(want []byte, revs []*v1.AppRevision) (*v1.AppRevision, error) {
+	for i := len(revs) - 1; i >= 0; i-- {
+		rev := revs[i]
 		if rev.Status.Phase != v1.PhaseReady {
 			continue
 		}
@@ -80,11 +91,10 @@ func hookInput(a *v1.App, to v1.ObjectName, declared v1.AppSpec, want []byte, re
 			return nil, fault.Wrapf(err, fault.Internal, op, "marshal the spec of app revision %s", rev.Name)
 		}
 		if bytes.Equal(want, have) {
-			in.Event = eventRollback
-			break
+			return rev, nil
 		}
 	}
-	return in, nil
+	return nil, nil
 }
 
 // pendingHook is the first entry of a point that is not done (Decision 3): failed when its last call is Failed, else

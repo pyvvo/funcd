@@ -4,7 +4,9 @@
 # rauthy's private path, that a user signs in through the edge and the app behind its oidc stance gets the principal
 # headers, that a rotation stores a new secret rauthy refuses the old one for at once, and that a code rauthy refused for
 # the old secret is redeemed with the current one. rauthy's login takes a session, a proof of work and the login post,
-# as its own tests do.
+# as its own tests do. Last, a Function calls echo's engine through funcd, on its local API and through the add-on
+# proxy, gets 404 for a path echo's Addon keeps private, and its own dial of the engine's address is refused
+# (ADR-0338).
 name: addon-rauthy-signin — the edge signs a user in through rauthy with the client funcd registered (ADR-0335, ADR-0336, containerd lane)
 
 vars:
@@ -25,7 +27,7 @@ testcases:
       - type: exec
         script: |
           limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
-            sh -c 'funcdctl apply -f /opt/lane/addon.yaml && funcdctl apply -f /opt/lane/rauthy-signin-whoami-addon.yaml'
+            sh -c 'funcdctl apply -f /opt/lane/app/addon.yaml && funcdctl apply -f /opt/lane/rauthy-signin-whoami-addon.yaml'
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "applied Addon/rauthy"
@@ -322,3 +324,37 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring id_token
+
+  # ADR-0338: a Function that binds echo calls its engine through funcd: ctx.addon.fetch and the add-on proxy both reach
+  # it with the Function's own header and without the token, a path its Addon keeps private is 404, and the Function's
+  # own dial of the engine's address is refused by the fence.
+  - name: a Function calls echo's engine through funcd, and its own dial of the engine is refused
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo funcdctl push /opt/lane/caller/addon-caller.mjs \
+            oci-layout:///mnt/funcd-deps/registry/addon-caller:1.0.0
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            funcdctl apply -f /opt/lane/addon-caller.yaml
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} bash -c '
+            addr=$(funcdctl get echoservices echo -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"address\"])")
+            curl -s -m 30 -X POST -H "Content-Type: application/json" -d "{\"address\":\"$addr\"}" http://127.0.0.1:8081/function/addon-caller'
+        retry: 30
+        delay: 2
+        info: "the caller → {{.result.systemout}}"
+        assertions:
+          - result.systemoutjson.fetch.status ShouldEqual 200
+          - 'result.systemoutjson.fetch.body ShouldContainSubstring "X-Lane: fetch"'
+          - result.systemoutjson.proxy.status ShouldEqual 200
+          - 'result.systemoutjson.proxy.body ShouldContainSubstring "X-Lane: proxy"'
+          - result.systemoutjson.proxy.body ShouldNotContainSubstring "X-Funcd-Addon-Token"
+          - result.systemoutjson.private ShouldEqual 404
+          - result.systemoutjson.dial ShouldEqual refused

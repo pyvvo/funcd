@@ -68,3 +68,30 @@ func TestAddonRulesAnyRegistry(t *testing.T) {
 	_, err = rules(controlplane.AddonRules{Registries: []string{"ghcr.io"}}).Admit(ctx, write(digested))
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "an unlisted registry: %v", err)
 }
+
+// ADR-0340 Decisions 2 and 4: the settings constraints and the Addon's uniqueness read the store, so both take the
+// admission lock (ADR-0147): the settings admission on an object's create and replace, the uniqueness on an Addon's
+// create and update.
+func TestAddonAdmissionsTakeTheLock(t *testing.T) {
+	t.Parallel()
+	byName := map[string]admission.Admission{}
+	for _, a := range controlplane.NewAddonAdmissions(controlplane.AddonRules{}) {
+		byName[a.Name()] = a
+	}
+	for name, ops := range map[string][]admission.Operation{
+		"addon-settings": {admission.Create, admission.Update},
+		"addon-unique":   {admission.Create, admission.Update},
+	} {
+		a, ok := byName[name]
+		require.True(t, ok, name)
+		reader, ok := a.(admission.NamespaceReading)
+		require.True(t, ok && reader.ReadsNamespace(), "%s reads under the lock", name)
+		gvk := v1.KindAddonObject.GVK()
+		if name == "addon-unique" {
+			gvk = v1.KindAddon.GVK()
+		}
+		for _, op := range ops {
+			require.True(t, a.Handles(gvk, op), "%s handles %s", name, op)
+		}
+	}
+}

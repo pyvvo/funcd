@@ -1,0 +1,5 @@
+# The values of rauthy's App template in the addon-rauthy lane (ADR-0337): the VM's registry, which holds the settings
+# Function the lane pushes, and the host of the App's IdentityProvider.
+registry: oci-layout:///mnt/funcd-deps/registry
+host: web-auth.example.com
+https: false

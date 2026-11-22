@@ -54,6 +54,14 @@ func SQL(rc ReadChecker) Binding {
 	}, rc, nil, "")
 }
 
+// Addon checks a Function's add-on bindings (ADR-0338 Decision 1): each binding's addon::call as the caller and a
+// Ready engine, with no engine call.
+func Addon(rc ReadChecker) Binding {
+	return readBinding(local.DependencyAddon, func(fn *v1.Function) []string {
+		return aliases(fn.Spec.Bindings.Addon, func(b v1.FunctionAddon) string { return b.Alias })
+	}, rc, nil, "")
+}
+
 // Secret checks a Function's Secret bindings (ADR-0321 Decision 4): each bound Secret's secret::read as the caller. It
 // reads no Secret and has no prober target, so a missing Secret passes and the start check answers for it.
 func Secret(rc ReadChecker) Binding {
@@ -77,7 +85,7 @@ func Links(r local.Resolver, authz auth.Authorizer, st local.FunctionStore) Bind
 
 // entry is a binding entry of a Function.
 type entry interface {
-	v1.FunctionKV | v1.FunctionBlob | v1.FunctionSQL | v1.FunctionLink
+	v1.FunctionKV | v1.FunctionBlob | v1.FunctionSQL | v1.FunctionLink | v1.FunctionAddon
 }
 
 func aliases[B entry](bs []B, alias func(B) string) []string {
@@ -200,7 +208,7 @@ func reasonOf(ctx context.Context, err error) string {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil:
 		return local.ReasonTimeout
-	case errors.Is(err, local.ErrEngineNotReady):
+	case errors.Is(err, local.ErrEngineNotReady), errors.Is(err, local.ErrAddonEngineUnavailable):
 		return local.ReasonEngineNotReady
 	case fault.KindOf(err) == fault.Forbidden:
 		return local.ReasonForbidden

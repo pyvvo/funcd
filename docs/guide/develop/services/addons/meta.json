@@ -2,6 +2,7 @@
   "title": "Add-ons",
   "pages": [
     "index",
+    "spec",
     "build"
   ]
 }

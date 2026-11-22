@@ -33,6 +33,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	const op = "services.addon.Reconcile"
 	obj, err := r.store.Get(ctx, req.GVK, req.Namespace, req.Name)
 	if fault.KindOf(err) == fault.NotFound {
+		r.forgetTarget(req.Namespace, req.Name)
 		return controller.Result{}, r.deleted(ctx, req.Namespace, req.Name)
 	}
 	if err != nil {
@@ -41,6 +42,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	o, ok := obj.(*v1.AddonObject)
 	if !ok {
 		return controller.Result{}, fault.Internalf(op, "object %s/%s is not an AddonObject", req.Namespace, req.Name)
+	}
+	if sa, st, err := r.settingsKindOf(ctx, o.Spec.Kind); err != nil {
+		return controller.Result{}, err
+	} else if st != nil {
+		return r.settingsObject(ctx, sa, st, o) // a settings object runs no engine (ADR-0340 Decision 3)
 	}
 	if err := r.remember(ctx, o); err != nil {
 		return controller.Result{}, err
@@ -51,6 +57,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 	if a == nil {
 		return r.hold(ctx, o, reasonAddonNotFound, fmt.Sprintf("no Addon registers the kind %q", o.Spec.Kind), 0)
+	}
+	// The engine runs the revision the object pins, never the Addon's spec of the pass (ADR-0339 Decision 2); the
+	// settings step reads the Addon as it is now (ADR-0341 Decision 1).
+	current := a
+	a, ph, err := r.pinned(ctx, a, o)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	if ph != nil {
+		return r.hold(ctx, o, ph.reason, ph.message, 0)
 	}
 	if !slices.ContainsFunc(r.modes, a.Spec.Runtime) {
 		return r.hold(ctx, o, reasonRuntimeUnavailable, r.unavailable(a), 0)
@@ -96,6 +112,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if cerr != nil {
 		st = provider.ProviderStatus{Reason: reasonEngineConvergeFailed}
 	}
+	if !st.Ready {
+		r.seeTarget(o.Namespace, o.Name, false)
+	}
 	o.Status.Address = st.Address
 	o.Status.Phase, o.Status.ObservedGeneration = v1.PhasePending, o.Generation
 	if st.Ready {
@@ -126,6 +145,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{Requeue: true}, nil
 	case !st.Ready:
 		return controller.Result{RequeueAfter: r.enginePoll}, nil
+	}
+	next, err := r.syncSettings(ctx, current, o)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	if next > 0 && next < r.period {
+		return controller.Result{RequeueAfter: next}, nil
 	}
 	return controller.Result{RequeueAfter: r.period}, nil
 }
@@ -185,18 +211,31 @@ func configBreaks(a *v1.Addon, o *v1.AddonObject) (string, error) {
 	if err != nil {
 		return "spec.config of Addon " + string(a.Name) + " is no longer a schema: " + err.Error(), nil
 	}
-	details, err := v.Validate(configOf(o))
+	parts, err := Breaks(v, o.Spec.Config)
 	if err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "check the config of %s/%s", o.Namespace, o.Name)
 	}
-	if len(details) == 0 {
+	if len(parts) == 0 {
 		return "", nil
+	}
+	return fmt.Sprintf("the config does not fit the %s schema of Addon %s: %s", a.Spec.Kind, a.Name, strings.Join(parts, "; ")), nil
+}
+
+// Breaks names each way config, an empty object when unset, breaks the schema v: "spec.config.<path>: <message>", in
+// the validator's order; none when it fits.
+func Breaks(v *contract.Validator, config json.RawMessage) ([]string, error) {
+	if len(config) == 0 {
+		config = json.RawMessage(`{}`)
+	}
+	details, err := v.Validate(config)
+	if err != nil {
+		return nil, err
 	}
 	parts := make([]string, len(details))
 	for i, d := range details {
 		parts[i] = "spec.config" + strings.ReplaceAll(d.Path, "/", ".") + ": " + d.Message
 	}
-	return fmt.Sprintf("the config does not fit the %s schema of Addon %s: %s", a.Spec.Kind, a.Name, strings.Join(parts, "; ")), nil
+	return parts, nil
 }
 
 // secretEnv reads the object's bound Secrets as the object, each read asked of Cedar (ADR-0332 Decision 4), and keeps
@@ -340,6 +379,7 @@ func (r *Reconciler) hold(ctx context.Context, o *v1.AddonObject, reason, messag
 			return controller.Result{}, err
 		}
 	}
+	r.seeTarget(o.Namespace, o.Name, false)
 	o.Status.Address = ""
 	o.Status.Phase, o.Status.ObservedGeneration = v1.PhasePending, o.Generation
 	o.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: message,

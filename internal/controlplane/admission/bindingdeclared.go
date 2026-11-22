@@ -68,7 +68,19 @@ func RootDeclared(kv []v1.KVStoreEntry, buckets []v1.BucketEntry, sql []v1.SQLDa
 	return d
 }
 
-// --- binding-declared (ADR-0248 Decision 2, ADR-0251 Decision 2): Create/Update on Function, Workflow, Lake
+// AppDeclared is what an App's root declares: RootDeclared over its sections, and the add-on objects its addons
+// entries declare by name or ref (ADR-0338 Decision 1).
+func AppDeclared(s *v1.AppSpec) *Declared {
+	d := RootDeclared(s.KV, s.Buckets, s.SQL, s.Lakes, s.ConfigMaps, s.Secrets)
+	for _, e := range s.Addons {
+		d.Add(v1.KindAddonObject, e.Name)
+		d.Add(v1.KindAddonObject, e.Ref)
+	}
+	return d
+}
+
+// --- binding-declared (ADR-0248 Decision 2, ADR-0251 Decision 2, ADR-0337 Decision 3): Create/Update on Function,
+// Workflow, Lake and an App's add-on object
 
 type bindingDeclared struct{ r StoreReader }
 
@@ -89,8 +101,8 @@ func (bindingDeclared) Phase() Phase { return Validating }
 func (bindingDeclared) ReadsNamespace() bool { return true }
 
 func (bindingDeclared) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return (gvk == v1.KindFunction.GVK() || gvk == v1.KindWorkflow.GVK() || gvk == v1.KindLake.GVK()) &&
-		(op == Create || op == Update)
+	return (gvk == v1.KindFunction.GVK() || gvk == v1.KindWorkflow.GVK() || gvk == v1.KindLake.GVK() ||
+		gvk == v1.KindAddonObject.GVK()) && (op == Create || op == Update)
 }
 
 func (a bindingDeclared) Admit(ctx context.Context, req Request) (v1.Object, error) {
@@ -113,6 +125,10 @@ func (a bindingDeclared) Admit(ctx context.Context, req Request) (v1.Object, err
 		err = workflowUndeclared(&o.Spec, app)
 	case *v1.Lake:
 		err = lakeUndeclared(&o.Spec, app)
+	case *v1.AddonObject:
+		if app != nil {
+			err = addonUndeclared(&o.Spec, app)
+		}
 	}
 	if err != nil {
 		return nil, fault.Invalidf(op, "%s", err.Error())
@@ -147,8 +163,7 @@ func (a bindingDeclared) controllerDeclared(ctx context.Context, req Request) (a
 	if err != nil || obj == nil {
 		return nil, step, err
 	}
-	s := &obj.(*v1.App).Spec
-	return RootDeclared(s.KV, s.Buckets, s.SQL, s.Lakes, s.ConfigMaps, s.Secrets), step, nil
+	return AppDeclared(&obj.(*v1.App).Spec), step, nil
 }
 
 // controller is the object c names in ns at c's UID, or nil.
@@ -216,6 +231,16 @@ func functionUndeclared(s *v1.FunctionSpec, app *Declared) error {
 	if err := names(u, "spec.bindings", b.Config, b.Secret); err != nil {
 		return err
 	}
+	// An App's Function binds only the add-on objects its App declares; a standalone Function binds any of its
+	// namespace, with no root entry (ADR-0338 Decision 1).
+	for i, x := range b.Addon {
+		if app == nil {
+			break
+		}
+		if !app.Has(v1.KindAddonObject, x.Object) {
+			return fmt.Errorf("spec.bindings.addon[%d]: add-on object %q is not declared in the App's spec.addons", i, x.Object)
+		}
+	}
 	for i, c := range s.Lakes {
 		if c.Name == "" {
 			continue
@@ -241,6 +266,18 @@ func names(u undeclared, path string, config, secret []v1.ObjectName) error {
 	}
 	for i, n := range secret {
 		if err := u.check(fmt.Sprintf("%s.secret[%d]", path, i), v1.KindSecret, n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addonUndeclared checks an App's add-on part: each Secret it binds is one the App declares. A standalone add-on object
+// binds any Secret of its namespace (ADR-0332 Decision 4), so only an App's part is checked (ADR-0337 Decision 3).
+func addonUndeclared(s *v1.AddonObjectSpec, app *Declared) error {
+	u := undeclared{app: app, keys: map[v1.Kind]string{v1.KindSecret: "the App's spec.secrets"}}
+	for i, n := range s.Bindings.Secret {
+		if err := u.check(fmt.Sprintf("spec.bindings.secret[%d]", i), v1.KindSecret, n); err != nil {
 			return err
 		}
 	}

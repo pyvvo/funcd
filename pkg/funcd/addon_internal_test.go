@@ -358,9 +358,13 @@ func TestScenarioAddonConfigSchema(t *testing.T) {
 
 // scenario: addon-config-invalid — a schema change that login's config breaks is stored, and login waits Pending,
 // ConfigInvalid, with no engine.
+//
+// On a server login keeps the revision it pins, whose schema it fits (ADR-0339 Decision 2,
+// TestScenarioAddonRevisionNoMove); under funcdctl dev's rule it follows the current revision at once (Decision 7), and
+// so meets the stricter schema.
 func TestScenarioAddonConfigInvalid(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t, []string{"containerd"}, WithAddonsFollowingCurrent())
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	e.waitReason(t, "default", "login", v1.PhaseReady, "")
@@ -737,6 +741,8 @@ func TestAddonRuntimeIndexesEachEngineBeforeItStarts(t *testing.T) {
 	login := identityProvider("default")
 	login.TypeMeta, login.Spec.Kind = tmeta(v1.KindAddonObject), "IdentityProvider"
 	seedObjects(t, st, addon, login)
+	_, err = s.reconciler.Revisions().Reconcile(ctx, controller.Request{GVK: v1.KindAddon.GVK(), Name: "rauthy"})
+	require.NoError(t, err, "the Addon's first revision, which login pins")
 	req := controller.Request{GVK: v1.KindAddonObject.GVK(), Namespace: "default", Name: "login"}
 
 	_, err = s.reconciler.Reconcile(ctx, req)

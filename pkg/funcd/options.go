@@ -95,10 +95,46 @@ func WithAnyAddonRegistry() Option {
 	return func(c *config) error { c.addonAnyRegistry = true; return nil }
 }
 
+// WithAddonCallLimits bounds a Function's call of an add-on object's engine (ADR-0338 Decision 4, addons.callTimeout and
+// addons.callPayloadLimit); 0 ⇒ 10 s and 1 MiB.
+func WithAddonCallLimits(timeout time.Duration, payload int64) Option {
+	return func(c *config) error {
+		if timeout < 0 || payload < 0 {
+			return fault.Invalidf("funcd.WithAddonCallLimits", "addons.callTimeout %s and addons.callPayloadLimit %d may not be negative", timeout, payload)
+		}
+		c.addonCallTimeout, c.addonCallPayload = timeout, payload
+		return nil
+	}
+}
+
+// WithAddonSettingsTimeout bounds a settings kind's Function's call (ADR-0341 Decision 8, addons.settingsTimeout); 0 ⇒
+// 30 s.
+func WithAddonSettingsTimeout(d time.Duration) Option {
+	return func(c *config) error {
+		if d < 0 {
+			return fault.Invalidf("funcd.WithAddonSettingsTimeout", "addons.settingsTimeout %s may not be negative", d)
+		}
+		c.addonSettingsTimeout = d
+		return nil
+	}
+}
+
+// WithAddonsFollowingCurrent makes every add-on object follow its Addon's current revision, as funcdctl dev does: a
+// changed Addon runs at once, with no App revision to move it (ADR-0339 Decision 7).
+func WithAddonsFollowingCurrent() Option {
+	return func(c *config) error { c.addonFollowCurrent = true; return nil }
+}
+
 // WithAddonObjectQuota sets the per-namespace cap on the objects of the add-ons' kinds, all add-ons together, enforced
 // at admission (ADR-0332 Decision 2, addons.maxObjectsPerNamespace). 0 ⇒ the default (20); a negative value disables it.
 func WithAddonObjectQuota(maxPerNamespace int) Option {
 	return func(c *config) error { c.addonMaxObjects = maxPerNamespace; return nil }
+}
+
+// WithAddonSettingsQuota sets the per-namespace cap on the settings objects of every kind together, enforced at
+// admission (ADR-0340 Decision 6, addons.maxSettingsPerNamespace). 0 ⇒ the default (200); a negative value disables it.
+func WithAddonSettingsQuota(maxPerNamespace int) Option {
+	return func(c *config) error { c.addonMaxSettings = maxPerNamespace; return nil }
 }
 
 // WithSQLProviderRuntime overrides the SQLDatabase engine runtime (ADR-0232); the production runtime supervises the

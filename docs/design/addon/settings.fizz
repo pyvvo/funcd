@@ -1,0 +1,173 @@
+---
+# The settings step of an add-on target's pass (ADR-0341 Decisions 1 to 5), for one target, one settings kind and
+# one settings object. The user creates, edits, deletes and creates again the object: as the store does, an edit
+# raises its generation, and a new object gets a new uid at generation 1, so funcd names each sent object by both. funcd's
+# pass sends the kind's Function the full list of the target's objects when no call is in flight and the list differs from
+# that of the last call that ended, that call failed, the resync fired, or funcd knows no call since its start. The
+# Function applies the list to the engine, its default when the list is empty, or fails (an error or the timeout).
+# funcd writes the object's status from the answer, at the generation it sent, unless the object changed since.
+# Someone may change the engine's settings at its own API (a drift). funcd may stop and start again: it keeps what it
+# knows of the calls in memory only, and its stop cuts the call in flight, which never answers.
+# Environment: the controller runs one worker, so a pass is one step; the call runs beside it, on its own goroutine.
+# The engine keeps what was applied across funcd's stop, as rauthy keeps its policy in its storage. Left out: several
+# targets, kinds and objects, the resync's period, the backoff's length, a restarted engine's lost settings (its
+# readiness epoch), and the answer's size; tests and experiment 0026 hold those. The resync fires at most twice, so
+# each run ends, and a drift comes while a resync is left to repair it.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 44
+  crash_on_yield: false
+---
+# diagram: call
+# mutant no-inflight-guard: OneCallAtATime
+# mutant ready-at-send: ReadyMeansApplied
+# mutant stale-answer: ReadyMeansApplied
+# mutant no-uid: ReadyMeansApplied
+# mutant no-retry: liveness
+# mutant no-resync: liveness
+# mutant state-survives-stop: liveness
+
+# no-inflight-guard: a pass sends while a call is in flight.
+# ready-at-send: funcd reports the object Ready when it sends the list, before the Function answers.
+# stale-answer: an answer marks the object Ready at its current generation, though it sent an older one.
+# no-uid: funcd tells sent objects apart by their generation alone, so an object created again under its name looks
+#   unchanged.
+# no-retry: a failed call is not sent again; only a change or the resync would send the list.
+# no-resync: the resync never fires, so nothing repairs a drift.
+# state-survives-stop: what funcd knows of its calls survives its stop, so the cut call stays in flight.
+MUTANT = ""
+
+action Init:
+    writes = 0
+    uid = 0
+    next_uid = 1
+    gen = 0
+    deletes = 0
+    engine = 0
+    applied = set([0])
+    ready = 0
+    calls = []
+    call = "idle"
+    sent = -1
+    failed = False
+    resync = False
+    drifts = 0
+    resyncs = 0
+    stops = 0
+    fails = 0
+
+# A create or an edit. An object is named by uid * 10 + generation in what funcd sends and applies.
+atomic action Write:
+    require writes < 3
+    writes += 1
+    if gen == 0:
+        uid = next_uid
+        next_uid += 1
+        gen = 1
+    else:
+        gen += 1
+
+atomic action Delete:
+    require gen > 0
+    require deletes < 1
+    deletes += 1
+    gen = 0
+    uid = 0
+    ready = 0
+
+# Someone changes the engine's settings at its own API.
+atomic action Drift:
+    require drifts < 1
+    require resyncs < 2
+    drifts += 1
+    engine = -1
+
+# The kind's resync elapses since the last call that ended.
+atomic fair action Resync:
+    require MUTANT != "no-resync"
+    require sent != -1
+    require len(calls) == 0
+    require not failed
+    require not resync
+    require resyncs < 2
+    resyncs += 1
+    resync = True
+
+# The target's pass: funcd knows no call since its start (sent == -1), the list changed, the last call failed, or the
+# resync fired.
+atomic fair action Pass:
+    if MUTANT != "no-inflight-guard":
+        require len(calls) == 0
+    require len(calls) < 2
+    want = uid * 10 + gen
+    changed = want != sent
+    if MUTANT == "no-uid":
+        changed = sent == -1 or gen != sent % 10
+    retry = failed and MUTANT != "no-retry"
+    require sent == -1 or changed or retry or resync
+    calls.append({"gen": want, "state": "sent"})
+    resync = False
+    call = "sent"
+    if MUTANT == "ready-at-send":
+        if gen > 0:
+            ready = want
+
+# The Function applies the list it got, or fails.
+atomic fair action Apply:
+    require len(calls) > 0
+    require calls[0]["state"] == "sent"
+    ok = oneof [True, False]
+    if ok:
+        engine = calls[0]["gen"]
+        applied.add(calls[0]["gen"])
+        calls[0]["state"] = "applied"
+        call = "applied"
+    else:
+        require fails < 1
+        fails += 1
+        calls[0]["state"] = "failed"
+        call = "failed"
+
+# funcd's goroutine gets the answer: the status at the generation sent, unless the object changed since, then the end.
+atomic fair action Answer:
+    require len(calls) > 0
+    require calls[0]["state"] == "applied" or calls[0]["state"] == "failed"
+    c = calls.pop(0)
+    cur = uid * 10 + gen
+    same = cur == c["gen"]
+    if MUTANT == "no-uid":
+        same = gen == c["gen"] % 10
+    if c["state"] == "applied" and MUTANT == "stale-answer":
+        if gen > 0:
+            ready = cur
+    elif gen > 0 and same:
+        if c["state"] == "applied":
+            ready = cur
+        else:
+            ready = 0
+    sent = c["gen"]
+    failed = c["state"] == "failed"
+    call = "idle"
+
+# funcd stops and starts again: its stop cuts the call in flight, which never answers.
+atomic action Stop:
+    require stops < 1
+    stops += 1
+    for c in calls:
+        c["state"] = "cut"
+    if MUTANT != "state-survives-stop":
+        calls = []
+        sent = -1
+        failed = False
+        resync = False
+    call = "idle"
+
+always assertion OneCallAtATime:
+    return len(calls) <= 1
+
+always assertion ReadyMeansApplied:
+    return ready == 0 or ready in applied
+
+always eventually assertion Converges:
+    return len(calls) == 0 and engine == uid * 10 + gen and ready == uid * 10 + gen

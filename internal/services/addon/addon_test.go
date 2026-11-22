@@ -119,6 +119,19 @@ func TestMapOIDCProvider(t *testing.T) {
 		r.MapOIDCProvider(ctx, sso))
 }
 
+// register stores a, then stamps its first revision as the Addon's reconciler does (ADR-0339 Decision 1), so an
+// object of its kind has a revision to pin.
+func register(t *testing.T, st store.Store, a *v1.Addon) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := st.Create(ctx, a)
+	require.NoError(t, err)
+	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: noRuntime{}})
+	require.NoError(t, err)
+	_, err = r.Revisions().Reconcile(ctx, controller.Request{GVK: v1.KindAddon.GVK(), Name: a.Name})
+	require.NoError(t, err)
+}
+
 // stored is the object login of namespace a, of kind, as funcd stores it, and its Addon rauthy registering addonKind,
 // with env; both are written to st directly, as no admission checks them.
 func stored(t *testing.T, st store.Store, addonKind, kind string, env map[string]string) controller.Request {
@@ -128,11 +141,10 @@ func stored(t *testing.T, st store.Store, addonKind, kind string, env map[string
 	a.Name = "rauthy"
 	a.Spec = v1.AddonSpec{Kind: addonKind, Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"}, Env: env,
 		Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d"}
-	_, err := st.Create(ctx, a)
-	require.NoError(t, err)
+	register(t, st, a)
 	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject}}
 	o.Name, o.Namespace, o.ResourceGroup, o.Spec.Kind = "login", "a", "rg1", kind
-	_, err = st.Create(ctx, o)
+	_, err := st.Create(ctx, o)
 	require.NoError(t, err)
 	return controller.Request{GVK: v1.KindAddonObject.GVK(), Namespace: "a", Name: "login"}
 }
@@ -197,11 +209,10 @@ func TestRuntimeUnavailableNamesWhy(t *testing.T) {
 	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}}
 	a.Name, a.Spec = "whoami", v1.AddonSpec{Kind: "EchoService", Image: "traefik/whoami@sha256:" + strings.Repeat("a", 64), Port: 80,
 		Readiness: v1.AddonReadiness{Path: "/health"}}
-	_, err := st.Create(ctx, a)
-	require.NoError(t, err)
+	register(t, st, a)
 	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject}}
 	o.Name, o.Namespace, o.ResourceGroup, o.Spec.Kind = "echo", "default", "rg1", "EchoService"
-	_, err = st.Create(ctx, o)
+	_, err := st.Create(ctx, o)
 	require.NoError(t, err)
 	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: unavailableRuntime{}, Modes: []string{v1.AddonRuntimeContainerd}})
 	require.NoError(t, err)

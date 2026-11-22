@@ -660,8 +660,29 @@ func registerNamespacedRead[T crudKind](api huma.API, r crudRoutes[T]) restOpera
 	return ops
 }
 
+// registerClusterRead registers r's list and get only, and returns all five of its operations. A read-only kind
+// (ADR-0339 Decision 1, as ADR-0172 Decision 2) stops here: its POST, PUT and DELETE answer 405 with Allow: GET.
+func registerClusterRead[T crudKind](api huma.API, r clusterRoutes[T]) restOperations {
+	base := "/apis/funcd.io/v1alpha1/" + r.path
+	ops := restOperationsOf(r.kind, r.kinds, base, base+"/{name}", false, r.cases)
+	huma.Register(api, ops.list,
+		func(ctx context.Context, _ *struct{}) (*listOutput[T], error) {
+			items, err := r.list(ctx)
+			if err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return &listOutput[T]{Body: items}, nil
+		})
+	huma.Register(api, ops.get,
+		func(ctx context.Context, in *clusterScopedGet) (*bodyOutput[T], error) {
+			return respond(r.get(ctx, in.Name))
+		})
+	return ops
+}
+
 // clusterRoutes is the REST surface of one cluster-scoped kind under /apis/funcd.io/v1alpha1/<path>, registered by
-// registerClusterCRUD. Its inputs carry no namespace: huma reads the path parameters from each handler's input type.
+// registerClusterCRUD, or by registerClusterRead for a read-only kind. Its inputs carry no namespace: huma reads the
+// path parameters from each handler's input type.
 type clusterRoutes[T crudKind] struct {
 	kind, kinds, path string
 	list              func(context.Context) ([]T, error)
@@ -685,23 +706,10 @@ type clusterNameBodyInput[T crudKind] struct {
 }
 
 func registerClusterCRUD[T crudKind, PT objectPtr[T]](api huma.API, r clusterRoutes[T]) {
-	base := "/apis/funcd.io/v1alpha1/" + r.path
-	ops := restOperationsOf(r.kind, r.kinds, base, base+"/{name}", false, r.cases)
-	huma.Register(api, ops.list,
-		func(ctx context.Context, _ *struct{}) (*listOutput[T], error) {
-			items, err := r.list(ctx)
-			if err != nil {
-				return nil, wrapFaultError(err)
-			}
-			return &listOutput[T]{Body: items}, nil
-		})
+	ops := registerClusterRead(api, r)
 	huma.Register(api, ops.create,
 		func(ctx context.Context, in *clusterBodyInput[T]) (*bodyOutput[T], error) {
 			return respond(r.create(withDryRun(ctx, in.DryRun), in.Body))
-		})
-	huma.Register(api, ops.get,
-		func(ctx context.Context, in *clusterScopedGet) (*bodyOutput[T], error) {
-			return respond(r.get(ctx, in.Name))
 		})
 	huma.Register(api, ops.replace,
 		func(ctx context.Context, in *clusterNameBodyInput[T]) (*bodyOutput[T], error) {

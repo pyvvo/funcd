@@ -135,17 +135,36 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	}, nil
 }
 
-// entry is one section entry: its field path, its kind, the object it names (its name or its ref), and its deletion.
+// entry is one section entry: its field path, its kind, the object it names (its name or its ref), its deletion, and
+// for an addons entry that declares one, the add-on's kind, which its lines name (ADR-0337 Decision 3).
 type entry struct {
 	path     string
 	kind     v1.Kind
 	name     v1.ObjectName
 	ref      bool
 	deletion v1.DeletionPolicy
+	shown    v1.Kind
 }
 
 func (e entry) key(ns v1.NamespaceName) v1.ObjectRef {
 	return v1.ObjectRef{Kind: e.kind, Namespace: ns, Name: e.name}
+}
+
+// shownKind is the kind e's lines name: the stored object's (shownKind), else the add-on kind e declares, else e's.
+func (e entry) shownKind(obj v1.Object) v1.Kind {
+	if obj != nil {
+		return shownKind(obj)
+	}
+	return cmp.Or(e.shown, e.kind)
+}
+
+// shownKind is the kind a line names for obj: an add-on object's add-on kind, not the AddonObject it is stored as
+// (ADR-0337 Decision 3), else obj's kind.
+func shownKind(obj v1.Object) v1.Kind {
+	if o, ok := obj.(*v1.AddonObject); ok && o.AddonKind() != "" {
+		return v1.Kind(o.AddonKind())
+	}
+	return obj.GroupVersionKind().Kind
 }
 
 // entries lists every section entry of a in section order (Decision 2), configMaps first, a defined one under its
@@ -171,6 +190,10 @@ func entries(a *v1.App) []entry {
 	}
 	for i, e := range s.SQL {
 		add("sql", v1.KindSQLDatabase, i, e.Name, e.Ref, e.Deletion)
+	}
+	for i, e := range s.Addons {
+		add("addons", v1.KindAddonObject, i, e.Name, e.Ref, "")
+		out[len(out)-1].shown = v1.Kind(e.Kind)
 	}
 	for i, e := range s.Functions {
 		add("functions", v1.KindFunction, i, e.Name, e.Ref, "")
@@ -218,10 +241,21 @@ func keyOf(o v1.Object) v1.ObjectRef {
 
 // stop is the reason a pass wrote no further part: ChildNotOwned or ChildInvalid (Decision 4), or SecretNotFound or
 // SecretKeyMissing (ADR-0213 Decision 8), naming the object, or RequirementNotMet (ADR-0219 Decision 3), naming none.
+// shown is the kind its lines name when it is not part's, an add-on object's add-on kind.
 type stop struct {
 	reason string
 	part   v1.ObjectRef
+	shown  v1.Kind
 	detail string
+}
+
+// named is the part as the stop's lines name it.
+func (s *stop) named() v1.ObjectRef {
+	k := s.part
+	if s.shown != "" {
+		k.Kind = s.shown
+	}
+	return k
 }
 
 // msg is "<Kind>/<Name>: <detail>", or the detail alone when the stop names no part.
@@ -229,7 +263,7 @@ func (s *stop) msg() string {
 	if s.part == (v1.ObjectRef{}) {
 		return s.detail
 	}
-	return fmt.Sprintf("%s: %s", partName(s.part), s.detail)
+	return fmt.Sprintf("%s: %s", partName(s.named()), s.detail)
 }
 
 // Reconcile stamps an AppRevision when the spec changed, checks that the App owns every part that exists, writes the
@@ -310,7 +344,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if err != nil {
 		return controller.Result{}, err
 	}
-	children := readiness(a, ents, objs, steps, halt)
+	var latestName v1.ObjectName
+	if latest != nil {
+		latestName = latest.Name
+	}
+	children := readiness(a, ents, objs, steps, halt, latestName)
 	hp, err := r.hooks(ctx, a, latest, current, objs, halt, wrote, busy)
 	if err != nil {
 		return controller.Result{}, err
@@ -416,14 +454,15 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry,
 			}
 			objs[k] = written
 			if changed && wrote == nil {
-				wrote = &k
+				shown := v1.ObjectRef{Kind: e.shownKind(written), Namespace: k.Namespace, Name: k.Name}
+				wrote = &shown
 			}
 			if changed && drift && heal {
 				healed = append(healed, k)
 				r.log.InfoContext(ctx, "self-healed", "kind", k.Kind, "namespace", k.Namespace, "name", k.Name, "app", a.Name)
 			}
 		case fault.Invalid, fault.PayloadTooLarge:
-			return &stop{reason: reasonChildInvalid, part: k, detail: err.Error()}, wrote, healed, nil
+			return &stop{reason: reasonChildInvalid, part: k, shown: e.shownKind(objs[k]), detail: err.Error()}, wrote, healed, nil
 		default:
 			return nil, nil, nil, fault.Wrapf(err, fault.KindOf(err), op, "write %s of app %s/%s", partName(k), a.Namespace, a.Name)
 		}
@@ -474,7 +513,9 @@ func notOwned(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object) *stop {
 	for _, e := range ents {
 		k := e.key(a.Namespace)
 		if cur := objs[k]; !e.ref && cur != nil && !owned(a, cur) {
-			return notOwnedStop(a, k)
+			s := notOwnedStop(a, k)
+			s.shown = shownKind(cur)
+			return s
 		}
 	}
 	return nil
@@ -715,7 +756,7 @@ func (r *Reconciler) remove(ctx context.Context, o v1.Object) error {
 }
 
 func pruningChild(o v1.Object, reason string) v1.AppChild {
-	return v1.AppChild{Kind: o.GroupVersionKind().Kind, Name: o.GetObjectMeta().Name, State: v1.AppChildPruning, Reason: reason}
+	return v1.AppChild{Kind: shownKind(o), Name: o.GetObjectMeta().Name, State: v1.AppChildPruning, Reason: reason}
 }
 
 // stepFunctions reads the step Functions of every Workflow part in objs, by name; an absent one maps to nil.

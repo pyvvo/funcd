@@ -14,6 +14,8 @@ type FunctionBindings struct {
 	// SQL binds an alias to a SQLDatabase, read through ctx.sql (ADR-0233); writes need its owner or a writer role. A
 	// missing database holds the Function Pending (SQLDatabaseNotFound).
 	SQL []FunctionSQL `json:"sql,omitempty" doc:"The SQLDatabases the code queries through ctx.sql, each under its alias. The binding grants reads; only the database's owner and the writers that a RolesAssignment names may write. A database that does not exist yet holds the Function in Pending with SQLDatabaseNotFound."`
+	// Addon binds an alias to an add-on object of the namespace, whose engine the code calls through funcd (ADR-0338).
+	Addon []FunctionAddon `json:"addon,omitempty" doc:"The add-on objects whose engines the code calls, each under its alias: through ctx.addon.fetch, or with any HTTP client at FUNCD_ADDON_<ALIAS>_URL with the header X-Funcd-Addon-Token set to FUNCD_ADDON_<ALIAS>_TOKEN. Each call goes through funcd, which asks Cedar for addon::call and serves only the paths that the object's edge entry serves."`
 	// Lake binds an alias to a Lake (ADR-0091): the worker gets FUNCD_LAKE_<ALIAS>_URL and _TOKEN, and
 	// the reconcile waits, fail-closed, until the lake is Ready.
 	Lake []FunctionLake `json:"lake,omitempty" doc:"The Lakes the code queries, each under its alias. The Function waits in Pending with LakeNotReady until every bound Lake is Ready."`

@@ -10,6 +10,7 @@ func grantFixtures() map[string]PrincipalObject {
 	fn.Spec.Bindings.KV = []v1.FunctionKV{{Alias: "counters", Store: "counters", Table: "counts"}, {Alias: "cache", Store: "cache", Table: "hot"}}
 	fn.Spec.Bindings.Blob = []v1.FunctionBlob{{Alias: "files", Bucket: "files", Prefix: "uploads"}}
 	fn.Spec.Bindings.SQL = []v1.FunctionSQL{{Alias: "db", Database: "todo-db"}}
+	fn.Spec.Bindings.Addon = []v1.FunctionAddon{{Alias: "idp", Object: "rauthy-login"}}
 	fn.Spec.Bindings.Lake = []v1.FunctionLake{{Alias: "lake", Lake: "lake"}}
 	fn.Spec.Bindings.Links = []v1.FunctionLink{{Alias: "billing", Target: "billing"}}
 	fn.Spec.Bindings.Config = []v1.ObjectName{"settings"}

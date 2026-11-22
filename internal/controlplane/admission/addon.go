@@ -2,29 +2,33 @@ package admission
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// --- add-on object count quota (ADR-0332 Decision 2): Create on AddonObject ------------------
+// --- add-on object count quota (ADR-0332 Decision 2, ADR-0340 Decision 6): Create on AddonObject ---------------------
 
 type addonObjectQuota struct {
-	r               StoreReader
-	maxPerNamespace int
+	r           StoreReader
+	maxEngines  int
+	maxSettings int
 }
 
-// NewAddonObjectQuotaAdmission returns the Validating admission that rejects creating an object of an add-on's kind
-// when its namespace already holds maxPerNamespace of them, all add-ons together, as the SQLDatabase quota does.
-// maxPerNamespace ≤ 0 disables the quota.
-func NewAddonObjectQuotaAdmission(r StoreReader, maxPerNamespace int) Admission {
-	return addonObjectQuota{r: r, maxPerNamespace: maxPerNamespace}
+// NewAddonObjectQuotaAdmission returns the Validating admission that rejects creating an add-on object when its
+// namespace already holds the most of its class: maxEngines objects that run an engine, all add-ons together, as the
+// SQLDatabase quota does, or maxSettings objects of settings kinds, every kind together (ADR-0340 Decision 6). A
+// maximum ≤ 0 disables its class's cap.
+func NewAddonObjectQuotaAdmission(r StoreReader, maxEngines, maxSettings int) Admission {
+	return addonObjectQuota{r: r, maxEngines: maxEngines, maxSettings: maxSettings}
 }
 
 func (addonObjectQuota) Name() string { return "addonobject-quota" }
 func (addonObjectQuota) Phase() Phase { return Validating }
 
-// ReadsNamespace: the count check reads the namespace's add-on objects, only while the quota is enabled (ADR-0147).
-func (a addonObjectQuota) ReadsNamespace() bool { return a.maxPerNamespace > 0 }
+// ReadsNamespace: the count reads the namespace's add-on objects, only while a cap is enabled (ADR-0147).
+func (a addonObjectQuota) ReadsNamespace() bool { return a.maxEngines > 0 || a.maxSettings > 0 }
 
 func (addonObjectQuota) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 	return gvk == v1.KindAddonObject.GVK() && op == Create
@@ -32,8 +36,51 @@ func (addonObjectQuota) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 
 func (a addonObjectQuota) Admit(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.addonobject-quota"
-	if _, ok := req.Object.(*v1.AddonObject); !ok {
+	o, ok := req.Object.(*v1.AddonObject)
+	if !ok {
 		return req.Object, nil
 	}
-	return countQuota(ctx, a.r, op, v1.KindAddonObject, req.Object, a.maxPerNamespace, "add-on objects")
+	settings, err := settingsPlurals(ctx, a.r)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "list Addons")
+	}
+	isSettings := settings[v1.AddonPlural(o.AddonKind())]
+	limit, what, key := a.maxEngines, "add-on objects that run an engine", "addons.maxObjectsPerNamespace"
+	if isSettings {
+		limit, what, key = a.maxSettings, "settings objects", "addons.maxSettingsPerNamespace"
+	}
+	if limit <= 0 {
+		return req.Object, nil
+	}
+	existing, err := a.r.List(ctx, v1.KindAddonObject.GVK(), o.Namespace)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "list add-on objects in %q", o.Namespace)
+	}
+	n := 0
+	for _, obj := range existing {
+		if x, ok := obj.(*v1.AddonObject); ok && settings[v1.AddonPlural(x.AddonKind())] == isSettings {
+			n++
+		}
+	}
+	if n >= limit {
+		return nil, fault.Invalidf(op, "namespace %q already holds the maximum %d %s that %s allows", o.Namespace, limit, what, key)
+	}
+	return req.Object, nil
+}
+
+// settingsPlurals are the plurals of every settings kind the Addons declare.
+func settingsPlurals(ctx context.Context, r StoreReader) (map[string]bool, error) {
+	addons, err := r.List(ctx, v1.KindAddon.GVK(), "")
+	if err != nil {
+		return nil, fmt.Errorf("list Addons: %w", err)
+	}
+	out := map[string]bool{}
+	for _, obj := range addons {
+		if a, ok := obj.(*v1.Addon); ok {
+			for _, st := range a.Spec.Settings {
+				out[v1.AddonPlural(st.Kind)] = true
+			}
+		}
+	}
+	return out, nil
 }

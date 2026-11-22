@@ -163,6 +163,9 @@ type Deps struct {
 	// (ListenAddr). A function without spec.bindings.blob, or a disabled gateway, gets nothing.
 	S3Gateway S3GatewayInjection
 
+	// AddonProxy is the node-private add-on proxy a Function that binds an add-on object reaches with any HTTP SDK
+	// (ADR-0338 Decision 3); a zero one gives no FUNCD_ADDON_* env.
+	AddonProxy AddonProxy
 	// LakeMaster is the node master secret the per-function lake token is derived from (ADR-0137):
 	// the Lake hook injects FUNCD_LAKE_<ALIAS>_TOKEN = DeriveLakeToken(master, ns, fn), a
 	// MAC-authenticated bearer the lake PEP proxy verifies (was the shared QUACK_TOKEN). It is the
@@ -310,6 +313,8 @@ type Reconciler struct {
 	// declares spec.bindings.blob. The master secret is never logged.
 	s3Gateway S3GatewayInjection
 
+	// addonProxy is Deps.AddonProxy.
+	addonProxy AddonProxy
 	// lakeMaster is the node master the per-function lake token is derived from (ADR-0137);
 	// nil/empty ⇒ lake injection derives a token the proxy cannot verify. Never logged.
 	lakeMaster []byte
@@ -526,6 +531,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		invokeSockets:     d.InvokeSockets,
 		s3Gateway:         d.S3Gateway,
 		lakeMaster:        d.LakeMaster,
+		addonProxy:        d.AddonProxy,
 		lakeExtensionDir:  d.LakeExtensionDir,
 		lakeProxies:       d.LakeProxies,
 		assigner:          pooling.NewAssigner(),

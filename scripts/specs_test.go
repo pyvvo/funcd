@@ -139,6 +139,45 @@ func TestSpecMutantFailingAnotherAssertion(t *testing.T) {
 	require.Contains(t, out, "gate.fizz mutant skip-guard: fails AtMostOneOpen, not NeverOpen")
 }
 
+// A mutant that breaks a transition assertion is named by it, as one that breaks an always assertion is.
+func TestSpecMutantFailingATransitionAssertion(t *testing.T) {
+	spec := gateSpec(t, "always assertion AtMostOneOpen:\n    return opened <= 1",
+		"transition assertion AtMostOneOpen(before, after):\n    return after.opened <= 1")
+	code, out := specs(t, "diagrams", spec)
+	require.Equal(t, 0, code, out)
+	code, out = specs(t, "check", spec)
+	require.Equal(t, 0, code, out)
+	require.Contains(t, out, "gate.fizz mutant skip-guard: fails AtMostOneOpen")
+}
+
+// A marker may name a transition assertion, whose declaration carries its (before, after) parameters.
+func TestSpecOracleMarkerNamesATransitionAssertion(t *testing.T) {
+	root := t.TempDir()
+	design := filepath.Join(root, "docs", "design", "demo")
+	require.NoError(t, os.MkdirAll(design, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts"), 0o755))
+	script, err := os.ReadFile("specs.py")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "specs.py"), script, 0o644))
+	spec := gateSpec(t, "always assertion AtMostOneOpen:\n    return opened <= 1",
+		"transition assertion AtMostOneOpen(before, after):\n    return after.opened <= 1")
+	body, err := os.ReadFile(spec)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(design, "gate.fizz"), body, 0o644))
+	marker := "// oracle" + ": docs/design/demo/gate.fizz#"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gate_test.go"), []byte("package demo\n\n"+marker+"AtMostOneOpen\n"), 0o644))
+	code, out := exitCode(t, exec.Command("git", "init", "-q", root))
+	require.Equal(t, 0, code, out)
+	run := func(args ...string) (int, string) {
+		return exitCode(t, exec.Command("python3", append([]string{filepath.Join(root, "scripts", "specs.py")}, args...)...))
+	}
+	code, out = run("diagrams", filepath.Join(design, "gate.fizz"))
+	require.Equal(t, 0, code, out)
+	code, out = run("check")
+	require.Equal(t, 0, code, out)
+	require.NotContains(t, out, "oracle marker names no assertion")
+}
+
 // A full check finds every oracle marker in the code: one that names no assertion of an existing spec fails it, and an
 // assertion with no marker is reported.
 func TestSpecOracleMarkers(t *testing.T) {

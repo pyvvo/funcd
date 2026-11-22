@@ -329,3 +329,23 @@ func TestCheckerSecret(t *testing.T) {
 	require.Equal(t, "Forbidden", r.Reason)
 	require.Empty(t, f.pdp.asked, "links are not checked after a secret failure")
 }
+
+// scenario: addon-call-no-engine (readiness) — an add-on binding whose object is not Ready reports kind addon, reason
+// EngineNotReady, for its alias (ADR-0338 Decision 1).
+func TestCheckerAddon(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	addon := &readCheck{errs: map[string]error{}}
+	check := health.NewChecker(health.CheckerDeps{Store: f.st, Bindings: []health.Binding{health.Addon(addon)}})
+	f.fn("rauthy-settings", "", func(fn *v1.Function) {
+		api(fn)
+		fn.Spec.Bindings.Addon = []v1.FunctionAddon{{Alias: "idp", Object: "login"}}
+	})
+	caller := local.Ref{Namespace: ns, Function: "rauthy-settings"}
+	require.Nil(t, check.Check(context.Background(), caller))
+	require.Equal(t, []string{"idp"}, addon.calls)
+
+	addon.errs["idp"] = local.ErrAddonEngineUnavailable.Errorf("services.addon.CheckRead", "the add-on object of %q is not Ready", "idp")
+	require.Equal(t, &local.DependencyReport{Kind: local.DependencyAddon, Binding: "idp", Reason: "EngineNotReady",
+		Message: `the add-on object of "idp" is not Ready`}, check.Check(context.Background(), caller))
+}

@@ -12,6 +12,7 @@
 - **Superseded in part by**: [ADR-0312](0312-a-buckets-backup-member-skips-its-lakes-prefixes.md) (2026-11-04) —
   Decision 2 (a Bucket brings in its Lakes), Decision 4's `blob/<bucket>/` line ("every object"), and Decision 7's
   `BucketPurger.Purge` in a Restore and `Format`: a Bucket's copy leaves its Lakes to their own members.
+- **Superseded in part by**: [ADR-0337](0337-an-app-template-carries-its-add-on.md) (2026-11-22) — Decision 2 (`scope.app` collects the App's add-on parts).
 - **Date**: 2026-10-10
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, restore, disaster-recovery, kvstore, blob, catalog, rbac, app

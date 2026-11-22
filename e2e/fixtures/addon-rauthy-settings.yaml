@@ -1,0 +1,23 @@
+# The addon-rauthy lane's settings Function (ADR-0341): rauthy's RauthyPasswordPolicy kind names it in function.ref, and
+# it puts a policy into rauthy through its binding of login (ADR-0338), with the API key of the lane's keys. Its code is
+# rauthy/settings of pyvvo/funcd-addons, which the lane pushes to this image.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: rauthy-settings
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: reconcile
+  image: oci-layout:///mnt/funcd-deps/registry/rauthy-settings:0.2.0
+  secrets:
+    - name: rauthy-keys
+      keys:
+        - BOOTSTRAP_API_KEY_SECRET
+  bindings:
+    addon:
+      - alias: idp
+        object: login
+    secret:
+      - rauthy-keys

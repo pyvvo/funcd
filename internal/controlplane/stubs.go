@@ -48,6 +48,7 @@ type StubHandlers struct {
 	workflowRuns     map[string]v1.WorkflowRun
 	sensors          map[string]v1.Sensor
 	addons           map[string]v1.Addon
+	addonRevisions   map[string]v1.AddonRevision
 	addonObjects     map[string]v1.AddonObject
 }
 
@@ -88,6 +89,7 @@ func NewStubHandlers() *StubHandlers {
 		workflowRuns:     make(map[string]v1.WorkflowRun),
 		sensors:          make(map[string]v1.Sensor),
 		addons:           make(map[string]v1.Addon),
+		addonRevisions:   make(map[string]v1.AddonRevision),
 		addonObjects:     make(map[string]v1.AddonObject),
 	}
 }
@@ -988,6 +990,16 @@ func (s *StubHandlers) ReplaceSensor(_ context.Context, ns v1.NamespaceName, nam
 
 func (s *StubHandlers) DeleteSensor(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	return stubDelete(s, s.sensors, "Sensor", nsKey(ns, name))
+}
+
+// ---- AddonRevision (cluster-scoped, read-only, ADR-0339) ----
+
+func (s *StubHandlers) GetAddonRevision(_ context.Context, name v1.ObjectName) (v1.AddonRevision, error) {
+	return stubGet(s, s.addonRevisions, "AddonRevision", string(name))
+}
+
+func (s *StubHandlers) ListAddonRevisions(_ context.Context) ([]v1.AddonRevision, error) {
+	return stubList(s, s.addonRevisions, "")
 }
 
 // ---- Addon (cluster-scoped, ADR-0332) ----

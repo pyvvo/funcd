@@ -40,6 +40,7 @@ func methodTable() map[string]map[string]methodEndpoint {
 		sqlQuery, sqlExec = "POST /sql/{binding}/query", "POST /sql/{binding}/execute"
 		secretKey, secret = "GET /secret/{key}", "GET /secret"
 		secretPut, secDel = "PUT /secret/{binding}/{key}", "DELETE /secret/{binding}/{key}"
+		addonCall         = "/addon/{alias}/{path...}"
 	)
 	conditions := []*fault.KnownCause{local.ErrKeyAbsent, local.ErrVersionMismatch, local.ErrIfMatchRepeated}
 	writes := slices.Concat(conditions, []*fault.KnownCause{local.ErrIfNoneMatchRepeated, local.ErrConditionsBoth,
@@ -84,7 +85,7 @@ func methodTable() map[string]map[string]methodEndpoint {
 			"sql.query":      tsQuery, "sql.queryValues": tsQuery, "sql.execute": sent(sqlExec, local.ErrSQLBodyMalformed),
 			"config.get": {}, "config.list": {},
 			"secret.get": secretRead, "secret.list": at(secret), "secret.put": secretWrite, "secret.del": at(secDel),
-			"lake.get": {},
+			"lake.get": {}, "addon.fetch": sent(addonCall),
 		},
 		"Python": {
 			"log": {}, "invoke": sent("POST /invoke/{alias}"), "remaining_ms": {},
@@ -96,7 +97,7 @@ func methodTable() map[string]map[string]methodEndpoint {
 			"sql.query":       pyQuery, "sql.query_values": pyQuery, "sql.execute": sent(sqlExec),
 			"config.get": {}, "config.list": {},
 			"secret.get": secretRead, "secret.list": at(secret), "secret.put": secretWrite, "secret.delete": at(secDel),
-			"lake.get": {},
+			"lake.get": {}, "addon.fetch": sent(addonCall),
 		},
 	}
 }

@@ -1,5 +1,5 @@
 # Venom e2e suite for the addon-rauthy containerd lane: an admin registers rauthy, an add-on built outside funcd, from
-# its published image pinned by digest (rauthy/addon.yaml of pyvvo/funcd-addons); a developer applies the lane's
+# its published image pinned by digest (rauthy/app/addon.yaml of pyvvo/funcd-addons); a developer applies the lane's
 # IdentityProvider, which turns Ready once rauthy answers its readiness path, and the edge serves it at its host with the
 # path kept. Run host-side once the self-deploying Lima VM is up; each apply and engine probe runs in the VM, beside the
 # daemon, by one exec step, and the edge calls hit the VM's forwarded data plane.
@@ -11,7 +11,13 @@
 #   4. rauthy's private path /auth/v1/clients_dyn is 404 at the edge however it is spelled, and so is a .. segment,
 #      while the engine's own address, which funcd reaches, serves it;
 #   5. the engine's netns holds the fence: no outbound endpoint, and an input chain that admits only loopback and funcd's
-#      bridge address.
+#      bridge address;
+# and the FEAT-0019 cases: rauthy's settings kind RauthyPasswordPolicy, whose Function puts login's policy into rauthy
+# through its binding, puts it back after a drift at rauthy's own API, refuses a second one, sends it again after funcd
+# restarts and sets rauthy's default back once it is deleted (ADR-0340, ADR-0341, ADR-0338); an admin's deploy of
+# rauthy's App template, whose IdentityProvider's policy goes to the App's own Function (ADR-0337); and a change of the
+# Addon that replaces no engine, while the App's next revision moves its part and a rollback takes it back (ADR-0339).
+# The staged Addon's policy resync is 5 s, so the drift check waits seconds; probe.py reads the policy rauthy enforces.
 name: addon-rauthy — an Addon built outside funcd, registered and run on containerd (ADR-0332, containerd lane)
 
 vars:
@@ -26,8 +32,9 @@ testcases:
     steps:
       - type: exec
         script: |
+          limactl shell {{.vm}} -- sudo sed -i "s/      resync: 10m/      resync: 5s/" /opt/lane/app/addon.yaml
           limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
-            funcdctl apply -f /opt/lane/addon.yaml 2>&1
+            funcdctl apply -f /opt/lane/app/addon.yaml 2>&1
         info: "developer apply → {{.result.systemout}}"
         assertions:
           - result.code ShouldNotEqual 0
@@ -35,7 +42,7 @@ testcases:
       - type: exec
         script: |
           limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
-            funcdctl apply -f /opt/lane/addon.yaml
+            funcdctl apply -f /opt/lane/app/addon.yaml
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "applied Addon/rauthy"
@@ -142,3 +149,219 @@ testcases:
           - result.systemout ShouldContainSubstring "chain input"
           - result.systemout ShouldContainSubstring "policy drop"
           - result.systemout ShouldContainSubstring "ip saddr 10.63.0.1 accept"
+
+  # ADR-0340 and ADR-0341: rauthy's settings kind RauthyPasswordPolicy, which its Function rauthy-settings applies
+  # through its binding of login (ADR-0338). The probe reads the shortest password rauthy takes now.
+  - name: the settings Function puts login's password policy into rauthy
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo funcdctl push /opt/lane/settings/rauthy-settings.mjs \
+            oci-layout:///mnt/funcd-deps/registry/rauthy-settings:0.2.0
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            sh -c 'funcdctl apply -f /opt/lane/settings-function.yaml && funcdctl apply -f /opt/lane/policy.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied RauthyPasswordPolicy/strict"
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            funcdctl get rauthypasswordpolicys strict -n default -o json \
+            | python3 -c 'import sys,json;s=json.load(sys.stdin)["status"];print(s.get("phase",""))'
+        retry: 60
+        delay: 2
+        info: "strict → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldEqual Ready
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            python3 /opt/lane/probe.py
+        info: "probe → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldStartWith "MIN=16 "
+
+  - name: a policy changed at rauthy's own API is put back at the next resync
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            python3 /opt/lane/probe.py loose
+        assertions:
+          - result.systemout ShouldContainSubstring "LOOSE 200"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            python3 /opt/lane/probe.py
+        retry: 30
+        delay: 1
+        info: "probe → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldStartWith "MIN=16 "
+
+  - name: a second policy for login is refused at admission
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            sh -c 'sed "s/name: strict/name: second/" /opt/lane/policy.yaml | funcdctl apply -f - 2>&1'
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemout ShouldContainSubstring "perTarget"
+
+  - name: after funcd restarts, login's first pass sends its list again
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo && echo RESTARTED'
+        assertions:
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            journalctl _SYSTEMD_INVOCATION_ID=$(systemctl show -p InvocationID --value funcd-demo) --no-pager \
+              | grep "msg=\"settings call ended\"" | grep "target=login" | grep -c "cause=start"'
+        retry: 60
+        delay: 2
+        info: "calls with cause start since the restart → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldNotEqual 0
+
+  - name: deleting the policy puts rauthy's default back
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            funcdctl delete rauthypasswordpolicys strict -n default
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            python3 /opt/lane/probe.py
+        retry: 30
+        delay: 2
+        info: "probe → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldStartWith "MIN=14 "
+
+  # ADR-0337: rauthy's App template carries its Addon; an admin's deploy registers or updates the Addon, then the App,
+  # whose IdentityProvider names the App's own settings Function.
+  - name: an admin deploys rauthy's App template, and its IdentityProvider's policy goes to its own Function
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            funcdctl app lock /opt/lane/app -f /opt/lane/values.yaml > /dev/null
+            funcdctl push --template /opt/lane/app oci-layout:///mnt/funcd-deps/registry/rauthy:0.2.0'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "rauthy:0.2.0@sha256:"
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
+            funcdctl app deploy oci-layout:///mnt/funcd-deps/registry/rauthy:0.2.0 -f /opt/lane/values.yaml --name web-auth 2>&1
+        info: "deploy → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            sh -c 'funcdctl get identityproviders web-auth-login -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s.get(\"phase\",\"\"),s.get(\"addonRevision\",\"\"),sep=\",\")"'
+        retry: 60
+        delay: 2
+        info: "web-auth-login → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldEqual Ready,rauthy-1
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            sh -c 'funcdctl apply -f /opt/lane/web-policy.yaml && funcdctl get rauthypasswordpolicys web -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"].get(\"phase\",\"\"))"'
+        retry: 60
+        delay: 2
+        info: "web → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring Ready
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            journalctl -u funcd-demo --no-pager | grep "msg=\"settings call ended\"" | grep "target=web-auth-login" | grep -c "function=web-auth-settings"'
+        info: "calls of web-auth-settings → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldNotEqual 0
+
+  # ADR-0339: an Addon's change is a revision that moves no object; the App's next revision moves its part, and a
+  # rollback takes the part back.
+  - name: a change of rauthy's Addon replaces no engine, and the App's revisions move its part
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            {{.ctr}} task ls | awk "\$1 == \"login-r0\" && \$3 == \"RUNNING\" {print \$2}" | head -1 > /tmp/login-pid
+            sed -i "s|HQL_BACKUP_CRON: .*|HQL_BACKUP_CRON: \"0 */30 * * * * *\"|" /opt/lane/app/addon.yaml
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} funcdctl apply -f /opt/lane/app/addon.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
+            sh -c 'funcdctl get addon rauthy -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"].get(\"currentRevision\",\"\"))"'
+        retry: 30
+        delay: 1
+        assertions:
+          - result.systemout ShouldEqual rauthy-2
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            sleep 5
+            pid=$({{.ctr}} task ls | awk "\$1 == \"login-r0\" && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            rev=$(FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} funcdctl get identityproviders login -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"addonRevision\"])")
+            echo "SAME=$([ "$pid" = "$(cat /tmp/login-pid)" ] && echo yes || echo no) REV=$rev"'
+        info: "login after the change → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldEqual "SAME=yes REV=rauthy-1"
+      # A developer's deploy only checks that the kind is served: an admin's would apply the template's addon.yaml as
+      # written again, which the change above edited after the push.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            printf "publicHost: web-auth.example.com:8081\n" > /tmp/web-auth-v2.yaml
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} funcdctl app deploy oci-layout:///mnt/funcd-deps/registry/rauthy:0.2.0 \
+              -f /opt/lane/values.yaml -f /tmp/web-auth-v2.yaml --name web-auth 2>&1'
+        info: "the App's second revision → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            sh -c 'funcdctl get identityproviders web-auth-login -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s.get(\"phase\",\"\"),s.get(\"addonRevision\",\"\"),sep=\",\")"'
+        retry: 60
+        delay: 2
+        info: "web-auth-login → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldEqual Ready,rauthy-2
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
+            funcdctl app rollback web-auth 1 2>&1
+        info: "rollback → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            sh -c 'funcdctl get identityproviders web-auth-login -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s.get(\"phase\",\"\"),s.get(\"addonRevision\",\"\"),sep=\",\")"'
+        retry: 60
+        delay: 2
+        info: "web-auth-login after the rollback → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldEqual Ready,rauthy-1

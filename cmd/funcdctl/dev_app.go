@@ -240,6 +240,14 @@ func (s *devAppSession) prepare(ctx context.Context, op string, reload bool) (de
 	if err != nil {
 		return devAppDesired{}, err
 	}
+	if a := p.t.Addon; a != nil {
+		// The template's Addon, applied before the App and again when addon.yaml changes, pruned once it goes (ADR-0337
+		// Decision 2).
+		if slices.ContainsFunc(docs, func(o v1.Object) bool { return o.GroupVersionKind().Kind == v1.KindAddon && o.GetName() == a.Name }) {
+			return devAppDesired{}, fault.Invalidf(op, "Addon %q is both the template's %s and an --apply document", a.Name, template.AddonFile)
+		}
+		docs = append([]v1.Object{a}, docs...)
+	}
 	for _, key := range slices.Sorted(maps.Keys(p.used)) {
 		img := p.used[key]
 		l := p.lock[key]
@@ -507,7 +515,8 @@ func applyDocuments(op string, files []string) ([]v1.Object, error) {
 }
 
 // loadTemplate reads the template directory as template.Load does, skipping only dot-entries (in resources/ too) and
-// dev's persist dir (Decision 3): it copies app.yaml and resources/ into a snapshot under the stage dir and loads that,
+// dev's persist dir (Decision 3): it copies app.yaml, addon.yaml and resources/ into a snapshot under the stage dir and
+// loads that,
 // so any other entry stops it with Load's refusal. app.lock is neither read nor written.
 func (s *devAppSession) loadTemplate(op string) (*template.Template, error) {
 	entries, err := os.ReadDir(s.dir)
@@ -523,7 +532,7 @@ func (s *devAppSession) loadTemplate(op string) (*template.Template, error) {
 		src := filepath.Join(s.dir, e.Name())
 		switch {
 		case strings.HasPrefix(e.Name(), ".") || s.skipped(src) || e.Name() == "app.lock":
-		case e.Name() == "app.yaml" && !e.IsDir():
+		case (e.Name() == "app.yaml" || e.Name() == template.AddonFile) && !e.IsDir():
 			if err := copyFile(src, filepath.Join(snap, e.Name())); err != nil {
 				return nil, fault.Invalidf(op, "copy %s: %v", src, err)
 			}
@@ -532,7 +541,7 @@ func (s *devAppSession) loadTemplate(op string) (*template.Template, error) {
 				return nil, fault.Invalidf(op, "copy %s: %v", src, err)
 			}
 		default:
-			return nil, fault.Invalidf(op, "%s: a template holds only app.yaml, app.lock and resources/*.yaml", e.Name())
+			return nil, fault.Invalidf(op, "%s: a template holds only app.yaml, app.lock, addon.yaml and resources/*.yaml", e.Name())
 		}
 	}
 	return template.Load(snap)

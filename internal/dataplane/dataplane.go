@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"path"
 	"strings"
 	"time"
 
@@ -424,7 +423,7 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	}
 	remainder := stripMatched(r.URL.Path, m.StripPrefix)
 	if m.KeepPath {
-		kept, ok := keptPath(r.URL.Path, m.Path, m.PrivatePaths)
+		kept, ok := pathx.Kept(r.URL.Path, m.Path, m.PrivatePaths)
 		if !ok {
 			fault.WriteProblem(w, fault.NotFoundf(op, "no route for %q", r.URL.Path))
 			return
@@ -457,25 +456,6 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	r.URL.Path = remainder
 	r.URL.RawPath = ""
 	proxy.ServeHTTP(w, r)
-}
-
-// keptPath is the path an add-on entry forwards, its base path kept (ADR-0332 Decision 5): a path with a .. segment is
-// refused, as the static backend refuses one, and so is a cleaned path outside base or under a private path; the rest
-// goes on cleaned, so another spelling of a private path finds it.
-func keptPath(p, base string, private []string) (string, bool) {
-	if pathx.ContainsDotDot(p) {
-		return "", false
-	}
-	clean := path.Clean(p)
-	if base != "/" && !pathx.HasPrefix(clean, base) {
-		return "", false
-	}
-	for _, pp := range private {
-		if pathx.HasPrefix(clean, pp) {
-			return "", false
-		}
-	}
-	return clean, true
 }
 
 // authStance resolves the F77 auth stance for a request: the matched Route's mode if set, else the

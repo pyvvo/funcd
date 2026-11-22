@@ -3,6 +3,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -79,14 +80,27 @@ func (r *Reconciler) resolveDataReferences(ctx context.Context, fn *v1.Function)
 		}
 	}
 
-	// ADR-0233 Decision 1: every spec.bindings.sql binding names a SQLDatabase of the namespace.
+	// ADR-0338 Decision 1 and ADR-0233 Decision 1: every spec.bindings.addon binding names an add-on object of the
+	// namespace, and every spec.bindings.sql binding a SQLDatabase.
+	type named struct {
+		kind                       v1.Kind
+		field, alias, noun, reason string
+		name                       v1.ObjectName
+	}
+	refs := make([]named, 0, len(fn.Spec.Bindings.Addon)+len(fn.Spec.Bindings.SQL))
+	for _, bnd := range fn.Spec.Bindings.Addon {
+		refs = append(refs, named{v1.KindAddonObject, "addon", bnd.Alias, "add-on object", "AddonObjectNotFound", bnd.Object})
+	}
 	for _, bnd := range fn.Spec.Bindings.SQL {
-		_, gerr := r.store.Get(ctx, v1.KindSQLDatabase.GVK(), ns, bnd.Database)
+		refs = append(refs, named{v1.KindSQLDatabase, "sql", bnd.Alias, "database", "SQLDatabaseNotFound", bnd.Database})
+	}
+	for _, ref := range refs {
+		_, gerr := r.store.Get(ctx, ref.kind.GVK(), ns, ref.name)
 		switch {
 		case fault.KindOf(gerr) == fault.NotFound:
-			return true, "SQLDatabaseNotFound", fmt.Sprintf("spec.bindings.sql[%s] → database %q not found in namespace %q; waiting", bnd.Alias, bnd.Database, ns), nil
+			return true, ref.reason, fmt.Sprintf("spec.bindings.%s[%s] → %s %q not found in namespace %q; waiting", ref.field, ref.alias, ref.noun, ref.name, ns), nil
 		case gerr != nil:
-			return false, "", "", fault.Wrapf(gerr, fault.KindOf(gerr), op, "get sqldatabase %q", bnd.Database)
+			return false, "", "", fault.Wrapf(gerr, fault.KindOf(gerr), op, "get %s %q", strings.ToLower(string(ref.kind)), ref.name)
 		}
 	}
 

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -64,6 +65,9 @@ func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Ob
 	if err := undeclaredSecret(app); err != nil {
 		return nil, err
 	}
+	if err := undeclaredSettingsFunction(app); err != nil {
+		return nil, err
+	}
 	st := stored{r: a.r, ns: app.Namespace, lists: map[v1.Kind][]v1.Object{}}
 	paths := make(map[v1.ObjectRef]string)
 	for _, e := range entries(app) {
@@ -83,7 +87,7 @@ func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Ob
 		}
 	}
 	s := &app.Spec
-	declared := admission.RootDeclared(s.KV, s.Buckets, s.SQL, s.Lakes, s.ConfigMaps, s.Secrets)
+	declared := admission.AppDeclared(s)
 	parts := app.Parts()
 	for i, p := range parts {
 		k := keyOf(p)
@@ -97,14 +101,15 @@ func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Ob
 		}
 		others := slices.Concat(parts[:i], parts[i+1:])
 		if _, err := admission.NewPipeline(a.parts(view{r: a.r, over: others})...).Admit(ctx, r); err != nil {
-			return nil, fault.Wrapf(err, fault.KindOf(err), admitOp, "%s (%s)", paths[k], partName(k))
+			return nil, fault.Wrapf(err, fault.KindOf(err), admitOp, "%s (%s/%s)", paths[k], shownKind(p), k.Name)
 		}
 	}
 	return req.Object, nil
 }
 
-// undeclaredSecret refuses the first name in a declared Function's or Lake's spec.bindings.secret, or in a declared
-// Workflow's image step function.bindings.secret, that spec.secrets does not declare (ADR-0213 Decision 7). A ref entry, which
+// undeclaredSecret refuses the first name in a declared Function's, Lake's or add-on object's spec.bindings.secret, or
+// in a declared Workflow's image step function.bindings.secret, that spec.secrets does not declare (ADR-0213 Decision
+// 7, ADR-0337 Decision 3). A ref entry, which
 // sets no spec field, and a ref step are exempt: the App does not define them. The rule is admission-only, so an App
 // stored before ADR-0213 still writes its status (Decision 9).
 func undeclaredSecret(app *v1.App) error {
@@ -139,6 +144,29 @@ func undeclaredSecret(app *v1.App) error {
 	for i, c := range s.Lakes {
 		if err := check(fmt.Sprintf("spec.lakes[%d]", i), v1.KindLake, c.Name, c.Bindings.Secret); err != nil {
 			return err
+		}
+	}
+	for i, e := range s.Addons {
+		if err := check(fmt.Sprintf("spec.addons[%d]", i), v1.Kind(e.Kind), e.Name, e.Bindings.Secret); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// undeclaredSettingsFunction refuses the first ref in an add-on object's spec.functions that names no Function the App
+// declares, by name or by ref (ADR-0341 Decision 3), so an App's copy of a template calls its own Functions only.
+func undeclaredSettingsFunction(app *v1.App) error {
+	declared := map[v1.ObjectName]bool{}
+	for _, f := range app.Spec.Functions {
+		declared[cmp.Or(f.Name, f.Ref)] = true
+	}
+	for i, e := range app.Spec.Addons {
+		for j, f := range e.Functions {
+			if !declared[f.Ref] {
+				return fault.Invalidf(admitOp, "spec.addons[%d].functions[%d].ref: %s/%s names Function %q, which spec.functions does not declare",
+					i, j, e.Kind, cmp.Or(e.Name, e.Ref), f.Ref)
+			}
 		}
 	}
 	return nil

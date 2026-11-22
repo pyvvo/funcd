@@ -6,6 +6,7 @@
   scope (#1302), a daemon test instead of a lane step, `hold.NeverCall`)
 - **Amended in place**: 2026-10-27, by the decider on [#1302](https://github.com/pyvvo/funcd/issues/1302): the S3
   gateway refuses writes into a held namespace's Buckets (Decision 6)
+- **Superseded in part by**: [ADR-0338](0338-a-function-calls-an-add-on-objects-engine.md) (2026-11-22) — Decision 1 (the add-on facet and proxy are gated paths).
 - **Date**: 2026-10-27
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, data-plane, hold

@@ -185,9 +185,14 @@ func setStatus(obj v1.Object, phase v1.Phase, conds ...v1.Condition) {
 	}
 }
 
-// markReady gives a part the status its reconciler writes once it serves its generation.
+// markReady gives a part the status its reconciler writes once it serves its generation; an add-on part, named by its
+// add-on kind, runs as the add-on reconciler runs it (runPart).
 func (h *harness) markReady(kind v1.Kind, name v1.ObjectName) {
 	h.t.Helper()
+	if kind.Validate() != nil {
+		h.runPart(name)
+		return
+	}
 	obj := h.get(kind, name)
 	if _, ok := obj.(v1.StatusObject); !ok {
 		return

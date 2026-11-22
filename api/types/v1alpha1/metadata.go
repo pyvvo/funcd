@@ -69,6 +69,9 @@ const (
 	// object of an add-on's kind is stored, the API showing it under that kind.
 	KindAddon       Kind = "Addon"
 	KindAddonObject Kind = "AddonObject"
+	// KindAddonRevision (ADR-0339, F265) is one frozen Addon spec, cluster-scoped, written only by the Addon reconciler
+	// and served read-only.
+	KindAddonRevision Kind = "AddonRevision"
 	// KindOIDCProvider is an OpenID Connect provider the edge signs users in with (ADR-0335, F261), whose client funcd
 	// registers under client.registration (ADR-0336, F262).
 	KindOIDCProvider Kind = "OIDCProvider"
@@ -96,7 +99,8 @@ func (k Kind) Validate() error {
 		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
 		KindLake, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
 		KindIdentity, KindRole, KindRolesAssignment, KindSite, KindApp, KindAppRevision,
-		KindBackupSchedule, KindBackup, KindRestore, KindSQLDatabase, KindAddon, KindAddonObject, KindOIDCProvider:
+		KindBackupSchedule, KindBackup, KindRestore, KindSQLDatabase, KindAddon, KindAddonObject, KindAddonRevision,
+		KindOIDCProvider:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -104,10 +108,10 @@ func (k Kind) Validate() error {
 }
 
 // Namespaced reports whether this kind is namespaced. Cluster-scoped kinds:
-// Namespace, RuntimeClass, WorkerNode, Gateway, Addon.
+// Namespace, RuntimeClass, WorkerNode, Gateway, Addon, AddonRevision.
 func (k Kind) Namespaced() bool {
 	switch k {
-	case KindNamespace, KindRuntimeClass, KindWorkerNode, KindGateway, KindAddon:
+	case KindNamespace, KindRuntimeClass, KindWorkerNode, KindGateway, KindAddon, KindAddonRevision:
 		return false
 	default:
 		return true
@@ -446,6 +450,10 @@ func NewObject(k Kind) (Object, bool) {
 		o := &AddonObject{}
 		o.TypeMeta = typeMetaFor(k)
 		return o, true
+	case KindAddonRevision:
+		r := &AddonRevision{}
+		r.TypeMeta = typeMetaFor(k)
+		return r, true
 	case KindOIDCProvider:
 		p := &OIDCProvider{}
 		p.TypeMeta = typeMetaFor(k)
@@ -492,6 +500,7 @@ func AllKinds() []Kind {
 		KindSQLDatabase,
 		KindAddon,
 		KindAddonObject,
+		KindAddonRevision,
 		KindOIDCProvider,
 	}
 }

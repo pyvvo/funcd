@@ -215,3 +215,50 @@ func TestIsAddonFile(t *testing.T) {
 		require.False(t, IsAddonFile(bad), bad)
 	}
 }
+
+// ADR-0340 Decision 1: a settings kind's name, Function, resync, schema and constraint paths.
+func TestAddonValidateSettings(t *testing.T) {
+	withSettings := func() *Addon {
+		a := rauthyAddon()
+		a.Spec.Settings = []AddonSettings{{
+			Kind: "RauthyPasswordPolicy", Target: "spec.config.provider", Resync: Duration(time.Minute),
+			Function: AddonSettingsFunction{Ref: "rauthy-settings"},
+			Schema:   json.RawMessage(`{"type":"object","properties":{"provider":{"type":"string"}},"required":["provider"]}`),
+			Constraints: AddonConstraints{Count: AddonCount{PerTarget: 1}, Immutable: []string{"spec.config.provider"},
+				Unique: []string{"spec.config.provider"}, Rules: []AddonRule{{Rule: "${{ true }}", Message: "always"}}},
+		}}
+		return a
+	}
+	require.NoError(t, withSettings().Validate())
+	require.Equal(t, []string{"IdentityProvider", "RauthyPasswordPolicy"}, withSettings().Spec.Kinds())
+	require.NotNil(t, withSettings().Spec.SettingsKind("rauthypasswordpolicy"), "a kind is found by its plural, whatever the case")
+	require.Equal(t, time.Duration(DefaultAddonResync), (&AddonSettings{}).EffectiveResync())
+
+	for name, edit := range map[string]func(s *AddonSettings){
+		"a kind that is no name":         func(s *AddonSettings) { s.Kind = "rauthy-policy" },
+		"funcd's own kind":               func(s *AddonSettings) { s.Kind = "Secret" },
+		"the Addon's own kind":           func(s *AddonSettings) { s.Kind = "Identityprovider" },
+		"no Function":                    func(s *AddonSettings) { s.Function.Ref = "" },
+		"a Function that is no name":     func(s *AddonSettings) { s.Function.Ref = "Rauthy_Settings" },
+		"no schema":                      func(s *AddonSettings) { s.Schema = nil },
+		"a schema that is no object":     func(s *AddonSettings) { s.Schema = json.RawMessage(`[]`) },
+		"a resync under 1s":              func(s *AddonSettings) { s.Resync = Duration(time.Millisecond) },
+		"a resync over 24h":              func(s *AddonSettings) { s.Resync = Duration(25 * time.Hour) },
+		"a target outside spec.config":   func(s *AddonSettings) { s.Target = "metadata.name" },
+		"a target with an empty segment": func(s *AddonSettings) { s.Target = "spec.config..provider" },
+		"an immutable path outside":      func(s *AddonSettings) { s.Constraints.Immutable = []string{"spec.provider"} },
+		"a negative count":               func(s *AddonSettings) { s.Constraints.Count.PerNamespace = -1 },
+		"a rule with no message":         func(s *AddonSettings) { s.Constraints.Rules[0].Message = "" },
+	} {
+		a := withSettings()
+		edit(&a.Spec.Settings[0])
+		err := a.Validate()
+		require.Error(t, err, name)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+	}
+
+	a := withSettings()
+	a.Spec.Settings = append(a.Spec.Settings, a.Spec.Settings[0])
+	a.Spec.Settings[1].Kind = "RAUTHYPASSWORDPOLICY"
+	require.Error(t, a.Validate(), "two settings kinds of one plural")
+}

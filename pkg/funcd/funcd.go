@@ -126,8 +126,10 @@ const (
 	defaultBucketsPerNamespace = 100
 	// defaultSQLDatabasesPerNamespace is the per-namespace SQLDatabase count cap when unset (ADR-0232).
 	defaultSQLDatabasesPerNamespace = 20
-	// defaultAddonObjectsPerNamespace is the per-namespace add-on object count cap when unset (ADR-0332 Decision 2).
-	defaultAddonObjectsPerNamespace = 20
+	// defaultAddonObjectsPerNamespace is the per-namespace cap on the add-on objects that run an engine when unset
+	// (ADR-0332 Decision 2); defaultAddonSettingsPerNamespace the cap on settings objects (ADR-0340 Decision 6).
+	defaultAddonObjectsPerNamespace  = 20
+	defaultAddonSettingsPerNamespace = 200
 	// The workflow engine tunables when WithWorkflow is not given: the daemon config's workflow.* defaults
 	// (ADR-0094, internal/platform/config), so a hung step fails the same way in dev and in production.
 	defaultWorkflowStepTimeout  = 300 * time.Second
@@ -334,11 +336,21 @@ type config struct {
 	addonRuntime provider.Runtime
 	addonModes   []string
 	// addonRegistries are addons.registries, the registries an Addon's image may come from (ADR-0332 Decision 6);
-	// addonMaxObjects is addons.maxObjectsPerNamespace, 0 ⇒ the default (20), negative disables the cap.
-	addonRegistries []string
-	addonMaxObjects int
+	// addonMaxObjects is addons.maxObjectsPerNamespace, 0 ⇒ the default (20), negative disables the cap;
+	// addonMaxSettings is addons.maxSettingsPerNamespace, 0 ⇒ the default (200) (ADR-0340 Decision 6).
+	addonRegistries  []string
+	addonMaxObjects  int
+	addonMaxSettings int
 	// addonAnyRegistry lets an Addon's image come from any registry (WithAnyAddonRegistry, ADR-0334 Decision 5).
 	addonAnyRegistry bool
+	// addonFollowCurrent makes every add-on object follow its Addon's current revision (WithAddonsFollowingCurrent,
+	// ADR-0339 Decision 7).
+	addonFollowCurrent bool
+	// addonCallTimeout and addonCallPayload bound a Function's call of an engine (WithAddonCallLimits, ADR-0338).
+	addonCallTimeout time.Duration
+	addonCallPayload int64
+	// addonSettingsTimeout bounds a settings Function's call (WithAddonSettingsTimeout, ADR-0341); 0 ⇒ 30 s.
+	addonSettingsTimeout time.Duration
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
 	sqlCallTimeout time.Duration
 	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075 with a
@@ -706,7 +718,8 @@ func (p *Platform) buildControlPlane() error {
 		// ADR-0137 (F102): LakeCapability makes the live PDP understand lake::query; the per-Lake
 		// PEP proxy that calls it is not yet wired here — see TODO(ADR-0137) in internal/services/lake/reconcile.go.
 		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.LakeCapability(),
-			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapabilityWithWriters(writerLister)},
+			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapabilityWithWriters(writerLister),
+			cedarauth.AddonCapability()},
 		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.LakePrincipalSource(),
 			cedarauth.AddonObjectPrincipalSource()},
 	)
@@ -835,7 +848,7 @@ func (p *Platform) buildControlPlane() error {
 		return err
 	}
 	if err := p.addon.build(addonDeps{secrets: p.secrets.resolver, routes: edgeAgg, ctrl: ctrl,
-		indexEngines: p.exec.indexAddonEngines}); err != nil {
+		indexEngines: p.exec.indexAddonEngines, authz: cedarPDP, master: master}); err != nil {
 		return err
 	}
 	p.exec.addonNamespaces = p.addon.engineNamespaces
@@ -896,6 +909,7 @@ func (p *Platform) buildControlPlane() error {
 		PoolLimit:            c.poolLimit,
 		S3Gateway:            p.blob.injection,
 		LakeMaster:           master, // ADR-0137: per-function lake token derivation (same master as S3)
+		AddonProxy:           p.addon.proxyFor(),
 		LakeExtensionDir:     c.lakeExtensionDir,
 		LakeProxies:          p.lake.proxy,
 		Secrets:              p.secrets.resolver,
@@ -1086,6 +1100,14 @@ func (p *Platform) buildControlPlane() error {
 	}
 	ctrl.Register(v1.KindApp.GVK(), appReconciler)
 	ctrl.Watches(v1.KindFunction.GVK(), appReconciler.MapStepFunction) // a Workflow part waits for its step Functions (ADR-0215)
+	// ADR-0341: a settings kind's Function is called from its target's pass through an invoker of the hooks' kind,
+	// bounded by addons.settingsTimeout; a Function's change requeues the settings objects it applies and their targets.
+	if rec := p.addon.reconciler; rec != nil {
+		rec.SetSettingsCaller(addonSettingsCaller{inv: &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act,
+			Protocol: protocolOf(c.store), Client: workerClient(calls, 0), Chain: callChain, Caller: invoke.AddonSettings}},
+			ctrl.Enqueue, c.addonSettingsTimeout)
+		ctrl.Watches(v1.KindFunction.GVK(), rec.MapFunction)
+	}
 	for _, pair := range gc.Pairs() {
 		if pair.Owner == v1.KindApp && pair.Child != v1.KindAppRevision { // a record, not a part (ADR-0200)
 			ctrl.Watches(pair.Child.GVK(), appReconciler.MapPart)

@@ -105,6 +105,9 @@ type Handlers interface {
 	ReplaceInvocation(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, inv v1.Invocation) (v1.Invocation, error)
 	DeleteInvocation(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
 
+	// AddonRevision (cluster-scoped, read-only) — ADR-0339
+	GetAddonRevision(ctx context.Context, name v1.ObjectName) (v1.AddonRevision, error)
+	ListAddonRevisions(ctx context.Context) ([]v1.AddonRevision, error)
 	// Addon (cluster-scoped, ADR-0332)
 	GetAddon(ctx context.Context, name v1.ObjectName) (v1.Addon, error)
 	CreateAddon(ctx context.Context, a v1.Addon) (v1.Addon, error)
