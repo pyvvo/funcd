@@ -11,8 +11,9 @@
   [ADR-0106](0106-run-scoped-log-read.md) (a run's read),
   [ADR-0168](0168-raw-output-pipes-and-record-bound.md) (raw output; its Consequence "engine raw output not stored",
   open question 15, answered here),
-  [ADR-0255](0255-funcdctl-dev-runs-the-dev-loop.md) Decision 4 (a watch command's output only in its log file, the
-  precedent for dev),
+  [ADR-0255](0255-funcdctl-dev-runs-the-dev-loop.md) (dev's log folder and its start line, reused) and
+  [ADR-0256](0256-funcdctl-dev-prints-output-that-led-to-no-build.md) Decision 3 (a watch command's bursts in dev's
+  terminal, which an engine does not take),
   [ADR-0276](0276-a-lake-shows-when-its-catalog-saves-fail.md) Decision 4 (an engine's output in the daemon log,
   kept) and its Scope (funclog storage of engine output, left out there),
   [ADR-0332](0332-an-admin-registers-add-ons-built-outside-funcd.md) (add-on kinds served at their plural),
@@ -29,8 +30,8 @@ log records and serves them to `funcdctl logs` (ADR-0081, ADR-0084). Under `func
 into its Docker container, where funcd reads nothing (ADR-0334). So a developer whose IdentityProvider stays
 `EngineNotReady`, or whose Lake refuses a query, cannot read the engine's reason without the host. Purpose: whoever may
 read an object reads its engine's output with `funcdctl logs`, kept and bounded as a Function's logs are, while dev's
-terminal stays as quiet as for a `dev.watch` command. The decider chose logs first and metrics later, on the same
-identity (FEAT-0020 F268).
+terminal shows none of it: the decider asked that add-on engines, which can write many lines, not bloat it. The decider
+chose logs first and metrics later, on the same identity (FEAT-0020 F268).
 
 ## Scenarios
 
@@ -65,12 +66,12 @@ to the daemon log copy on a server (ADR-0276 Decision 4 stays); `funcdctl logs` 
 
 ## Constraints & Decision drivers
 
-- One path for every engine kind: each engine worker carries its owner kind (`pkg/funcd/addon_provider.go:86`,
-  `pkg/funcd/binding_providers.go:479`, `:647`) and meets one output hook.
+- One path for every engine kind: each engine worker carries its owner kind (`provider.NewRuntime`'s `OwnerKind`, in
+  the add-on provider's `build` and in `pkg/funcd/binding_providers.go`) and meets one output hook.
 - One store: funclog's records, segments, compaction and retention, and ADR-0083's stable compacted schema.
 - The read rule of a Function's logs: authorized at query time in the path's namespace (ADR-0084).
 - No engine key may meet a Function's: both live in one namespace prefix.
-- Dev's terminal shows no engine line, as no `dev.watch` command's (ADR-0255 Decision 4).
+- Dev's terminal shows no engine line, unlike a `dev.watch` command's bursts (ADR-0256), as the decider asked.
 - F268's metrics reuse the identity chosen here.
 
 ## Alternatives considered
@@ -85,10 +86,12 @@ to the daemon log copy on a server (ADR-0276 Decision 4 stays); `funcdctl logs` 
   `attrs_json`, never new columns. Rejected: the key's owner segment already names them, and the reader fills them.
 - **stderr at ERROR, as a Function's raw stderr (ADR-0168)**: engines write routine lines to stderr (ADR-0276
   Decision 4), so `--severity error` would show them all. Rejected.
-- **Dev prints engine lines, as it prints a Function's**: an engine may write a line per request; the decider asked
-  for dev to stay unbloated, as with `vite build --watch`. Rejected, and so is printing a failed container's last
-  lines as for a watch command (ADR-0255 Decision 3): dev re-creates a failed engine at each pass, so a crash loop
-  would print every pass; the status says `EngineNotReady`, and the log file holds the lines.
+- **Dev prints engine lines, as it prints a Function's, or as a watch command's**: an engine may write a line per
+  request, and one that owns no build would print every burst under ADR-0256 Decision 3; the decider refused that
+  bloat. Rejected. So is printing a failed container's last 20 lines (ADR-0255 Decision 3): dev re-creates a failed
+  engine at each pass, so a crash loop would print every pass. Printing them once, at the first failure since the
+  engine was last Ready, would need dev to track each engine's readiness, while the object's `EngineNotReady`, its
+  log file and `funcdctl logs` already show why; a later ADR can add it if dev proves too quiet.
 - **The engine pushes OTLP itself (`OTEL_EXPORTER_OTLP_ENDPOINT` to a funcd receiver)**: only engines with an
   OpenTelemetry SDK, and an engine's egress to funcd. Kept for F268's metrics, which need such a path anyway.
 
@@ -106,26 +109,28 @@ to the daemon log copy on a server (ADR-0276 Decision 4 stays); `funcdctl logs` 
    segments live at `logs/<ns>/<plural>.<name>/<date>/…`, where `<plural>` is the kind in lower case with an `s`
    (`v1.AddonPlural`): an object name is a DNS label with no dot, so no Function's segment `logs/<ns>/<fn>/` is the
    same. Compaction and retention treat the segment as a Function's, and the compacted `Row` stays as it is: an engine
-   row's `function` is empty, and the reader takes `kind` and `name` from the owner segment. A run's read (ADR-0106)
-   skips the owner segments with a dot: an engine record carries no trace.
+   row's `function` is empty, and the read fills `kind` and `name` from its query, whose route knows them (`Lake`,
+   `SQLDatabase`, or the Addon's kind). A run's read (ADR-0106) skips the owner segments with a dot: an engine record
+   carries no trace.
 3. **The read.** `GET /apis/funcd.io/v1alpha1/namespaces/{namespace}/{plural}/{name}/logs` serves `lakes`,
    `sqldatabases` and each add-on kind's plural, with the Function route's query (`since`, `severity`, `limit`). It
    authorizes before reading, as a read of the object: `get` on `Lake`, `SQLDatabase` or `AddonObject` in the namespace
    (an admin in any namespace, a developer or a viewer in a bound one), else 403. It reads what is stored, so an
-   object's logs outlive it until retention, as a deleted Function's do. A plural no Addon registers, a settings kind's
-   included, is 404, so an Addon's deletion hides its objects' logs before their retention ends. Each line of the
-   answer carries `kind` and `name`.
+   object's logs outlive it until retention, as a deleted Function's do. A plural that is no Addon's kind, or is a
+   settings kind's, is 404, so an Addon's deletion hides its objects' logs before their retention ends. Each line of
+   the answer carries `kind` and `name`.
 4. **The command.** `funcdctl logs <kind>/<name>` resolves `<kind>` as `funcdctl get` does (`sdk.KindFromToken`: a
    plural, a singular or an alias, in any case), with the flags of `funcdctl logs`. `function/<name>` is the bare
    form; `lake`, `sqldatabase` and a kind that is none of funcd's (an add-on's) read the engine route; any other kind
    of funcd's is refused before any call, `workflowrun` naming `funcdctl workflow logs`. A bare name is a Function, as
    before.
-5. **Dev.** Under `funcdctl dev`, the Docker and nerdctl providers follow each engine container's stdout and stderr
-   from its start. Each line goes to the container's log file, `<process dir>/logs/<plural>.<name>.log` beside the
-   `dev.watch` logs and emptied when dev starts, and to dev's funclog store, past dev's printing tee; none reaches
-   dev's terminal or dev's own log. Dev prints `engine <kind>/<name>: <log file>` once, as the container first
-   starts, as it prints a watch command's (ADR-0255). Lines written while dev stops may be lost: dev seals the streams
-   before it stops the containers (`pkg/funcd/logroutes.go:45`, ADR-0334 Decision 7).
+5. **Dev.** Under `funcdctl dev`, the Docker and nerdctl runtimes follow each engine container's stdout and stderr
+   from its start. Each line goes to the container's log file, `<process dir>/logs/<namespace>/<plural>.<name>.log`
+   beside the `dev.watch` logs, emptied when dev starts, and to dev's funclog store, past dev's printing tee. None
+   reaches dev's terminal or dev's own log: dev prints only `engine <kind>/<name>: <log file>`, once, as the container
+   first starts, as it prints a watch command's file (ADR-0255). This departs from a watch command's rule on purpose
+   (ADR-0256 Decision 3 prints every burst of a command that owns no build). Lines written while dev stops are lost:
+   dev stops the containers after the platform (ADR-0334 Decision 7).
 
 ## Design model
 
@@ -187,18 +192,32 @@ type ProviderSpec struct {
 	ServedKind v1.Kind // new: copied into each engine's WorkerSpec
 }
 
-// internal/provider/docker and internal/provider/nerdctl, on their Engine
-Follow(ctx context.Context, name string) (stdout, stderr io.ReadCloser, err error) // new: from the container's start
+// internal/provider (new): a Runtime that reads its engines' output itself, as dev's do
+type LineFollower interface {
+	FollowLines(fn func(spec ProviderSpec, stream, line string))
+}
+
+// internal/provider/docker and internal/provider/nerdctl, on their Engine (new): from the container's start
+Follow(ctx context.Context, name string) (stdout, stderr io.ReadCloser, err error)
+
+// internal/provider/docker.Runtime, which nerdctl's embeds (new)
+func (r *Runtime) SetLogs(dir string, writef func(format string, args ...any) error) // dev's log folder and printer
+func (r *Runtime) FollowLines(fn func(spec provider.ProviderSpec, stream, line string)) // provider.LineFollower
 
 // pkg/sdk
 func (c *Client) EngineLogs(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName,
 	opts LogsOptions) ([]logread.Line, error)
 ```
 
+Under dev, `cmd/funcdctl` calls `SetLogs` with `<process dir>/logs` and its printer, and the runtime writes each log
+file and prints its one line. The add-on provider sets `FollowLines` to the executor's append-only capture: funclog's
+inner sink, never the daemon log. The runtime's follow goroutines end with their container and are not under the
+drain (`pkg/funcd/logroutes.go`), so dev's stop waits for none of them.
+
 | Dependency or output | What |
 |---|---|
 | Consumes | the output capture (`runtime.OutputCapturer`), funclog's logs sink, `funclog.enabled`, `funclog.segmentMaxAge`, the authorizer |
-| Exposes | `GET …/namespaces/{ns}/{lakes,sqldatabases,<add-on plural>}/{name}/logs`; `funcdctl logs <kind>/<name>`; segments under `logs/<ns>/<plural>.<name>/`; dev's `<process dir>/logs/<plural>.<name>.log` |
+| Exposes | `GET …/namespaces/{ns}/{lakes,sqldatabases,<add-on plural>}/{name}/logs`; `funcdctl logs <kind>/<name>`; segments under `logs/<ns>/<plural>.<name>/`; dev's `<process dir>/logs/<namespace>/<plural>.<name>.log` |
 | Config keys | none new; `funclog.enabled`'s doc names the engines' logs too |
 
 ## Implementation plan
@@ -212,7 +231,8 @@ func (c *Client) EngineLogs(ctx context.Context, ns v1.NamespaceName, kind v1.Ki
 - `internal/controlplane/logs.go`: the routes of `lakes` and `sqldatabases`; `internal/controlplane/addon.go`: the
   add-on kinds' `/{plural}/{name}/logs`; their answers and cause rows; the OpenAPI spec and the stubs regenerated.
 - `pkg/sdk`, `cmd/funcdctl/logs.go`: `EngineLogs` and the `<kind>/<name>` form.
-- `internal/provider/docker`, `internal/provider/nerdctl`: `Follow`, and the dev capture into the log file and the store.
+- `internal/provider/docker`, `internal/provider/nerdctl`: `Follow`, `SetLogs` and `FollowLines`;
+  `cmd/funcdctl/dev_addon.go` calls `SetLogs`; the add-on provider's `build` sets `FollowLines`.
 - `internal/platform/config`: `funclog.enabled`'s doc.
 - Docs: a "Read its engine's logs" line in the guide's Add-ons, Lake and SQL Usage pages; the behavior rows.
 - Tests, one per Scenario, named after it: the add-on and Lake/SQL ones in `pkg/funcd` against the process runtime;
@@ -241,8 +261,10 @@ func (c *Client) EngineLogs(ctx context.Context, ns v1.NamespaceName, kind v1.Ki
 - (+) F268 has its identity: the engine resource.
 - (−) The funcd-system bucket grows with chatty engines, bounded by retention and `storage.minFreeSize`.
 - (−) One loop serves both copies of a line (Decision 1).
+- (−) Under dev, the store is in memory unless `--persist`, so neither retention nor `storage.minFreeSize` bounds an
+  engine's lines within a session, and its log file grows with them.
 - Risk accepted: an engine's output reaches everyone who may read its object, viewers included. An engine gets its
-  bound Secrets, keys and auth files (`internal/services/addon/reconcile.go:202-220`), which a viewer may not read
+  bound Secrets, keys and auth files (`secretEnv` in `internal/services/addon/reconcile.go`), which a viewer may not read
   (ADR-0171 Decision 9); an engine that prints one shows it to them, as a Function that prints one does.
 
 ## Open questions
@@ -253,7 +275,8 @@ func (c *Client) EngineLogs(ctx context.Context, ns v1.NamespaceName, kind v1.Ki
 ## References
 
 - FEAT-0020 F267; feature issue #1518, under the epoch's tracker #1517.
-- ADR-0081, ADR-0083, ADR-0084, ADR-0106, ADR-0168, ADR-0171, ADR-0255, ADR-0276, ADR-0281, ADR-0332, ADR-0334,
-  ADR-0340.
-- Code on main d5bef540: `pkg/funcd/executor.go:239`, `pkg/funcd/engineoutput.go:16`, `internal/funclog/sink.go:352`,
-  `internal/funclog/compact/compact.go:51`, `internal/controlplane/logs.go:70`, `internal/controlplane/addon.go:324`.
+- ADR-0081, ADR-0083, ADR-0084, ADR-0106, ADR-0168, ADR-0171, ADR-0255, ADR-0256, ADR-0276, ADR-0281, ADR-0332,
+  ADR-0334, ADR-0340.
+- Code: the executor's `captureLogs` and `logEngineOutput` (`pkg/funcd`), funclog's `segmentKey`, compact's `Row`,
+  `RegisterLogs` in `internal/controlplane/logs.go`, `addonObjectOperations` and `kindFor` in
+  `internal/controlplane/addon.go`.
