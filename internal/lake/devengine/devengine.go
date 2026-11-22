@@ -71,6 +71,8 @@ type Runtime struct {
 	// bundled and extract reach the embedded engine; a test swaps them for a fake engine.
 	bundled func() bool
 	extract func(dir string) (embedengine.Paths, error)
+	// LineHook keeps each stderr line of an engine (ADR-0343): the runtime is a provider.LineFollower.
+	provider.LineHook
 }
 
 // Option configures the dev lake engine runtime.
@@ -295,7 +297,7 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 	// Decision 6).
 	cmd.Env = append(os.Environ(), "DUCKDB_AGENT_MODE=0")
 	watcher := &rowWatcher{seen: make(chan struct{})}
-	stderr := &prefixLogWriter{logger: r.logger, provider: string(spec.Ref.Name)}
+	stderr := &prefixLogWriter{logger: r.logger, provider: string(spec.Ref.Name), keep: r.LinesOf(spec, "stderr")}
 	cmd.Stdout = watcher
 	cmd.Stderr = stderr
 	// Its own process group, so the reap after a crash reaches everything the engine started (ADR-0167).
@@ -440,10 +442,12 @@ func dataPathFor(lakeURL string) string {
 var ansiColor = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // prefixLogWriter forwards duckdb stderr lines to the driver's logger at debug level and keeps the last ones, which a
-// failed start reports. Only the stderr copier calls Write; last is read once the engine has exited.
+// failed start reports; keep, when set, gets each line too (ADR-0343). Only the stderr copier calls Write; last is
+// read once the engine has exited.
 type prefixLogWriter struct {
 	logger   *slog.Logger
 	provider string
+	keep     func(line string)
 	last     []string
 	partial  string // a line not ended yet
 }
@@ -469,6 +473,9 @@ func (w *prefixLogWriter) line(line string) {
 		return
 	}
 	w.logger.Debug("lake engine", "provider", w.provider, "line", line)
+	if w.keep != nil {
+		w.keep(line)
+	}
 	w.last = append(w.last, line)
 	if len(w.last) > 3 {
 		w.last = w.last[1:]

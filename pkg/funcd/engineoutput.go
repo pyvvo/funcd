@@ -62,7 +62,22 @@ func engineResource(spec runtime.WorkerSpec) (funclog.Resource, bool) {
 		Replica: strconv.Itoa(spec.Replica)}, true
 }
 
-// keepDevEngineLine keeps a line that dev's container runtime reads from an add-on engine (ADR-0342 Decision 5): in
+// followDevLines makes a runtime that reads its engines' output itself, one of dev's, hand each line to keep, under kind
+// when the spec names none: dev's add-on runtimes (ADR-0342 Decision 5) and its Lake and SQL engine runners (ADR-0343).
+func followDevLines(rt provider.Runtime, kind v1.Kind, keep func(spec provider.ProviderSpec, stream, line string)) {
+	lf, ok := rt.(provider.LineFollower)
+	if !ok || keep == nil {
+		return
+	}
+	lf.FollowLines(func(spec provider.ProviderSpec, stream, line string) {
+		if spec.ServedKind == "" {
+			spec.ServedKind = kind
+		}
+		keep(spec, stream, line)
+	})
+}
+
+// keepDevEngineLine keeps a line that one of dev's runtimes reads from an engine (ADR-0342 Decision 5, ADR-0343): in
 // funclog only, past dev's printing tee and never in the daemon's log, which is dev's terminal, so a failed append is
 // dropped unlogged.
 func (e *executor) keepDevEngineLine(spec provider.ProviderSpec, stream, line string) {

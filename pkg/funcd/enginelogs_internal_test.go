@@ -131,3 +131,26 @@ func TestDevEngineLinesStayOutOfTheDaemonLog(t *testing.T) {
 	require.Equal(t, "stdout", lines[0].Source)
 	require.NotContains(t, logs.String(), "followed line")
 }
+
+// lineRuntime is a dev runtime that reads its engines' output itself; a test hands it lines.
+type lineRuntime struct {
+	provider.Runtime
+	provider.LineHook
+}
+
+// ADR-0343: dev's Lake and SQL engine runners, whose specs name no served kind, have their lines kept under Lake and
+// SQLDatabase, past dev's terminal.
+func TestDevLakeAndSQLLinesAreKeptUnderTheirKind(t *testing.T) {
+	t.Parallel()
+	p, _, b, logs := engineLogsRig(t)
+	lake, sql := &lineRuntime{}, &lineRuntime{}
+	followDevLines(lake, v1.KindLake, p.exec.keepDevEngineLine)
+	followDevLines(sql, v1.KindSQLDatabase, p.exec.keepDevEngineLine)
+	lake.LinesOf(provider.ProviderSpec{Ref: provider.ProviderRef{Namespace: "default", Name: "sales"}}, "stderr")("lake line")
+	sql.LinesOf(provider.ProviderSpec{Ref: provider.ProviderRef{Namespace: "default", Name: "orders"}}, "stderr")("sql line")
+	runThenCancel(t, p)
+
+	require.Equal(t, []string{"lake line"}, bodiesOf(readLines(t, b, logread.Query{Kind: "Lake", Name: "sales"})))
+	require.Equal(t, []string{"sql line"}, bodiesOf(readLines(t, b, logread.Query{Kind: "SQLDatabase", Name: "orders"})))
+	require.NotContains(t, logs.String(), "lake line")
+}

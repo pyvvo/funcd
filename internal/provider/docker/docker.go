@@ -184,12 +184,13 @@ type Runtime struct {
 	// its helper writes one (ADR-0288 Decision 2).
 	quarantine sync.Mutex
 
-	// The engines' output (ADR-0342 Decision 5): the folder of their log files, dev's printer, the func that keeps each
-	// line, the log files this session has opened, and the context every follow ends with.
+	// The engines' output (ADR-0342 Decision 5): the func that keeps each line, which makes the runtime a
+	// provider.LineFollower; the folder of the log files, dev's printer, the log files this session has opened, and the
+	// context every follow ends with.
+	provider.LineHook
 	outMu    sync.Mutex
 	logDir   string
 	writef   func(format string, args ...any) error
-	lines    func(spec provider.ProviderSpec, stream, line string)
 	logged   map[string]bool
 	follows  context.Context //nolint:containedctx // the runtime's own, ended by StopAll: a follow outlives each pass
 	unfollow context.CancelFunc
@@ -529,22 +530,12 @@ func (r *Runtime) SetLogs(dir string, printf func(format string, args ...any) er
 	r.logDir, r.writef = dir, printf
 }
 
-// FollowLines makes fn keep each line an engine writes: provider.LineFollower.
-func (r *Runtime) FollowLines(fn func(spec provider.ProviderSpec, stream, line string)) {
-	r.outMu.Lock()
-	defer r.outMu.Unlock()
-	r.lines = fn
-}
-
 // follow reads the engine container name from its start, in the background until it stops or StopAll runs: each line
 // goes to the object's log file and to the func FollowLines set, a line longer than workerpipe.DefaultLineBytes split
 // into lines of that size, as a server's worker pipe splits it. It reads nothing when neither is set.
 func (r *Runtime) follow(spec provider.ProviderSpec, name string) {
-	r.outMu.Lock()
-	lines := r.lines
-	r.outMu.Unlock()
 	file := r.logFile(spec)
-	if lines == nil && file == nil {
+	if r.LinesOf(spec, "stdout") == nil && file == nil {
 		return
 	}
 	stdout, stderr, err := r.eng.Follow(r.follows, name)
@@ -561,6 +552,7 @@ func (r *Runtime) follow(spec provider.ProviderSpec, name string) {
 		stream string
 		rc     io.ReadCloser
 	}{{"stdout", stdout}, {"stderr", stderr}} {
+		keep := r.LinesOf(spec, s.stream)
 		wg.Go(func() {
 			defer func() { _ = s.rc.Close() }()
 			br := bufio.NewReaderSize(s.rc, workerpipe.DefaultLineBytes)
@@ -575,8 +567,8 @@ func (r *Runtime) follow(spec provider.ProviderSpec, name string) {
 					_, _ = file.WriteString(line + "\n")
 					fileMu.Unlock()
 				}
-				if lines != nil {
-					lines(spec, s.stream, line)
+				if keep != nil {
+					keep(line)
 				}
 			}
 		})

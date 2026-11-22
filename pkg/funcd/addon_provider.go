@@ -234,9 +234,7 @@ func (s *addonProvider) build(d addonDeps) error {
 		serverMode = v1.AddonRuntimeContainerd
 	}
 	s.engines = engineRuntime
-	if lf, ok := engineRuntime.(provider.LineFollower); ok && d.engineLine != nil {
-		lf.FollowLines(d.engineLine)
-	}
+	followDevLines(engineRuntime, "", d.engineLine)
 	s.files, _ = engineRuntime.(workload.AddonFiles)
 	volumes, _ := engineRuntime.(provider.Volumes)
 	rec, err := addonsvc.NewReconciler(addonsvc.Deps{

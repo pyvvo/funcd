@@ -33,10 +33,35 @@ type Runtime interface {
 	Teardown(ctx context.Context, ref ProviderRef) error
 }
 
-// LineFollower is a Runtime that reads its engines' output itself, as dev's container runtimes do (ADR-0342
-// Decision 5): fn gets each line an engine writes, its stream "stdout" or "stderr".
+// LineFollower is a Runtime that reads its engines' output itself, as dev's runtimes do (ADR-0342 Decision 5,
+// ADR-0343): fn gets each line an engine writes, its stream "stdout" or "stderr".
 type LineFollower interface {
 	FollowLines(fn func(spec ProviderSpec, stream, line string))
+}
+
+// LineHook holds the func a LineFollower hands its engines' lines to: a Runtime that embeds one is a LineFollower. It
+// has a lock of its own, so an engine's start reads it under the runtime's own lock.
+type LineHook struct {
+	mu sync.Mutex
+	fn func(spec ProviderSpec, stream, line string)
+}
+
+// FollowLines sets the func each line goes to.
+func (h *LineHook) FollowLines(fn func(spec ProviderSpec, stream, line string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.fn = fn
+}
+
+// LinesOf is the func that hands spec's lines of stream on; nil when FollowLines set none.
+func (h *LineHook) LinesOf(spec ProviderSpec, stream string) func(line string) {
+	h.mu.Lock()
+	fn := h.fn
+	h.mu.Unlock()
+	if fn == nil {
+		return nil
+	}
+	return func(line string) { fn(spec, stream, line) }
 }
 
 // Deps wires the runtime over the EXISTING ports — no new execution/routing model, no new driver.

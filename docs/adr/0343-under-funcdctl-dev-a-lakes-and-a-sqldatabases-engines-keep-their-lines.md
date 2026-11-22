@@ -1,6 +1,6 @@
 # ADR-0343: Under funcdctl dev, a Lake's and a SQLDatabase's engines keep their lines too (amends ADR-0342)
 
-- **Status**: Accepted (2026-11-22), by the decider's go-ahead ("yes, add it to this PR"), after one round of an
+- **Status**: Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider's go-ahead ("yes, add it to this PR"), after one round of an
   independent judge, its five Minors folded
 - **Date**: 2026-11-22
 - **Deciders**: green-0-rabbit
