@@ -245,8 +245,8 @@ github.com/containerd/errdefs/pkg v0.3.0 h1:9IKJ06FvyNlexW690DXuQNx2KA2cUJXx151X
 github.com/containerd/errdefs/pkg v0.3.0/go.mod h1:NJw6s9HwNuRhnjJhM7pylWwMyAkmCQvQ4GpJHEqRLVk=
 github.com/containerd/fifo v1.1.0 h1:4I2mbh5stb1u6ycIABlBw9zgtlK8viPI9QkQNRQEEmY=
 github.com/containerd/fifo v1.1.0/go.mod h1:bmC4NWMbXlt2EZ0Hc7Fx7QzTFxgPID13eH0Qu+MAb2o=
-github.com/containerd/go-cni v1.1.14 h1:jcFWauA5ED2wUHgCdvPB/IyvOtBcXzmgj8LprJ8nJH0=
-github.com/containerd/go-cni v1.1.14/go.mod h1:igdwKOd5qpuMIafFcovqefXeThU/s2MoDSOnkCv77fw=
+github.com/containerd/go-cni v1.1.15 h1:ce9mQ012Es7DKGq4CP60k97AnTIzIwOKF9/j/7LEeLQ=
+github.com/containerd/go-cni v1.1.15/go.mod h1:5DAleVZ1qeXMhkTJnPSTFZVgP7QbEz2RDd67hMFZ4ew=
 github.com/containerd/log v0.2.0 h1:BewD/umNgVnoczglOpX8eRMyEy5t5iPlu5AIpnWDONc=
 github.com/containerd/log v0.2.0/go.mod h1:/M7L7CXKcPTfNC74XzaK+5H5KbO5+4lJVpuVI6vRLoM=
 github.com/containerd/log/otel v0.1.0 h1:Az5rFFo0+c4v2yC8ROR63sWsZpKl/vhtUnUhqLSpE6U=
