@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
@@ -99,10 +100,10 @@ func TestAddonBoundObjectIsInUseForPrune(t *testing.T) {
 	a.Spec.Addons = nil
 	a.Spec.ConfigMaps = []v1.ConfigMapEntry{{Name: "web-auth-settings", ConfigMapSpec: v1.ConfigMapSpec{Data: map[string]string{"k": "v"}}}}
 	e.apply(t, e.dev, a)
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		_, stored := e.object(t, "default", "web-auth-login")
 		return !stored
-	}, 500*time.Millisecond, 20*time.Millisecond, "a bound object is kept")
+	}, 500*time.Millisecond, 20*time.Millisecond), "a bound object is kept")
 	require.NoError(t, e.dev.Delete(e.ctx, v1.KindFunction, "default", "rauthy-settings"))
 	require.Eventually(t, func() bool {
 		_, stored := e.object(t, "default", "web-auth-login")

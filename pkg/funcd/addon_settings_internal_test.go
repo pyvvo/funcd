@@ -12,6 +12,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 )
 
 // ADR-0340: an Addon declares settings kinds, whose objects run no engine and which funcd checks at admission.
@@ -203,10 +204,10 @@ func TestScenarioSettingsObjectNoEngine(t *testing.T) {
 	}
 	status, detail := e.create(t, policiesPath, policy("default", "strict", "login", 16, 64))
 	require.True(t, created(status), "%d %s", status, detail)
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		_, running, _ := e.rt.state(ref("default", "strict"))
 		return running
-	}, 300*time.Millisecond, 20*time.Millisecond, "no engine runs for a settings object")
+	}, 300*time.Millisecond, 20*time.Millisecond), "no engine runs for a settings object")
 }
 
 // scenario: settings-count-per-target — a second policy for one IdentityProvider is refused with 400 naming the first.
@@ -349,8 +350,8 @@ func TestAddonSettingsChangeReplacesNoEngine(t *testing.T) {
 	a.Spec.Settings[0].Resync = v1.Duration(2 * time.Minute)
 	a.Spec.Settings = a.Spec.Settings[:1]
 	e.apply(t, e.admin, a)
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		_, _, n := e.rt.state(ref("default", "login"))
 		return n != starts
-	}, 500*time.Millisecond, 20*time.Millisecond, "the engine is not replaced")
+	}, 500*time.Millisecond, 20*time.Millisecond), "the engine is not replaced")
 }

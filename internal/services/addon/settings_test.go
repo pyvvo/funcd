@@ -17,6 +17,7 @@ import (
 	"github.com/pyvvo/funcd/internal/services/addon"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 )
 
 // ADR-0341: a settings kind's Function applies a target's settings, called from the target's pass.
@@ -400,7 +401,7 @@ func TestScenarioSettingsHungFunction(t *testing.T) {
 	_, phase := g.ready("other")
 	require.Equal(t, v1.PhaseReady, phase)
 	g.pass("login")
-	require.Never(t, func() bool { return len(g.caller.got()) > 1 }, 100*time.Millisecond, 5*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return len(g.caller.got()) > 1 }, 100*time.Millisecond, 5*time.Millisecond),
 		"one call at a time per target and kind")
 
 	g.callEnds("login")
@@ -439,8 +440,8 @@ func TestScenarioSettingsRestart(t *testing.T) {
 	g.requireReason("strict", "Progressing")
 	cancel()
 	<-stopped
-	require.Never(t, func() bool { c, _ := g.ready("strict"); return c.Reason != "Progressing" }, 200*time.Millisecond,
-		20*time.Millisecond, "funcd's stop writes nothing from the call")
+	require.True(t, poll.Never(func() bool { c, _ := g.ready("strict"); return c.Reason != "Progressing" },
+		200*time.Millisecond, 20*time.Millisecond), "funcd's stop writes nothing from the call")
 
 	g.caller.set(nil)
 	g.r = g.reconciler(time.Second)

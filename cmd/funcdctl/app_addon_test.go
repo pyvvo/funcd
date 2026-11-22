@@ -22,6 +22,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -186,10 +187,10 @@ func TestAddonDeployWaitsForTheRevision(t *testing.T) {
 	e := newAddonCLIEnvWith(t, false)
 	run := startCLI(t, e.admin, "app", "deploy", addonTemplate(t, rauthyTemplateAddon), "-n", "team-a", "--no-wait")
 	run.waitOut(t, "created Addon/rauthy\n")
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		_, ok := e.app(t, "rauthy")
 		return ok
-	}, 300*time.Millisecond, 20*time.Millisecond, "no App before the Addon's revision is current")
+	}, 300*time.Millisecond, 20*time.Millisecond), "no App before the Addon's revision is current")
 	a, _ := e.addon(t, "rauthy")
 	a.Status.CurrentRevision = v1.AddonRevisionName(a.Name, a.Generation)
 	_, err := e.st.Update(context.Background(), a)

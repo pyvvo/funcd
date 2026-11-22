@@ -11,6 +11,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 )
 
 // ADR-0339: an Addon's versions are revisions, and each object pins the one its engine runs.
@@ -98,11 +99,11 @@ func TestScenarioAddonRevisionNoMove(t *testing.T) {
 
 	e.updateImage(t, newerImage)
 	e.waitCurrent(t, "rauthy-2")
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		o, _ := e.object(t, "default", "login")
 		spec, _, n := e.rt.state(ref("default", "login"))
 		return n != starts || spec.Image != rauthyAddon("rauthy").Spec.Image || o.Status.AddonRevision != "rauthy-1"
-	}, 500*time.Millisecond, 20*time.Millisecond, "a newer revision moves no engine")
+	}, 500*time.Millisecond, 20*time.Millisecond), "a newer revision moves no engine")
 	_, kept := e.revision(t, "rauthy-1")
 	require.True(t, kept, "login pins rauthy-1, so it stays")
 
@@ -180,10 +181,10 @@ func TestAddonRevisionAppPartMoves(t *testing.T) {
 
 	e.updateImage(t, newerImage)
 	e.waitCurrent(t, "rauthy-2")
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		o, _ := e.object(t, "default", "web-auth-login")
 		return o.Status.AddonRevision != "rauthy-1"
-	}, 300*time.Millisecond, 20*time.Millisecond, "the Addon's change alone moves no part")
+	}, 300*time.Millisecond, 20*time.Millisecond), "the Addon's change alone moves no part")
 
 	next := loginApp("default", "web-auth")
 	next.Spec.Version = "1.1.0"
