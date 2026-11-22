@@ -65,21 +65,6 @@ testcases:
           - result.systemout ShouldContainSubstring "ENDPOINT=10.63.0.1:"  # the netns-reachable lake::query PEP proxy (ADR-0137), not the engine's :8080
           - result.systemout ShouldContainSubstring "FUNCTIONS=0"     # a provider, NOT a Function
 
-  - name: the Lake's engine lines are read with funcdctl logs lake/lake (ADR-0342)
-    steps:
-      - type: exec
-        script: |
-          limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
-            funcdctl logs lake/lake -n default -o json | head -1'
-        retry: 15
-        delay: 2
-        info: "funcdctl logs lake/lake → {{.result.systemout}}"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring '"kind":"Lake"'
-          - result.systemout ShouldContainSubstring '"name":"lake"'
-
   - name: the engine serves Quack and its S3 access is authorized (ADR-0088, not 403)
     steps:
       - type: exec
@@ -625,6 +610,17 @@ testcases:
         info: "the engine's failed save in the daemon's journal → {{.result.systemout}}"
         assertions:
           - result.systemout ShouldEqual LOGGED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl logs lake/lake -n default -o json | grep "catalog checkpoint failed" | head -1'
+        retry: 15
+        delay: 2
+        info: "the same line in funcdctl logs lake/lake (ADR-0342) → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring '"kind":"Lake"'
+          - result.systemout ShouldContainSubstring '"name":"lake"'
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
