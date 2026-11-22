@@ -4,6 +4,7 @@
   8fe0f7ea, 121 s; `duckdb` and `sql` at b22e9cd2, 312 s and 229 s; [report](../reviews/adr-0342-implementation-claude-opus-5-5.md));
   Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider's go-ahead ("Don't wait for me ... We should have this
   implemented, and the related lanes"), after three rounds of an independent judge, every Blocker and Major folded
+- **Superseded in part by**: [ADR-0343](0343-under-funcdctl-dev-a-lakes-and-a-sqldatabases-engines-keep-their-lines.md) (2026-11-22) — its Scope's Out line on dev's own Lake and SQL engines, and Decision 5, which gains dev's Lake and SQL engine runners
 - **Date**: 2026-11-22
 - **Deciders**: green-0-rabbit
 - **Tags**: observability, logs, engines, addons, lake, sql
