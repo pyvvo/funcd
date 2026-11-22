@@ -34,8 +34,8 @@ DIAGRAM = re.compile(r"^#\s*diagram:\s*(.+)$", re.MULTILINE)
 MUTANT = re.compile(r"^#\s*mutant\s+([\w-]+):\s*(\S+)\s*$", re.MULTILINE)
 DECLARED = re.compile(r'^MUTANT = ""\s*$', re.MULTILINE)
 FRONT = re.compile(r"\A\s*---\n(.*?)\n---", re.DOTALL)
-ASSERTION = re.compile(r"^(?:always|exists|transition|always eventually|eventually always)\s+assertion\s+(\w+)\s*:",
-                       re.MULTILINE)
+ASSERTION = re.compile(r"^(?:always|exists|transition|always eventually|eventually always)\s+assertion\s+(\w+)\s*"
+                       r"(?:\([^)]*\))?\s*:", re.MULTILINE)
 ORACLE = re.compile(r"oracle: (docs/design/[\w/-]+\.fizz)#(\w+)")
 
 

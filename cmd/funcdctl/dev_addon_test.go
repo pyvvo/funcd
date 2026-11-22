@@ -635,6 +635,8 @@ func TestDevPruneDeletesObjectsBeforeTheirAddon(t *testing.T) {
 
 // scenario: addon-template-dev — dev applies the template's addon.yaml with its admin token, then the App, whose
 // addons part it holds; a changed addon.yaml is applied again at the next reload, and removing it deletes the Addon.
+//
+// scenario: addon-revision-dev — the reload that changes addon.yaml moves the App's part to the new revision.
 func TestScenarioAddonTemplateDev(t *testing.T) {
 	requireRuntime(t)
 	requireApp(t)
@@ -664,6 +666,11 @@ func TestScenarioAddonTemplateDev(t *testing.T) {
 	require.NoError(t, os.WriteFile(addonPath, []byte(strings.Replace(echoAddon, "path: /health", "path: /ready", 1)), 0o600))
 	require.Eventually(t, func() bool { return readiness() == "/ready" }, time.Minute, 100*time.Millisecond,
 		"the reload applies the changed addon.yaml")
+	require.Eventually(t, func() bool {
+		obj, err := r.inst.client.Get(ctx, "EchoService", devNamespace, "todo-echo")
+		o, ok := obj.(*v1.AddonObject)
+		return err == nil && ok && o.Status.AddonRevision == "whoami-2"
+	}, time.Minute, 100*time.Millisecond, "under dev the part follows the Addon's current revision")
 
 	require.NoError(t, os.Remove(addonPath))
 	require.Eventually(t, func() bool {

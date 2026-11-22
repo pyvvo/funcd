@@ -2,7 +2,7 @@
 
 Status words and how to read this: [the index](README.md).
 
-Kinds: Addon, AddonObject.
+Kinds: Addon, AddonObject, AddonRevision.
 
 ```mermaid
 stateDiagram-v2
@@ -10,7 +10,7 @@ stateDiagram-v2
     Pending --> Pending : held, or the engine does not answer its readiness path yet
     Pending --> Ready : the engine answers 200
     Ready --> Pending : its Addon goes or no longer fits, a Secret goes or is forbidden, or a probe fails
-    Ready --> Stopping : deleted or held, or a changed Secret, Addon or object, or an in-place Restore, replaces the engine
+    Ready --> Stopping : deleted or held, or a changed Secret, pin or object, or an in-place Restore, replaces the engine
     Pending --> Stopping : deleted or held
     Stopping --> Pending : a new engine starts
     Stopping --> [*] : deleted, or funcd stops
@@ -27,7 +27,9 @@ status keeps its last one until the pass ends. An in-place Restore's two engine 
 | An Addon's image | Pinned by digest, from a registry that `addons.registries` lists, the image's host; the empty default refuses every Addon. A tag fails the schema | none | 422 at `body.spec.image`; 400 `does not come from a registry that addons.registries lists` | **differs** | the scenario addon-image-pinned says 422 for both, ADR-0148 Decision 1 400; `TestScenarioAddonImagePinned` |
 | An Addon's config and env | The schema passes the contract profile and compiles; each env value is a literal or one `${{ }}` expression over config that the schema types | none | 400 naming `spec.config` or the env key | **differs** | ADR-0332 Decisions 1 and 4 say 422; `Invalid` is 400 by ADR-0148 Decision 1; `TestScenarioAddonEnvChecked` |
 | An Addon's runtimes | containerd alone, the default: the process runtime runs no image | none | 422 at `body.spec.runtimes` | decided | ADR-0332 Decision 1, `TestScenarioAddonRuntimeUnavailable` |
-| An Addon changed or deleted | An update takes the cluster-scoped lock and checks no object: a new schema applies to the next writes, each object of its kind gets one new engine, a change of `settings` alone none, and its objects outlive it | the next pass | an object that no longer fits waits | decided | ADR-0332 Decisions 1 and 3, ADR-0340 Decision 2, `TestScenarioAddonRemoved` |
+| An Addon changed or deleted | An update takes the cluster-scoped lock and checks no object: it stamps a revision and replaces no engine, so a new schema applies to the next writes; its objects outlive it | the next pass | `status.currentRevision` | decided | ADR-0332 Decisions 1 and 3, ADR-0339 Decision 1, ADR-0340 Decision 2, `TestScenarioAddonRevisionNoMove`, `TestScenarioAddonRemoved` |
+| Which revision an object runs | The one it pins: a standalone object pins the current revision at its first pass and each new generation, an App's part its App revision's record once applied, forward only | none | `status.addonRevision`; a gone pin `AddonRevisionNotFound` | decided | ADR-0339 Decisions 2 and 3, `TestScenarioAddonRevisionNoMove`, `TestScenarioAddonRevisionSuperseded` |
+| An unused revision | Removed once no object pins it and no AppRevision records it; the current one stays. An AddonRevision is read-only, for an admin | `runtime.supervisionPeriod` 10 s | 405 with `Allow: GET` | decided | ADR-0339 Decisions 1 and 6, `TestScenarioAddonRevisionRetired`, `TestScenarioAddonRevisionReadOnly` |
 | An object of an add-on's kind | At its kind's plural, a namespaced kind's verbs; one name is one object per namespace, whatever its kind. With no Addon of the kind, create and replace are 404; list, get and delete serve what is stored | none | 404; 409 for a name of another kind | decided | ADR-0332 Decision 2, `TestScenarioAddonKindUnregistered`, `TestScenarioAddonSecondKind` |
 | An object's config | Checked against its Addon's schema when it is written | none | 422 naming the property under `body.spec.config` | decided | ADR-0332 Decision 2, `TestScenarioAddonConfigSchema` |
 | A settings kind | An Addon's `settings` kind is served at its plural; its objects run no engine and name a target of the Addon's kind | none | the object stored, no engine | decided | ADR-0340 Decisions 1 and 3, `TestScenarioSettingsKindServed`, `TestScenarioSettingsObjectNoEngine` |
@@ -36,7 +38,7 @@ status keeps its last one until the pass ends. An in-place Restore's two engine 
 | An object on a process server | Its Addon runs on containerd only, which the process runtime does not run; under funcdctl dev the add-on runtime runs containerd's | none | `Pending`, `RuntimeUnavailable`, naming both modes | decided | ADR-0332 Decision 3, `TestScenarioAddonRuntimeUnavailable` |
 | An object's engine | One replica of its Addon's image, port, probe and storage, with the object's resources, fenced with no endpoint | until its readiness path answers 200 | `Ready`; else `Pending`, `EngineNotReady`, or `EngineConvergeFailed` when it cannot start | decided | ADR-0332 Decision 3, ADR-0232's reasons, `TestScenarioAddonObjectRuns`, `TestReconcileFindsTheAddonByPlural` |
 | Who reaches an engine | funcd alone: the fence admits new connections from loopback and the bridge address, and the egress gateway refuses an engine's address whatever rule permits it, from before the engine starts | none | a refused connection | decided | ADR-0332 Decision 3, `TestDecideRefusesAnAddonEngine`, `TestAddonRuntimeIndexesEachEngineBeforeItStarts` |
-| An object's environment | Its Addon's env over its config, a non-string as its JSON, and only the `secretKeys` of its bound Secrets, read by Cedar as the object; a changed Secret, Addon or object replaces the engine | the next pass | the engine's environment | decided | ADR-0332 Decision 4, `TestScenarioAddonSecretKeys` |
+| An object's environment | Its pinned revision's env over its config, a non-string as its JSON, and only the `secretKeys` of its bound Secrets, read by Cedar as the object; a changed Secret, pin or object replaces the engine | the next pass | the engine's environment | decided | ADR-0332 Decision 4, ADR-0339 Decision 2, `TestScenarioAddonSecretKeys` |
 | An object's edge entry | On `ingress.host` under its Addon's basePath, kept, ranked after a Lake's; its stance is its own `ingress.auth`, open when unset, never the namespace's default. A path or the authenticated mode is refused | once Ready | `IngressReady`; 400 | **differs** | ADR-0332 Decision 5 says 422 for authenticated; `Invalid` is 400 by ADR-0148 Decision 1; `TestAddonEntryStance` |
 | An object behind an `oidc` stance | Its own `ingress.auth` signs callers in through an OIDCProvider of its namespace, with `ingress.host` in `default`; while the provider is missing, the entry keeps its claim, refused | until the provider exists | `IngressReady=False`, `ProviderNotFound`; 503 | decided | ADR-0335 Decision 10, `TestAddonObjectProviderNotFound` |
 | An Addon's basePath at or under `/.auth` | Refused, since the edge answers `/.auth/` on every host | none | 400 naming `spec.basePath` | decided | ADR-0335 Decision 3 (amended 2026-11-21), `TestAddonValidate` |

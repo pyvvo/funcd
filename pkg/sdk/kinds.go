@@ -14,7 +14,7 @@ import (
 )
 
 // ReadOnlyKind reports whether the API serves only get and list for k, a kind a reconciler alone writes (ADR-0172,
-// ADR-0200).
+// ADR-0200, ADR-0339).
 func ReadOnlyKind(k v1.Kind) bool { return ReadOnlyWriter(k) != "" }
 
 // ReadOnlyWriter names the writer of a read-only kind, for the refusal of a write to it; "" if k is writable.
@@ -24,6 +24,8 @@ func ReadOnlyWriter(k v1.Kind) string {
 		return "the Function reconciler"
 	case v1.KindAppRevision:
 		return "the App reconciler"
+	case v1.KindAddonRevision:
+		return "the Addon reconciler"
 	default:
 		return ""
 	}
@@ -79,6 +81,7 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindBackup:          {"backups", true},          // ADR-0222, F111
 	v1.KindRestore:         {"restores", true},         // ADR-0222, F111
 	v1.KindAddon:           {"addons", false},          // ADR-0332, F258
+	v1.KindAddonRevision:   {"addonrevisions", false},  // ADR-0339, F265
 	v1.KindOIDCProvider:    {"oidcproviders", true},    // ADR-0335, F261
 }
 

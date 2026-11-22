@@ -61,8 +61,16 @@ func object(t testing.TB, kind v1.Kind, name v1.ObjectName) v1.Object {
 	obj, ok := v1.NewObject(kind)
 	require.True(t, ok)
 	m := obj.GetObjectMeta()
-	m.Namespace, m.Name, m.ResourceGroup = ns, name, "rg1"
+	m.Namespace, m.Name, m.ResourceGroup = scope(kind), name, "rg1"
+	if !kind.Namespaced() {
+		m.ResourceGroup = ""
+	}
 	switch o := obj.(type) {
+	case *v1.Addon:
+		o.Spec = v1.AddonSpec{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/"},
+			Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809"}
+	case *v1.AddonRevision:
+		o.Spec.Addon, o.Spec.Number = "rauthy", 1
 	case *v1.Workflow:
 		o.Spec.Steps = []v1.WorkflowStep{{Name: "s1", Function: &v1.FunctionStep{Ref: "x"}}}
 	case *v1.Function:
@@ -120,9 +128,17 @@ func create(t testing.TB, st store.Store, kind v1.Kind, name v1.ObjectName, owne
 	return out
 }
 
+// scope is the namespace of the test's objects of kind: ns, or none for a cluster-scoped kind.
+func scope(kind v1.Kind) v1.NamespaceName {
+	if !kind.Namespaced() {
+		return ""
+	}
+	return ns
+}
+
 func exists(t testing.TB, st store.Store, kind v1.Kind, name v1.ObjectName) bool {
 	t.Helper()
-	_, err := st.Get(context.Background(), kind.GVK(), ns, name)
+	_, err := st.Get(context.Background(), kind.GVK(), scope(kind), name)
 	if fault.KindOf(err) == fault.NotFound {
 		return false
 	}
@@ -132,7 +148,7 @@ func exists(t testing.TB, st store.Store, kind v1.Kind, name v1.ObjectName) bool
 
 func del(t testing.TB, st store.Store, kind v1.Kind, name v1.ObjectName) {
 	t.Helper()
-	require.NoError(t, st.Delete(context.Background(), kind.GVK(), ns, name, ""))
+	require.NoError(t, st.Delete(context.Background(), kind.GVK(), scope(kind), name, ""))
 }
 
 // fleet creates one owner and child of every pair, and returns them by pair.
@@ -143,12 +159,14 @@ func fleet(t testing.TB, st store.Store) map[gc.Pair][2]v1.Object {
 	site := create(t, st, v1.KindSite, "web", nil)
 	fn := create(t, st, v1.KindFunction, "fn", nil)
 	app := create(t, st, v1.KindApp, "app", nil)
+	addon := create(t, st, v1.KindAddon, "rauthy", nil)
 	f := map[gc.Pair][2]v1.Object{
-		{Owner: v1.KindWorkflow, Child: v1.KindFunction}: {wf, create(t, st, v1.KindFunction, "wf-s1", wf)},
-		{Owner: v1.KindWorkflow, Child: v1.KindKVStore}:  {wf, create(t, st, v1.KindKVStore, "wf-state", wf)},
-		{Owner: v1.KindIdentity, Child: v1.KindSecret}:   {id, create(t, st, v1.KindSecret, "id", id)},
-		{Owner: v1.KindSite, Child: v1.KindRoute}:        {site, create(t, st, v1.KindRoute, "web", site)},
-		{Owner: v1.KindFunction, Child: v1.KindRevision}: {fn, create(t, st, v1.KindRevision, "fn-1", fn)},
+		{Owner: v1.KindAddon, Child: v1.KindAddonRevision}: {addon, create(t, st, v1.KindAddonRevision, v1.AddonRevisionName("rauthy", 1), addon)},
+		{Owner: v1.KindWorkflow, Child: v1.KindFunction}:   {wf, create(t, st, v1.KindFunction, "wf-s1", wf)},
+		{Owner: v1.KindWorkflow, Child: v1.KindKVStore}:    {wf, create(t, st, v1.KindKVStore, "wf-state", wf)},
+		{Owner: v1.KindIdentity, Child: v1.KindSecret}:     {id, create(t, st, v1.KindSecret, "id", id)},
+		{Owner: v1.KindSite, Child: v1.KindRoute}:          {site, create(t, st, v1.KindRoute, "web", site)},
+		{Owner: v1.KindFunction, Child: v1.KindRevision}:   {fn, create(t, st, v1.KindRevision, "fn-1", fn)},
 	}
 	for _, p := range gc.Pairs() {
 		if p.Owner == v1.KindApp {
@@ -171,6 +189,7 @@ func deleteOwners(t testing.TB, st store.Store) {
 	del(t, st, v1.KindSite, "web")
 	del(t, st, v1.KindFunction, "fn")
 	del(t, st, v1.KindApp, "app")
+	del(t, st, v1.KindAddon, "rauthy")
 }
 
 // scenario: live-owner-children-never-collected — sweeps delete nothing while every owner lives.
@@ -198,10 +217,14 @@ func TestCollectNamespaceDeletesChildrenOfDeletedOrReplacedOwners(t *testing.T) 
 	deleteOwners(t, st)
 	create(t, st, v1.KindIdentity, "id", nil) // a namesake with another UID
 
-	require.NoError(t, newCollector(t, st, 0).CollectNamespace(context.Background(), ns))
+	c := newCollector(t, st, 0)
+	require.NoError(t, c.CollectNamespace(context.Background(), ns))
 	for p, oc := range f {
-		require.False(t, exists(t, st, p.Child, oc[1].GetObjectMeta().Name), "the child of a dead owner is collected: %v", p)
+		require.Equal(t, !p.Child.Namespaced(), exists(t, st, p.Child, oc[1].GetObjectMeta().Name),
+			"the child of a dead owner is collected, a cluster-scoped one by a pass over every namespace: %v", p)
 	}
+	require.NoError(t, c.CollectNamespace(context.Background(), ""))
+	require.False(t, exists(t, st, v1.KindAddonRevision, v1.AddonRevisionName("rauthy", 1)), "a pass over every namespace collects it")
 	require.True(t, exists(t, st, v1.KindSecret, unowned.GetObjectMeta().Name), "an unowned object stays")
 	require.True(t, exists(t, st, v1.KindSecret, "weak"), "a non-controller ownerRef is ignored")
 }
@@ -377,6 +400,7 @@ func writers() map[string][]gc.Pair {
 		"internal/controlplane/kvhandover.go":     nil, // writes only the non-controller KVStore marker (ADR-0178)
 		"internal/app/revision.go":                {{Owner: v1.KindApp, Child: v1.KindAppRevision}},
 		"internal/app/hooks.go":                   {{Owner: v1.KindAppRevision, Child: v1.KindInvocation}},
+		"internal/services/addon/revisions.go":    {{Owner: v1.KindAddon, Child: v1.KindAddonRevision}},
 	}
 }
 
@@ -454,7 +478,7 @@ func TestPairsCoverEveryControllerRef(t *testing.T) {
 	}
 	for _, p := range gc.Pairs() {
 		require.True(t, kinds[p.Owner] && kinds[p.Child], "pair %v names real kinds", p)
-		require.True(t, p.Owner.Namespaced() && p.Child.Namespaced(), "pair %v is namespaced", p)
+		require.Equal(t, p.Owner.Namespaced(), p.Child.Namespaced(), "pair %v keeps to one scope", p)
 	}
 	require.ElementsMatch(t, want, gc.Pairs())
 	require.Equal(t, v1.KindRevision, gc.Pairs()[len(gc.Pairs())-1].Child, "Revision is collected last")

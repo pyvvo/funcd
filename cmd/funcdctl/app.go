@@ -605,7 +605,10 @@ func (a *cli) deployAddon(ctx context.Context, c *sdk.Client, want *v1.Addon, ns
 	case err != nil:
 		return false, err
 	case !dryRun:
-		return true, a.writef("%s Addon/%s\n", verb, w.Name)
+		if err := a.writef("%s Addon/%s\n", verb, w.Name); err != nil {
+			return false, err
+		}
+		return true, waitAddonRevision(ctx, c, answer)
 	}
 	if err := a.printDryRun(answer); err != nil {
 		return false, err
@@ -614,6 +617,32 @@ func (a *cli) deployAddon(ctx context.Context, c *sdk.Client, want *v1.Addon, ns
 		return false, a.writef("the App's dry run needs Addon/%s registered\n", w.Name)
 	}
 	return true, nil
+}
+
+// addonPoll paces the wait for an Addon's revision, which its reconciler stamps within one pass.
+const addonPoll = 200 * time.Millisecond
+
+// waitAddonRevision waits until the Addon a deploy wrote names the revision of its generation current, or that of a
+// later write, so the App's new revision records it (ADR-0337 Decision 2, ADR-0339 Decision 3). An interrupt stops
+// the wait, and the deploy applies no App.
+func waitAddonRevision(ctx context.Context, c *sdk.Client, written v1.Object) error {
+	a, ok := written.(*v1.Addon)
+	if !ok {
+		return fault.Internalf("funcdctl app deploy", "the Addon's answer is a %T", written)
+	}
+	for {
+		obj, err := c.Get(ctx, v1.KindAddon, "", a.Name)
+		if err != nil {
+			return err
+		}
+		cur, ok := obj.(*v1.Addon)
+		if ok && cur.Generation >= a.Generation && cur.Status.CurrentRevision == v1.AddonRevisionName(a.Name, cur.Generation) {
+			return nil
+		}
+		if err := sleepCtx(ctx, addonPoll); err != nil {
+			return err
+		}
+	}
 }
 
 // sameAddonSpec compares two Addon specs as sameAppSpec compares App specs: by the JSON of each typed spec.

@@ -139,13 +139,15 @@ func TestAddonKindPaths(t *testing.T) {
 	}
 }
 
-// ADR-0200 Decision 2: ReadOnlyWriter names the writer of each read-only kind, and only of those.
+// ADR-0200 Decision 2 and ADR-0339 Decision 1: ReadOnlyWriter names the writer of each read-only kind, and only of
+// those.
 func TestReadOnlyWriter(t *testing.T) {
 	t.Parallel()
 	for _, k := range v1.AllKinds() {
 		want := map[v1.Kind]string{
-			v1.KindRevision:    "the Function reconciler",
-			v1.KindAppRevision: "the App reconciler",
+			v1.KindRevision:      "the Function reconciler",
+			v1.KindAppRevision:   "the App reconciler",
+			v1.KindAddonRevision: "the Addon reconciler",
 		}[k]
 		if got := ReadOnlyWriter(k); got != want || ReadOnlyKind(k) != (want != "") {
 			t.Errorf("ReadOnlyWriter(%s) = %q, ReadOnlyKind = %v; want %q", k, got, ReadOnlyKind(k), want)

@@ -49,6 +49,7 @@ Phases: [Functions](functions.md). New words: Reading, Waiting, Starting, Servin
 | The add-on runtime under dev | Docker on the first socket that answers, else nerdctl unless `dev.addons.runtime` names one. With neither, an object waits `RuntimeUnavailable` naming what dev tried. An engine and volume per object and project | none | `no container engine runs add-on engines` | decided | ADR-0334 Decision 1, `TestScenarioDevAddonRuntimeChoice`, `TestScenarioDevAddonTwoProjects` |
 | Registering an Addon under dev | Dev's admin token applies the folder's or `--apply`'s Addons first, with no namespace, and deletes them after their objects; any registry is allowed. `funcdctl --token funcd-dev-admin-token` registers one | none | 403 `may not act on cluster-scoped kind` with dev's developer token | decided | ADR-0334 Decision 5, `TestScenarioDevAddonRegister` |
 | A template's `addon.yaml` under dev | Applied with dev's admin token before the App, again at a reload that changes it, and deleted once the file goes | none | the Addon's spec | decided | ADR-0337 Decision 2, `TestScenarioAddonTemplateDev` |
+| An Addon's change under dev | Every add-on object follows the current revision, an App's part too, so a changed `addon.yaml` runs at the next reload, with no hook around it | the next pass | `status.addonRevision` | decided | ADR-0339 Decision 7, `TestScenarioAddonTemplateDev` |
 | Folder mode's write grant | Each Function gets a write-only Role on the namespace, which a deploy does not give it. An App gets none | none | a write that works here can get 403 once deployed | decided | ADR-0128 Decision 2, ADR-0253 Decision 4, `TestScenarioDevWriterGrant` |
 | An App's hooks | Dropped unless `--hooks`, so a migration a hook runs does not run | none | no hook line, and no table the hook makes | decided | ADR-0253 Decision 4, `TestScenarioAppDevHooksOptIn` |
 | A Lake | Served by the embedded DuckDB CLI, not the production shim and its saves. A build without it logs and stays not ready | none | `lake engine not embedded in this dev build — lake unavailable` | deferred | ADR-0125 Decision 5, card "Dev catalog engine: converge on the prod duckdb shim.py vs the embedded CLI+SQL devengine?", `TestConvergeNotBundledReportsUnavailable` |
@@ -67,6 +68,7 @@ Phases: [Functions](functions.md). New words: Reading, Waiting, Starting, Servin
 
 | Value | Default | From |
 |---|---|---|
+| `addonPoll` | 200ms | `cmd/funcdctl/app.go` |
 | `deployPoll` | 1s | `cmd/funcdctl/app.go` |
 | `devReloadPoll` | 300ms | `cmd/funcdctl/dev.go` |
 | `devS3PortAttempts` | 3 | `cmd/funcdctl/dev.go` |

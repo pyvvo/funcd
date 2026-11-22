@@ -56,11 +56,11 @@ var Features = []Feature{
 
 // Omitted kinds get no Spec: pyvvo/funcd#1438 removes the first four, RuntimeClass gets its fields and its first
 // reader with FEAT-0012 F139, and an add-on's objects take the fields their Addon's schema gives them, which the
-// add-on documents (ADR-0332), so neither Addon nor AddonObject has a Developer page yet.
+// add-on documents (ADR-0332), so neither Addon, AddonObject nor AddonRevision has a Developer page yet.
 //
 //nolint:gochecknoglobals // an immutable lookup table, the ADR's contract
 var Omitted = []v1.Kind{v1.KindService, v1.KindGrant, v1.KindGateway, v1.KindWorkerNode, v1.KindRuntimeClass,
-	v1.KindAddon, v1.KindAddonObject}
+	v1.KindAddon, v1.KindAddonObject, v1.KindAddonRevision}
 
 // Marker is the first front-matter line of every page Render writes; specgen deletes a page that carries it and that
 // Render no longer returns.

@@ -909,10 +909,18 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `addonRevisions` | array of [`AppRevision.spec.addonRevisions[]`](#apprevisionspecaddonrevisions) | The AddonRevision of each add-on kind of the App's addons parts, set when the revision was created: the Addon's current revision, or for the spec of a kept revision that was current once, that revision's records. A part runs its kind's record once this revision is applied. |
 | `app` | object, [`AppRevision.spec.app`](#apprevisionspecapp), required | The App this revision belongs to. |
 | `hookInput` | object, [`AppRevision.spec.hookInput`](#apprevisionspechookinput) | The data that each hook call of this revision receives, fixed when the revision was created. Set only when its spec has a hook. |
 | `number` | integer, required, 1 to 9999999999 | The revision's number: 1 for the App's first revision, then one more than the latest. The revision is named &lt;app&gt;-&lt;number&gt;, and funcdctl app rollback takes this number. |
 | `spec` | object, [`App.spec`](#appspec), required | The App's spec when this revision was created, without spec.paused. It never changes. |
+
+### `AppRevision.spec.addonRevisions[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `kind` | string, required | The add-on's kind. |
+| `revision` | string, required, a DNS-1123 label | The AddonRevision the App's parts of that kind run. |
 
 ### `AppRevision.spec.app`
 
@@ -926,12 +934,22 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `addonRevisions` | array of [`AppRevision.spec.hookInput.addonRevisions[]`](#apprevisionspechookinputaddonrevisions) | Each addons part whose AddonRevision this revision changes: the revision it runs when this one was created, and the one it runs once this one is applied. A pre-hook runs while the part runs from, a post-hook once it runs to. |
 | `app` | string, required, a DNS-1123 label | The App's name. |
 | `event` | string, required, one of `install`, `upgrade`, `rollback` | install when the App had no current revision, rollback when the spec equals that of a kept revision that was current once, upgrade otherwise. |
 | `from` | string, a DNS-1123 label | The App's current revision when this one was created, empty on an install. |
 | `fromVersion` | string | The spec.version of the from revision, empty on an install or when it sets none. |
 | `to` | string, required, a DNS-1123 label | This revision's name. |
 | `toVersion` | string | This revision's spec.version, empty when it sets none. |
+
+### `AppRevision.spec.hookInput.addonRevisions[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `from` | string, a DNS-1123 label | The AddonRevision the part ran when the App revision was created; empty for a part that ran none yet. |
+| `kind` | string, required | The part's add-on kind. |
+| `object` | string, required, a DNS-1123 label | The part's name. |
+| `to` | string, required, a DNS-1123 label | The AddonRevision the part runs once the App revision is applied. |
 
 ### `AppRevision.status`
 

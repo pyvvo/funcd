@@ -81,9 +81,18 @@ func (r *Reconciler) stamp(ctx context.Context, a *v1.App, revs []*v1.AppRevisio
 	rev := obj.(*v1.AppRevision)
 	rev.ObjectMeta = v1.ObjectMeta{Name: next.name, Namespace: a.Namespace, ResourceGroup: a.ResourceGroup, OwnerReferences: []v1.OwnerReference{controllerRef(a)}}
 	rev.Spec = v1.AppRevisionSpec{App: v1.ObjectRef{Kind: v1.KindApp, Namespace: a.Namespace, Name: a.Name}, Number: next.number, Spec: next.declared}
-	if rev.Spec.HookInput, err = hookInput(a, next.name, next.declared, next.want, revs); err != nil {
+	back, err := rolledBack(next.want, revs)
+	if err != nil {
 		return nil, nil, err
 	}
+	if rev.Spec.AddonRevisions, err = r.addonRecords(ctx, next.declared, back); err != nil {
+		return nil, nil, err
+	}
+	moves, err := r.addonMoves(ctx, a, next.declared, rev.Spec.AddonRevisions)
+	if err != nil {
+		return nil, nil, err
+	}
+	rev.Spec.HookInput = hookInput(a, next.name, next.declared, back, moves)
 	rev.Status = v1.AppRevisionStatus{Status: v1.Status{Phase: v1.PhaseDeploying}}
 	if met {
 		started := v1.NewTimestamp(r.clock.Now())
@@ -95,6 +104,77 @@ func (r *Reconciler) stamp(ctx context.Context, a *v1.App, revs []*v1.AppRevisio
 	}
 	r.log.InfoContext(ctx, "stamped", "namespace", string(a.Namespace), "app", string(a.Name), "revision", string(next.name))
 	return append(revs, created.(*v1.AppRevision)), nil, nil
+}
+
+// addonRecords is each add-on kind's revision for a new revision's parts (ADR-0339 Decision 3): back's records when
+// the spec is that of a kept revision that was current once, else each kind's current revision, in the order of the
+// spec's addons entries. A kind whose Addon has no revision yet gets no record: its part pins the current revision.
+func (r *Reconciler) addonRecords(ctx context.Context, spec v1.AppSpec, back *v1.AppRevision) ([]v1.AppAddonRevision, error) {
+	kinds := addonKinds(spec)
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	if back != nil {
+		return back.Spec.AddonRevisions, nil
+	}
+	res, err := r.store.List(ctx, v1.KindAddon.GVK(), store.ListOptions{})
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list Addons")
+	}
+	var out []v1.AppAddonRevision
+	for _, k := range kinds {
+		for _, o := range res.Items {
+			if ad, ok := o.(*v1.Addon); ok && v1.SameAddonKind(ad.Spec.Kind, k) && ad.Status.CurrentRevision != "" {
+				out = append(out, v1.AppAddonRevision{Kind: k, Revision: ad.Status.CurrentRevision})
+			}
+		}
+	}
+	return out, nil
+}
+
+// addonKinds are the distinct kinds of spec's declared addons entries, in their order.
+func addonKinds(spec v1.AppSpec) []string {
+	var out []string
+	for _, e := range spec.Addons {
+		if e.Ref == "" && !slices.ContainsFunc(out, func(k string) bool { return v1.SameAddonKind(k, e.Kind) }) {
+			out = append(out, e.Kind)
+		}
+	}
+	return out
+}
+
+// recordFor is records' revision for kind, "" when it has none.
+func recordFor(records []v1.AppAddonRevision, kind string) v1.ObjectName {
+	for _, rec := range records {
+		if v1.SameAddonKind(rec.Kind, kind) {
+			return rec.Revision
+		}
+	}
+	return ""
+}
+
+// addonMoves is each declared add-on part whose revision records change (ADR-0339 Decision 5): from the revision the
+// stored part runs, which a failed upgrade may have moved past the current revision's record, to its kind's record.
+func (r *Reconciler) addonMoves(ctx context.Context, a *v1.App, spec v1.AppSpec, records []v1.AppAddonRevision) ([]v1.AppHookAddonRevision, error) {
+	var out []v1.AppHookAddonRevision
+	for _, e := range spec.Addons {
+		to := recordFor(records, e.Kind)
+		if e.Ref != "" || to == "" {
+			continue
+		}
+		obj, err := r.get(ctx, v1.KindAddonObject, a.Namespace, e.Name)
+		if err != nil {
+			return nil, err
+		}
+		var from v1.ObjectName
+		if o, ok := obj.(*v1.AddonObject); ok {
+			from = o.Status.AddonRevision
+		}
+		if from != to {
+			out = append(out, v1.AppHookAddonRevision{Kind: e.Kind, Object: e.Name, From: from, To: to})
+		}
+	}
+	return out, nil
 }
 
 // stampTarget is the revision a stamp creates: its name and number, the spec it freezes and that spec's JSON.

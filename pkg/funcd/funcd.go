@@ -343,6 +343,9 @@ type config struct {
 	addonMaxSettings int
 	// addonAnyRegistry lets an Addon's image come from any registry (WithAnyAddonRegistry, ADR-0334 Decision 5).
 	addonAnyRegistry bool
+	// addonFollowCurrent makes every add-on object follow its Addon's current revision (WithAddonsFollowingCurrent,
+	// ADR-0339 Decision 7).
+	addonFollowCurrent bool
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
 	sqlCallTimeout time.Duration
 	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075 with a

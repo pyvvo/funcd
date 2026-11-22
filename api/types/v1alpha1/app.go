@@ -85,6 +85,16 @@ type AppHookInput struct {
 	To          ObjectName `json:"to" doc:"This revision's name."`
 	FromVersion string     `json:"fromVersion,omitempty" doc:"The spec.version of the from revision, empty on an install or when it sets none."`
 	ToVersion   string     `json:"toVersion,omitempty" doc:"This revision's spec.version, empty when it sets none."`
+	// AddonRevisions names each add-on part whose revision this App revision changes (ADR-0339 Decision 5).
+	AddonRevisions []AppHookAddonRevision `json:"addonRevisions,omitempty" doc:"Each addons part whose AddonRevision this revision changes: the revision it runs when this one was created, and the one it runs once this one is applied. A pre-hook runs while the part runs from, a post-hook once it runs to."`
+}
+
+// AppHookAddonRevision is one add-on part's move in a hook's input (ADR-0339 Decision 5).
+type AppHookAddonRevision struct {
+	Kind   string     `json:"kind" doc:"The part's add-on kind."`
+	Object ObjectName `json:"object" doc:"The part's name."`
+	From   ObjectName `json:"from,omitempty" doc:"The AddonRevision the part ran when the App revision was created; empty for a part that ran none yet."`
+	To     ObjectName `json:"to" doc:"The AddonRevision the part runs once the App revision is applied."`
 }
 
 // AppRequirement is a requires entry (ADR-0219 Decision 1): an App of the same namespace and an npm-style version range.

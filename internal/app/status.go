@@ -51,8 +51,10 @@ type verdict struct {
 func partName(k v1.ObjectRef) string { return fmt.Sprintf("%s/%s", k.Kind, k.Name) }
 
 // readiness judges every declared entry in section order (Decision 5); the part a stopped pass names is Pending
-// with the stop's reason. steps holds the step Functions of the Workflow parts, by name, nil when absent.
-func readiness(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, steps map[v1.ObjectName]*v1.Function, halt *stop) []verdict {
+// with the stop's reason. steps holds the step Functions of the Workflow parts, by name, nil when absent. An add-on
+// part counts only once it pins the record of latest, the App's latest revision (ADR-0339 Decision 4).
+func readiness(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, steps map[v1.ObjectName]*v1.Function, halt *stop,
+	latest v1.ObjectName) []verdict {
 	out := make([]verdict, 0, len(ents))
 	for _, e := range ents {
 		k := e.key(a.Namespace)
@@ -66,6 +68,10 @@ func readiness(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, steps m
 			v = pending(reasonProgressing, reasonProgressing, "not written yet")
 		default:
 			v = judge(obj, steps)
+			if o, ok := obj.(*v1.AddonObject); ok && !e.ref && v.child.State == v1.AppChildReady && o.Status.AppRevision != latest {
+				v = pending(reasonProgressing, reasonProgressing, "runs the record of "+cmp.Or(string(o.Status.AppRevision), "no revision")+
+					", not of "+string(latest))
+			}
 		}
 		v.child.Kind, v.child.Name = e.shownKind(objs[k]), e.name
 		out = append(out, v)

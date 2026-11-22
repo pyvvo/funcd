@@ -204,6 +204,8 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.AddonObject:
 		o.TypeMeta = tm
+	case *v1.AddonRevision:
+		o.TypeMeta = tm
 	}
 }
 
@@ -822,7 +824,7 @@ type crudKind interface {
 		v1.Role | v1.RolesAssignment | v1.KVStore | v1.Bucket | v1.Lake | v1.SQLDatabase | v1.Policy |
 		v1.EgressPolicy | v1.Invocation | v1.RuntimeClass | v1.WorkerNode | v1.Gateway | v1.Workflow | v1.WorkflowRun |
 		v1.Sensor | v1.Site | v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore |
-		v1.Addon | v1.AddonObject
+		v1.Addon | v1.AddonObject | v1.AddonRevision
 }
 
 type objectPtr[T crudKind] interface {

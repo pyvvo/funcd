@@ -344,7 +344,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if err != nil {
 		return controller.Result{}, err
 	}
-	children := readiness(a, ents, objs, steps, halt)
+	var latestName v1.ObjectName
+	if latest != nil {
+		latestName = latest.Name
+	}
+	children := readiness(a, ents, objs, steps, halt, latestName)
 	hp, err := r.hooks(ctx, a, latest, current, objs, halt, wrote, busy)
 	if err != nil {
 		return controller.Result{}, err

@@ -82,25 +82,29 @@ type Deps struct {
 	// Now nil ⇒ time.Now.
 	QuarantinePeriod time.Duration
 	Now              func() time.Time
+	// FollowCurrent makes every object follow its Addon's current revision, as funcdctl dev runs one developer's
+	// loop with no other namespace to protect (ADR-0339 Decision 7).
+	FollowCurrent bool
 }
 
 // Reconciler is the controller.Reconciler for AddonObject.
 type Reconciler struct {
-	store        store.Store
-	prov         provider.Runtime
-	secrets      provider.SecretResolver
-	routes       router.EntrySetter
-	modes        []string
-	serverMode   string
-	logger       *slog.Logger
-	period       time.Duration
-	referentPoll time.Duration
-	enginePoll   time.Duration
-	files        workload.AddonFiles
-	volumes      provider.Volumes
-	gate         hold.Gate
-	quarantine   time.Duration
-	now          func() time.Time
+	store         store.Store
+	prov          provider.Runtime
+	secrets       provider.SecretResolver
+	routes        router.EntrySetter
+	modes         []string
+	serverMode    string
+	logger        *slog.Logger
+	period        time.Duration
+	referentPoll  time.Duration
+	enginePoll    time.Duration
+	files         workload.AddonFiles
+	volumes       provider.Volumes
+	gate          hold.Gate
+	quarantine    time.Duration
+	now           func() time.Time
+	followCurrent bool
 
 	mu   sync.Mutex
 	seen map[provider.ProviderRef]seenObject // each object's UID and deletion policy at its last pass
@@ -140,7 +144,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		referentPoll: orDefault(d.ReferentPollInterval, defaultPollInterval),
 		enginePoll:   min(orDefault(d.EnginePollInterval, defaultPollInterval), period),
 		files:        d.Files, volumes: d.Volumes, gate: gate, quarantine: d.QuarantinePeriod, now: now,
-		seen: map[provider.ProviderRef]seenObject{},
+		followCurrent: d.FollowCurrent,
+		seen:          map[provider.ProviderRef]seenObject{},
 	}, nil
 }
 

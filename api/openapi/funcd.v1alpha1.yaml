@@ -157,8 +157,20 @@ components:
     AddonObjectStatus:
       additionalProperties: false
       properties:
+        addonRevision:
+          description: "The AddonRevision whose spec the engine runs. A newer revision of the Addon moves no object: an edit of the object moves it to the Addon's current revision, and for an App's part, the App's revision moves it."
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
         address:
           description: The engine's own address, its host and port, which only funcd reaches.
+          type: string
+        appRevision:
+          description: "For an App's part, the AppRevision whose record for its kind it pins: the App's latest revision once that one is applied. A part moves forward only."
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         conditions:
           description: The conditions that explain the phase.
@@ -236,6 +248,45 @@ components:
         - restore
         - file
         - state
+      type: object
+    AddonRevision:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/AddonRevisionSpec"
+      required:
+        - metadata
+        - spec
+        - apiVersion
+        - kind
+      type: object
+    AddonRevisionSpec:
+      additionalProperties: false
+      properties:
+        addon:
+          description: The Addon this revision belongs to.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        number:
+          description: "The Addon's generation when funcd stamped this revision. Numbers may skip: funcd stamps the generation it reads."
+          format: int64
+          minimum: 1
+          type: integer
+        spec:
+          $ref: "#/components/schemas/AddonSpec"
+          description: "The Addon's spec at that generation. It never changes: an object that pins this revision runs its engine from it."
+      required:
+        - addon
+        - number
+        - spec
       type: object
     AddonRule:
       additionalProperties: false
@@ -384,6 +435,12 @@ components:
           type:
             - array
             - "null"
+        currentRevision:
+          description: "The AddonRevision of the Addon's latest spec: an object created, or edited outside an App, pins it, and an App's new revision records it. Empty until funcd has stamped the Addon's first revision."
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
         observedGeneration:
           description: The generation of the spec that funcd last acted on.
           format: int64
@@ -438,6 +495,22 @@ components:
         - apiVersion
         - kind
       type: object
+    AppAddonRevision:
+      additionalProperties: false
+      properties:
+        kind:
+          description: The add-on's kind.
+          type: string
+        revision:
+          description: The AddonRevision the App's parts of that kind run.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - kind
+        - revision
+      type: object
     AppChild:
       additionalProperties: false
       properties:
@@ -477,6 +550,35 @@ components:
           type: string
       required:
         - function
+      type: object
+    AppHookAddonRevision:
+      additionalProperties: false
+      properties:
+        from:
+          description: The AddonRevision the part ran when the App revision was created; empty for a part that ran none yet.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        kind:
+          description: The part's add-on kind.
+          type: string
+        object:
+          description: The part's name.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        to:
+          description: The AddonRevision the part runs once the App revision is applied.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - kind
+        - object
+        - to
       type: object
     AppHookCall:
       additionalProperties: false
@@ -526,6 +628,13 @@ components:
     AppHookInput:
       additionalProperties: false
       properties:
+        addonRevisions:
+          description: "Each addons part whose AddonRevision this revision changes: the revision it runs when this one was created, and the one it runs once this one is applied. A pre-hook runs while the part runs from, a post-hook once it runs to."
+          items:
+            $ref: "#/components/schemas/AppHookAddonRevision"
+          type:
+            - array
+            - "null"
         app:
           description: The App's name.
           maxLength: 63
@@ -660,6 +769,13 @@ components:
     AppRevisionSpec:
       additionalProperties: false
       properties:
+        addonRevisions:
+          description: "The AddonRevision of each add-on kind of the App's addons parts, set when the revision was created: the Addon's current revision, or for the spec of a kept revision that was current once, that revision's records. A part runs its kind's record once this revision is applied."
+          items:
+            $ref: "#/components/schemas/AppAddonRevision"
+          type:
+            - array
+            - "null"
         app:
           $ref: "#/components/schemas/ObjectRef"
           description: The App this revision belongs to.
@@ -6982,6 +7098,113 @@ info:
   version: v1alpha1
 openapi: 3.1.0
 paths:
+  /apis/funcd.io/v1alpha1/addonrevisions:
+    get:
+      operationId: listAddonRevisions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/AddonRevision"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role does not allow it to list AddonRevisions. Use an admin's credential."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role does not allow it to list AddonRevisions.
+              fix: Use an admin's credential.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the AddonRevisions
+      tags:
+        - AddonRevision
+  /apis/funcd.io/v1alpha1/addonrevisions/{name}:
+    get:
+      operationId: getAddonRevision
+      parameters:
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AddonRevision"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role does not allow it to read an AddonRevision. Use an admin's credential."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role does not allow it to read an AddonRevision.
+              fix: Use an admin's credential.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No AddonRevision of that name exists. Check the name."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No AddonRevision of that name exists.
+              fix: Check the name.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read an AddonRevision
+      tags:
+        - AddonRevision
   /apis/funcd.io/v1alpha1/addons:
     get:
       operationId: listAddons

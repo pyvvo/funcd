@@ -61,6 +61,14 @@ An `OIDCProvider` with `client.registration` has funcd register the edge's sign-
 `oidc` then signs its callers in, and the code behind it reads who signed in:
 [Sign users in](../../security-and-networking/security/index.md#sign-users-in).
 
+## Upgrade it
+
+An admin's change of an Addon stamps a revision, an AddonRevision named after the Addon and its generation, such as
+`rauthy-2`, and replaces no engine: each object keeps running the revision that `status.addonRevision` names. An edit
+of the object moves it to the Addon's current revision, and an App's next revision moves its parts, its hooks around
+the move. An admin lists the revisions with `funcdctl get addonrevisions`; funcd removes one that no object pins and no
+App's revision records. Under `funcdctl dev`, every object follows the current revision at once.
+
 ## Ship it with an App
 
 An App template can carry the add-on with the Functions, values and hooks that run beside it: `addon.yaml` holds the

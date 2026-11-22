@@ -57,6 +57,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if a == nil {
 		return r.hold(ctx, o, reasonAddonNotFound, fmt.Sprintf("no Addon registers the kind %q", o.Spec.Kind), 0)
 	}
+	// The engine runs the revision the object pins, never the Addon's spec of the pass (ADR-0339 Decision 2).
+	a, ph, err := r.pinned(ctx, a, o)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	if ph != nil {
+		return r.hold(ctx, o, ph.reason, ph.message, 0)
+	}
 	if !slices.ContainsFunc(r.modes, a.Spec.Runtime) {
 		return r.hold(ctx, o, reasonRuntimeUnavailable, r.unavailable(a), 0)
 	}

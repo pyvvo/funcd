@@ -62,7 +62,8 @@ func devAddonOptions(ctx context.Context, stateDir string, cfg devConfig, inst *
 	rt := chooseAddonRuntime(ctx, cfg, key, inst.logger)
 	inst.addons = rt
 	inst.cleanup = append(inst.cleanup, rt.StopAll)
-	return []funcd.Option{funcd.WithAddonRuntime(rt, v1.AddonRuntimeContainerd), funcd.WithAnyAddonRegistry()}, nil
+	return []funcd.Option{funcd.WithAddonRuntime(rt, v1.AddonRuntimeContainerd), funcd.WithAnyAddonRegistry(),
+		funcd.WithAddonsFollowingCurrent()}, nil
 }
 
 // devSessionKey is the session's key (ADR-0334 Decision 6): the first 16 hex digits of the sha256 of the state dir's

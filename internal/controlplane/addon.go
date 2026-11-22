@@ -41,6 +41,23 @@ func registerAddon(api huma.API, h Handlers) {
 	})
 }
 
+// ===== AddonRevision (cluster-scoped, read-only, admins only) — ADR-0339 Decision 1 =====
+
+func registerAddonRevision(api huma.API, h Handlers) {
+	registerClusterRead(api, clusterRoutes[v1.AddonRevision]{
+		kind: "AddonRevision", kinds: "AddonRevisions", path: "addonrevisions",
+		list: h.ListAddonRevisions, get: h.GetAddonRevision, cases: &kindCases{},
+	})
+}
+
+func (h *storeHandlers) GetAddonRevision(ctx context.Context, name v1.ObjectName) (v1.AddonRevision, error) {
+	return typedObj[v1.AddonRevision](h.getObj(ctx, v1.KindAddonRevision, "", name))
+}
+
+func (h *storeHandlers) ListAddonRevisions(ctx context.Context) ([]v1.AddonRevision, error) {
+	return typedObjs[v1.AddonRevision](h.listObj(ctx, v1.KindAddonRevision, ""))
+}
+
 func (h *storeHandlers) GetAddon(ctx context.Context, name v1.ObjectName) (v1.Addon, error) {
 	return typedObj[v1.Addon](h.getObj(ctx, v1.KindAddon, "", name))
 }

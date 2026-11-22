@@ -220,9 +220,11 @@ type AddonStorage struct {
 	GID  int    `json:"gid,omitempty" minimum:"0" doc:"The group ID that owns the directory."`
 }
 
-// AddonStatus is the shared Status only, as RuntimeClassStatus is: each object reports its own state.
+// AddonStatus is the shared Status and the current revision (ADR-0339 Decision 1): each object reports its own state.
 type AddonStatus struct {
 	Status `json:",inline"`
+	// CurrentRevision is the revision a new or moved object pins.
+	CurrentRevision ObjectName `json:"currentRevision,omitempty" doc:"The AddonRevision of the Addon's latest spec: an object created, or edited outside an App, pins it, and an App's new revision records it. Empty until funcd has stamped the Addon's first revision."`
 }
 
 // GroupVersionKind returns the constant GVK for Addon.
@@ -434,6 +436,10 @@ type AddonObjectStatus struct {
 	Status  `json:",inline"`
 	Address string             `json:"address,omitempty" doc:"The engine's own address, its host and port, which only funcd reaches."`
 	Restore *AddonRestoreState `json:"restore,omitempty" doc:"The in-place Restore whose copy the engine loads: it goes once an engine started without restore.env is Ready, or once that Restore has failed or is gone. While it stands, the namespace is held."`
+	// AddonRevision is the revision the engine runs, and AppRevision, for an App's part, the App revision whose record
+	// it pins (ADR-0339 Decisions 2 and 3).
+	AddonRevision ObjectName `json:"addonRevision,omitempty" doc:"The AddonRevision whose spec the engine runs. A newer revision of the Addon moves no object: an edit of the object moves it to the Addon's current revision, and for an App's part, the App's revision moves it."`
+	AppRevision   ObjectName `json:"appRevision,omitempty" doc:"For an App's part, the AppRevision whose record for its kind it pins: the App's latest revision once that one is applied. A part moves forward only."`
 }
 
 // AddonRestoreState is the copy an in-place Restore placed for an add-on object's engine (ADR-0333 Decisions 3 and 4).

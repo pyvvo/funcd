@@ -95,6 +95,12 @@ func WithAnyAddonRegistry() Option {
 	return func(c *config) error { c.addonAnyRegistry = true; return nil }
 }
 
+// WithAddonsFollowingCurrent makes every add-on object follow its Addon's current revision, as funcdctl dev does: a
+// changed Addon runs at once, with no App revision to move it (ADR-0339 Decision 7).
+func WithAddonsFollowingCurrent() Option {
+	return func(c *config) error { c.addonFollowCurrent = true; return nil }
+}
+
 // WithAddonObjectQuota sets the per-namespace cap on the objects of the add-ons' kinds, all add-ons together, enforced
 // at admission (ADR-0332 Decision 2, addons.maxObjectsPerNamespace). 0 ⇒ the default (20); a negative value disables it.
 func WithAddonObjectQuota(maxPerNamespace int) Option {

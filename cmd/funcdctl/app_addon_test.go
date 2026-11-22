@@ -61,6 +61,12 @@ type addonCLIEnv struct {
 
 func newAddonCLIEnv(t *testing.T) *addonCLIEnv {
 	t.Helper()
+	return newAddonCLIEnvWith(t, true)
+}
+
+// newAddonCLIEnvWith is newAddonCLIEnv whose Addons get their revision named current only with stamp.
+func newAddonCLIEnvWith(t *testing.T, stamp bool) *addonCLIEnv {
+	t.Helper()
 	st := store.New(memory.New())
 	h, err := controlplane.NewServer(controlplane.Deps{
 		Store: st, Authorizer: rbac.New(),
@@ -72,6 +78,9 @@ func newAddonCLIEnv(t *testing.T) *addonCLIEnv {
 			Reserved: controlplane.ReservedPlurals()}),
 	})
 	require.NoError(t, err)
+	if stamp {
+		stampRevisions(t, st)
+	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	client := func(token string) *sdk.Client {
@@ -80,6 +89,26 @@ func newAddonCLIEnv(t *testing.T) *addonCLIEnv {
 		return c
 	}
 	return &addonCLIEnv{admin: client(addonAdminToken), dev: client(devToken), st: st}
+}
+
+// stampRevisions stands in for the Addon reconciler: it names each Addon's generation its current revision.
+func stampRevisions(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	w, err := st.Watch(ctx, v1.KindAddon.GVK(), store.WatchOptions{})
+	require.NoError(t, err)
+	go func() {
+		defer w.Stop()
+		for ev := range w.ResultChan() {
+			a, ok := ev.Object.(*v1.Addon)
+			if !ok || ev.Type == store.Deleted || a.Status.CurrentRevision == v1.AddonRevisionName(a.Name, a.Generation) {
+				continue
+			}
+			a.Status.CurrentRevision = v1.AddonRevisionName(a.Name, a.Generation)
+			_, _ = st.Update(ctx, a)
+		}
+	}()
 }
 
 // addonTemplate writes the rauthy template, whose App holds the IdentityProvider <app>-login, with addon as its
@@ -150,6 +179,26 @@ func TestScenarioAddonTemplateAdminInstall(t *testing.T) {
 	require.Equal(t, v1.ObjectName("rauthy-login"), app.Spec.Addons[0].Name)
 }
 
+// ADR-0337 Decision 2: after it writes the Addon, deploy applies the App only once the Addon names the revision of
+// the generation it wrote current, so the App's revision records it; --no-wait waits too.
+func TestAddonDeployWaitsForTheRevision(t *testing.T) {
+	t.Parallel()
+	e := newAddonCLIEnvWith(t, false)
+	run := startCLI(t, e.admin, "app", "deploy", addonTemplate(t, rauthyTemplateAddon), "-n", "team-a", "--no-wait")
+	run.waitOut(t, "created Addon/rauthy\n")
+	require.Never(t, func() bool {
+		_, ok := e.app(t, "rauthy")
+		return ok
+	}, 300*time.Millisecond, 20*time.Millisecond, "no App before the Addon's revision is current")
+	a, _ := e.addon(t, "rauthy")
+	a.Status.CurrentRevision = v1.AddonRevisionName(a.Name, a.Generation)
+	_, err := e.st.Update(context.Background(), a)
+	require.NoError(t, err)
+	require.NoError(t, run.wait(t))
+	_, ok := e.app(t, "rauthy")
+	require.True(t, ok, "the App follows the revision")
+}
+
 // scenario: addon-template-admin-update — an Addon of the template's kind under another name: unchanged when the specs
 // agree, else updated under its own name; deploy never creates a second Addon of the kind.
 func TestScenarioAddonTemplateAdminUpdate(t *testing.T) {
@@ -160,7 +209,7 @@ func TestScenarioAddonTemplateAdminUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "unchanged Addon/login-provider\n", out)
 	same, _ := e.addon(t, "login-provider")
-	require.Equal(t, before.ResourceVersion, same.ResourceVersion, "an unchanged Addon is not written")
+	require.Equal(t, before.Generation, same.Generation, "an unchanged Addon is not written")
 
 	newer := strings.Replace(rauthyTemplateAddon, "path: /auth/v1/ping", "path: /auth/v1/health", 1)
 	out, err = deployAs(e.admin, addonTemplate(t, newer), "-n", "team-a", "--no-wait")
@@ -181,7 +230,8 @@ func TestScenarioAddonTemplateDeveloperDeploy(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, out, "a developer writes no Addon")
 	after, _ := e.addon(t, "rauthy")
-	require.Equal(t, before.ResourceVersion, after.ResourceVersion, "the Addon is unchanged")
+	require.Equal(t, before.Generation, after.Generation, "the Addon is unchanged")
+	require.Equal(t, before.Spec.Port, after.Spec.Port)
 	_, ok := e.app(t, "rauthy")
 	require.True(t, ok)
 }

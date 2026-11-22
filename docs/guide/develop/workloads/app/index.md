@@ -133,8 +133,9 @@ REVISION   VERSION   PHASE   STAMPED
 A **hook** is a Function of the App that funcd calls for each new revision: [`spec.hooks`](spec.md#appspechooks)
 lists `preApply` hooks, which run before the other parts change, such as a migration, and `postApply` hooks, once the
 revision is current. funcd calls each list in order, with a CloudEvent whose data is the
-[hook input](spec.md#apprevisionspechookinput): the event, `install`, `upgrade` or `rollback`, the App, and the current
-and new revisions with their versions.
+[hook input](spec.md#apprevisionspechookinput): the event, `install`, `upgrade` or `rollback`, the App, the current
+and new revisions with their versions, and for an App with add-on parts, each part whose add-on revision the new
+revision changes ([carry an add-on](#carry-an-add-on)).
 
 - Until every pre-hook succeeds, funcd writes only the pre-hooks and what they bind, and the current revision keeps
   serving; a failed pre-hook fails the revision with `HookFailed`.
@@ -187,6 +188,12 @@ nothing and exits 1: `Addon rauthy is not registered: an admin deploys this temp
 prints the App alone, and the Addon's `${{ }}` are its own, never the template's values. `funcdctl dev` applies
 `addon.yaml` with its admin token before the App, again when the file changes, and deletes the Addon once the file
 goes.
+
+Each change of an Addon is a revision, `rauthy-1` then `rauthy-2`, and a newer one moves no engine. An App's revision
+records the revision of each add-on kind of its parts, and a part moves to that record once the App's revision is
+applied, so the pre-hooks run against the old engine and the post-hooks against the new one; the hook input's
+`addonRevisions` names each part's move. A rollback takes back the records of the revision it rolls back to, so the
+part returns to the older engine. A part only moves forward: a revision that fails does not move it back.
 
 An `addons` part is admitted against its Addon: a kind no Addon registers, a config that breaks the Addon's schema, or
 a Secret that the App's `secrets` do not declare is refused with 400 naming the entry. The part is Ready once its

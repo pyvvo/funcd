@@ -75,7 +75,8 @@ func (s *addonProvider) Reclaim(ctx context.Context) error {
 }
 
 // build builds the engine runtime, which runs containerd's engines, or the runtime WithAddonRuntime gives with its
-// modes, and the reconciler, which watches the Addons, the Secrets its objects bind and the Restores that load them. A
+// modes, the reconciler, which watches the Addons, the Secrets its objects bind, the Restores that load them and the
+// AppRevisions that move an App's parts, and the Addon's reconciler, which stamps its revisions (ADR-0339). A
 // runtime that is also workload.AddonFiles and provider.Volumes reaches the engines' files and storage (ADR-0333).
 func (s *addonProvider) build(d addonDeps) error {
 	const op = "funcd.New"
@@ -105,7 +106,7 @@ func (s *addonProvider) build(d addonDeps) error {
 		Store: c.store, Provider: engineRuntime, Secrets: d.secrets, Routes: d.routes, Modes: modes, ServerMode: serverMode,
 		Logger: c.logger, SupervisionPeriod: c.pacing.SupervisionPeriod, ReferentPollInterval: c.pacing.ReferentPollInterval,
 		EnginePollInterval: c.pacing.EnginePollInterval, Files: s.files, Volumes: volumes, Hold: c.gate(),
-		QuarantinePeriod: c.quarantinePeriodOrDefault(), Now: c.quarantineNow,
+		QuarantinePeriod: c.quarantinePeriodOrDefault(), Now: c.quarantineNow, FollowCurrent: c.addonFollowCurrent,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build the add-on object reconciler")
@@ -113,7 +114,9 @@ func (s *addonProvider) build(d addonDeps) error {
 	s.reconciler = rec
 	s.reserved = controlplane.ReservedPlurals()
 	d.ctrl.Register(v1.KindAddonObject.GVK(), rec)
+	d.ctrl.Register(v1.KindAddon.GVK(), rec.Revisions())
 	d.ctrl.Watches(v1.KindAddon.GVK(), rec.MapAddon)
+	d.ctrl.Watches(v1.KindAppRevision.GVK(), rec.MapAppRevision)
 	d.ctrl.Watches(v1.KindSecret.GVK(), rec.MapSecret)
 	d.ctrl.Watches(v1.KindOIDCProvider.GVK(), rec.MapOIDCProvider)
 	d.ctrl.Watches(v1.KindRestore.GVK(), rec.MapRestore)
