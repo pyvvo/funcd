@@ -415,6 +415,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		funcd.WithSQLDatabaseQuota(cfg.SQL.MaxDatabasesPerNamespace),
 		funcd.WithAddonRegistries(cfg.Addons.Registries...),
 		funcd.WithAddonObjectQuota(cfg.Addons.MaxObjectsPerNamespace),
+		funcd.WithAddonSettingsQuota(cfg.Addons.MaxSettingsPerNamespace),
 		funcd.WithNestedInFlightCap(cfg.Invoke.MaxNestedInFlight),
 		credOpt,
 		funcd.WithArtifactStore(filepath.Join(cfg.Storage.DataDir, "artifacts")),

@@ -59,7 +59,8 @@ func (s *addonProvider) Admissions(r admission.StoreReader) []admission.Admissio
 	c := s.cfg
 	return append(controlplane.NewAddonAdmissions(controlplane.AddonRules{Store: r, Registries: c.addonRegistries,
 		AnyRegistry: c.addonAnyRegistry, Reserved: s.reserved}),
-		admission.NewAddonObjectQuotaAdmission(r, cmp.Or(c.addonMaxObjects, defaultAddonObjectsPerNamespace)))
+		admission.NewAddonObjectQuotaAdmission(r, cmp.Or(c.addonMaxObjects, defaultAddonObjectsPerNamespace),
+			cmp.Or(c.addonMaxSettings, defaultAddonSettingsPerNamespace)))
 }
 
 // BackupKinds is the one member kind of every add-on object, through the runtime's file access (ADR-0333 Decision 2).

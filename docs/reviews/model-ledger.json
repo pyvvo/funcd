@@ -14713,5 +14713,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1511-fix-claude-opus-5-5.md",
     "notes": "the start-up hook remembers every stored add-on object, held or not; revert check fails for the reported reason; held-first mutant fails; not independent (no review agents)"
+  },
+  {
+    "date": "2026-11-22",
+    "adr": "0340",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 13,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0340-implementation-claude-opus-5-5.md",
+    "notes": "pass, not independent (the builder reviewed); 5 mutants caught; the spec.functions refusal and the Implemented stamp land with ADR-0341"
   }
 ]

@@ -89,6 +89,15 @@ func TestAddonAnswersMatrix(t *testing.T) {
 		a.token = answersAdmin
 		return answerRow{op: op, when: when, on: e, ask: a}
 	}
+	// A replace keeps spec.kind but can add a settings kind that another Addon registers (ADR-0340 Decision 2).
+	twin := row("replaceAddon", "Another Addon registers", ask{what: "a settings kind another Addon registers",
+		method: http.MethodPut, path: addonsPath + "/rauthy", body: edited(func(s *v1.AddonSpec) {
+			s.Settings = []v1.AddonSettings{{Kind: "TwinService", Target: "spec.config.provider",
+				Function: v1.AddonSettingsFunction{Ref: "settings"},
+				Schema: json.RawMessage(`{"type":"object","additionalProperties":false,` +
+					`"properties":{"provider":{"type":"string"}},"required":["provider"]}`)}}
+		}), detail: `Addon "twin" registers kind "TwinService"`})
+	twin.setup = func(t *testing.T, e *answerEnv) { registerAddons(t, e, addonFixture("twin", "TwinService")) }
 	runMatrix(t, append(shared,
 		row("createAddon", "is a kind of funcd's", ask{what: "a kind of funcd's", method: http.MethodPost,
 			path: addonsPath, body: other("lake", "Lake", func(*v1.AddonSpec) {}), detail: "is a kind of funcd's own"}),
@@ -109,6 +118,7 @@ func TestAddonAnswersMatrix(t *testing.T) {
 			detail: "does not come from a registry that addons.registries lists"}),
 		row("replaceAddon", "spec.config is not a JSON Schema", ask{what: "an env value the schema does not type",
 			method: http.MethodPut, path: addonsPath + "/rauthy", body: edited(untyped), detail: "spec.env"}),
+		twin,
 	))
 }
 

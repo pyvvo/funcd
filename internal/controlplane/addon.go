@@ -23,20 +23,21 @@ import (
 
 func registerAddon(api huma.API, h Handlers) {
 	writes := []ErrorCase{
-		problem(fault.Invalid, "spec.kind is a kind of funcd's, or its plural is a path that funcd serves, whatever the "+
-			"case; or a replace changes spec.kind.", "Choose another kind. A new kind needs a new Addon."),
+		problem(fault.Invalid, "spec.kind or a settings kind is a kind of funcd's, another kind of the Addon or a path "+
+			"that funcd serves, whatever the case; or a replace changes spec.kind.",
+			"Choose another kind. A new kind needs a new Addon."),
 		problem(fault.Invalid, "The registry of spec.image is not one that addons.registries lists.",
 			"Use an image from a listed registry, or ask the operator to list its registry."),
 		problem(fault.Invalid, "spec.config is not a JSON Schema in funcd's contract profile, or an env value is not a "+
 			"literal or a single ${{ }} expression that the schema types.", "Correct the field that the detail names."),
 	}
-	// Only a create can take another Addon's kind or plural: a replace keeps its kind.
+	// A replace keeps spec.kind but can add a settings kind that another Addon registers (ADR-0340 Decision 2).
 	taken := problem(fault.Conflict, "Another Addon registers the same kind or the same plural, whatever the case.",
 		"Choose another kind, or change the other Addon.")
 	registerClusterCRUD(api, clusterRoutes[v1.Addon]{
 		kind: "Addon", kinds: "Addons", path: "addons",
 		list: h.ListAddons, create: h.CreateAddon, get: h.GetAddon, replace: h.ReplaceAddon, remove: h.DeleteAddon,
-		cases: &kindCases{create: append(slices.Clone(writes), taken), replace: writes},
+		cases: &kindCases{create: append(slices.Clone(writes), taken), replace: append(slices.Clone(writes), taken)},
 	})
 }
 
@@ -71,14 +72,16 @@ type AddonRules struct {
 	Reserved []string
 }
 
-// NewAddonAdmissions returns the Validating admissions of an Addon write. A create's kind and plural are neither
-// funcd's nor another Addon's, without case: that one reads every Addon, so it is marked, and two creates take the
-// cluster-scoped admission lock (ADR-0147) and cannot register one plural. Every write keeps its kind, names an image
-// from a listed registry, passes its config schema through the contract profile and has each env value a literal or
-// one ${{ }} expression that the schema types, restore.env's reading restore.file too (ADR-0333 Decision 1): a change
-// takes no lock, and its kind, kept, keeps its plural unique.
+// NewAddonAdmissions returns the Validating admissions of an Addon write, and of a settings object's. Every kind an
+// Addon adds, spec.kind and its settings kinds, is neither funcd's nor another Addon's, without case, on a create and
+// on an update: that check reads every Addon, so it is marked, and two writes take the cluster-scoped admission lock
+// (ADR-0147) and cannot register one plural (ADR-0340 Decision 2). Every write keeps spec.kind, names an image from a
+// listed registry, passes its config schema through the contract profile and has each env value a literal or one ${{ }}
+// expression that the schema types, restore.env's reading restore.file too (ADR-0333 Decision 1); a settings kind's
+// schema, paths and rules pass CheckSettings. A settings object passes its kind's constraints under the namespace's
+// lock.
 func NewAddonAdmissions(r AddonRules) []admission.Admission {
-	return []admission.Admission{addonUnique{r}, addonRules{r}}
+	return []admission.Admission{addonUnique{r}, addonRules{r}, addonSettings{r}}
 }
 
 type addonUnique struct{ AddonRules }
@@ -88,7 +91,7 @@ func (addonUnique) Phase() admission.Phase { return admission.Validating }
 func (addonUnique) ReadsNamespace() bool   { return true }
 
 func (addonUnique) Handles(gvk v1.GroupVersionKind, op admission.Operation) bool {
-	return gvk == v1.KindAddon.GVK() && op == admission.Create
+	return gvk == v1.KindAddon.GVK() && (op == admission.Create || op == admission.Update)
 }
 
 func (a addonUnique) Admit(ctx context.Context, req admission.Request) (v1.Object, error) {
@@ -97,9 +100,11 @@ func (a addonUnique) Admit(ctx context.Context, req admission.Request) (v1.Objec
 	if !ok {
 		return req.Object, nil
 	}
-	plural := v1.AddonPlural(ad.Spec.Kind)
-	if slices.Contains(a.Reserved, plural) {
-		return nil, fault.Invalidf(op, "the plural %q of spec.kind %q is a path that funcd serves", plural, ad.Spec.Kind)
+	for _, kind := range ad.Spec.Kinds() {
+		plural := v1.AddonPlural(kind)
+		if slices.Contains(a.Reserved, plural) {
+			return nil, fault.Invalidf(op, "the plural %q of the kind %q is a path that funcd serves", plural, kind)
+		}
 	}
 	others, err := a.Store.List(ctx, v1.KindAddon.GVK(), "")
 	if err != nil {
@@ -110,8 +115,12 @@ func (a addonUnique) Admit(ctx context.Context, req admission.Request) (v1.Objec
 		if !ok || other.Name == ad.Name {
 			continue
 		}
-		if strings.EqualFold(other.Spec.Kind, ad.Spec.Kind) || v1.AddonPlural(other.Spec.Kind) == plural {
-			return nil, fault.Conflictf(op, "Addon %q registers kind %q, of the plural %q", other.Name, other.Spec.Kind, plural)
+		for _, kind := range ad.Spec.Kinds() {
+			for _, taken := range other.Spec.Kinds() {
+				if v1.SameAddonKind(kind, taken) {
+					return nil, fault.Conflictf(op, "Addon %q registers kind %q, of the plural %q", other.Name, taken, v1.AddonPlural(taken))
+				}
+			}
 		}
 	}
 	return req.Object, nil
@@ -151,6 +160,60 @@ func (a addonRules) Admit(_ context.Context, req admission.Request) (v1.Object, 
 	}
 	if err := addonsvc.CheckRestoreEnv(ad.Spec.Restore, ad.Spec.Config); err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "spec.restore.env")
+	}
+	for i := range ad.Spec.Settings {
+		if err := addonsvc.CheckSettings(&ad.Spec.Settings[i]); err != nil {
+			return nil, fault.Wrapf(err, fault.Invalid, op, "spec.settings[%d]", i)
+		}
+	}
+	return req.Object, nil
+}
+
+// addonSettings checks a write of a settings object against its kind's constraints (ADR-0340 Decision 4): it reads the
+// namespace's other objects of the kind, so it takes the namespace's admission lock (ADR-0147), and two writes cannot
+// both pass a count or a unique field.
+type addonSettings struct{ AddonRules }
+
+func (addonSettings) Name() string           { return "addon-settings" }
+func (addonSettings) Phase() admission.Phase { return admission.Validating }
+func (addonSettings) ReadsNamespace() bool   { return true }
+
+func (addonSettings) Handles(gvk v1.GroupVersionKind, op admission.Operation) bool {
+	return gvk == v1.KindAddonObject.GVK() && (op == admission.Create || op == admission.Update)
+}
+
+func (a addonSettings) Admit(ctx context.Context, req admission.Request) (v1.Object, error) {
+	const op = "admission.addon-settings"
+	o, ok := req.Object.(*v1.AddonObject)
+	if !ok {
+		return req.Object, nil
+	}
+	addons, err := a.Store.List(ctx, v1.KindAddon.GVK(), "")
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "list Addons")
+	}
+	var st *v1.AddonSettings
+	for _, obj := range addons {
+		if ad, ok := obj.(*v1.Addon); ok && st == nil {
+			st = ad.Spec.SettingsKind(o.Spec.Kind)
+		}
+	}
+	if st == nil {
+		return req.Object, nil
+	}
+	objs, err := a.Store.List(ctx, v1.KindAddonObject.GVK(), o.Namespace)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "list the add-on objects of %s", o.Namespace)
+	}
+	var others []*v1.AddonObject
+	for _, obj := range objs {
+		if x, ok := obj.(*v1.AddonObject); ok && x.Name != o.Name && v1.SameAddonKind(x.Spec.Kind, st.Kind) {
+			others = append(others, x)
+		}
+	}
+	old, _ := req.Old.(*v1.AddonObject)
+	if err := addonsvc.AdmitSettings(st, o, old, others); err != nil {
+		return nil, err
 	}
 	return req.Object, nil
 }
@@ -336,8 +399,9 @@ func addonObjectOperations() restOperations {
 		[]ErrorCase{problem(fault.NotFound, "No Addon registers the kind, and the namespace holds no object of it.",
 			"Check the plural, or register the add-on.")})...)
 	ops.create = Describe(ops.create, "Create an object of an add-on's kind", v.create(append(writes,
-		problem(fault.Invalid, "The namespace already holds the most add-on objects that addons.maxObjectsPerNamespace "+
-			"allows.", "Delete an object that the namespace no longer needs, or ask the operator to raise the cap.")))...)
+		problem(fault.Invalid, "The namespace already holds the most add-on objects that run an engine that "+
+			"addons.maxObjectsPerNamespace allows, or the most settings objects that addons.maxSettingsPerNamespace allows.",
+			"Delete an object that the namespace no longer needs, or ask the operator to raise the cap.")))...)
 	ops.get = Describe(ops.get, "Read an object of an add-on's kind", v.get()...)
 	ops.replace = Describe(ops.replace, "Replace an object of an add-on's kind", v.replace(writes)...)
 	ops.remove = Describe(ops.remove, "Delete an object of an add-on's kind", v.remove(nil)...)
@@ -375,18 +439,49 @@ func (h *storeHandlers) addons(ctx context.Context) ([]*v1.Addon, error) {
 	return out, nil
 }
 
-// addonFor is the Addon whose kind has plural, fault.NotFound when none registers it.
-func (h *storeHandlers) addonFor(ctx context.Context, plural string) (*v1.Addon, error) {
+// servedKind is the kind a plural names: an Addon's own kind, or one of its settings kinds (ADR-0340 Decision 3).
+type servedKind struct {
+	addon    *v1.Addon
+	settings *v1.AddonSettings // nil for the Addon's own kind
+}
+
+func (k servedKind) name() string {
+	if k.settings != nil {
+		return k.settings.Kind
+	}
+	return k.addon.Spec.Kind
+}
+
+func (k servedKind) schema() json.RawMessage {
+	if k.settings != nil {
+		return k.settings.Schema
+	}
+	return k.addon.Spec.Config
+}
+
+// kindFor is the kind of plural, fault.NotFound when no Addon adds it.
+func (h *storeHandlers) kindFor(ctx context.Context, plural string) (servedKind, error) {
 	all, err := h.addons(ctx)
 	if err != nil {
-		return nil, err
+		return servedKind{}, err
 	}
 	for _, a := range all {
 		if v1.AddonPlural(a.Spec.Kind) == plural {
-			return a, nil
+			return servedKind{addon: a}, nil
+		}
+		for i := range a.Spec.Settings {
+			if v1.AddonPlural(a.Spec.Settings[i].Kind) == plural {
+				return servedKind{addon: a, settings: &a.Spec.Settings[i]}, nil
+			}
 		}
 	}
-	return nil, fault.NotFoundf("controlplane.addon", "no Addon registers a kind of the plural %q", plural)
+	return servedKind{}, fault.NotFoundf("controlplane.addon", "no Addon registers a kind of the plural %q", plural)
+}
+
+// addonFor is the Addon that adds the kind of plural, fault.NotFound when none does.
+func (h *storeHandlers) addonFor(ctx context.Context, plural string) (*v1.Addon, error) {
+	k, err := h.kindFor(ctx, plural)
+	return k.addon, err
 }
 
 // ofPlural reports whether a stored object is of the add-on kind whose plural the path names.
@@ -411,17 +506,25 @@ func shown(obj v1.Object, err error) (v1.AddonObject, error) {
 
 // stored turns a user's object of a's kind into its stored form: its kind is a's, its spec.kind empty or a's, and its
 // config fits a's schema (ADR-0332 Decision 2). A config that breaks the schema is the body's 422, naming each property.
-func stored(a *v1.Addon, o v1.AddonObject) (*v1.AddonObject, error) {
+func stored(k servedKind, o v1.AddonObject) (*v1.AddonObject, error) {
 	const op = "controlplane.addonObject"
-	if string(o.Kind) != a.Spec.Kind {
-		return nil, fault.Invalidf(op, "body kind %q is not %q, the kind of the path's plural", o.Kind, a.Spec.Kind)
+	kind := k.name()
+	if string(o.Kind) != kind {
+		return nil, fault.Invalidf(op, "body kind %q is not %q, the kind of the path's plural", o.Kind, kind)
 	}
-	if o.Spec.Kind != "" && o.Spec.Kind != a.Spec.Kind {
-		return nil, fault.Invalidf(op, "spec.kind %q is not %q: funcd sets it from the path", o.Spec.Kind, a.Spec.Kind)
+	if o.Spec.Kind != "" && o.Spec.Kind != kind {
+		return nil, fault.Invalidf(op, "spec.kind %q is not %q: funcd sets it from the path", o.Spec.Kind, kind)
 	}
-	v, err := contract.Compile(a.Spec.Config)
+	if k.settings != nil {
+		s := o.Spec
+		if len(s.Bindings.Secret) > 0 || s.Ingress != nil || s.Resources != (v1.ResourceSpec{}) || s.Deletion != "" {
+			return nil, fault.Invalidf(op, "a %s object runs no engine: spec.bindings, spec.ingress, spec.resources and "+
+				"spec.deletion are not allowed", kind)
+		}
+	}
+	v, err := contract.Compile(k.schema())
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "compile the config schema of Addon %q", a.Name)
+		return nil, fault.Wrapf(err, fault.Internal, op, "compile the %s schema of Addon %q", kind, k.addon.Name)
 	}
 	config := o.Spec.Config
 	if len(config) == 0 {
@@ -436,11 +539,11 @@ func stored(a *v1.Addon, o v1.AddonObject) (*v1.AddonObject, error) {
 		for i, d := range details {
 			errs[i] = &huma.ErrorDetail{Message: d.Message, Location: "body.spec.config" + strings.ReplaceAll(d.Path, "/", ".")}
 		}
-		return nil, huma.Error422UnprocessableEntity("spec.config does not fit the "+a.Spec.Kind+" schema", errs...)
+		return nil, huma.Error422UnprocessableEntity("spec.config does not fit the "+kind+" schema", errs...)
 	}
 	out := o
 	out.TypeMeta = v1.TypeMeta{APIVersion: v1.KindAddonObject.GVK().APIVersion(), Kind: v1.KindAddonObject}
-	out.Spec.Kind = a.Spec.Kind
+	out.Spec.Kind = kind
 	return &out, nil
 }
 
@@ -489,11 +592,11 @@ func (h *storeHandlers) CreateAddonObject(ctx context.Context, ns v1.NamespaceNa
 	if err := h.authorize(ctx, auth.VerbCreate, v1.KindAddonObject, ns); err != nil {
 		return v1.AddonObject{}, err
 	}
-	a, err := h.addonFor(ctx, plural)
+	k, err := h.kindFor(ctx, plural)
 	if err != nil {
 		return v1.AddonObject{}, err
 	}
-	obj, err := stored(a, o)
+	obj, err := stored(k, o)
 	if err != nil {
 		return v1.AddonObject{}, err
 	}
@@ -504,11 +607,11 @@ func (h *storeHandlers) ReplaceAddonObject(ctx context.Context, ns v1.NamespaceN
 	if err := h.authorize(ctx, auth.VerbUpdate, v1.KindAddonObject, ns); err != nil {
 		return v1.AddonObject{}, err
 	}
-	a, err := h.addonFor(ctx, plural)
+	k, err := h.kindFor(ctx, plural)
 	if err != nil {
 		return v1.AddonObject{}, err
 	}
-	obj, err := stored(a, o)
+	obj, err := stored(k, o)
 	if err != nil {
 		return v1.AddonObject{}, err
 	}

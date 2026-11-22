@@ -1,6 +1,6 @@
 # ADR-0340: An Addon declares settings kinds, whose objects funcd checks at admission
 
-- **Status**: Accepted (2026-11-22), by the decider ("I accept all ADR"), after four rounds of an independent judge, every Blocker and Major
+- **Status**: Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider ("I accept all ADR"), after four rounds of an independent judge, every Blocker and Major
   folded
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit

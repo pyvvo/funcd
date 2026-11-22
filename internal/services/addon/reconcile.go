@@ -42,6 +42,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if !ok {
 		return controller.Result{}, fault.Internalf(op, "object %s/%s is not an AddonObject", req.Namespace, req.Name)
 	}
+	if _, st, err := r.settingsKindOf(ctx, o.Spec.Kind); err != nil {
+		return controller.Result{}, err
+	} else if st != nil {
+		return controller.Result{}, nil // a settings object runs no engine (ADR-0340 Decision 3)
+	}
 	if err := r.remember(ctx, o); err != nil {
 		return controller.Result{}, err
 	}

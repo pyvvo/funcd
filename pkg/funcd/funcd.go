@@ -126,8 +126,10 @@ const (
 	defaultBucketsPerNamespace = 100
 	// defaultSQLDatabasesPerNamespace is the per-namespace SQLDatabase count cap when unset (ADR-0232).
 	defaultSQLDatabasesPerNamespace = 20
-	// defaultAddonObjectsPerNamespace is the per-namespace add-on object count cap when unset (ADR-0332 Decision 2).
-	defaultAddonObjectsPerNamespace = 20
+	// defaultAddonObjectsPerNamespace is the per-namespace cap on the add-on objects that run an engine when unset
+	// (ADR-0332 Decision 2); defaultAddonSettingsPerNamespace the cap on settings objects (ADR-0340 Decision 6).
+	defaultAddonObjectsPerNamespace  = 20
+	defaultAddonSettingsPerNamespace = 200
 	// The workflow engine tunables when WithWorkflow is not given: the daemon config's workflow.* defaults
 	// (ADR-0094, internal/platform/config), so a hung step fails the same way in dev and in production.
 	defaultWorkflowStepTimeout  = 300 * time.Second
@@ -334,9 +336,11 @@ type config struct {
 	addonRuntime provider.Runtime
 	addonModes   []string
 	// addonRegistries are addons.registries, the registries an Addon's image may come from (ADR-0332 Decision 6);
-	// addonMaxObjects is addons.maxObjectsPerNamespace, 0 ⇒ the default (20), negative disables the cap.
-	addonRegistries []string
-	addonMaxObjects int
+	// addonMaxObjects is addons.maxObjectsPerNamespace, 0 ⇒ the default (20), negative disables the cap;
+	// addonMaxSettings is addons.maxSettingsPerNamespace, 0 ⇒ the default (200) (ADR-0340 Decision 6).
+	addonRegistries  []string
+	addonMaxObjects  int
+	addonMaxSettings int
 	// addonAnyRegistry lets an Addon's image come from any registry (WithAnyAddonRegistry, ADR-0334 Decision 5).
 	addonAnyRegistry bool
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.

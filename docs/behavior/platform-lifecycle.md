@@ -129,6 +129,7 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `engineOutputBuf` | 64KiB | `pkg/funcd/engineoutput.go` |
 | `closeMargin` | 2s | `pkg/funcd/funcd.go` |
 | `defaultAddonObjectsPerNamespace` | 20 | `pkg/funcd/funcd.go` |
+| `defaultAddonSettingsPerNamespace` | 200 | `pkg/funcd/funcd.go` |
 | `defaultBucketsPerNamespace` | 100 | `pkg/funcd/funcd.go` |
 | `defaultCloseGrace` | 3s | `pkg/funcd/funcd.go` |
 | `defaultDeadletterMaxEntries` | 1000 | `pkg/funcd/funcd.go` |

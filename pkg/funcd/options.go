@@ -101,6 +101,12 @@ func WithAddonObjectQuota(maxPerNamespace int) Option {
 	return func(c *config) error { c.addonMaxObjects = maxPerNamespace; return nil }
 }
 
+// WithAddonSettingsQuota sets the per-namespace cap on the settings objects of every kind together, enforced at
+// admission (ADR-0340 Decision 6, addons.maxSettingsPerNamespace). 0 ⇒ the default (200); a negative value disables it.
+func WithAddonSettingsQuota(maxPerNamespace int) Option {
+	return func(c *config) error { c.addonMaxSettings = maxPerNamespace; return nil }
+}
+
 // WithSQLProviderRuntime overrides the SQLDatabase engine runtime (ADR-0232); the production runtime supervises the
 // rqlite container, tests and `funcdctl dev` (ADR-0237) inject their own. It must implement provider.Volumes.
 func WithSQLProviderRuntime(r provider.Runtime) Option {

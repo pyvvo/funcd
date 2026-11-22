@@ -40,6 +40,128 @@ type AddonSpec struct {
 	SecretKeys   []string          `json:"secretKeys,omitempty" doc:"The keys of an object's bound Secrets that reach the engine's environment. A bound Secret's other keys do not."`
 	Snapshot     *AddonSnapshot    `json:"snapshot,omitempty" doc:"Where the engine writes its own consistent copies, which a Backup of an object copies. Unset, a Backup that names an object of the add-on fails with reason NoSnapshot, and a resourceGroup scope leaves the add-on's objects out."`
 	Restore      *AddonRestore     `json:"restore,omitempty" doc:"How the engine loads a copy at its start, which an in-place Restore of an object puts in place. Unset, an object of the add-on cannot be restored."`
+	Settings     []AddonSettings   `json:"settings,omitempty" doc:"Kinds of settings objects that the add-on adds beside spec.kind. An object of one runs no engine: the kind's Function applies the objects of each target through the target's engine."`
+}
+
+// AddonSettings is a kind of settings objects (ADR-0340): each object runs no engine and names its target, an object of
+// the Addon's spec.kind in its namespace, whose settings the kind's Function applies (ADR-0341).
+type AddonSettings struct {
+	Kind        string                `json:"kind" doc:"The settings kind, a kind name as spec.kind is, served at its plural."`
+	Target      string                `json:"target" doc:"The string field under spec.config that names the object's target, such as spec.config.provider."`
+	Resync      Duration              `json:"resync,omitempty" doc:"How often funcd sends a target's objects again with no change, from 1s to 24h; unset is 10m."`
+	Function    AddonSettingsFunction `json:"function" doc:"The Function that applies a target's objects, named as a Workflow step names its Function. A target may name its own in its spec.functions."`
+	Schema      json.RawMessage       `json:"schema" doc:"The JSON Schema of the objects' spec.config, within funcd's contract profile. It must require the target field at each level."`
+	Constraints AddonConstraints      `json:"constraints,omitzero" doc:"What an object must keep at admission, beside its schema."`
+}
+
+// AddonSettingsFunction names a settings kind's Function, as a Workflow step's function.ref names one (ADR-0094).
+type AddonSettingsFunction struct {
+	Ref ObjectName `json:"ref" doc:"The name of an existing Function in the target's namespace, which funcd calls with each target's objects. funcd does not create or change it, and the objects wait while it is missing."`
+}
+
+// AddonConstraints are a settings kind's admission rules, each checked under the namespace's admission lock.
+type AddonConstraints struct {
+	Count     AddonCount  `json:"count,omitzero" doc:"How many objects of the kind a target or a namespace holds at most; 0 is no limit."`
+	Unique    []string    `json:"unique,omitempty" doc:"Fields under spec.config whose value no two objects of the kind in a namespace share."`
+	Immutable []string    `json:"immutable,omitempty" doc:"Fields under spec.config that a replace cannot change."`
+	Rules     []AddonRule `json:"rules,omitempty" doc:"Conditions over object, oldObject and others that a write must meet."`
+}
+
+// AddonCount bounds the objects of a settings kind.
+type AddonCount struct {
+	PerTarget    int `json:"perTarget,omitempty" minimum:"0" doc:"The most objects of the kind that name one target."`
+	PerNamespace int `json:"perNamespace,omitempty" minimum:"0" doc:"The most objects of the kind in a namespace."`
+}
+
+// AddonRule is a ${{ }} condition that an object of a settings kind must meet.
+type AddonRule struct {
+	Rule    string `json:"rule" doc:"A single ${{ }} condition over object, oldObject (on a replace) and others."`
+	Message string `json:"message" doc:"What a refusal says."`
+}
+
+// The bounds and the default of a settings kind's resync.
+const (
+	MinAddonResync     = Duration(time.Second)
+	MaxAddonResync     = Duration(24 * time.Hour)
+	DefaultAddonResync = Duration(10 * time.Minute)
+)
+
+// EffectiveResync is resync, DefaultAddonResync when unset.
+func (s *AddonSettings) EffectiveResync() time.Duration {
+	if s.Resync == 0 {
+		return time.Duration(DefaultAddonResync)
+	}
+	return time.Duration(s.Resync)
+}
+
+// SettingsKind is the settings kind named kind, compared as SameAddonKind compares; nil when the Addon adds none.
+func (s *AddonSpec) SettingsKind(kind string) *AddonSettings {
+	for i := range s.Settings {
+		if SameAddonKind(s.Settings[i].Kind, kind) {
+			return &s.Settings[i]
+		}
+	}
+	return nil
+}
+
+// Kinds are every kind the Addon adds: spec.kind, then its settings kinds.
+func (s *AddonSpec) Kinds() []string {
+	out := []string{s.Kind}
+	for _, st := range s.Settings {
+		out = append(out, st.Kind)
+	}
+	return out
+}
+
+// ConfigField is the segments under spec.config of a field path such as spec.config.provider, and whether p is one.
+func ConfigField(p string) ([]string, bool) {
+	rest, ok := strings.CutPrefix(p, "spec.config.")
+	if !ok || rest == "" {
+		return nil, false
+	}
+	segs := strings.Split(rest, ".")
+	return segs, !slices.Contains(segs, "")
+}
+
+// validateSettings checks each settings kind: its name, distinct from every other kind of the Addon, its target and
+// constraint paths under spec.config, its Function's name, its resync and its required schema.
+func (s *AddonSpec) validateSettings(op string) error {
+	for i, st := range s.Settings {
+		field := fmt.Sprintf("spec.settings[%d]", i)
+		switch {
+		case !addonKind.MatchString(st.Kind):
+			return fault.Invalidf(op, "%s.kind %q is not a kind name", field, st.Kind)
+		case funcdKind(st.Kind):
+			return fault.Invalidf(op, "%s.kind %q is a kind of funcd's own", field, st.Kind)
+		case slices.ContainsFunc(s.Kinds()[:i+1], func(k string) bool { return SameAddonKind(k, st.Kind) }):
+			return fault.Invalidf(op, "%s.kind %q is another kind of the Addon, whatever the case", field, st.Kind)
+		case !dnsLabel.MatchString(string(st.Function.Ref)):
+			return fault.Invalidf(op, "%s.function.ref %q is not a valid DNS-1123 name", field, st.Function.Ref)
+		case len(bytes.TrimSpace(st.Schema)) == 0:
+			return fault.Invalidf(op, "%s.schema is required", field)
+		case st.Resync != 0 && (st.Resync < MinAddonResync || st.Resync > MaxAddonResync):
+			return fault.Invalidf(op, "%s.resync %s is not from %s to %s", field, st.Resync, MinAddonResync, MaxAddonResync)
+		case st.Constraints.Count.PerTarget < 0 || st.Constraints.Count.PerNamespace < 0:
+			return fault.Invalidf(op, "%s.constraints.count must not be negative", field)
+		}
+		if _, ok := ConfigField(st.Target); !ok {
+			return fault.Invalidf(op, "%s.target %q is not a field under spec.config", field, st.Target)
+		}
+		for _, p := range slices.Concat(st.Constraints.Unique, st.Constraints.Immutable) {
+			if _, ok := ConfigField(p); !ok {
+				return fault.Invalidf(op, "%s.constraints field %q is not a field under spec.config", field, p)
+			}
+		}
+		for j, r := range st.Constraints.Rules {
+			if r.Rule == "" || r.Message == "" {
+				return fault.Invalidf(op, "%s.constraints.rules[%d] needs a rule and a message", field, j)
+			}
+		}
+		if c := bytes.TrimSpace(st.Schema); len(c) > 0 && c[0] != '{' {
+			return fault.Invalidf(op, "%s.schema must be a JSON Schema object", field)
+		}
+	}
+	return nil
 }
 
 // AddonSnapshot is the folder an add-on's engine writes its own copies to (ADR-0333 Decision 1).
@@ -218,6 +340,9 @@ func (a *Addon) Validate() error {
 		if err := validateEnvKey(op, "spec.secretKeys entry", k); err != nil {
 			return err
 		}
+	}
+	if err := s.validateSettings(op); err != nil {
+		return err
 	}
 	return s.validateCopies(op)
 }

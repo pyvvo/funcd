@@ -74,6 +74,58 @@ rauthy's [`addon.yaml`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/a
 - `restore.path` and `restore.env` are where funcd puts a copy back and the environment of the start that loads it,
   with `${{ restore.file }}` the copy's path. They lie under `storage.path`, apart from `snapshot.path`.
 
+## Settings kinds
+
+Some engines keep a setting behind their own API, often for their whole instance, such as rauthy's password policy. An
+Addon gives such a setting a kind of its own in `settings`. An object of a settings kind runs no engine: it names its
+target, an object of the Addon's `kind` in the same namespace, and the kind's Function applies it to that target's
+engine.
+
+```yaml
+settings:
+  - kind: RauthyPasswordPolicy
+    target: spec.config.provider
+    resync: 5m
+    function:
+      ref: rauthy-settings
+    schema:
+      type: object
+      additionalProperties: false
+      properties:
+        provider:
+          type: string
+        lengthMin:
+          type: integer
+        lengthMax:
+          type: integer
+      required:
+        - provider
+        - lengthMin
+        - lengthMax
+    constraints:
+      count:
+        perTarget: 1
+      immutable:
+        - spec.config.provider
+      rules:
+        - rule: ${{ object.spec.config.lengthMin <= object.spec.config.lengthMax }}
+          message: lengthMin must not exceed lengthMax
+```
+
+- `kind` is served at its plural, as the Addon's own kind is, and is unique across the platform.
+- `target` is a string field under `spec.config` that the schema requires.
+- `function.ref` names the kind's Function in the target's namespace.
+- `schema` checks each object's `spec.config`, with a 422 naming the property.
+- `constraints` are checked when an object is written, under the namespace's lock, and a refusal is 400:
+  - `count.perTarget` and `count.perNamespace` bound the objects of the kind;
+  - `unique` lists fields whose value no two objects of the namespace share;
+  - `immutable` lists fields that a replace cannot change;
+  - each `rules` entry is a `${{ }}` condition over `object`, `oldObject` on a replace, and `others`, the namespace's
+    other objects of the kind, of which a rule can read the length.
+
+A settings object takes no `bindings`, `ingress`, `resources` or `deletion`. Settings objects count toward
+`addons.maxSettingsPerNamespace`, 200 by default, and not toward the engines' `addons.maxObjectsPerNamespace`.
+
 ## Test it under funcdctl dev
 
 `funcdctl dev` runs an add-on's engine on the local Docker or containerd, and its admin token registers an Addon:
