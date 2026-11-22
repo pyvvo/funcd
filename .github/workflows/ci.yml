@@ -115,6 +115,15 @@ jobs:
           key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
           restore-keys: go-${{ runner.os }}-
 
+      # The design specs' passes (scripts/specs.py keys each by its spec's text, the fizz command and the state budget):
+      # a run restores the latest set and runs FizzBee again only for the specs whose inputs changed.
+      - name: Cache the design specs' passes
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/specs
+          key: specs-${{ runner.os }}-${{ hashFiles('docs/design/**/*.fizz', 'scripts/specs.py', 'flake.lock') }}
+          restore-keys: specs-${{ runner.os }}-
+
       - name: Run CI (fmt check + lint + fast tests + build)
         if: needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.generated == 'true' || github.event_name == 'push'
         run: nix develop --command just ci
