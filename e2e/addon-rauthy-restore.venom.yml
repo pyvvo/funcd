@@ -29,7 +29,7 @@ testcases:
       # hiqlite writes a snapshot at each HQL_BACKUP_CRON tick; the module's Addon writes one every 15 min.
       - type: exec
         script: |
-          {{.avmsh}} 'sed "s|HQL_BACKUP_CRON: .*|HQL_BACKUP_CRON: \"*/15 * * * * * *\"|" /opt/lane/addon.yaml | funcdctl apply -f -'
+          {{.avmsh}} 'sed "s|HQL_BACKUP_CRON: .*|HQL_BACKUP_CRON: \"*/15 * * * * * *\"|" /opt/lane/app/addon.yaml | funcdctl apply -f -'
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "applied Addon/rauthy"

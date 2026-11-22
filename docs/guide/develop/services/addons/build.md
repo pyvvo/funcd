@@ -48,7 +48,7 @@ On a server, an engine reaches nothing outward: funcd fences its network, and on
 
 ## The Addon
 
-rauthy's [`addon.yaml`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/addon.yaml), part by part:
+rauthy's [`addon.yaml`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/app/addon.yaml), part by part:
 
 - `kind: IdentityProvider` is the kind users declare, at `/apis/funcd.io/v1alpha1/namespaces/<ns>/identityproviders`.
   funcdctl takes it as `IdentityProvider`, `identityprovider` or `identityproviders`. A lower-case word that ends in
@@ -131,7 +131,7 @@ A settings object takes no `bindings`, `ingress`, `resources` or `deletion`. Set
 `funcdctl dev` runs an add-on's engine on the local Docker or containerd, and its admin token registers an Addon:
 
 ```sh
-funcdctl --token funcd-dev-admin-token apply -f rauthy/addon.yaml
+funcdctl --token funcd-dev-admin-token apply -f rauthy/app/addon.yaml
 funcdctl rauthy keys --admin-email admin@login.localhost
 funcdctl apply -f identityprovider.yaml
 funcdctl get identityproviders -n default

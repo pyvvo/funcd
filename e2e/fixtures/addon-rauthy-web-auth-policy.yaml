@@ -1,0 +1,13 @@
+# A password policy for the IdentityProvider of the lane's App web-auth, which its own Function web-auth-settings
+# applies (ADR-0341 Decision 3).
+apiVersion: funcd.io/v1alpha1
+kind: RauthyPasswordPolicy
+metadata:
+  name: web
+  namespace: default
+  resourceGroup: rg1
+spec:
+  config:
+    provider: web-auth-login
+    lengthMin: 12
+    lengthMax: 64
