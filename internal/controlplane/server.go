@@ -89,6 +89,7 @@ func NewServer(d Deps) (http.Handler, error) {
 	api := NewAPI(r, NewStoreHandlers(d.Store, d.Authorizer, admission.NewPipeline(admissions...), d.Collector, d.Planner))
 	if d.Logs != nil { // ADR-0084: the function-log read route, tenant-scoped by the same RBAC PEP
 		RegisterLogs(api, d.Logs, d.Authorizer)
+		RegisterEngineLogs(api, d.Logs, d.Authorizer, storeEngineKinds{store: d.Store}) // ADR-0342: the engines' logs
 	}
 	if d.RunLogs != nil { // ADR-0106: the run-scoped log read route (resolves status.traceId), same RBAC PEP
 		RegisterWorkflowRunLogs(api, d.RunLogs, d.Authorizer)

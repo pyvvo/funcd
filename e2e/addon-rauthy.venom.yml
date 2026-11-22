@@ -77,6 +77,21 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring login
 
+  - name: login's engine lines are read with funcdctl logs identityprovider/login (ADR-0342)
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl logs identityprovider/login -n default -o json | head -1'
+        retry: 15
+        delay: 2
+        info: "funcdctl logs identityprovider/login → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring '"kind":"IdentityProvider"'
+          - result.systemout ShouldContainSubstring '"name":"login"'
+
   - name: the edge serves rauthy at login.example.com with its path kept
     steps:
       - type: http

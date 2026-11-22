@@ -183,3 +183,43 @@ func TestScenarioDevAddonBackup(t *testing.T) {
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "the copy left restore.path: %v", err)
 	require.NotEqual(t, before, d.id(name), "the engine was started again for the copy")
 }
+
+// scenario: engine-logs-dev — under dev, echo's engine lines reach its log file and dev's store, and never the terminal:
+// dev prints only the file's path, once (ADR-0342 Decision 5).
+func TestScenarioEngineLogsDev(t *testing.T) {
+	requireRuntime(t)
+	sock := requireDocker(t)
+	dir := devProject(t, merge(nodeFunction("api", "", okBuild), map[string]string{"addon.yaml": echoAddon, "echo.yaml": echoObject}))
+	cfg := devConfig{}
+	removeKeyAtCleanup(t, sock, sessionKey(t, cfg, dir))
+	out := &lockedBuffer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	inst, err := (&cli{out: out}).startDev(ctx, dir, cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cancel(); _ = inst.stop() })
+	waitObject(t, inst, "EchoService", "echo", "Ready", ready)
+
+	const printed = "engine echoservice/echo: "
+	require.Eventually(t, func() bool { return strings.Contains(out.String(), printed) }, time.Minute, 50*time.Millisecond,
+		"dev prints the engine's log file")
+	rest := out.String()[strings.Index(out.String(), printed)+len(printed):]
+	path := rest[:strings.IndexByte(rest, '\n')]
+	require.Equal(t, filepath.Join("logs", "default", "echoservices.echo.log"), filepath.Join(filepath.Base(filepath.Dir(filepath.Dir(path))),
+		filepath.Base(filepath.Dir(path)), filepath.Base(path)))
+	var file []string
+	require.Eventually(t, func() bool {
+		b, _ := os.ReadFile(path) //nolint:gosec // the path dev printed, under the test's project
+		file = strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+		return len(b) > 0
+	}, time.Minute, 100*time.Millisecond, "the engine's start line reaches its log file")
+	require.Eventually(t, func() bool {
+		lines, err := inst.client.EngineLogs(ctx, devNamespace, "EchoService", "echo", sdk.LogsOptions{})
+		return err == nil && len(lines) > 0 && lines[0].Body == file[0]
+	}, time.Minute, 500*time.Millisecond, "funcdctl logs echoservice/echo reads the line from dev's store")
+
+	terminal := out.String()
+	require.Equal(t, 1, strings.Count(terminal, printed), "the path is printed once")
+	for _, line := range file {
+		require.NotContains(t, terminal, line, "no engine line reaches dev's terminal")
+	}
+}

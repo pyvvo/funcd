@@ -43,8 +43,10 @@ type Line struct {
 	Severity       string          `json:"severity" doc:"The line's level: TRACE, DEBUG, INFO, WARN, ERROR or FATAL."`
 	SeverityNumber int32           `json:"severityNumber" doc:"The level as an OpenTelemetry severity number: 1 to 4 for trace, 5 to 8 for debug, 9 to 12 for info, 13 to 16 for warn, 17 to 20 for error and 21 to 24 for fatal."`
 	Body           string          `json:"body" doc:"The line's text."`
-	Namespace      string          `json:"namespace" doc:"The Function's namespace."`
-	Function       string          `json:"function" doc:"The Function whose worker wrote the line."`
+	Namespace      string          `json:"namespace" doc:"The namespace of the Function or of the object whose engine wrote the line."`
+	Function       string          `json:"function" doc:"The Function whose worker wrote the line; empty for an engine's line."`
+	Kind           string          `json:"kind,omitempty" doc:"The kind of the object whose engine wrote the line, such as Lake; empty for a Function's line."`
+	Name           string          `json:"name,omitempty" doc:"The object whose engine wrote the line; empty for a Function's line."`
 	Replica        string          `json:"replica" doc:"The replica of the worker that wrote the line."`
 	Source         string          `json:"source" doc:"Where the worker wrote the line: console, logging, stdout or stderr."`
 	Invocation     string          `json:"inv,omitempty" doc:"The ID of the call during which the worker wrote the line, when one is known."`
@@ -53,11 +55,14 @@ type Line struct {
 	Attrs          json.RawMessage `json:"attrs,omitempty" doc:"The line's other attributes, as a JSON object."`
 }
 
-// Query selects + bounds a read. Namespace is required; Function OR TraceID must be set (a bare
-// namespace scan with no trace filter is rejected — see Read's guard). The rest are optional filters.
+// Query selects + bounds a read. Namespace is required; Function, an engine's Kind and Name, OR TraceID must be set (a
+// bare namespace scan with no trace filter is rejected — see Read's guard). The rest are optional filters.
 type Query struct {
-	Namespace         string
-	Function          string
+	Namespace string
+	Function  string
+	// Kind and Name read an engine's lines, under logs/<ns>/<plural>.<name>/ (ADR-0342 Decision 2), when Function is "".
+	Kind              string
+	Name              string
 	Since             time.Time // zero ⇒ no lower bound
 	MinSeverityNumber int32     // 0 ⇒ all severities
 	Limit             int       // <= 0 ⇒ DefaultLimit; capped at MaxLimit
@@ -87,8 +92,12 @@ func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 	// Guard (ADR-0106): namespace is always required; Function OR TraceID must be set. A bare namespace
 	// scan with no trace filter stays Invalid, so the namespace-wide mode is only ever reachable WITH a
 	// trace-id — it can never become an unfiltered full-namespace dump.
-	if q.Namespace == "" || (q.Function == "" && q.TraceID == "") {
-		return nil, fault.Invalidf(op, "namespace is required, and one of function or traceId must be set")
+	engine := q.Kind != "" || q.Name != ""
+	switch {
+	case q.Namespace == "" || (q.Function == "" && !engine && q.TraceID == ""):
+		return nil, fault.Invalidf(op, "namespace is required, and one of function, an engine's kind and name, or traceId must be set")
+	case engine && (q.Kind == "" || q.Name == "" || q.Function != ""):
+		return nil, fault.Invalidf(op, "an engine's read names its kind and its name, and no function")
 	}
 	limit := q.Limit
 	if limit <= 0 {
@@ -101,15 +110,21 @@ func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 	// ADR-0106: namespace-wide, run-scoped read (all functions) when Function is empty and a trace-id is
 	// set; otherwise the ADR-0084 per-function prefix.
 	prefix := logsPrefix + q.Namespace + "/"
-	if q.Function != "" {
+	want := func(string) bool { return true }
+	switch {
+	case engine:
+		prefix += compact.EngineSegment(q.Kind, q.Name) + "/"
+	case q.Function != "":
 		prefix += q.Function + "/"
+	default: // a run's read skips the engines' segments: an engine's record carries no trace (ADR-0342 Decision 2)
+		want = func(key string) bool { return !engineKey(key) }
 	}
 	objs, err := r.bucket.List(ctx, prefix)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list %q", prefix)
 	}
 
-	rows, vanished, err := r.readObjects(ctx, objs, func(string) bool { return true })
+	rows, vanished, err := r.readObjects(ctx, objs, want)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +140,7 @@ func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 			return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "list %q", prefix)
 		}
 		more, _, merr := r.readObjects(ctx, again, func(key string) bool {
-			return !listed[key] && strings.HasSuffix(key, compactSuffix)
+			return !listed[key] && strings.HasSuffix(key, compactSuffix) && want(key)
 		})
 		if merr != nil {
 			return nil, merr
@@ -155,9 +170,19 @@ func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 	}
 	lines := make([]Line, 0, len(kept))
 	for _, row := range kept {
-		lines = append(lines, lineFromRow(row))
+		l := lineFromRow(row)
+		if engine { // the compacted row has no kind or name column (ADR-0083): the read names them
+			l.Kind, l.Name = q.Kind, q.Name
+		}
+		lines = append(lines, l)
 	}
 	return lines, nil
+}
+
+// engineKey reports whether a listed key holds an engine's records: its <fn> part is an engine's segment.
+func engineKey(key string) bool {
+	parts := strings.SplitN(key, "/", 4) // logs / ns / fn / rest
+	return len(parts) == 4 && compact.IsEngineSegment(parts[2])
 }
 
 // readObjects decodes the listed Parquet and raw objects whose key passes want. An object deleted between

@@ -53,13 +53,19 @@ type devAddonDrivers struct {
 // devAddonOptions runs the add-on engines on the developer's own container engine (ADR-0334 Decision 1), under the
 // session's key (Decision 6), from any registry (Decision 5). Dev builds the runtime once process.Open holds the
 // session's registry, so a second session is refused first, and its start reaps what a killed session left (Decision 7);
-// the platform's stop is followed by its StopAll.
-func devAddonOptions(ctx context.Context, stateDir string, cfg devConfig, inst *devInstance) ([]funcd.Option, error) {
+// the platform's stop is followed by its StopAll. Each engine's output goes to its log file beside the dev.watch logs,
+// which writef prints once, and never to the terminal (ADR-0342 Decision 5).
+func devAddonOptions(ctx context.Context, stateDir string, cfg devConfig, inst *devInstance, writef func(string, ...any) error) ([]funcd.Option, error) {
 	key, err := devSessionKey(stateDir)
 	if err != nil {
 		return nil, err
 	}
 	rt := chooseAddonRuntime(ctx, cfg, key, inst.logger)
+	if lr, ok := rt.(interface {
+		SetLogs(dir string, printf func(string, ...any) error)
+	}); ok {
+		lr.SetLogs(filepath.Join(stateDir, "logs"), writef)
+	}
 	inst.addons = rt
 	inst.cleanup = append(inst.cleanup, rt.StopAll)
 	return []funcd.Option{funcd.WithAddonRuntime(rt, v1.AddonRuntimeContainerd), funcd.WithAnyAddonRegistry(),

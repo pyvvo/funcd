@@ -1,6 +1,6 @@
 # ADR-0342: An engine's output is kept and read as a Function's logs
 
-- **Status**: Accepted (2026-11-22), by the decider's go-ahead ("Don't wait for me ... We should have this
+- **Status**: Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider's go-ahead ("Don't wait for me ... We should have this
   implemented, and the related lanes"), after three rounds of an independent judge, every Blocker and Major folded
 - **Date**: 2026-11-22
 - **Deciders**: green-0-rabbit

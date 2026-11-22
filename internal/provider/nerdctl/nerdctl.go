@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"os"
 	"os/exec"
 	"path"
 	"runtime"
@@ -239,6 +240,31 @@ func (c cli) Remove(ctx context.Context, name string) error {
 		return nil
 	}
 	return err
+}
+
+// Follow runs nerdctl logs --follow with a pipe of its own per stream, so each reader ends as the command does, once
+// the container stops; nothing here waits on the reads.
+func (c cli) Follow(ctx context.Context, name string) (io.ReadCloser, io.ReadCloser, error) {
+	args := []string{"logs", "--follow", name}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		return nil, nil, fault.Wrapf(err, fault.Internal, "nerdctl", "follow %s", name)
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		_, _ = outR.Close(), outW.Close()
+		return nil, nil, fault.Wrapf(err, fault.Internal, "nerdctl", "follow %s", name)
+	}
+	cmd := exec.CommandContext(ctx, c.bin, args...) //nolint:gosec // nerdctl, found on PATH, with the driver's own arguments
+	cmd.Stdout, cmd.Stderr = outW, errW
+	err = cmd.Start()
+	_, _ = outW.Close(), errW.Close()
+	if err != nil {
+		_, _ = outR.Close(), errR.Close()
+		return nil, nil, cliError(ctx, args, "", err)
+	}
+	go func() { _ = cmd.Wait() }()
+	return outR, errR, nil
 }
 
 // mountpoint is the directory that holds volume name's files, where nerdctl runs.

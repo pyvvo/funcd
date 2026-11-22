@@ -16,15 +16,15 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// logsCmd prints a function's logs from the control-plane logs route (ADR-0084), tenant-scoped to the
-// caller's identity. Default renders a subset (time · severity · replica · body); -o wide appends the
+// logsCmd prints a function's logs from the control-plane logs route (ADR-0084), or an engine's (ADR-0342), tenant-scoped
+// to the caller's identity. Default renders a subset (time · severity · replica · body); -o wide appends the
 // structured attributes inline as key=value; -o json emits one JSON record per line.
 func (a *cli) logsCmd() *cobra.Command {
 	var ns, since, severity, output string
 	var limit int
 	cmd := &cobra.Command{
-		Use:   "logs <function>",
-		Short: "Print a function's logs (tenant-scoped to your identity)",
+		Use:   "logs <function> | <kind>/<name>",
+		Short: "Print the logs of a Function or of an object's engine (tenant-scoped to your identity)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := checkOutput("funcdctl logs", output, "wide", "json"); err != nil {
@@ -34,13 +34,21 @@ func (a *cli) logsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			kind, name, err := logsTarget(args[0])
+			if err != nil {
+				return err
+			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err
 			}
-			lines, err := c.Logs(cmd.Context(), v1.NamespaceName(ns), v1.ObjectName(args[0]), sdk.LogsOptions{
-				Since: wireSince, Severity: severity, Limit: limit,
-			})
+			opts := sdk.LogsOptions{Since: wireSince, Severity: severity, Limit: limit}
+			var lines []logread.Line
+			if kind == v1.KindFunction {
+				lines, err = c.Logs(cmd.Context(), v1.NamespaceName(ns), name, opts)
+			} else {
+				lines, err = c.EngineLogs(cmd.Context(), v1.NamespaceName(ns), kind, name, opts)
+			}
 			if err != nil {
 				return err
 			}
@@ -53,6 +61,29 @@ func (a *cli) logsCmd() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 0, "max records to return, most-recent (default 1000)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: wide (append source/inv/attrs inline) | json")
 	return cmd
+}
+
+// logsTarget is the owner of the lines funcdctl logs reads (ADR-0342 Decision 4): a bare name or function/<name> is a
+// Function, <kind>/<name> an engine's, its kind resolved as funcdctl get resolves one. Another kind of funcd's is refused
+// before any call.
+func logsTarget(arg string) (v1.Kind, v1.ObjectName, error) {
+	const op = "funcdctl logs"
+	token, name, ok := strings.Cut(arg, "/")
+	if !ok {
+		return v1.KindFunction, v1.ObjectName(arg), nil
+	}
+	kind, known := sdk.KindFromToken(token)
+	switch {
+	case !known:
+		return "", "", fault.Invalidf(op, "%q names no kind", token)
+	case kind == v1.KindFunction:
+		return kind, v1.ObjectName(name), nil
+	case kind == v1.KindWorkflowRun:
+		return "", "", fault.Invalidf(op, "a WorkflowRun's logs are funcdctl workflow logs %s", name)
+	case !sdk.EngineKind(kind):
+		return "", "", fault.Invalidf(op, "a %s runs no engine: funcdctl logs reads a Function, a Lake, a SQLDatabase or an add-on object", kind)
+	}
+	return kind, v1.ObjectName(name), nil
 }
 
 // sinceParam returns --since as the API takes it (#824): a duration in ADR-0194's grammar as typed, or any

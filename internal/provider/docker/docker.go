@@ -43,6 +43,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/provider"
 	containerrt "github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
 )
 
 // The labels every container and volume of a Runtime carries (Decision 6), and the roles they name.
@@ -112,6 +113,9 @@ type Engine interface {
 	Stop(ctx context.Context, name string, grace time.Duration) error
 	// Remove removes the container; nil when it is gone.
 	Remove(ctx context.Context, name string) error
+	// Follow streams what the container writes on its standard output and error, from its start, until it stops or ctx
+	// ends (ADR-0342 Decision 5).
+	Follow(ctx context.Context, name string) (stdout, stderr io.ReadCloser, err error)
 	// CreateVolume creates the volume name with labels.
 	CreateVolume(ctx context.Context, name string, labels map[string]string) error
 	// Volumes lists the volumes that carry every label.
@@ -179,6 +183,16 @@ type Runtime struct {
 	// quarantine makes a Move and an Expire take turns: Expire removes an entry with no state, which a Move has until
 	// its helper writes one (ADR-0288 Decision 2).
 	quarantine sync.Mutex
+
+	// The engines' output (ADR-0342 Decision 5): the folder of their log files, dev's printer, the func that keeps each
+	// line, the log files this session has opened, and the context every follow ends with.
+	outMu    sync.Mutex
+	logDir   string
+	writef   func(format string, args ...any) error
+	lines    func(spec provider.ProviderSpec, stream, line string)
+	logged   map[string]bool
+	follows  context.Context //nolint:containedctx // the runtime's own, ended by StopAll: a follow outlives each pass
+	unfollow context.CancelFunc
 }
 
 var (
@@ -373,7 +387,8 @@ func NewRuntime(ctx context.Context, eng Engine, key string, persist bool, logge
 		return nil, fault.Invalidf(op, "session key %q is not 16 hex digits", key)
 	}
 	r := &Runtime{eng: eng, key: key, persist: persist, logger: cmp.Or(logger, slog.Default()).With("component", "addon-dev-runtime"),
-		probe: httpx.NodeClient(probeTimeout)}
+		probe: httpx.NodeClient(probeTimeout), logged: map[string]bool{}}
+	r.follows, r.unfollow = context.WithCancel(context.Background())
 	if err := r.reap(ctx); err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "remove what an earlier session of key %s left", key)
 	}
@@ -502,7 +517,110 @@ func (r *Runtime) start(ctx context.Context, spec provider.ProviderSpec, name, h
 	case !ok:
 		return Container{}, fault.Internalf(op, "the engine container %s is gone right after its start", name)
 	}
+	r.follow(spec, name)
 	return c, nil
+}
+
+// SetLogs makes each engine's output go to its log file under dir, and printf print the file once per session, as dev
+// prints a watch command's (ADR-0342 Decision 5).
+func (r *Runtime) SetLogs(dir string, printf func(format string, args ...any) error) {
+	r.outMu.Lock()
+	defer r.outMu.Unlock()
+	r.logDir, r.writef = dir, printf
+}
+
+// FollowLines makes fn keep each line an engine writes: provider.LineFollower.
+func (r *Runtime) FollowLines(fn func(spec provider.ProviderSpec, stream, line string)) {
+	r.outMu.Lock()
+	defer r.outMu.Unlock()
+	r.lines = fn
+}
+
+// follow reads the engine container name from its start, in the background until it stops or StopAll runs: each line
+// goes to the object's log file and to the func FollowLines set, a line longer than workerpipe.DefaultLineBytes split
+// into lines of that size, as a server's worker pipe splits it. It reads nothing when neither is set.
+func (r *Runtime) follow(spec provider.ProviderSpec, name string) {
+	r.outMu.Lock()
+	lines := r.lines
+	r.outMu.Unlock()
+	file := r.logFile(spec)
+	if lines == nil && file == nil {
+		return
+	}
+	stdout, stderr, err := r.eng.Follow(r.follows, name)
+	if err != nil {
+		r.logger.Warn("cannot follow an add-on engine's output", "name", name, "err", err)
+		if file != nil {
+			_ = file.Close()
+		}
+		return
+	}
+	var wg sync.WaitGroup
+	var fileMu sync.Mutex
+	for _, s := range []struct {
+		stream string
+		rc     io.ReadCloser
+	}{{"stdout", stdout}, {"stderr", stderr}} {
+		wg.Go(func() {
+			defer func() { _ = s.rc.Close() }()
+			br := bufio.NewReaderSize(s.rc, workerpipe.DefaultLineBytes)
+			for {
+				part, _, err := br.ReadLine() // a longer line comes in parts of the buffer's size, each one line
+				if err != nil && len(part) == 0 {
+					return
+				}
+				line := string(part)
+				if file != nil {
+					fileMu.Lock()
+					_, _ = file.WriteString(line + "\n")
+					fileMu.Unlock()
+				}
+				if lines != nil {
+					lines(spec, s.stream, line)
+				}
+			}
+		})
+	}
+	go func() {
+		wg.Wait()
+		if file != nil {
+			_ = file.Close()
+		}
+	}()
+}
+
+// logFile opens the object's log file, <dir>/<namespace>/<plural>.<name>.log: emptied at its first open in the session,
+// when the path is printed once, and appended to by the engines that replace it. nil when SetLogs set no folder.
+func (r *Runtime) logFile(spec provider.ProviderSpec) *os.File {
+	r.outMu.Lock()
+	dir, printf := r.logDir, r.writef
+	r.outMu.Unlock()
+	if dir == "" || spec.ServedKind == "" {
+		return nil
+	}
+	dir = filepath.Join(dir, string(spec.Ref.Namespace))
+	path := filepath.Join(dir, v1.AddonPlural(string(spec.ServedKind))+"."+string(spec.Ref.Name)+".log")
+	r.outMu.Lock()
+	first := !r.logged[path]
+	r.logged[path] = true
+	r.outMu.Unlock()
+	flags := os.O_WRONLY | os.O_CREATE | os.O_APPEND
+	if first {
+		flags |= os.O_TRUNC
+	}
+	err := os.MkdirAll(dir, 0o700)
+	var f *os.File
+	if err == nil {
+		f, err = os.OpenFile(path, flags, 0o600) //nolint:gosec // dev's own log file, under its process dir
+	}
+	if err != nil {
+		r.logger.Warn("cannot open an add-on engine's log file", "path", path, "err", err)
+		return nil
+	}
+	if first && printf != nil {
+		_ = printf("engine %s/%s: %s\n", strings.ToLower(string(spec.ServedKind)), spec.Ref.Name, path)
+	}
+	return f
 }
 
 // prepareStorage creates ref's volume when it has none, and sets its root to the engine's user, mode 0700, through the
@@ -601,6 +719,7 @@ func (r *Runtime) StopAll() {
 	if err := r.reap(context.Background()); err != nil {
 		r.logger.Warn("could not remove every add-on engine of this session", "key", r.key, "err", err)
 	}
+	r.unfollow()
 }
 
 // reap is StopAll's work, which New does first.
@@ -1267,6 +1386,53 @@ func (e *engineAPI) Remove(ctx context.Context, name string) error {
 		return nil
 	}
 	return err
+}
+
+// Follow streams the container's logs from its start: the engine multiplexes both streams, which demuxStream splits.
+func (e *engineAPI) Follow(ctx context.Context, name string) (io.ReadCloser, io.ReadCloser, error) {
+	p := "/containers/" + url.PathEscape(name) + "/logs"
+	resp, err := e.do(ctx, http.MethodGet, p, url.Values{"follow": {"1"}, "stdout": {"1"}, "stderr": {"1"}}, nil, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes))
+		return nil, nil, engineError("GET "+p, resp.StatusCode, b)
+	}
+	outR, outW := io.Pipe()
+	errR, errW := io.Pipe()
+	go func() {
+		err := demuxStream(resp.Body, outW, errW)
+		_ = resp.Body.Close()
+		outW.CloseWithError(err)
+		errW.CloseWithError(err)
+	}()
+	return outR, errR, nil
+}
+
+// demuxStream copies the engine's multiplexed stream, frame by frame (an 8-byte header naming the stream and the size),
+// into stdout and stderr until it ends; a frame of another stream is skipped.
+func demuxStream(r io.Reader, stdout, stderr io.Writer) error {
+	var header [8]byte
+	for {
+		if _, err := io.ReadFull(r, header[:]); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		dst := io.Discard
+		switch header[0] {
+		case 1:
+			dst = stdout
+		case 2:
+			dst = stderr
+		}
+		if _, err := io.CopyN(dst, r, int64(binary.BigEndian.Uint32(header[4:]))); err != nil {
+			return err
+		}
+	}
 }
 
 // removeQuietly removes a container this driver made for one call, even when ctx is done.

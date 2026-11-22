@@ -33,6 +33,12 @@ type Runtime interface {
 	Teardown(ctx context.Context, ref ProviderRef) error
 }
 
+// LineFollower is a Runtime that reads its engines' output itself, as dev's container runtimes do (ADR-0342
+// Decision 5): fn gets each line an engine writes, its stream "stdout" or "stderr".
+type LineFollower interface {
+	FollowLines(fn func(spec ProviderSpec, stream, line string))
+}
+
 // Deps wires the runtime over the EXISTING ports — no new execution/routing model, no new driver.
 type Deps struct {
 	// Runtime is the existing container port (internal/runtime, ADR-0032/0054): Create/Start/
@@ -343,15 +349,16 @@ func (r *engineRuntime) retire(ctx context.Context, id containerrt.InstanceID) e
 // engine token, config) is passed verbatim.
 func (r *engineRuntime) workerSpec(spec ProviderSpec, replica int) containerrt.WorkerSpec {
 	return containerrt.WorkerSpec{
-		Namespace: spec.Ref.Namespace,
-		Name:      spec.Ref.Name,
-		OwnerKind: r.ownerKind,
-		Replica:   replica,
-		Image:     spec.Image,
-		Command:   nil, // the curated image entrypoint is the engine — no artifact, no shape gate
-		Env:       spec.Env,
-		Limits:    containerrt.LimitsFrom(spec.Resources.CPU, spec.Resources.Memory),
-		Mounts:    append(r.storageMounts(spec), r.scratch.mounts(spec)...),
+		Namespace:  spec.Ref.Namespace,
+		Name:       spec.Ref.Name,
+		OwnerKind:  r.ownerKind,
+		ServedKind: spec.ServedKind,
+		Replica:    replica,
+		Image:      spec.Image,
+		Command:    nil, // the curated image entrypoint is the engine — no artifact, no shape gate
+		Env:        spec.Env,
+		Limits:     containerrt.LimitsFrom(spec.Resources.CPU, spec.Resources.Memory),
+		Mounts:     append(r.storageMounts(spec), r.scratch.mounts(spec)...),
 
 		EgressOnly: spec.EgressOnly,
 		HostOnly:   spec.HostOnly,

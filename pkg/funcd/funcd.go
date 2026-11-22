@@ -848,7 +848,7 @@ func (p *Platform) buildControlPlane() error {
 		return err
 	}
 	if err := p.addon.build(addonDeps{secrets: p.secrets.resolver, routes: edgeAgg, ctrl: ctrl,
-		indexEngines: p.exec.indexAddonEngines, authz: cedarPDP, master: master}); err != nil {
+		indexEngines: p.exec.indexAddonEngines, authz: cedarPDP, master: master, engineLine: p.exec.keepDevEngineLine}); err != nil {
 		return err
 	}
 	p.exec.addonNamespaces = p.addon.engineNamespaces

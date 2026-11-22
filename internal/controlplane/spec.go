@@ -18,6 +18,7 @@ import (
 func SpecAPI() huma.API {
 	api := NewAPI(chi.NewRouter(), NewStubHandlers())
 	RegisterStubLogs(api)            // ADR-0084: the function-logs route
+	RegisterStubEngineLogs(api)      // ADR-0342: the engines' logs routes
 	RegisterStubWorkflowRunLogs(api) // ADR-0106: the run-scoped logs route
 	RegisterStubVolumes(api)         // ADR-0262: delete a retained Function volume
 	RegisterStubDeadLetters(api)     // ADR-0118: the DLQ read and replay/discard routes

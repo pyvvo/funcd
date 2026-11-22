@@ -72,30 +72,97 @@ func RegisterLogs(api huma.API, q LogQuerier, authz auth.Authorizer) {
 	}, "Read the logs of a Function", slices.Concat([]ErrorCase{unauthorized(),
 		forbidden("read Functions in the namespace"), badPath("namespace or the name")}, logFilterCases())...,
 	), func(ctx context.Context, in *logsInput) (*logsOutput, error) {
-		if err := authorizeLogs(ctx, authz, in.Namespace); err != nil {
+		if err := authorizeLogs(ctx, authz, v1.KindFunction, in.Namespace); err != nil {
 			return nil, wrapFaultError(err)
 		}
-		since, err := parseSince(in.Since)
-		if err != nil {
-			return nil, wrapFaultError(err)
-		}
-		minSev, ok := logread.SeverityNumber(in.Severity)
-		if !ok {
-			return nil, wrapFaultError(fault.Invalidf("controlplane.logs", "unknown severity %q", in.Severity))
-		}
-		lines, err := q.Read(ctx, logread.Query{
-			Namespace:         string(in.Namespace),
-			Function:          string(in.Name),
-			Since:             since,
-			MinSeverityNumber: minSev,
-			Limit:             in.Limit,
+		return readLogs(ctx, q, in.LogFilters, logread.Query{Namespace: string(in.Namespace), Function: string(in.Name)})
+	})
+}
+
+// readLogs answers the lines that query names, filtered as f asks.
+func readLogs(ctx context.Context, q LogQuerier, f LogFilters, query logread.Query) (*logsOutput, error) {
+	since, err := parseSince(f.Since)
+	if err != nil {
+		return nil, wrapFaultError(err)
+	}
+	minSev, ok := logread.SeverityNumber(f.Severity)
+	if !ok {
+		return nil, wrapFaultError(fault.Invalidf("controlplane.logs", "unknown severity %q", f.Severity))
+	}
+	query.Since, query.MinSeverityNumber, query.Limit = since, minSev, f.Limit
+	lines, err := q.Read(ctx, query)
+	if err != nil {
+		return nil, wrapFaultError(err)
+	}
+	out := &logsOutput{}
+	out.Body.Items = lines
+	return out, nil
+}
+
+// engineLogsInput is the logs read of an object that runs an engine (ADR-0342 Decision 3). Its path params are typed as
+// logsInput's are, so the prefix the reader builds stays in the authorized namespace.
+type engineLogsInput struct {
+	Namespace v1.NamespaceName `path:"namespace" doc:"The object's namespace."`
+	Name      v1.ObjectName    `path:"name" doc:"The object's name."`
+	LogFilters
+}
+
+// addonEngineLogsInput is engineLogsInput for an object of an add-on's kind, named by the kind's plural.
+type addonEngineLogsInput struct {
+	Namespace v1.NamespaceName `path:"namespace" doc:"The object's namespace."`
+	Plural    string           `path:"plural" doc:"The plural of the object's add-on kind: the kind in lower case with an s."`
+	Name      v1.ObjectName    `path:"name" doc:"The object's name."`
+	LogFilters
+}
+
+// EngineKinds resolves an add-on kind's plural to the kind whose objects run an engine (ADR-0342 Decision 3):
+// fault.NotFound when no Addon registers one of that plural, a settings kind's plural included.
+type EngineKinds interface {
+	EngineKind(ctx context.Context, plural string) (string, error)
+}
+
+// RegisterEngineLogs registers the logs reads of the objects that run an engine (ADR-0342 Decision 3): Lakes,
+// SQLDatabases and the objects of each add-on's kind. Each authorizes get on the object's kind in the namespace before
+// it reads, as RegisterLogs does for a Function.
+func RegisterEngineLogs(api huma.API, q LogQuerier, authz auth.Authorizer, kinds EngineKinds) {
+	for _, k := range []struct {
+		kind   v1.Kind
+		plural string
+	}{{v1.KindLake, "lakes"}, {v1.KindSQLDatabase, "sqldatabases"}} {
+		huma.Register(api, Describe(huma.Operation{
+			OperationID: "get" + string(k.kind) + "Logs",
+			Method:      http.MethodGet,
+			Path:        apiPrefix + "/namespaces/{namespace}/" + k.plural + "/{name}/logs",
+			Tags:        []string{string(k.kind)},
+		}, "Read the logs of a "+string(k.kind)+"'s engine", slices.Concat([]ErrorCase{unauthorized(),
+			forbidden("read " + string(k.kind) + "s in the namespace"), badPath("namespace or the name")}, logFilterCases())...,
+		), func(ctx context.Context, in *engineLogsInput) (*logsOutput, error) {
+			if err := authorizeLogs(ctx, authz, k.kind, in.Namespace); err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return readLogs(ctx, q, in.LogFilters, logread.Query{Namespace: string(in.Namespace), Kind: string(k.kind),
+				Name: string(in.Name)})
 		})
+	}
+	huma.Register(api, Describe(huma.Operation{
+		OperationID: "getAddonObjectLogs",
+		Method:      http.MethodGet,
+		Path:        apiPrefix + "/namespaces/{namespace}/{plural}/{name}/logs",
+		Tags:        []string{"AddonObject"},
+	}, "Read the logs of an add-on object's engine", slices.Concat([]ErrorCase{unauthorized(),
+		forbidden("read add-on objects in the namespace"), badPath("namespace or the name"),
+		problem(fault.NotFound, "No Addon registers a kind of the plural whose objects run an engine: none registers the "+
+			"plural, or it is one of an Addon's settings kinds, whose objects run none.",
+			"Check the plural: the kind in lower case with an s.")}, logFilterCases())...,
+	), func(ctx context.Context, in *addonEngineLogsInput) (*logsOutput, error) {
+		if err := authorizeLogs(ctx, authz, v1.KindAddonObject, in.Namespace); err != nil {
+			return nil, wrapFaultError(err)
+		}
+		kind, err := kinds.EngineKind(ctx, in.Plural)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		out := &logsOutput{}
-		out.Body.Items = lines
-		return out, nil
+		return readLogs(ctx, q, in.LogFilters, logread.Query{Namespace: string(in.Namespace), Kind: kind, Name: string(in.Name)})
 	})
 }
 
@@ -312,13 +379,24 @@ func (stubLogAuthorizer) Authorize(context.Context, auth.Request) (auth.Decision
 // even though it is mounted at runtime only when a blob substrate is present.
 func RegisterStubLogs(api huma.API) { RegisterLogs(api, stubLogQuerier{}, stubLogAuthorizer{}) }
 
-// authorizeLogs runs the ADR-0018 PEP for a logs read: the caller must be allowed to get Functions in ns.
-func authorizeLogs(ctx context.Context, authz auth.Authorizer, ns v1.NamespaceName) error {
+// stubEngineKinds backs RegisterStubEngineLogs: spec generation never resolves a plural.
+type stubEngineKinds struct{}
+
+func (stubEngineKinds) EngineKind(context.Context, string) (string, error) { return "", nil }
+
+// RegisterStubEngineLogs registers the engines' logs operations with inert deps, for spec generation (ADR-0342).
+func RegisterStubEngineLogs(api huma.API) {
+	RegisterEngineLogs(api, stubLogQuerier{}, stubLogAuthorizer{}, stubEngineKinds{})
+}
+
+// authorizeLogs runs the ADR-0018 PEP for a logs read: the caller must be allowed to get objects of kind in ns, the
+// Function or the object whose engine wrote the lines.
+func authorizeLogs(ctx context.Context, authz auth.Authorizer, kind v1.Kind, ns v1.NamespaceName) error {
 	id, ok := middleware.IdentityFrom(ctx)
 	if !ok {
 		return fault.Unauthorizedf("controlplane.logs", "no authenticated identity")
 	}
-	dec, err := authz.Authorize(ctx, auth.Request{Identity: id, Verb: auth.VerbGet, Kind: v1.KindFunction, Namespace: ns})
+	dec, err := authz.Authorize(ctx, auth.Request{Identity: id, Verb: auth.VerbGet, Kind: kind, Namespace: ns})
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, "controlplane.logs", "authorize logs read")
 	}

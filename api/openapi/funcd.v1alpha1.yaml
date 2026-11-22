@@ -4467,13 +4467,19 @@ components:
           description: The line's text.
           type: string
         function:
-          description: The Function whose worker wrote the line.
+          description: The Function whose worker wrote the line; empty for an engine's line.
           type: string
         inv:
           description: The ID of the call during which the worker wrote the line, when one is known.
           type: string
+        kind:
+          description: The kind of the object whose engine wrote the line, such as Lake; empty for a Function's line.
+          type: string
+        name:
+          description: The object whose engine wrote the line; empty for a Function's line.
+          type: string
         namespace:
-          description: The Function's namespace.
+          description: The namespace of the Function or of the object whose engine wrote the line.
           type: string
         replica:
           description: The replica of the worker that wrote the line.
@@ -15853,6 +15859,115 @@ paths:
       summary: Replace a Lake
       tags:
         - Lake
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes/{name}/logs:
+    get:
+      operationId: getLakeLogs
+      parameters:
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: "Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."
+          explode: false
+          in: query
+          name: since
+          schema:
+            description: "Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."
+            type: string
+        - description: "Only the lines at this level or above: trace, debug, info, warn, error or fatal."
+          explode: false
+          in: query
+          name: severity
+          schema:
+            description: "Only the lines at this level or above: trace, debug, info, warn, error or fatal."
+            type: string
+        - description: "The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: "The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogsOutputBody"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:invalid`: The since parameter is neither a duration, such as 15m, nor a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Send since in one of those two forms.
+            - `urn:funcd:problem:invalid`: The severity parameter is none of trace, debug, info, warn, error and fatal. Send one of those levels, or leave severity out.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The since parameter is neither a duration, such as 15m, nor a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z.
+              fix: Send since in one of those two forms.
+            - type: urn:funcd:problem:invalid
+              when: The severity parameter is none of trace, debug, info, warn, error and fatal.
+              fix: Send one of those levels, or leave severity out.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read Lakes in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read Lakes in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The limit parameter is not an integer. Send limit as a whole number.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The limit parameter is not an integer.
+              fix: Send limit as a whole number.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read the logs of a Lake's engine
+      tags:
+        - Lake
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/oidcproviders:
     get:
       operationId: listOIDCProviders
@@ -22165,6 +22280,115 @@ paths:
       summary: Replace a SQLDatabase
       tags:
         - SQLDatabase
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases/{name}/logs:
+    get:
+      operationId: getSQLDatabaseLogs
+      parameters:
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: "Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."
+          explode: false
+          in: query
+          name: since
+          schema:
+            description: "Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."
+            type: string
+        - description: "Only the lines at this level or above: trace, debug, info, warn, error or fatal."
+          explode: false
+          in: query
+          name: severity
+          schema:
+            description: "Only the lines at this level or above: trace, debug, info, warn, error or fatal."
+            type: string
+        - description: "The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: "The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogsOutputBody"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:invalid`: The since parameter is neither a duration, such as 15m, nor a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Send since in one of those two forms.
+            - `urn:funcd:problem:invalid`: The severity parameter is none of trace, debug, info, warn, error and fatal. Send one of those levels, or leave severity out.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The since parameter is neither a duration, such as 15m, nor a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z.
+              fix: Send since in one of those two forms.
+            - type: urn:funcd:problem:invalid
+              when: The severity parameter is none of trace, debug, info, warn, error and fatal.
+              fix: Send one of those levels, or leave severity out.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read SQLDatabases in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read SQLDatabases in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The limit parameter is not an integer. Send limit as a whole number.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The limit parameter is not an integer.
+              fix: Send limit as a whole number.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read the logs of a SQLDatabase's engine
+      tags:
+        - SQLDatabase
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/volumes/{function}/{name}:
     delete:
       operationId: deleteVolume
@@ -24105,6 +24329,132 @@ paths:
         - bearer: []
         - apiKey: []
       summary: Replace an object of an add-on's kind
+      tags:
+        - AddonObject
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/{plural}/{name}/logs:
+    get:
+      operationId: getAddonObjectLogs
+      parameters:
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: "The plural of the object's add-on kind: the kind in lower case with an s."
+          in: path
+          name: plural
+          required: true
+          schema:
+            description: "The plural of the object's add-on kind: the kind in lower case with an s."
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: "Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."
+          explode: false
+          in: query
+          name: since
+          schema:
+            description: "Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."
+            type: string
+        - description: "Only the lines at this level or above: trace, debug, info, warn, error or fatal."
+          explode: false
+          in: query
+          name: severity
+          schema:
+            description: "Only the lines at this level or above: trace, debug, info, warn, error or fatal."
+            type: string
+        - description: "The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: "The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogsOutputBody"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:invalid`: The since parameter is neither a duration, such as 15m, nor a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Send since in one of those two forms.
+            - `urn:funcd:problem:invalid`: The severity parameter is none of trace, debug, info, warn, error and fatal. Send one of those levels, or leave severity out.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The since parameter is neither a duration, such as 15m, nor a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z.
+              fix: Send since in one of those two forms.
+            - type: urn:funcd:problem:invalid
+              when: The severity parameter is none of trace, debug, info, warn, error and fatal.
+              fix: Send one of those levels, or leave severity out.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read add-on objects in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read add-on objects in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Addon registers a kind of the plural whose objects run an engine: none registers the plural, or it is one of an Addon's settings kinds, whose objects run none. Check the plural: the kind in lower case with an s."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: "No Addon registers a kind of the plural whose objects run an engine: none registers the plural, or it is one of an Addon's settings kinds, whose objects run none."
+              fix: "Check the plural: the kind in lower case with an s."
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The limit parameter is not an integer. Send limit as a whole number.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The limit parameter is not an integer.
+              fix: Send limit as a whole number.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read the logs of an add-on object's engine
       tags:
         - AddonObject
   /apis/funcd.io/v1alpha1/namespaces/{name}:

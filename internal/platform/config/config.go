@@ -316,7 +316,7 @@ type Config struct {
 	// default. A zero SegmentMaxBytes / empty SegmentMaxAge (a duration, "10s") keeps the sink default
 	// (8 MiB / 10s). The sink writes to the blob substrate, so funcd-system is the only Bucket accepted.
 	Funclog struct {
-		Enabled         bool   `json:"enabled,omitempty" env:"FUNCD_FUNCLOG_ENABLED" doc:"When false, funcd stores neither the logs nor the spans of the Functions' workers, so funcdctl logs has nothing new to show."`
+		Enabled         bool   `json:"enabled,omitempty" env:"FUNCD_FUNCLOG_ENABLED" doc:"When false, funcd stores neither the logs nor the spans of the Functions' workers, nor the lines of the engines of Lakes, SQLDatabases and add-on objects, so funcdctl logs has nothing new to show."`
 		SegmentMaxBytes int    `json:"segmentMaxBytes,omitempty" env:"FUNCD_FUNCLOG_SEGMENT_MAX_BYTES" validate:"min=0" doc:"The size, in bytes, at which funcd writes the log or span records that it holds for one worker to the funcd-system bucket as a segment, unless funclog.segmentMaxAge comes first. 0 means 8 MiB."`
 		SegmentMaxAge   string `json:"segmentMaxAge,omitempty" env:"FUNCD_FUNCLOG_SEGMENT_MAX_AGE" doc:"How long funcd holds a worker's log or span records before it writes them to the funcd-system bucket as a segment, unless funclog.segmentMaxBytes comes first. funcdctl logs shows a record only once its segment is written. Empty or 0s means 10s."`
 		Bucket          string `json:"bucket,omitempty" env:"FUNCD_FUNCLOG_BUCKET" validate:"omitempty,eq=funcd-system" doc:"The bucket of the Functions' logs and spans. funcd does not read it: they always go to the funcd-system bucket."`

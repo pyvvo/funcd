@@ -80,6 +80,21 @@ testcases:
           - result.bodyjson.count ShouldEqual 2
           - result.body ShouldContainSubstring '"titles":["milk","eggs"]'
 
+  - name: SL the database's engine lines are read with funcdctl logs sqldatabase/notes-db (ADR-0342)
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl logs sqldatabase/notes-db -n default -o json | head -1'
+        retry: 15
+        delay: 2
+        info: "funcdctl logs sqldatabase/notes-db → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring '"kind":"SQLDatabase"'
+          - result.systemout ShouldContainSubstring '"name":"notes-db"'
+
   - name: S2 the reader binds the database but its write is refused
     steps:
       - type: http

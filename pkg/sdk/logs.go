@@ -32,31 +32,21 @@ func (c *Client) Logs(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName
 	if err != nil {
 		return nil, err
 	}
-	u += "/logs"
-	q := url.Values{}
-	if o.Since != "" {
-		q.Set("since", o.Since)
+	return c.readLines(ctx, op, u+"/logs", o, "")
+}
+
+// EngineLogs reads the logs of the engine of a Lake, a SQLDatabase or an object of an add-on's kind (ADR-0342
+// Decision 3), scoped as Logs is, by the right to get the object's kind in the namespace.
+func (c *Client) EngineLogs(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName, o LogsOptions) ([]logread.Line, error) {
+	const op = "sdk.EngineLogs"
+	if ns == "" || kind == "" || name == "" {
+		return nil, fault.Invalidf(op, "namespace, kind and name are required")
 	}
-	if o.Severity != "" {
-		q.Set("severity", o.Severity)
-	}
-	if o.Limit > 0 {
-		q.Set("limit", strconv.Itoa(o.Limit))
-	}
-	if len(q) > 0 {
-		u += "?" + q.Encode()
-	}
-	body, err := c.do(ctx, http.MethodGet, u, nil)
+	u, err := c.itemURL(kind, ns, name)
 	if err != nil {
 		return nil, err
 	}
-	var out struct {
-		Items []logread.Line `json:"items"`
-	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, fault.Internalf(op, "decode logs response: %v", err)
-	}
-	return out.Items, nil
+	return c.readLines(ctx, op, u+"/logs", o, "")
 }
 
 // RunLogs reads a whole workflow run's logs from the run-scoped control-plane route (ADR-0106): the server
@@ -72,7 +62,11 @@ func (c *Client) RunLogs(ctx context.Context, ns v1.NamespaceName, run v1.Object
 	if err != nil {
 		return nil, err
 	}
-	u += "/logs"
+	return c.readLines(ctx, op, u+"/logs", o, o.Step)
+}
+
+// readLines reads the lines that the logs route u answers, filtered as o asks; step goes to a run's route only.
+func (c *Client) readLines(ctx context.Context, op, u string, o LogsOptions, step string) ([]logread.Line, error) {
 	q := url.Values{}
 	if o.Since != "" {
 		q.Set("since", o.Since)
@@ -83,8 +77,8 @@ func (c *Client) RunLogs(ctx context.Context, ns v1.NamespaceName, run v1.Object
 	if o.Limit > 0 {
 		q.Set("limit", strconv.Itoa(o.Limit))
 	}
-	if o.Step != "" {
-		q.Set("step", o.Step)
+	if step != "" {
+		q.Set("step", step)
 	}
 	if len(q) > 0 {
 		u += "?" + q.Encode()
@@ -97,7 +91,7 @@ func (c *Client) RunLogs(ctx context.Context, ns v1.NamespaceName, run v1.Object
 		Items []logread.Line `json:"items"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, fault.Internalf(op, "decode run logs response: %v", err)
+		return nil, fault.Internalf(op, "decode logs response: %v", err)
 	}
 	return out.Items, nil
 }

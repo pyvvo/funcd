@@ -1070,7 +1070,7 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		return nil, fault.Wrapf(rerr, fault.KindOf(rerr), op, "open the process runtime in %s", stateDir)
 	}
 	inst.cleanup = append(inst.cleanup, func() { _ = rt.Close() })
-	addonOpts, aerr := devAddonOptions(ctx, stateDir, cfg, inst)
+	addonOpts, aerr := devAddonOptions(ctx, stateDir, cfg, inst, a.writef)
 	if aerr != nil {
 		return nil, aerr
 	}

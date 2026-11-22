@@ -579,9 +579,9 @@ Remove stored credentials for a registry
 ## `funcdctl logs`
 
 ```text
-funcdctl logs <function> [flags]
+funcdctl logs <function> | <kind>/<name> [flags]
 
-Print a function's logs (tenant-scoped to your identity)
+Print the logs of a Function or of an object's engine (tenant-scoped to your identity)
 ```
 
 | Flag | Type | Default | Description |

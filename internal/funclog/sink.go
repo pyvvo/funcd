@@ -17,6 +17,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/funclog/compact"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
@@ -295,9 +296,16 @@ func marshalOTLP(res Resource, entries []Entry, now time.Time) ([]byte, error) {
 	logs := plog.NewLogs()
 	rl := logs.ResourceLogs().AppendEmpty()
 	ra := rl.Resource().Attributes()
-	ra.PutStr("source", "function") // the tenant/function lane label, distinct from ADR-0010's source=platform
-	ra.PutStr("namespace", res.Namespace)
-	ra.PutStr("function", res.Function)
+	if res.Kind != "" { // an engine's records (ADR-0342 Decision 2)
+		ra.PutStr("source", "engine")
+		ra.PutStr("namespace", res.Namespace)
+		ra.PutStr("kind", res.Kind)
+		ra.PutStr("name", res.Name)
+	} else {
+		ra.PutStr("source", "function") // the tenant/function lane label, distinct from ADR-0010's source=platform
+		ra.PutStr("namespace", res.Namespace)
+		ra.PutStr("function", res.Function)
+	}
 	if res.Replica != "" {
 		ra.PutStr("replica", res.Replica)
 	}
@@ -349,10 +357,15 @@ func tenantOf(r Resource) string {
 	return r.Namespace
 }
 
-// segmentKey partitions objects as logs/<ns>/<fn>/<date>/<unixnano>-<replica>.otlp.jsonl.
+// segmentKey partitions objects as logs/<ns>/<fn>/<date>/<unixnano>-<replica>.otlp.jsonl, <fn> an engine's
+// <plural>.<name> (ADR-0342 Decision 2).
 func segmentKey(res Resource, now time.Time) string {
+	owner := res.Function
+	if res.Kind != "" {
+		owner = compact.EngineSegment(res.Kind, res.Name)
+	}
 	return fmt.Sprintf("logs/%s/%s/%s/%d-%s.otlp.jsonl",
-		res.Namespace, res.Function, now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), keyReplica(res.Replica))
+		res.Namespace, owner, now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), keyReplica(res.Replica))
 }
 
 // maxKeyReplica bounds the replica part of a segment key. A run-root span's replica is its run record name,

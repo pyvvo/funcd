@@ -18,7 +18,9 @@ as OpenTelemetry records in the `funcd-system` bucket, under `logs/<namespace>/<
 output, it drops the lines that do not fit and logs `worker output dropped`.
 
 `funcdctl logs <function>` prints a Function's logs, filtered with `--since`, `--severity` and `--limit`, which is 1000
-by default. `funcdctl workflow logs <run>` prints the logs of every step of a WorkflowRun.
+by default. `funcdctl workflow logs <run>` prints the logs of every step of a WorkflowRun. `funcdctl logs <kind>/<name>`
+prints what the engine of a Lake, a SQLDatabase or an add-on object wrote, such as `funcdctl logs lake/sales`: funcd
+keeps an engine's lines as a Function's, both streams at INFO, and writes them to its own log too.
 
 Each call to a Function also records a span in the same bucket. The edge starts a trace for each call, or adopts the
 caller's `traceparent` header, and a Function that calls another Function over a link passes the trace on. One trace

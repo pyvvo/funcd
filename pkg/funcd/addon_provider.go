@@ -75,6 +75,8 @@ type addonDeps struct {
 	indexEngines func(ctx context.Context) error
 	authz        auth.Authorizer // asks addon::call (ADR-0338 Decision 5)
 	master       []byte          // the add-on proxy's tokens come from it, with a key of their own
+	// engineLine keeps a line that a runtime reading its engines' output itself hands over (ADR-0342 Decision 5).
+	engineLine func(spec provider.ProviderSpec, stream, line string)
 }
 
 func (s *addonProvider) Name() string { return "addon" }
@@ -232,6 +234,9 @@ func (s *addonProvider) build(d addonDeps) error {
 		serverMode = v1.AddonRuntimeContainerd
 	}
 	s.engines = engineRuntime
+	if lf, ok := engineRuntime.(provider.LineFollower); ok && d.engineLine != nil {
+		lf.FollowLines(d.engineLine)
+	}
 	s.files, _ = engineRuntime.(workload.AddonFiles)
 	volumes, _ := engineRuntime.(provider.Volumes)
 	rec, err := addonsvc.NewReconciler(addonsvc.Deps{

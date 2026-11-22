@@ -91,15 +91,17 @@ type Mount struct {
 type WorkerSpec struct {
 	Namespace v1alpha1.NamespaceName
 	Name      v1alpha1.ObjectName
-	OwnerKind v1alpha1.Kind       // the kind whose reconciler created the worker; required (ADR-0152)
-	Revision  v1alpha1.ObjectName // the Revision this worker runs (ADR-0143); "" outside the Function lifecycle
-	Replica   int
-	Members   int               // the members a pool worker hosts (ADR-0046); 0 for a solo worker
-	Image     string            // runtime image (containerd driver)
-	Command   []string          // launch command / container args
-	Env       map[string]string // typed-flat; no any
-	Mounts    []Mount           // host→container bind mounts (container drivers; ADR-0032)
-	Limits    Limits
+	OwnerKind v1alpha1.Kind // the kind whose reconciler created the worker; required (ADR-0152)
+	// ServedKind is the kind its object is served as when OwnerKind is not it: an add-on object's kind (ADR-0342).
+	ServedKind v1alpha1.Kind
+	Revision   v1alpha1.ObjectName // the Revision this worker runs (ADR-0143); "" outside the Function lifecycle
+	Replica    int
+	Members    int               // the members a pool worker hosts (ADR-0046); 0 for a solo worker
+	Image      string            // runtime image (containerd driver)
+	Command    []string          // launch command / container args
+	Env        map[string]string // typed-flat; no any
+	Mounts     []Mount           // host→container bind mounts (container drivers; ADR-0032)
+	Limits     Limits
 	// EgressOnly, when non-nil (empty included), limits the worker's new outbound connections to TCP to these
 	// endpoints (containerd; ADR-0269). nil means no fence.
 	EgressOnly []netip.AddrPort

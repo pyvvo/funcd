@@ -173,3 +173,4 @@ The table lists each described operation of these kinds, with its method and pat
 | `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes/{name}` | [Read a Lake](../../../api/services/lake/get.md) |
 | `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes/{name}` | [Replace a Lake](../../../api/services/lake/replace.md) |
 | `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes/{name}` | [Delete a Lake](../../../api/services/lake/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/lakes/{name}/logs` | [Read the logs of a Lake's engine](../../../api/services/lake/get-logs.md) |
