@@ -94,3 +94,7 @@ To record: claude-opus-5-5 on ADR-0339 (implementation) → pass, 0 blockers, 0 
 
 Nothing goes back to the builder. The lane run before the PR stamps ADR-0337 and ADR-0339 `Implemented`. The decider
 rules on the backup question and the two choices. The PR that ships the batch names issue #1514.
+
+### Lane case (added at the Implemented stamp, 2026-11-22)
+
+`addon-rauthy` passed on containerd at d46b7c03, 99 s: an admin's change of rauthy's Addon stamped `rauthy-2` while `login` kept its engine (the same task) and its pin `rauthy-1`; the App's second revision moved `web-auth-login` to `rauthy-2`, and `funcdctl app rollback web-auth 1` took it back to `rauthy-1`. The stamp is now set.

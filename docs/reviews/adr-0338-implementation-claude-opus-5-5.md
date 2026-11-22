@@ -95,3 +95,7 @@ To record: claude-opus-5-5 on ADR-0338 (implementation) → pass, 0 blockers, 0 
 
 Nothing goes back to the builder. The lane run before the PR, with the guide's section, stamps ADR-0338
 `Implemented`. The decider confirms the three choices. The PR that ships the batch names issue #1505.
+
+### Lane case (added at the Implemented stamp, 2026-11-22)
+
+`addon-rauthy-signin` passed on containerd at e0638104, 69 s: the Function `addon-caller` of pyvvo/funcd-functions v0.26.0 reached the whoami object `echo` through `ctx.addon.fetch` and through the add-on proxy, each with its `X-Lane` header and without the token, got 404 for the Addon's private path `/private`, and its own dial of the engine's address was refused. The guide's Add-ons page gained "Call its engine from a Function" and the Spec page lists `ctx.addon` in both languages. The stamp is now set.

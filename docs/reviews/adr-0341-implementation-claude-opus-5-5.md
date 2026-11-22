@@ -92,3 +92,7 @@ To record: claude-opus-5-5 on ADR-0341 (implementation) → pass, 0 blockers, 0 
 
 Nothing goes back to the builder. The lane run before the PR, with the docs section, stamps ADR-0341 `Implemented`,
 and F266 then turns `implemented`. The decider confirms the choices. The PR that ships the batch names issue #1515.
+
+### Lane case (added at the Implemented stamp, 2026-11-22)
+
+`addon-rauthy` passed on containerd at d46b7c03, 99 s: rauthy's settings Function of pyvvo/funcd-addons v0.2.0 put login's policy into rauthy, which then refused a password under 16 characters; a looser policy put at rauthy's own API was put back at the next resync; a second policy was refused; after funcd's restart, login's first pass sent its list with the cause `start`; and the delete set rauthy's default of 14 back. The guide's Add-ons page gained "Apply its settings". The stamp is now set.

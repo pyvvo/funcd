@@ -79,3 +79,7 @@ To record: claude-opus-5-5 on ADR-0337 (implementation) → pass, 0 blockers, 0 
 
 Nothing goes back to the builder. ADR-0339's commit adds the deploy's wait and the record clause and stamps ADR-0337
 `Implemented`; the lane case runs before the PR. The PR that ships the batch names issue #1504.
+
+### Lane case (added at the Implemented stamp, 2026-11-22)
+
+`addon-rauthy` passed on containerd at d46b7c03, 99 s: rauthy's template, pushed as one artifact, deployed by an admin's `funcdctl app deploy` as `web-auth`, whose IdentityProvider `web-auth-login` turned Ready with its own settings Function `web-auth-settings`, which got the calls for its policy. The stamp is now set.

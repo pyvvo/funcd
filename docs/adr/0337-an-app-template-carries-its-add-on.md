@@ -1,6 +1,7 @@
 # ADR-0337: An App template carries its add-on, and an App holds the add-on's objects
 
-- **Status**: Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider ("I accept all ADR"), after four rounds of an independent judge, every Blocker and Major
+- **Status**: Implemented (2026-11-22), review passed and its lane case passed on containerd (`addon-rauthy` at d46b7c03, 99 s;
+  [report](../reviews/adr-0337-implementation-claude-opus-5-5.md)); Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider ("I accept all ADR"), after four rounds of an independent judge, every Blocker and Major
   folded
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
