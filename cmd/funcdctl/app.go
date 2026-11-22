@@ -525,6 +525,11 @@ func (a *cli) appDeployCmd() *cobra.Command {
 // its revision (ADR-0217 Decision 8). A dry run applies it with sdk.DryRun even when the spec is equal, prints the
 // answer and waits for nothing (ADR-0220 Decision 7).
 func (a *cli) deploy(ctx context.Context, c *sdk.Client, t *template.Template, in template.RenderInput, noWait, dryRun bool) error {
+	if t.Addon != nil {
+		if ok, err := a.deployAddon(ctx, c, t.Addon, in.Namespace, dryRun); err != nil || !ok {
+			return err
+		}
+	}
 	var (
 		s      *deployStart
 		answer v1.Object
@@ -557,6 +562,71 @@ func (a *cli) deploy(ctx context.Context, c *sdk.Client, t *template.Template, i
 		return nil
 	}
 	return a.waitDeploy(ctx, c, s.applied, s.n0, s.ready)
+}
+
+// deployAddon readies the template's Addon before the App (ADR-0337 Decision 2) and reports whether the App goes on.
+// An admin's deploy lists the Addons and takes the one of the template's kind, under any name: with none it creates
+// the template's, with one whose spec differs it updates that one under its own name, and with one that agrees it
+// writes nothing; a refused write applies no App. A developer, whom the list forbids, only checks that the kind is
+// served in the namespace. A dry run sends the Addon's write with sdk.DryRun, and the App's dry run only when the kind
+// is served.
+func (a *cli) deployAddon(ctx context.Context, c *sdk.Client, want *v1.Addon, ns v1.NamespaceName, dryRun bool) (bool, error) {
+	const op = "funcdctl app deploy"
+	objs, err := c.List(ctx, v1.KindAddon, "")
+	if fault.KindOf(err) == fault.Forbidden {
+		_, err = c.List(ctx, v1.Kind(want.Spec.Kind), ns)
+		if fault.KindOf(err) == fault.NotFound {
+			return false, fault.Invalidf(op, "Addon %s is not registered: an admin deploys this template first", want.Name)
+		}
+		return err == nil, err
+	}
+	if err != nil {
+		return false, err
+	}
+	var cur *v1.Addon
+	for _, o := range objs {
+		if x, ok := o.(*v1.Addon); ok && v1.SameAddonKind(x.Spec.Kind, want.Spec.Kind) {
+			cur = x
+		}
+	}
+	w, verb := *want, "created"
+	if cur != nil {
+		same, err := sameAddonSpec(cur.Spec, want.Spec)
+		if err != nil {
+			return false, err
+		}
+		if same {
+			return true, a.writef("unchanged Addon/%s\n", cur.Name)
+		}
+		w.Name, w.ResourceVersion, verb = cur.Name, cur.ResourceVersion, "updated"
+	}
+	answer, err := c.Apply(ctx, &w, applyOptions(dryRun)...)
+	switch {
+	case err != nil:
+		return false, err
+	case !dryRun:
+		return true, a.writef("%s Addon/%s\n", verb, w.Name)
+	}
+	if err := a.printDryRun(answer); err != nil {
+		return false, err
+	}
+	if cur == nil {
+		return false, a.writef("the App's dry run needs Addon/%s registered\n", w.Name)
+	}
+	return true, nil
+}
+
+// sameAddonSpec compares two Addon specs as sameAppSpec compares App specs: by the JSON of each typed spec.
+func sameAddonSpec(x, y v1.AddonSpec) (bool, error) {
+	bx, err := json.Marshal(x)
+	if err != nil {
+		return false, fault.Internalf("funcdctl app deploy", "marshal the stored Addon spec: %v", err)
+	}
+	by, err := json.Marshal(y)
+	if err != nil {
+		return false, fault.Internalf("funcdctl app deploy", "marshal the template's Addon spec: %v", err)
+	}
+	return bytes.Equal(bx, by), nil
 }
 
 // deployStart is what a deploy read and did before it waits: the App it rendered, the number n0 of the stored App's
@@ -895,12 +965,13 @@ func (a *cli) waitTreeGone(ctx context.Context, c *sdk.Client, ns v1.NamespaceNa
 }
 
 // treeKinds are the child kinds gc.Pairs reaches from App, Secret excluded, in the order the pairs list them.
+// AddonObject is left out too: the SDK reaches an add-on object only at its kind's plural (addonKinds).
 func treeKinds() []v1.Kind {
 	var kinds []v1.Kind
 	seen := map[v1.Kind]bool{v1.KindApp: true}
 	for frontier := []v1.Kind{v1.KindApp}; len(frontier) > 0; frontier = frontier[1:] {
 		for _, p := range gc.Pairs() {
-			if p.Owner == frontier[0] && !seen[p.Child] && p.Child != v1.KindSecret {
+			if p.Owner == frontier[0] && !seen[p.Child] && p.Child != v1.KindSecret && p.Child != v1.KindAddonObject {
 				seen[p.Child] = true
 				kinds = append(kinds, p.Child)
 				frontier = append(frontier, p.Child)
@@ -922,21 +993,45 @@ func (k treeKey) ref() v1.ObjectRef { return v1.ObjectRef{Kind: k.kind, Name: k.
 // appTree is an App's tree: every object controlled by the App or, transitively, by an object of the tree.
 type appTree struct {
 	kinds  []v1.Kind
+	addons []v1.Kind
 	owners map[v1.UID]v1.Kind
 	noted  []treeKey
 }
 
 func newAppTree(app *v1.App) *appTree {
-	return &appTree{kinds: treeKinds(), owners: map[v1.UID]v1.Kind{app.UID: v1.KindApp}}
+	return &appTree{kinds: treeKinds(), addons: addonKinds(app), owners: map[v1.UID]v1.Kind{app.UID: v1.KindApp}}
 }
 
-// walk lists each kind of the tree in the namespace, notes every object a noted owner controls until no new owner
-// appears, and returns the UID of each object present.
+// addonKinds are the add-on kinds of an App's parts: those its addons entries name and those its status.children
+// lines name, a kind that is not funcd's, so a dropped entry still pruning is waited for (ADR-0337 Decision 6).
+func addonKinds(app *v1.App) []v1.Kind {
+	var out []v1.Kind
+	add := func(k string) {
+		if k != "" && !slices.ContainsFunc(out, func(x v1.Kind) bool { return v1.SameAddonKind(string(x), k) }) {
+			out = append(out, v1.Kind(k))
+		}
+	}
+	for _, e := range app.Spec.Addons {
+		add(e.Kind)
+	}
+	for _, c := range app.Status.Children {
+		if c.Kind.Validate() != nil {
+			add(string(c.Kind))
+		}
+	}
+	return out
+}
+
+// walk lists each kind of the tree in the namespace, each add-on kind at its plural, notes every object a noted owner
+// controls until no new owner appears, and returns the UID of each object present.
 func (t *appTree) walk(ctx context.Context, c *sdk.Client, ns v1.NamespaceName) (map[v1.ObjectRef]v1.UID, error) {
 	var objs []v1.Object
 	present := map[v1.ObjectRef]v1.UID{}
-	for _, k := range t.kinds {
+	for _, k := range slices.Concat(t.kinds, t.addons) {
 		list, err := c.List(ctx, k, ns)
+		if fault.KindOf(err) == fault.NotFound && slices.Contains(t.addons, k) {
+			continue // no Addon registers the kind any longer, and no object of it is left
+		}
 		if err != nil {
 			return nil, err
 		}

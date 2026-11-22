@@ -745,6 +745,47 @@ components:
     AppSpec:
       additionalProperties: false
       properties:
+        addons:
+          description: "The objects of add-ons' kinds that the App declares or refers to; no two entries name the same one, whatever their kinds, since one name is one add-on object per namespace. An entry's kind is an Addon's, its config fits that Addon's schema, and each Secret it binds is one that the App's secrets declare. Its deletion is the object's own: what becomes of its engine's storage once it is deleted."
+          items:
+            additionalProperties: false
+            properties:
+              bindings:
+                $ref: "#/components/schemas/AddonObjectBindings"
+                description: What the object's engine uses.
+              config:
+                description: The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object.
+              deletion:
+                description: "What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way."
+                enum:
+                  - retain
+                  - delete
+                type: string
+              ingress:
+                $ref: "#/components/schemas/Ingress"
+                description: Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused.
+              kind:
+                description: "The add-on's kind: one that an Addon registers, as the Addon writes it. A ref entry leaves it unset."
+                type: string
+              name:
+                description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              ref:
+                description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              resources:
+                $ref: "#/components/schemas/ResourceSpec"
+                description: The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine.
+            type: object
+          type:
+            - array
+            - "null"
         backupSchedules:
           description: "The BackupSchedules that the App declares or refers to; no two entries name the same one. An entry with an empty scope backs up this App: each object that its kv, buckets, sql and lakes entries name, and its Functions' local volumes."
           items:
@@ -1984,7 +2025,7 @@ components:
       additionalProperties: false
       properties:
         children:
-          description: One line per entry of configMaps, kv, buckets, sql, functions, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them. Then one Pruning line per dropped object not deleted yet.
+          description: One line per entry of configMaps, kv, buckets, sql, addons, functions, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them; an addons line names the add-on's kind. Then one Pruning line per dropped object not deleted yet.
           items:
             $ref: "#/components/schemas/AppChild"
           type:

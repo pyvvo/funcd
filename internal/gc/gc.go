@@ -28,7 +28,8 @@ const rewatchBackoff = time.Second
 type Pair struct{ Owner, Child v1.Kind }
 
 // Pairs is every pair a reconciler stamps. Revision is last: one sweep collects a Function, then its Revisions.
-// The App pairs are one per App section kind (ADR-0199 Decision 7, ADR-0222 Decision 2), users before stores, with (App, ConfigMap) after
+// The App pairs are one per App section kind (ADR-0199 Decision 7, ADR-0222 Decision 2), users before stores, with the
+// add-on objects among the stores (ADR-0337 Decision 5), (App, ConfigMap) after
 // (App, Bucket) (ADR-0213 Decision 5), then (App, AppRevision) (ADR-0200 Decision 8) and the hook calls of an
 // AppRevision (ADR-0214). The Function's, Site's and Workflow's root entries follow, lakes before stores (ADR-0248
 // Decision 8), then a standalone Lake's (ADR-0251 Decision 6) and the rest of a Workflow's (ADR-0250 Decision 6). An
@@ -43,6 +44,7 @@ func Pairs() []Pair {
 		{Owner: v1.KindApp, Child: v1.KindRoute}, {Owner: v1.KindApp, Child: v1.KindSite},
 		{Owner: v1.KindApp, Child: v1.KindLake}, {Owner: v1.KindApp, Child: v1.KindBackupSchedule},
 		{Owner: v1.KindApp, Child: v1.KindKVStore}, {Owner: v1.KindApp, Child: v1.KindSQLDatabase},
+		{Owner: v1.KindApp, Child: v1.KindAddonObject},
 		{Owner: v1.KindApp, Child: v1.KindBucket}, {Owner: v1.KindApp, Child: v1.KindConfigMap},
 		{Owner: v1.KindApp, Child: v1.KindAppRevision}, {Owner: v1.KindAppRevision, Child: v1.KindInvocation},
 		{Owner: v1.KindFunction, Child: v1.KindLake}, {Owner: v1.KindFunction, Child: v1.KindKVStore},

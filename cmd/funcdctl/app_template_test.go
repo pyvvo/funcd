@@ -580,7 +580,8 @@ func TestCLIAppDeleteNoWait(t *testing.T) {
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 }
 
-// ADR-0217 Decision 9: the tree's kinds are those gc.Pairs reaches from App, Secret excluded.
+// ADR-0217 Decision 9: the tree's kinds are those gc.Pairs reaches from App, Secret excluded, and AddonObject, which
+// the walk reaches at each add-on kind's plural (ADR-0337 Decision 6).
 func TestAppTreeKinds(t *testing.T) {
 	t.Parallel()
 	reach := map[v1.Kind]bool{v1.KindApp: true}
@@ -594,7 +595,9 @@ func TestAppTreeKinds(t *testing.T) {
 	}
 	delete(reach, v1.KindApp)
 	delete(reach, v1.KindSecret)
+	delete(reach, v1.KindAddonObject)
 	require.ElementsMatch(t, slices.Collect(maps.Keys(reach)), treeKinds())
+	require.NotContains(t, treeKinds(), v1.KindAddonObject, "the SDK serves no AddonObject route")
 	require.Contains(t, treeKinds(), v1.KindRevision, "a Function's Revisions are the App's grandchildren")
 	require.NotContains(t, treeKinds(), v1.KindSecret)
 }

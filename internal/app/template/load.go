@@ -18,6 +18,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/expr"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 const loadOp = "app.load"
@@ -33,6 +34,9 @@ type Template struct {
 	ValuesSchema json.RawMessage        // empty ⇒ {"type":"object"}
 	When         map[string]string      // "resources/<file>.yaml" → ${{ }} condition
 	Files        map[string][]byte      // "resources/<file>.yaml" → fragment
+	// Addon is addon.yaml's Addon, which deploy and dev apply before the App and render never evaluates (ADR-0337
+	// Decision 1); nil when the template has none.
+	Addon *v1.Addon
 }
 
 // appFile is app.yaml: a plain client file, decoded strictly (an unknown key is refused) as YAML 1.2.
@@ -47,10 +51,16 @@ type appFile struct {
 
 const resourcesDir = "resources"
 
+// AddonFile is the template's Addon (ADR-0337 Decision 1).
+const AddonFile = "addon.yaml"
+
+// layoutRule is the refusal of an entry that is no file of a template.
+const layoutRule = "a template holds only app.yaml, app.lock, addon.yaml and resources/*.yaml"
+
 var imageName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Load reads a template directory: app.yaml, app.lock and resources/*.yaml, nothing else (ADR-0217 Decisions 1 and
-// 2, ADR-0218 Decision 3).
+// Load reads a template directory: app.yaml, app.lock, addon.yaml and resources/*.yaml, nothing else (ADR-0217
+// Decisions 1 and 2, ADR-0218 Decision 3, ADR-0337 Decision 1).
 func Load(dir string) (*Template, error) {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return nil, fault.Invalidf(loadOp, "%s is not a template directory", dir)
@@ -60,11 +70,13 @@ func Load(dir string) (*Template, error) {
 		return nil, fault.Invalidf(loadOp, "read %s: %v", dir, err)
 	}
 	t := &Template{Files: map[string][]byte{}}
-	var sawApp, sawLock bool
+	var sawApp, sawLock, sawAddon bool
 	for _, e := range entries {
 		switch {
 		case e.Name() == "app.yaml" && e.Type().IsRegular():
 			sawApp = true
+		case e.Name() == AddonFile && e.Type().IsRegular():
+			sawAddon = true
 		case e.Name() == resourcesDir && e.IsDir():
 			if err := t.loadResources(filepath.Join(dir, resourcesDir)); err != nil {
 				return nil, err
@@ -72,7 +84,7 @@ func Load(dir string) (*Template, error) {
 		case e.Name() == lockFile && e.Type().IsRegular():
 			sawLock = true
 		default:
-			return nil, fault.Invalidf(loadOp, "%s: a template holds only app.yaml, app.lock and resources/*.yaml", e.Name())
+			return nil, fault.Invalidf(loadOp, "%s: %s", e.Name(), layoutRule)
 		}
 	}
 	if !sawApp {
@@ -90,7 +102,36 @@ func Load(dir string) (*Template, error) {
 			return nil, err
 		}
 	}
+	if sawAddon {
+		if t.Addon, err = readAddon(filepath.Join(dir, AddonFile)); err != nil {
+			return nil, err
+		}
+	}
 	return t, nil
+}
+
+// readAddon reads addon.yaml: exactly one document, an Addon that names no namespace. Its ${{ }} are the Addon's own,
+// left as written: the Addon's admission checks them (ADR-0332 Decision 4).
+func readAddon(path string) (*v1.Addon, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // a file of the template directory
+	if err != nil {
+		return nil, fault.Invalidf(loadOp, "read %s: %v", AddonFile, err)
+	}
+	objs, err := sdk.DecodeManifests(data)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, loadOp, "%s", AddonFile)
+	}
+	if len(objs) != 1 {
+		return nil, fault.Invalidf(loadOp, "%s holds %d documents: it holds one Addon", AddonFile, len(objs))
+	}
+	a, ok := objs[0].(*v1.Addon)
+	if !ok {
+		return nil, fault.Invalidf(loadOp, "%s holds a %s: it holds one Addon", AddonFile, objs[0].GroupVersionKind().Kind)
+	}
+	if a.Namespace != "" {
+		return nil, fault.Invalidf(loadOp, "%s: an Addon is cluster-scoped, so it names no namespace", AddonFile)
+	}
+	return a, nil
 }
 
 func (t *Template) loadResources(dir string) error {

@@ -68,7 +68,8 @@ func RootDeclared(kv []v1.KVStoreEntry, buckets []v1.BucketEntry, sql []v1.SQLDa
 	return d
 }
 
-// --- binding-declared (ADR-0248 Decision 2, ADR-0251 Decision 2): Create/Update on Function, Workflow, Lake
+// --- binding-declared (ADR-0248 Decision 2, ADR-0251 Decision 2, ADR-0337 Decision 3): Create/Update on Function,
+// Workflow, Lake and an App's add-on object
 
 type bindingDeclared struct{ r StoreReader }
 
@@ -89,8 +90,8 @@ func (bindingDeclared) Phase() Phase { return Validating }
 func (bindingDeclared) ReadsNamespace() bool { return true }
 
 func (bindingDeclared) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return (gvk == v1.KindFunction.GVK() || gvk == v1.KindWorkflow.GVK() || gvk == v1.KindLake.GVK()) &&
-		(op == Create || op == Update)
+	return (gvk == v1.KindFunction.GVK() || gvk == v1.KindWorkflow.GVK() || gvk == v1.KindLake.GVK() ||
+		gvk == v1.KindAddonObject.GVK()) && (op == Create || op == Update)
 }
 
 func (a bindingDeclared) Admit(ctx context.Context, req Request) (v1.Object, error) {
@@ -113,6 +114,10 @@ func (a bindingDeclared) Admit(ctx context.Context, req Request) (v1.Object, err
 		err = workflowUndeclared(&o.Spec, app)
 	case *v1.Lake:
 		err = lakeUndeclared(&o.Spec, app)
+	case *v1.AddonObject:
+		if app != nil {
+			err = addonUndeclared(&o.Spec, app)
+		}
 	}
 	if err != nil {
 		return nil, fault.Invalidf(op, "%s", err.Error())
@@ -241,6 +246,18 @@ func names(u undeclared, path string, config, secret []v1.ObjectName) error {
 	}
 	for i, n := range secret {
 		if err := u.check(fmt.Sprintf("%s.secret[%d]", path, i), v1.KindSecret, n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addonUndeclared checks an App's add-on part: each Secret it binds is one the App declares. A standalone add-on object
+// binds any Secret of its namespace (ADR-0332 Decision 4), so only an App's part is checked (ADR-0337 Decision 3).
+func addonUndeclared(s *v1.AddonObjectSpec, app *Declared) error {
+	u := undeclared{app: app, keys: map[v1.Kind]string{v1.KindSecret: "the App's spec.secrets"}}
+	for i, n := range s.Bindings.Secret {
+		if err := u.check(fmt.Sprintf("spec.bindings.secret[%d]", i), v1.KindSecret, n); err != nil {
 			return err
 		}
 	}

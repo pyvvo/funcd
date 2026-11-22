@@ -14,7 +14,8 @@ stateDiagram-v2
 ```
 
 funcdctl runs an App's own CLI as a plugin, kubectl-style: an executable on PATH, not an invoke plugin of the call
-chain (ADR-0319). funcdctl's own commands are in the funcdctl dev chapter and in the ADRs they cite.
+chain (ADR-0319). funcdctl's own commands are in the funcdctl dev chapter and in the ADRs they cite, but for an App
+template that carries an Addon, the last rows (ADR-0337).
 New words: Parsing, Command, Plugin.
 
 | Where | What happens | Time | You see | Status | Source |
@@ -26,6 +27,10 @@ New words: Parsing, Command, Plugin.
 | What a plugin is handed | funcdctl's environment with `FUNCDCTL`, the calling binary, `FUNCDCTL_VERSION`, and `FUNCD_SERVER` and `FUNCD_TOKEN` as funcdctl resolved them. An empty token is not handed on | none | `FUNCD_TOKEN` | decided | ADR-0319 Decision 4, `TestPlugin_EnvNamesTheCallingFuncdctlAndWhatItResolved`, `TestPlugin_CallsBackThroughFuncdctlWithTheResolvedToken` |
 | A plugin's process | It replaces funcdctl's and keeps the PID, so the exit code, the stdio and the signals are its own. A failed exec is funcdctl's own error, exit 1 | none | `exec format error` | decided | ADR-0319 Decision 5, `TestPlugin_ReplacesTheFuncdctlProcess` |
 | `funcdctl plugin list` | A NAME and PATH table of the plain-word plugins of the absolute PATH entries, in PATH order, and a warning on stderr for each one that never runs. It exits 0 | none | `no plugins on PATH` | decided | ADR-0319 Decision 7, `TestPluginList_NamesEachPluginAndWarnsAboutTheOnesThatNeverRun` |
+| An admin's `app deploy` of a template with an Addon | Takes the Addon of the template's kind under any name: creates it, updates a differing one under its own name, or leaves one that agrees; a refused write applies no App | none | `created Addon/<name>`, `updated`, `unchanged` | decided | ADR-0337 Decision 2, `TestScenarioAddonTemplateAdminUpdate` |
+| A developer's `app deploy` of a template with an Addon | Only checks that the kind is served in the namespace, and applies nothing when it is not | none | exit 1 `Addon <name> is not registered` | decided | ADR-0337 Decision 2, `TestScenarioAddonTemplateDeveloperUnregistered` |
+| `app deploy --dry-run` of a template with an Addon | Sends the Addon's write as a dry run, and the App's only once the kind is served | none | `the App's dry run needs Addon/<name> registered`, exit 0 | decided | ADR-0337 Decision 2, `TestScenarioAddonTemplateDryRun` |
+| `app render` of a template with an Addon | Prints the App alone: `addon.yaml` is never evaluated, so its `${{ }}` reach the Addon's admission as written | none | the App's YAML | decided | ADR-0337 Decision 1, `TestScenarioAddonYAMLAsWritten` |
 
 <!-- generated values, do not edit: just behavior-values -->
 <details>

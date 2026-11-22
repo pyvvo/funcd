@@ -58,8 +58,7 @@ func (p *Planner) PlanApp(ctx context.Context, a *v1.App) (v1.AppPlan, error) {
 		return v1.AppPlan{}, err
 	}
 	for _, o := range dropped {
-		k := keyOf(o)
-		plan.Parts = append(plan.Parts, v1.PlanPart{Kind: k.Kind, Name: k.Name, Action: v1.PlanPrune})
+		plan.Parts = append(plan.Parts, v1.PlanPart{Kind: shownKind(o), Name: o.GetObjectMeta().Name, Action: v1.PlanPrune})
 	}
 	return plan, nil
 }
@@ -106,12 +105,12 @@ func changedParts(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object) ([]v
 		if cur == nil {
 			action = v1.PlanCreate
 		}
-		out = append(out, v1.PlanPart{Kind: e.kind, Name: e.name, Action: action})
+		out = append(out, v1.PlanPart{Kind: e.shownKind(cur), Name: e.name, Action: action})
 	}
 	return out, nil
 }
 
 // stopLine is the plan's line of the part where a pass stops.
 func stopLine(s *stop, action v1.PlanAction) v1.PlanPart {
-	return v1.PlanPart{Kind: s.part.Kind, Name: s.part.Name, Action: action, Reason: s.reason}
+	return v1.PlanPart{Kind: s.named().Kind, Name: s.part.Name, Action: action, Reason: s.reason}
 }

@@ -50,8 +50,8 @@ its engine answers on its readiness path.
 
 ## Back it up
 
-A BackupSchedule copies an add-on object when its scope names it under `addons`: each Backup copies the newest copy
-that the engine wrote of its own data. A Restore of an add-on object is in place only. funcd restarts the engine with
+A BackupSchedule copies an add-on object when its scope names it under `addons`, and an App's scope copies its
+`addons` parts: each Backup copies the newest copy that the engine wrote of its own data. A Restore of an add-on object is in place only. funcd restarts the engine with
 the copy, then again without it, and holds the namespace meanwhile.
 
 ## Sign users in through it
@@ -60,6 +60,12 @@ An `OIDCProvider` with `client.registration` has funcd register the edge's sign-
 `addon`, naming the IdentityProvider, has funcd reach rauthy at the engine's own address. A Route whose `auth.mode` is
 `oidc` then signs its callers in, and the code behind it reads who signed in:
 [Sign users in](../../security-and-networking/security/index.md#sign-users-in).
+
+## Ship it with an App
+
+An App template can carry the add-on with the Functions, values and hooks that run beside it: `addon.yaml` holds the
+Addon, which an admin's `funcdctl app deploy` registers or updates before the App, and the App's `addons` section holds
+the objects of its kind: [Carry an add-on](../../workloads/app/index.md#carry-an-add-on).
 
 ## Build one
 

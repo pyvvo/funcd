@@ -194,6 +194,28 @@ func TestResolve_AddonMembers(t *testing.T) {
 	require.ErrorContains(t, err, "member add-on object gone")
 }
 
+// scenario: addon-app-backup — scope.app copies the App's add-on parts beside its stores, those whose Addon declares a
+// snapshot (ADR-0337 Decision 7).
+func TestScenarioAddonAppBackup(t *testing.T) {
+	t.Parallel()
+	r := newAddonRig(t, nil)
+	echo := &v1.Addon{TypeMeta: tm(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "whoami"}, Spec: v1.AddonSpec{Kind: "EchoService",
+		Image: testImage, Port: 80, Readiness: v1.AddonReadiness{Path: "/"}}}
+	app := &v1.App{TypeMeta: tm(v1.KindApp), ObjectMeta: meta("web-auth", "web-auth")}
+	app.Spec.KV = []v1.KVStoreEntry{{Name: "web-auth-state"}}
+	app.Spec.Addons = []v1.AppAddon{{Ref: "login"}, {Name: "web-auth-echo", AddonObjectSpec: v1.AddonObjectSpec{Kind: "EchoService"}}}
+	for _, o := range []v1.Object{echo, app,
+		&v1.AddonObject{TypeMeta: tm(v1.KindAddonObject), ObjectMeta: meta("web-auth-echo", "web-auth"), Spec: v1.AddonObjectSpec{Kind: "EchoService"}},
+		&v1.KVStore{TypeMeta: tm(v1.KindKVStore), ObjectMeta: meta("web-auth-state", "web-auth")}} {
+		_, err := r.st.Create(r.ctx, o)
+		require.NoError(t, err)
+	}
+	ms, err := workload.Resolve(r.ctx, r.st, "orders", v1.BackupScope{App: "web-auth"}, workload.Limits{}.OrDefaults())
+	require.NoError(t, err)
+	require.Equal(t, []workload.Member{{Kind: v1.KindKVStore, Name: "web-auth-state"}, login()}, ms,
+		"the App's IdentityProvider is copied; its EchoService, whose Addon declares no snapshot, is not")
+}
+
 // file is a member file of the copy of login whose name is the copy's.
 func memberFile(name string) workload.MemberFile {
 	return workload.MemberFile{Kind: "IdentityProvider", Name: "login",

@@ -190,18 +190,31 @@ func configBreaks(a *v1.Addon, o *v1.AddonObject) (string, error) {
 	if err != nil {
 		return "spec.config of Addon " + string(a.Name) + " is no longer a schema: " + err.Error(), nil
 	}
-	details, err := v.Validate(configOf(o))
+	parts, err := Breaks(v, o.Spec.Config)
 	if err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "check the config of %s/%s", o.Namespace, o.Name)
 	}
-	if len(details) == 0 {
+	if len(parts) == 0 {
 		return "", nil
+	}
+	return fmt.Sprintf("the config does not fit the %s schema of Addon %s: %s", a.Spec.Kind, a.Name, strings.Join(parts, "; ")), nil
+}
+
+// Breaks names each way config, an empty object when unset, breaks the schema v: "spec.config.<path>: <message>", in
+// the validator's order; none when it fits.
+func Breaks(v *contract.Validator, config json.RawMessage) ([]string, error) {
+	if len(config) == 0 {
+		config = json.RawMessage(`{}`)
+	}
+	details, err := v.Validate(config)
+	if err != nil {
+		return nil, err
 	}
 	parts := make([]string, len(details))
 	for i, d := range details {
 		parts[i] = "spec.config" + strings.ReplaceAll(d.Path, "/", ".") + ": " + d.Message
 	}
-	return fmt.Sprintf("the config does not fit the %s schema of Addon %s: %s", a.Spec.Kind, a.Name, strings.Join(parts, "; ")), nil
+	return parts, nil
 }
 
 // secretEnv reads the object's bound Secrets as the object, each read asked of Cedar (ADR-0332 Decision 4), and keeps

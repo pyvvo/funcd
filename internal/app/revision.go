@@ -280,7 +280,7 @@ func childrenReady(vs []verdict) v1.Condition {
 // first Pending part and its reason, else the part the pass wrote.
 func failure(vs []verdict, halt *stop, wrote *v1.ObjectRef) string {
 	if halt != nil {
-		return partName(halt.part) + ": " + halt.reason + ": " + halt.detail
+		return partName(halt.named()) + ": " + halt.reason + ": " + halt.detail
 	}
 	if c := readyCondition(vs, nil); c.Status == v1.ConditionFalse {
 		return c.Message

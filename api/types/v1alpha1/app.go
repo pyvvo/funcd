@@ -45,15 +45,17 @@ type AppSpec struct {
 	KV       []KVStoreEntry   `json:"kv,omitempty" doc:"The KVStores that the App declares or refers to; no two entries name the same one. A store that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned."`
 	Buckets  []BucketEntry    `json:"buckets,omitempty" doc:"The Buckets that the App declares or refers to; no two entries name the same one. A Bucket that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned."`
 	// SQL declares the App's SQL databases (ADR-0236), stores like kv and buckets.
-	SQL          []SQLDatabaseEntry `json:"sql,omitempty" doc:"The SQLDatabases that the App declares or refers to; no two entries name the same one. A database that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned."`
-	Functions    []AppFunction      `json:"functions,omitempty" doc:"The Functions that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret it binds is one that the App's lists of those names declare. A workflows step that sets function.image is written as a Function named <workflow>-<step>, a name no entry may declare."`
-	Workflows    []AppWorkflow      `json:"workflows,omitempty" doc:"The Workflows that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret its steps bind is one that the App's lists of those names declare. A step that sets function.image is written as a Function named <workflow>-<step>, a name that no functions entry or other step may take."`
-	EventSources []AppEventSource   `json:"eventSources,omitempty" doc:"The EventSources that the App declares or refers to; no two entries name the same one."`
-	Sensors      []AppSensor        `json:"sensors,omitempty" doc:"The Sensors that the App declares or refers to; no two entries name the same one."`
-	Routes       []AppRoute         `json:"routes,omitempty" doc:"The Routes that the App declares or refers to; no two entries name the same one, and none declares a Route under the name of a Site that sites declares, since each Site writes a Route of its own name."`
-	Sites        []AppSite          `json:"sites,omitempty" doc:"The Sites that the App declares or refers to; no two entries name the same one. An entry leaves buckets empty: the Site refers to the Bucket it serves, which the App's buckets declare or which exists already. Each declared Site writes a Route of its own name, which no routes entry may declare."`
-	Lakes        []LakeEntry        `json:"lakes,omitempty" doc:"The Lakes that the App declares or refers to; no two entries name the same one. An entry leaves buckets, configMaps and secrets empty; each Bucket and Secret it binds is declared in the App's buckets and secrets."`
-	ConfigMaps   []ConfigMapEntry   `json:"configMaps,omitempty" doc:"The ConfigMaps that the App defines or refers to, written before every other part; no two entries name the same one. A change to a defined entry's data writes a new ConfigMap, changes each part that names it to the new one, and prunes the old one with the other dropped parts."`
+	SQL []SQLDatabaseEntry `json:"sql,omitempty" doc:"The SQLDatabases that the App declares or refers to; no two entries name the same one. A database that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned."`
+	// Addons declares objects of add-ons' kinds that the App owns (ADR-0337 Decision 3).
+	Addons       []AppAddon       `json:"addons,omitempty" doc:"The objects of add-ons' kinds that the App declares or refers to; no two entries name the same one, whatever their kinds, since one name is one add-on object per namespace. An entry's kind is an Addon's, its config fits that Addon's schema, and each Secret it binds is one that the App's secrets declare. Its deletion is the object's own: what becomes of its engine's storage once it is deleted."`
+	Functions    []AppFunction    `json:"functions,omitempty" doc:"The Functions that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret it binds is one that the App's lists of those names declare. A workflows step that sets function.image is written as a Function named <workflow>-<step>, a name no entry may declare."`
+	Workflows    []AppWorkflow    `json:"workflows,omitempty" doc:"The Workflows that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret its steps bind is one that the App's lists of those names declare. A step that sets function.image is written as a Function named <workflow>-<step>, a name that no functions entry or other step may take."`
+	EventSources []AppEventSource `json:"eventSources,omitempty" doc:"The EventSources that the App declares or refers to; no two entries name the same one."`
+	Sensors      []AppSensor      `json:"sensors,omitempty" doc:"The Sensors that the App declares or refers to; no two entries name the same one."`
+	Routes       []AppRoute       `json:"routes,omitempty" doc:"The Routes that the App declares or refers to; no two entries name the same one, and none declares a Route under the name of a Site that sites declares, since each Site writes a Route of its own name."`
+	Sites        []AppSite        `json:"sites,omitempty" doc:"The Sites that the App declares or refers to; no two entries name the same one. An entry leaves buckets empty: the Site refers to the Bucket it serves, which the App's buckets declare or which exists already. Each declared Site writes a Route of its own name, which no routes entry may declare."`
+	Lakes        []LakeEntry      `json:"lakes,omitempty" doc:"The Lakes that the App declares or refers to; no two entries name the same one. An entry leaves buckets, configMaps and secrets empty; each Bucket and Secret it binds is declared in the App's buckets and secrets."`
+	ConfigMaps   []ConfigMapEntry `json:"configMaps,omitempty" doc:"The ConfigMaps that the App defines or refers to, written before every other part; no two entries name the same one. A change to a defined entry's data writes a new ConfigMap, changes each part that names it to the new one, and prunes the old one with the other dropped parts."`
 	// BackupSchedules backs up the App's stores (ADR-0222 Decision 2); an entry with an empty scope backs up this App.
 	BackupSchedules []AppBackupSchedule `json:"backupSchedules,omitempty" doc:"The BackupSchedules that the App declares or refers to; no two entries name the same one. An entry with an empty scope backs up this App: each object that its kv, buckets, sql and lakes entries name, and its Functions' local volumes."`
 	// Secrets declares the Secrets the parts name, never their values (ADR-0213 Decision 6).
@@ -141,6 +143,14 @@ type SQLDatabaseEntry struct {
 	// Deletion is retain (or empty, the default: the database and its data outlive the App) or delete.
 	Deletion        DeletionPolicy `json:"deletion,omitempty"`
 	SQLDatabaseSpec `json:",inline"`
+}
+
+// AppAddon is an addons entry: an object of an add-on's kind the App declares by name, or only the ref of an existing
+// one (ADR-0337 Decision 3).
+type AppAddon struct {
+	Name            ObjectName `json:"name,omitempty"`
+	Ref             ObjectName `json:"ref,omitempty"`
+	AddonObjectSpec `json:",inline"`
 }
 
 // AppFunction is a functions entry: a Function the App declares by name, or only the ref of an existing one.
@@ -263,6 +273,17 @@ func (SQLDatabaseEntry) Schema(r huma.Registry) *huma.Schema {
 	return entrySchema(r, reflect.TypeFor[SQLDatabaseSpec](), true)
 }
 
+// Schema is AddonObjectSpec's schema plus name and ref (see entrySchema); kind is the entry's own, which it must set.
+func (AppAddon) Schema(r huma.Registry) *huma.Schema {
+	s := entrySchema(r, reflect.TypeFor[AddonObjectSpec](), false)
+	if k, ok := s.Properties["kind"]; ok {
+		kind := *k
+		kind.Description = "The add-on's kind: one that an Addon registers, as the Addon writes it. A ref entry leaves it unset."
+		s.Properties["kind"] = &kind
+	}
+	return s
+}
+
 // Schema is FunctionSpec's schema plus name and ref (see entrySchema).
 func (AppFunction) Schema(r huma.Registry) *huma.Schema {
 	return entrySchema(r, reflect.TypeFor[FunctionSpec](), false)
@@ -329,6 +350,11 @@ func (e SQLDatabaseEntry) MarshalJSON() ([]byte, error) {
 }
 
 // MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
+func (e AppAddon) MarshalJSON() ([]byte, error) {
+	return marshalEntry(entryHead{Name: e.Name, Ref: e.Ref}, e.AddonObjectSpec)
+}
+
+// MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
 func (e AppFunction) MarshalJSON() ([]byte, error) {
 	return marshalEntry(entryHead{Name: e.Name, Ref: e.Ref}, e.FunctionSpec)
 }
@@ -373,7 +399,7 @@ type AppStatus struct {
 	LatestRevision  ObjectName `json:"latestRevision,omitempty" doc:"The newest AppRevision, created for the latest spec. It differs from currentRevision while a rollout waits or runs, and after one fails."`
 	// Version is the spec.version of the current revision.
 	Version      string       `json:"version,omitempty" doc:"The spec.version of the current revision."`
-	Children     []AppChild   `json:"children,omitempty" doc:"One line per entry of configMaps, kv, buckets, sql, functions, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them. Then one Pruning line per dropped object not deleted yet."`
+	Children     []AppChild   `json:"children,omitempty" doc:"One line per entry of configMaps, kv, buckets, sql, addons, functions, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them; an addons line names the add-on's kind. Then one Pruning line per dropped object not deleted yet."`
 	LastSelfHeal *AppSelfHeal `json:"lastSelfHeal,omitempty" doc:"The last part that funcd wrote back after another writer changed or deleted it, and when."`
 	// Requires is the state of each spec.requires entry, in its order (ADR-0219 Decision 5).
 	Requires []AppRequirementState `json:"requires,omitempty" doc:"The state of each spec.requires entry, in its order."`
@@ -743,6 +769,10 @@ func (a *App) entries() []appEntry {
 		out = append(out, newEntry("sql", i, entryHead{e.Name, e.Ref, e.Deletion}, e.SQLDatabaseSpec,
 			&SQLDatabase{TypeMeta: typeMetaFor(KindSQLDatabase), ObjectMeta: meta(e.Name), Spec: e.SQLDatabaseSpec}))
 	}
+	for i, e := range s.Addons {
+		out = append(out, newEntry("addons", i, entryHead{Name: e.Name, Ref: e.Ref}, e.AddonObjectSpec,
+			&AddonObject{TypeMeta: typeMetaFor(KindAddonObject), ObjectMeta: meta(e.Name), Spec: e.AddonObjectSpec}))
+	}
 	for i, e := range s.Functions {
 		spec := e.FunctionSpec
 		spec.Bindings.Config = repoint(spec.Bindings.Config, stored)
@@ -913,7 +943,7 @@ type entryHead struct {
 // partSpec is the spec of a kind that has a section.
 type partSpec interface {
 	ConfigMapSpec | KVStoreSpec | BucketSpec | FunctionSpec | WorkflowSpec | EventSourceSpec | SensorSpec | RouteSpec |
-		SiteSpec | LakeSpec | BackupScheduleSpec | SQLDatabaseSpec
+		SiteSpec | LakeSpec | BackupScheduleSpec | SQLDatabaseSpec | AddonObjectSpec
 }
 
 // marshalEntry writes an entry's head, then its spec's fields only when the spec is set: a ref entry goes out as

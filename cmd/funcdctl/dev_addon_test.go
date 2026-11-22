@@ -26,6 +26,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/app/template"
 	"github.com/pyvvo/funcd/internal/provider/docker"
 	"github.com/pyvvo/funcd/internal/provider/nerdctl"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -630,4 +631,43 @@ func TestDevPruneDeletesObjectsBeforeTheirAddon(t *testing.T) {
 		funcd.DevToken + " /apis/funcd.io/v1alpha1/namespaces/default/secrets/keys",
 		funcd.DevAdminToken + " /apis/funcd.io/v1alpha1/addons/whoami",
 	}, deletes)
+}
+
+// scenario: addon-template-dev — dev applies the template's addon.yaml with its admin token, then the App, whose
+// addons part it holds; a changed addon.yaml is applied again at the next reload, and removing it deletes the Addon.
+func TestScenarioAddonTemplateDev(t *testing.T) {
+	requireRuntime(t)
+	requireApp(t)
+	ctx := context.Background()
+	t.Setenv("TODO_API_TOKEN", todoToken)
+	root := appCopy(t, "todo")
+	addonPath := filepath.Join(root, "app", template.AddonFile)
+	require.NoError(t, os.WriteFile(addonPath, []byte(echoAddon), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "app", "resources", "echo.yaml"),
+		[]byte("addons:\n  - name: ${{ app.name + \"-echo\" }}\n    kind: EchoService\n"), 0o600))
+	r := startApp(t, root, todoCfg(func(c *devConfig) { c.addonDrivers = noEngine() }))
+	admin, err := sdk.New(r.inst.controlURL, sdk.WithToken(funcd.DevAdminToken))
+	require.NoError(t, err)
+	readiness := func() string {
+		obj, err := admin.Get(ctx, v1.KindAddon, "", "whoami")
+		if err != nil {
+			return ""
+		}
+		return obj.(*v1.Addon).Spec.Readiness.Path
+	}
+	require.Equal(t, "/health", readiness(), "the template's Addon is registered before the App")
+	require.Eventually(t, func() bool {
+		_, err := r.inst.client.Get(ctx, "EchoService", devNamespace, "todo-echo")
+		return err == nil
+	}, time.Minute, 100*time.Millisecond, "the App writes its addons part")
+
+	require.NoError(t, os.WriteFile(addonPath, []byte(strings.Replace(echoAddon, "path: /health", "path: /ready", 1)), 0o600))
+	require.Eventually(t, func() bool { return readiness() == "/ready" }, time.Minute, 100*time.Millisecond,
+		"the reload applies the changed addon.yaml")
+
+	require.NoError(t, os.Remove(addonPath))
+	require.Eventually(t, func() bool {
+		_, err := admin.Get(ctx, v1.KindAddon, "", "whoami")
+		return fault.KindOf(err) == fault.NotFound
+	}, time.Minute, 100*time.Millisecond, "removing addon.yaml deletes the Addon")
 }

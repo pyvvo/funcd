@@ -67,7 +67,7 @@ func readiness(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, steps m
 		default:
 			v = judge(obj, steps)
 		}
-		v.child.Kind, v.child.Name = e.kind, e.name
+		v.child.Kind, v.child.Name = e.shownKind(objs[k]), e.name
 		out = append(out, v)
 	}
 	return out

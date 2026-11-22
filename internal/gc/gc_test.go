@@ -90,6 +90,8 @@ func object(t testing.TB, kind v1.Kind, name v1.ObjectName) v1.Object {
 		o.Spec.Location = v1.LakeLocation{Bucket: "lake", Prefix: "lake"}
 	case *v1.AppRevision:
 		o.Spec.App, o.Spec.Number = v1.ObjectRef{Kind: v1.KindApp, Namespace: ns, Name: "app"}, 1
+	case *v1.AddonObject:
+		o.Spec.Kind = "IdentityProvider"
 	case *v1.BackupSchedule:
 		o.Spec = v1.BackupScheduleSpec{Schedule: "@daily", Scope: v1.BackupScope{App: "app"},
 			Target:     v1.BackupTarget{URL: "s3://backups", CredentialsSecret: "writer"},
@@ -383,7 +385,8 @@ func appPairs() []gc.Pair {
 	var out []gc.Pair
 	for _, k := range []v1.Kind{
 		v1.KindFunction, v1.KindWorkflow, v1.KindEventSource, v1.KindSensor, v1.KindRoute, v1.KindSite,
-		v1.KindLake, v1.KindBackupSchedule, v1.KindKVStore, v1.KindSQLDatabase, v1.KindBucket, v1.KindConfigMap,
+		v1.KindLake, v1.KindBackupSchedule, v1.KindKVStore, v1.KindSQLDatabase, v1.KindAddonObject, v1.KindBucket,
+		v1.KindConfigMap,
 	} {
 		out = append(out, gc.Pair{Owner: v1.KindApp, Child: k})
 	}

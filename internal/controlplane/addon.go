@@ -81,7 +81,7 @@ type AddonRules struct {
 // schema, paths and rules pass CheckSettings. A settings object passes its kind's constraints under the namespace's
 // lock.
 func NewAddonAdmissions(r AddonRules) []admission.Admission {
-	return []admission.Admission{addonUnique{r}, addonRules{r}, addonSettings{r}}
+	return []admission.Admission{addonUnique{r}, addonRules{r}, addonObject{r}, addonSettings{r}}
 }
 
 type addonUnique struct{ AddonRules }
@@ -165,6 +165,64 @@ func (a addonRules) Admit(_ context.Context, req admission.Request) (v1.Object, 
 		if err := addonsvc.CheckSettings(&ad.Spec.Settings[i]); err != nil {
 			return nil, fault.Wrapf(err, fault.Invalid, op, "spec.settings[%d]", i)
 		}
+	}
+	return req.Object, nil
+}
+
+// addonObject checks an add-on object's write against its Addon, as the API's routes do before any admission: its kind
+// is the one an Addon registers, its config fits that kind's schema, and a settings object sets no engine field. An
+// App's part reaches the store with no route, so app-parts refuses it here with 400, naming its entry, each property
+// and each keyword (ADR-0337 Decision 3).
+type addonObject struct{ AddonRules }
+
+func (addonObject) Name() string           { return "addon-object" }
+func (addonObject) Phase() admission.Phase { return admission.Validating }
+
+func (addonObject) Handles(gvk v1.GroupVersionKind, op admission.Operation) bool {
+	return gvk == v1.KindAddonObject.GVK() && (op == admission.Create || op == admission.Update)
+}
+
+func (a addonObject) Admit(ctx context.Context, req admission.Request) (v1.Object, error) {
+	const op = "admission.addon-object"
+	o, ok := req.Object.(*v1.AddonObject)
+	if !ok {
+		return req.Object, nil
+	}
+	addons, err := a.Store.List(ctx, v1.KindAddon.GVK(), "")
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "list Addons")
+	}
+	var k servedKind
+	for _, obj := range addons {
+		ad, ok := obj.(*v1.Addon)
+		switch {
+		case !ok:
+		case v1.SameAddonKind(ad.Spec.Kind, o.Spec.Kind):
+			k = servedKind{addon: ad}
+		case ad.Spec.SettingsKind(o.Spec.Kind) != nil:
+			k = servedKind{addon: ad, settings: ad.Spec.SettingsKind(o.Spec.Kind)}
+		}
+	}
+	switch {
+	case k.addon == nil:
+		return nil, fault.Invalidf(op, "no Addon registers the kind %q", o.Spec.Kind)
+	case k.name() != o.Spec.Kind:
+		return nil, fault.Invalidf(op, "spec.kind %q is written %q by Addon %q", o.Spec.Kind, k.name(), k.addon.Name)
+	}
+	if err := engineFields(k, o.Spec); err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "%s", o.Name)
+	}
+	v, err := contract.Compile(k.schema())
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "compile the %s schema of Addon %q", k.name(), k.addon.Name)
+	}
+	parts, err := addonsvc.Breaks(v, o.Spec.Config)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "spec.config")
+	}
+	if len(parts) > 0 {
+		return nil, fault.Invalidf(op, "spec.config does not fit the %s schema of Addon %s: %s", k.name(), k.addon.Name,
+			strings.Join(parts, "; "))
 	}
 	return req.Object, nil
 }
@@ -515,12 +573,8 @@ func stored(k servedKind, o v1.AddonObject) (*v1.AddonObject, error) {
 	if o.Spec.Kind != "" && o.Spec.Kind != kind {
 		return nil, fault.Invalidf(op, "spec.kind %q is not %q: funcd sets it from the path", o.Spec.Kind, kind)
 	}
-	if k.settings != nil {
-		s := o.Spec
-		if len(s.Bindings.Secret) > 0 || s.Ingress != nil || s.Resources != (v1.ResourceSpec{}) || s.Deletion != "" {
-			return nil, fault.Invalidf(op, "a %s object runs no engine: spec.bindings, spec.ingress, spec.resources and "+
-				"spec.deletion are not allowed", kind)
-		}
+	if err := engineFields(k, o.Spec); err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "%s", o.Name)
 	}
 	v, err := contract.Compile(k.schema())
 	if err != nil {
@@ -545,6 +599,18 @@ func stored(k servedKind, o v1.AddonObject) (*v1.AddonObject, error) {
 	out.TypeMeta = v1.TypeMeta{APIVersion: v1.KindAddonObject.GVK().APIVersion(), Kind: v1.KindAddonObject}
 	out.Spec.Kind = kind
 	return &out, nil
+}
+
+// engineFields refuses an engine field on an object of a settings kind (ADR-0340 Decision 3).
+func engineFields(k servedKind, s v1.AddonObjectSpec) error {
+	if k.settings == nil {
+		return nil
+	}
+	if len(s.Bindings.Secret) > 0 || s.Ingress != nil || s.Resources != (v1.ResourceSpec{}) || s.Deletion != "" {
+		return fault.Invalidf("controlplane.addonObject", "a %s object runs no engine: spec.bindings, spec.ingress, "+
+			"spec.resources and spec.deletion are not allowed", k.name())
+	}
+	return nil
 }
 
 func (h *storeHandlers) ListAddonObjects(ctx context.Context, ns v1.NamespaceName, plural string) ([]v1.AddonObject, error) {
