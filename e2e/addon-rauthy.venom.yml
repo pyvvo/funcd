@@ -329,11 +329,13 @@ testcases:
         info: "login after the change → {{.result.systemout}}"
         assertions:
           - result.systemout ShouldEqual "SAME=yes REV=rauthy-1"
+      # A developer's deploy only checks that the kind is served: an admin's would apply the template's addon.yaml as
+      # written again, which the change above edited after the push.
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} -- sudo bash -c '
             printf "publicHost: web-auth.example.com:8081\n" > /tmp/web-auth-v2.yaml
-            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} funcdctl app deploy oci-layout:///mnt/funcd-deps/registry/rauthy:0.2.0 \
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} funcdctl app deploy oci-layout:///mnt/funcd-deps/registry/rauthy:0.2.0 \
               -f /opt/lane/values.yaml -f /tmp/web-auth-v2.yaml --name web-auth 2>&1'
         info: "the App's second revision → {{.result.systemout}}"
         assertions:
