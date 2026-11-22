@@ -1,5 +1,8 @@
 {
   "Function": {
+    "addonBindings": [
+      "AddonObject::\"team/rauthy-login\""
+    ],
     "blobBindings": [
       "BlobPrefix::\"team/files/uploads\""
     ],
@@ -21,6 +24,7 @@
     ]
   },
   "Lake": {
+    "addonBindings": [],
     "blobBindings": [
       "BlobPrefix::\"team/lakehouse/bronze\"",
       "BlobPrefix::\"team/lakehouse/gold\""

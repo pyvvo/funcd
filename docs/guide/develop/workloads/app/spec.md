@@ -18,6 +18,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `addons` | array of [`App.spec.addons[]`](#appspecaddons) | The objects of add-ons' kinds that the App declares or refers to; no two entries name the same one, whatever their kinds, since one name is one add-on object per namespace. An entry's kind is an Addon's, its config fits that Addon's schema, and each Secret it binds is one that the App's secrets declare. Its deletion is the object's own: what becomes of its engine's storage once it is deleted. |
 | `backupSchedules` | array of [`App.spec.backupSchedules[]`](#appspecbackupschedules) | The BackupSchedules that the App declares or refers to; no two entries name the same one. An entry with an empty scope backs up this App: each object that its kv, buckets, sql and lakes entries name, and its Functions' local volumes. |
 | `buckets` | array of [`App.spec.buckets[]`](#appspecbuckets) | The Buckets that the App declares or refers to; no two entries name the same one. A Bucket that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned. |
 | `configMaps` | array of [`App.spec.configMaps[]`](#appspecconfigmaps) | The ConfigMaps that the App defines or refers to, written before every other part; no two entries name the same one. A change to a defined entry's data writes a new ConfigMap, changes each part that names it to the new one, and prunes the old one with the other dropped parts. |
@@ -35,6 +36,57 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `sql` | array of [`App.spec.sql[]`](#appspecsql) | The SQLDatabases that the App declares or refers to; no two entries name the same one. A database that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned. |
 | `version` | string | A free label for this version of the App, shown by funcdctl app history and passed to the hooks; funcdctl app deploy sets it to the template's version. A range in another App's spec.requires matches it only when it is a SemVer 2.0.0 version, such as 1.4.0 with no v prefix. |
 | `workflows` | array of [`App.spec.workflows[]`](#appspecworkflows) | The Workflows that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret its steps bind is one that the App's lists of those names declare. A step that sets function.image is written as a Function named &lt;workflow&gt;-&lt;step&gt;, a name that no functions entry or other step may take. |
+
+### `App.spec.addons[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `bindings` | object, [`App.spec.addons[].bindings`](#appspecaddonsbindings) | What the object's engine uses. |
+| `config` | any JSON value | The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object. |
+| `deletion` | string, one of `retain`, `delete` | What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. |
+| `functions` | array of [`App.spec.addons[].functions[]`](#appspecaddonsfunctions) | The object's own Function for a settings kind of its Addon, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none. |
+| `ingress` | object, [`App.spec.addons[].ingress`](#appspecaddonsingress) | Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused. |
+| `kind` | string | The add-on's kind: one that an Addon registers, as the Addon writes it. A ref entry leaves it unset. |
+| `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
+| `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine. |
+
+### `App.spec.addons[].bindings`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `secret` | array of string values, each a DNS-1123 label | Secrets of the namespace whose keys, those that the Addon's spec.secretKeys lists, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine. |
+
+### `App.spec.addons[].functions[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `kind` | string, required | A settings kind of the object's Addon, named once. |
+| `ref` | string, required, a DNS-1123 label | A Function of the object's namespace that binds the object in its bindings.addon, which funcd calls with the object's settings objects of the kind. In an App, a Function the App declares. |
+
+### `App.spec.addons[].ingress`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `auth` | object, [`App.spec.addons[].ingress.auth`](#appspecaddonsingressauth) | How the edge checks callers at the resource's own address; unset, the namespace's spec.edgeDefaults.auth decides, else open. A Lake refuses it, since the Lake gateway checks each caller. |
+| `enabled` | boolean | Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true. |
+| `host` | string | The exact host of the resource's own address. Empty is the namespace's host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, any host that no other namespace reserves. |
+| `path` | string | The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/&lt;name&gt;, /site/&lt;name&gt; or /lake/&lt;name&gt; by kind. |
+
+### `App.spec.addons[].ingress.auth`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `mode` | string, one of `""`, `authenticated`, `open`, `oidc` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. oidc signs callers in with the OIDCProvider that provider names, and passes the signed-in user to the code behind it in the X-Funcd-Principal headers. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
+| `provider` | string, a DNS-1123 label | With mode oidc, the OIDCProvider of the namespace that signs callers in; required with oidc and refused with another mode. |
+| `unauthenticated` | string, one of `""`, `redirect`, `401`, `allow` | With mode oidc, what a call that is not signed in gets: redirect, the default, sends a GET or HEAD navigation to the provider with 302 and gives any other call 401; 401 gives every such call 401; allow passes every call, with no principal. Refused with another mode. |
+
+### `App.spec.addons[].resources`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `cpu` | string | The CPU cap of the worker or engine it sizes, as a number of cores of at least 0.01, such as 0.5 or 2. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it. |
+| `memory` | string | The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that uses more memory than the cap is killed. |
 
 ### `App.spec.backupSchedules[]`
 
@@ -189,7 +241,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` | The name of the export that the shim calls in the code, such as handle. A Function without one, or whose code has no such export, fails with ShapeInvalid. |
 | `image` | string | The OCI reference of the code's artifact: a registry reference with a tag or a digest, or an oci-layout:// reference to a layout on the server's disk. A Function whose image is missing, or cannot be resolved or pulled, starts no worker. |
 | `imageDigest` | string, a sha256 digest | The sha256 digest that funcd pulls the image by and checks it against. Unset, funcd resolves the image to its digest when it creates the Revision of a new spec and keeps that digest, so a tag that moves later changes nothing. |
-| `ingress` | object, [`App.spec.functions[].ingress`](#appspecfunctionsingress) | The Function's own address at the edge. With no host and no path, it answers by name at /function/&lt;name&gt;; a host or a path gives it a Route of its own in place of that address, which its IngressReady condition reports. Its path may not be /function or under it. |
+| `ingress` | object, [`App.spec.addons[].ingress`](#appspecaddonsingress) | The Function's own address at the edge. With no host and no path, it answers by name at /function/&lt;name&gt;; a host or a path gives it a Route of its own in place of that address, which its IngressReady condition reports. Its path may not be /function or under it. |
 | `kv` | array of [`App.spec.functions[].kv[]`](#appspecfunctionskv) | The KVStores the Function declares: by name it creates and owns one, and a store of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.kv binds only a declared store. An App's part declares none and binds those that the App declares. |
 | `lakes` | array of [`App.spec.functions[].lakes[]`](#appspecfunctionslakes) | The Lakes the Function declares: by name it creates one that goes with the Function, by ref it uses an existing one. spec.bindings.lake binds only a declared Lake, and a Lake declared by name declares nothing at its own root: it binds the Function's buckets, configMaps and secrets. An App's part declares none. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
@@ -197,7 +249,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `protocol` | string, one of `""`, `cloudevent`, `http` | How funcd calls the code. cloudevent, the default, passes each call to the handler as a CloudEvent. http passes each edge request to the handler, an http(app) export: only the edge and another Function's ctx.fetch over a link reach it, and it needs a node runtime and no pooling.worker. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 | `replicas` | integer, 0 to 15 | How many workers run while the Function is awake: at least 1 once a call wakes it, and at least scaling.minReplicas. Every call goes to the lowest listening replica, and the others are spares. With minReplicas 0, replicas above 0 also starts workers before the first call, but not after a sleep. A local volume allows at most 1. |
-| `resources` | object, [`App.spec.functions[].resources`](#appspecfunctionsresources) | The CPU and memory caps of each of the Function's workers; a field left empty takes functions.defaultResources. Only the containerd runtime enforces them, and they cannot be set with pooling.worker. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The CPU and memory caps of each of the Function's workers; a field left empty takes functions.defaultResources. Only the containerd runtime enforces them, and they cannot be set with pooling.worker. |
 | `runtime` | string, a DNS-1123 label | The runtime that runs the code, such as nodejs22 or python314. A Function without one fails with ShapeInvalid, and one whose runtime this node cannot run fails with RuntimeUnavailable. |
 | `scaling` | object, [`App.spec.functions[].scaling`](#appspecfunctionsscaling) | Scale to zero: with minReplicas 0, the default, and an idleTimeout, a Function with no traffic goes Idle and its workers stop until the next call wakes it. |
 | `secrets` | array of [`App.spec.functions[].secrets[]`](#appspecfunctionssecrets) | The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Function waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key. An App's part declares none and binds those that the App declares. |
@@ -209,6 +261,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `addon` | array of [`App.spec.functions[].bindings.addon[]`](#appspecfunctionsbindingsaddon) | The add-on objects whose engines the code calls, each under its alias: through ctx.addon.fetch, or with any HTTP client at FUNCD_ADDON\_&lt;ALIAS&gt;\_URL with the header X-Funcd-Addon-Token set to FUNCD_ADDON\_&lt;ALIAS&gt;\_TOKEN. Each call goes through funcd, which asks Cedar for addon::call and serves only the paths that the object's edge entry serves. |
 | `blob` | array of [`App.spec.functions[].bindings.blob[]`](#appspecfunctionsbindingsblob) | The Bucket prefixes the code reaches through ctx.blob, and over S3 while the S3 gateway is on, each under its alias. The binding grants reads; only the prefix's owner and the writers that a RolesAssignment names may write. A Bucket or prefix that does not exist yet holds the Function in Pending with BucketNotFound. |
 | `config` | array of string values, each a DNS-1123 label | ConfigMaps whose keys each worker gets as environment variables when it starts, a later ConfigMap's value winning for a key that both hold. A key that starts with FUNCD\_, or that a bound Secret holds, is left out; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of a ConfigMap's. A missing ConfigMap holds the Function Failed with ConfigResolveFailed. |
 | `kv` | array of [`App.spec.functions[].bindings.kv[]`](#appspecfunctionsbindingskv) | The KV tables the code reaches through ctx.kv, each under its alias. The binding grants reads; only the table's owner and the writers that a RolesAssignment names may write. A store or table that does not exist yet holds the Function in Pending with KVStoreNotFound. |
@@ -216,6 +269,13 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `links` | array of [`App.spec.functions[].bindings.links[]`](#appspecfunctionsbindingslinks) | The Functions the code calls, each under its alias: through ctx.invoke one whose protocol is cloudevent, through ctx.fetch one whose protocol is http. Each target must exist in the namespace when this Function is applied, the namespace's links form no cycle, and a Function that a link targets cannot be deleted until the link goes. |
 | `secret` | array of string values, each a DNS-1123 label | Secrets whose keys the code reads through ctx.secret, on each read and with no cache, a later Secret's value winning for a key that both hold. No value reaches the worker's environment. No worker starts while a bound Secret is missing, and a worker whose Function a Policy forbids to read one is not ready. |
 | `sql` | array of [`App.spec.functions[].bindings.sql[]`](#appspecfunctionsbindingssql) | The SQLDatabases the code queries through ctx.sql, each under its alias. The binding grants reads; only the database's owner and the writers that a RolesAssignment names may write. A database that does not exist yet holds the Function in Pending with SQLDatabaseNotFound. |
+
+### `App.spec.functions[].bindings.addon[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `alias` | string, required, a DNS-1123 label | The name the handler calls the object by: ctx.addon.fetch takes it, and the worker gets FUNCD_ADDON\_&lt;ALIAS&gt;\_URL and FUNCD_ADDON\_&lt;ALIAS&gt;\_TOKEN for an HTTP SDK. Unique in the list. |
+| `object` | string, required, a DNS-1123 label | An add-on object of the Function's namespace, declared by its App when an App holds the Function. A missing one holds the Function in Pending with AddonObjectNotFound. |
 
 ### `App.spec.functions[].bindings.blob[]`
 
@@ -273,23 +333,6 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
-### `App.spec.functions[].ingress`
-
-| Field | Type and limits | Description |
-| --- | --- | --- |
-| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) | How the edge checks callers at the resource's own address; unset, the namespace's spec.edgeDefaults.auth decides, else open. A Lake refuses it, since the Lake gateway checks each caller. |
-| `enabled` | boolean | Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true. |
-| `host` | string | The exact host of the resource's own address. Empty is the namespace's host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, any host that no other namespace reserves. |
-| `path` | string | The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/&lt;name&gt;, /site/&lt;name&gt; or /lake/&lt;name&gt; by kind. |
-
-### `App.spec.functions[].ingress.auth`
-
-| Field | Type and limits | Description |
-| --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open`, `oidc` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. oidc signs callers in with the OIDCProvider that provider names, and passes the signed-in user to the code behind it in the X-Funcd-Principal headers. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
-| `provider` | string, a DNS-1123 label | With mode oidc, the OIDCProvider of the namespace that signs callers in; required with oidc and refused with another mode. |
-| `unauthenticated` | string, one of `""`, `redirect`, `401`, `allow` | With mode oidc, what a call that is not signed in gets: redirect, the default, sends a GET or HEAD navigation to the provider with 302 and gives any other call 401; 401 gives every such call 401; allow passes every call, with no principal. Refused with another mode. |
-
 ### `App.spec.functions[].kv[]`
 
 | Field | Type and limits | Description |
@@ -323,11 +366,11 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `bindings` | object, [`App.spec.functions[].lakes[].bindings`](#appspecfunctionslakesbindings) | What the Lake's engine uses: Bucket prefixes, and the ConfigMaps and Secrets of its environment. |
 | `buckets` | array of [`App.spec.functions[].lakes[].buckets[]`](#appspecfunctionslakesbuckets) | The Buckets that a Lake applied on its own declares: by name the Lake creates the Bucket, an omitted prefix owner being the Lake, and a Bucket of that name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each Bucket that the Lake's bindings.blob names must be declared here. A lake that another resource declares sets none. |
 | `configMaps` | array of [`App.spec.functions[].lakes[].configMaps[]`](#appspecfunctionslakesconfigmaps) | The ConfigMaps that a Lake applied on its own declares: by name the Lake defines one, and a ConfigMap of its stored name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each ConfigMap that the Lake's bindings.config names must be declared here. A lake that another resource declares sets none. |
-| `ingress` | object, [`App.spec.functions[].ingress`](#appspecfunctionsingress) | Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/&lt;name&gt;, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself. |
+| `ingress` | object, [`App.spec.addons[].ingress`](#appspecaddonsingress) | Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/&lt;name&gt;, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself. |
 | `location` | object, [`App.spec.functions[].lakes[].location`](#appspecfunctionslakeslocation) | The Bucket prefix that holds the Lake's files, one of the Lake's bindings.blob. The Lake waits in Pending, with the reason PrefixNotOwned, until the prefix's owner is this Lake. The Lake's catalog is kept outside the Bucket, under the same location, so a Lake located where another was finds that Lake's files and catalog. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `resources` | object, [`App.spec.functions[].resources`](#appspecfunctionsresources) | The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine. |
 | `secrets` | array of [`App.spec.functions[].lakes[].secrets[]`](#appspecfunctionslakessecrets) | The Secrets that a Lake applied on its own declares, with the keys its engine reads. Each Secret that the Lake's bindings.secret names must be declared here, and the Lake waits in Pending, with SecretNotFound or SecretKeyMissing, while one is missing or lacks a key. A lake that another resource declares sets none. |
 
 ### `App.spec.functions[].lakes[].bindings`
@@ -377,13 +420,6 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | --- | --- | --- |
 | `worker` | string | A worker id, a DNS-1123 label: Functions of the namespace that name it, run the same runtime, are in the same resource group and have the same bindings, owned data and grants share one worker, which status.pool names. Empty, the default, runs the Function solo. Only the process runtime pools, for node runtimes and, when the server's Python is 3.14 or later, python ones; anywhere else the Function runs solo too. A pool takes the first 16 Functions by name, and the others wait in Pending with PoolFull. |
 
-### `App.spec.functions[].resources`
-
-| Field | Type and limits | Description |
-| --- | --- | --- |
-| `cpu` | string | The CPU cap of the worker or engine it sizes, as a number of cores of at least 0.01, such as 0.5 or 2. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it. |
-| `memory` | string | The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that uses more memory than the cap is killed. |
-
 ### `App.spec.functions[].scaling`
 
 | Field | Type and limits | Description |
@@ -409,7 +445,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it. |
 | `quota` | object, [`App.spec.buckets[].prefixes[].quota`](#appspecbucketsprefixesquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `resources` | object, [`App.spec.functions[].resources`](#appspecfunctionsresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
 
 ### `App.spec.functions[].volumes[]`
 
@@ -452,11 +488,11 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `bindings` | object, [`App.spec.functions[].lakes[].bindings`](#appspecfunctionslakesbindings) | What the Lake's engine uses: Bucket prefixes, and the ConfigMaps and Secrets of its environment. |
 | `buckets` | array of [`App.spec.lakes[].buckets[]`](#appspeclakesbuckets) | The Buckets that a Lake applied on its own declares: by name the Lake creates the Bucket, an omitted prefix owner being the Lake, and a Bucket of that name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each Bucket that the Lake's bindings.blob names must be declared here. A lake that another resource declares sets none. |
 | `configMaps` | array of [`App.spec.lakes[].configMaps[]`](#appspeclakesconfigmaps) | The ConfigMaps that a Lake applied on its own declares: by name the Lake defines one, and a ConfigMap of its stored name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each ConfigMap that the Lake's bindings.config names must be declared here. A lake that another resource declares sets none. |
-| `ingress` | object, [`App.spec.functions[].ingress`](#appspecfunctionsingress) | Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/&lt;name&gt;, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself. |
+| `ingress` | object, [`App.spec.addons[].ingress`](#appspecaddonsingress) | Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/&lt;name&gt;, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself. |
 | `location` | object, [`App.spec.functions[].lakes[].location`](#appspecfunctionslakeslocation) | The Bucket prefix that holds the Lake's files, one of the Lake's bindings.blob. The Lake waits in Pending, with the reason PrefixNotOwned, until the prefix's owner is this Lake. The Lake's catalog is kept outside the Bucket, under the same location, so a Lake located where another was finds that Lake's files and catalog. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `resources` | object, [`App.spec.functions[].resources`](#appspecfunctionsresources) | The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine. |
 | `secrets` | array of [`App.spec.lakes[].secrets[]`](#appspeclakessecrets) | The Secrets that a Lake applied on its own declares, with the keys its engine reads. Each Secret that the Lake's bindings.secret names must be declared here, and the Lake waits in Pending, with SecretNotFound or SecretKeyMissing, while one is missing or lacks a key. A lake that another resource declares sets none. |
 
 ### `App.spec.lakes[].buckets[]`
@@ -496,7 +532,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) | The edge authentication of the rules that set none. Unset uses the Namespace's spec.edgeDefaults.auth, else open. |
+| `auth` | object, [`App.spec.addons[].ingress.auth`](#appspecaddonsingressauth) | The edge authentication of the rules that set none. Unset uses the Namespace's spec.edgeDefaults.auth, else open. |
 | `enabled` | boolean | false turns the Route off: it serves nothing, leaves its paths to other Routes and reports Disabled. Unset is true, except on a Route that a Site or a Function owns in a namespace whose defaultExposure is explicit. |
 | `host` | string | The host the rules answer on, matched in lower case and without a port or a trailing dot. Empty is the namespace host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, every host except another namespace's own host, &lt;other&gt;.&lt;server.baseDomain&gt; or a name under it, while that namespace uses it; a host that another namespace's Route names is not excluded, and the longer matching path wins there. In the default namespace, an explicit defaultExposure refuses an empty host (HostRequired). A host that names another namespace, &lt;other&gt;.&lt;server.baseDomain&gt; or a name under it, is refused (HostReserved) while that namespace uses it, and always for a rule at or under /function. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
@@ -507,7 +543,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) | The edge authentication of this rule's requests. Unset uses the Route's auth, then the Namespace's spec.edgeDefaults.auth, then open. |
+| `auth` | object, [`App.spec.addons[].ingress.auth`](#appspecaddonsingressauth) | The edge authentication of this rule's requests. Unset uses the Route's auth, then the Namespace's spec.edgeDefaults.auth, then open. |
 | `backend` | object, [`App.spec.routes[].rules[].backend`](#appspecroutesrulesbackend), required | What the rule serves: set exactly one of function, static and site. |
 | `methods` | array of string values, each one of `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` | The request methods the rule matches; empty matches every method. |
 | `path` | string, required | The path the rule matches, starting with /. In the default namespace, a Route with no host may not have a rule at or under /function, the path that calls Functions by name (ReservedPath). |
@@ -606,7 +642,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) | How the edge checks callers at the resource's own address; unset, the namespace's spec.edgeDefaults.auth decides, else open. A Lake refuses it, since the Lake gateway checks each caller. |
+| `auth` | object, [`App.spec.addons[].ingress.auth`](#appspecaddonsingressauth) | How the edge checks callers at the resource's own address; unset, the namespace's spec.edgeDefaults.auth decides, else open. A Lake refuses it, since the Lake gateway checks each caller. |
 | `baseHref` | boolean | Serve a copy of the bundle's index whose &lt;base href&gt; is the Site's mount, so a bundle built with relative URLs runs at any path, deep links included. |
 | `enabled` | boolean | Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true. |
 | `host` | string | The exact host of the resource's own address. Empty is the namespace's host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, any host that no other namespace reserves. |
@@ -637,7 +673,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it. |
 | `quota` | object, [`App.spec.buckets[].prefixes[].quota`](#appspecbucketsprefixesquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `resources` | object, [`App.spec.functions[].resources`](#appspecfunctionsresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
 
 ### `App.spec.workflows[]`
 
@@ -700,11 +736,11 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `bindings` | object, [`App.spec.functions[].lakes[].bindings`](#appspecfunctionslakesbindings) | What the Lake's engine uses: Bucket prefixes, and the ConfigMaps and Secrets of its environment. |
 | `buckets` | array of [`App.spec.workflows[].lakes[].buckets[]`](#appspecworkflowslakesbuckets) | The Buckets that a Lake applied on its own declares: by name the Lake creates the Bucket, an omitted prefix owner being the Lake, and a Bucket of that name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each Bucket that the Lake's bindings.blob names must be declared here. A lake that another resource declares sets none. |
 | `configMaps` | array of [`App.spec.workflows[].lakes[].configMaps[]`](#appspecworkflowslakesconfigmaps) | The ConfigMaps that a Lake applied on its own declares: by name the Lake defines one, and a ConfigMap of its stored name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each ConfigMap that the Lake's bindings.config names must be declared here. A lake that another resource declares sets none. |
-| `ingress` | object, [`App.spec.functions[].ingress`](#appspecfunctionsingress) | Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/&lt;name&gt;, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself. |
+| `ingress` | object, [`App.spec.addons[].ingress`](#appspecaddonsingress) | Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/&lt;name&gt;, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself. |
 | `location` | object, [`App.spec.functions[].lakes[].location`](#appspecfunctionslakeslocation) | The Bucket prefix that holds the Lake's files, one of the Lake's bindings.blob. The Lake waits in Pending, with the reason PrefixNotOwned, until the prefix's owner is this Lake. The Lake's catalog is kept outside the Bucket, under the same location, so a Lake located where another was finds that Lake's files and catalog. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `resources` | object, [`App.spec.functions[].resources`](#appspecfunctionsresources) | The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine. |
 | `secrets` | array of [`App.spec.workflows[].lakes[].secrets[]`](#appspecworkflowslakessecrets) | The Secrets that a Lake applied on its own declares, with the keys its engine reads. Each Secret that the Lake's bindings.secret names must be declared here, and the Lake waits in Pending, with SecretNotFound or SecretKeyMissing, while one is missing or lacks a key. A lake that another resource declares sets none. |
 
 ### `App.spec.workflows[].lakes[].buckets[]`
@@ -758,7 +794,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it. |
 | `quota` | object, [`App.spec.buckets[].prefixes[].quota`](#appspecbucketsprefixesquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `resources` | object, [`App.spec.functions[].resources`](#appspecfunctionsresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
 
 ### `App.spec.workflows[].steps[]`
 
@@ -825,7 +861,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `children` | array of [`App.status.children[]`](#appstatuschildren) | One line per entry of configMaps, kv, buckets, sql, functions, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them. Then one Pruning line per dropped object not deleted yet. |
+| `children` | array of [`App.status.children[]`](#appstatuschildren) | One line per entry of configMaps, kv, buckets, sql, addons, functions, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them; an addons line names the add-on's kind. Then one Pruning line per dropped object not deleted yet. |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
 | `currentRevision` | string, a DNS-1123 label | The AppRevision whose rollout last completed, empty until one has. After a failed rollout the parts keep the newer spec, so it names the last complete rollout, not what runs. |
 | `lastSelfHeal` | object, [`App.status.lastSelfHeal`](#appstatuslastselfheal) | The last part that funcd wrote back after another writer changed or deleted it, and when. |
@@ -889,10 +925,18 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `addonRevisions` | array of [`AppRevision.spec.addonRevisions[]`](#apprevisionspecaddonrevisions) | The AddonRevision of each add-on kind of the App's addons parts, set when the revision was created: the Addon's current revision, or for the spec of a kept revision that was current once, that revision's records. A part runs its kind's record once this revision is applied. |
 | `app` | object, [`AppRevision.spec.app`](#apprevisionspecapp), required | The App this revision belongs to. |
 | `hookInput` | object, [`AppRevision.spec.hookInput`](#apprevisionspechookinput) | The data that each hook call of this revision receives, fixed when the revision was created. Set only when its spec has a hook. |
 | `number` | integer, required, 1 to 9999999999 | The revision's number: 1 for the App's first revision, then one more than the latest. The revision is named &lt;app&gt;-&lt;number&gt;, and funcdctl app rollback takes this number. |
 | `spec` | object, [`App.spec`](#appspec), required | The App's spec when this revision was created, without spec.paused. It never changes. |
+
+### `AppRevision.spec.addonRevisions[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `kind` | string, required | The add-on's kind. |
+| `revision` | string, required, a DNS-1123 label | The AddonRevision the App's parts of that kind run. |
 
 ### `AppRevision.spec.app`
 
@@ -906,12 +950,22 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `addonRevisions` | array of [`AppRevision.spec.hookInput.addonRevisions[]`](#apprevisionspechookinputaddonrevisions) | Each addons part whose AddonRevision this revision changes: the revision it runs when this one was created, and the one it runs once this one is applied. A pre-hook runs while the part runs from, a post-hook once it runs to. |
 | `app` | string, required, a DNS-1123 label | The App's name. |
 | `event` | string, required, one of `install`, `upgrade`, `rollback` | install when the App had no current revision, rollback when the spec equals that of a kept revision that was current once, upgrade otherwise. |
 | `from` | string, a DNS-1123 label | The App's current revision when this one was created, empty on an install. |
 | `fromVersion` | string | The spec.version of the from revision, empty on an install or when it sets none. |
 | `to` | string, required, a DNS-1123 label | This revision's name. |
 | `toVersion` | string | This revision's spec.version, empty when it sets none. |
+
+### `AppRevision.spec.hookInput.addonRevisions[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `from` | string, a DNS-1123 label | The AddonRevision the part ran when the App revision was created; empty for a part that ran none yet. |
+| `kind` | string, required | The part's add-on kind. |
+| `object` | string, required, a DNS-1123 label | The part's name. |
+| `to` | string, required, a DNS-1123 label | The AddonRevision the part runs once the App revision is applied. |
 
 ### `AppRevision.status`
 

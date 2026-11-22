@@ -1,0 +1,69 @@
+apiVersion: funcd.io/v1alpha1
+kind: Addon
+metadata:
+  name: rauthy
+spec:
+  kind: IdentityProvider
+  image: ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d
+  port: 8080
+  basePath: /auth/v1
+  readiness:
+    path: /auth/v1/ping
+  settings:
+    - kind: RauthyPasswordPolicy
+      target: spec.config.provider
+      function:
+        ref: rauthy-settings
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          provider:
+            type: string
+          lengthMin:
+            type: integer
+            minimum: 8
+        required:
+          - provider
+          - lengthMin
+      constraints:
+        count:
+          perTarget: 1
+---
+apiVersion: funcd.io/v1alpha1
+kind: IdentityProvider
+metadata:
+  name: login
+  namespace: default
+  resourceGroup: default
+spec: {}
+---
+# region function
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: rauthy-settings
+  namespace: default
+  resourceGroup: default
+spec:
+  runtime: nodejs22
+  handler: reconcile
+  image: registry.example.com/rauthy-settings:0.2.0
+  bindings:
+    addon:
+      - alias: idp
+        object: login
+# endregion function
+---
+# region policy
+apiVersion: funcd.io/v1alpha1
+kind: RauthyPasswordPolicy
+metadata:
+  name: strict
+  namespace: default
+  resourceGroup: default
+spec:
+  config:
+    provider: login
+    lengthMin: 16
+# endregion policy

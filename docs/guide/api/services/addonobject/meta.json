@@ -1,0 +1,10 @@
+{
+  "title": "AddonObject",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

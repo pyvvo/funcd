@@ -858,18 +858,30 @@ funcdctl-plugin:
 
 addon-rauthy:
   description: An admin registers rauthy, an add-on built outside funcd, from its published image pinned by digest, and a developer's IdentityProvider of it turns Ready on real containerd; the edge serves its /auth/v1/ping at its host with the path kept, answers 404 to its private path however it is spelled, and the engine's netns admits only funcd (ADR-0332).
-  # rauthy's Addon is rauthy/addon.yaml of pyvvo/funcd-addons; the lane's own IdentityProvider, its test keys and its
-  # daemon config are funcd's fixtures.
+  # rauthy's App template, with its Addon app/addon.yaml, and its settings Function are rauthy/app and rauthy/settings of
+  # pyvvo/funcd-addons; the lane's own IdentityProvider, its test keys, the settings Function's manifest, the policies,
+  # the template's values and its daemon config are funcd's fixtures.
   module: github.com/pyvvo/funcd-addons
   dir: rauthy
   stage:
-    - addon.yaml
+    - app
+    - settings
     - from: e2e/fixtures/addon-rauthy-funcdconfig.yaml
       to: funcdconfig.yaml
     - from: e2e/fixtures/addon-rauthy-keys.yaml
       to: rauthy-keys.yaml
     - from: e2e/fixtures/addon-rauthy-login.yaml
       to: login.yaml
+    - from: e2e/fixtures/addon-rauthy-settings.yaml
+      to: settings-function.yaml
+    - from: e2e/fixtures/addon-rauthy-policy.yaml
+      to: policy.yaml
+    - from: e2e/fixtures/addon-rauthy-web-auth-policy.yaml
+      to: web-policy.yaml
+    - from: e2e/fixtures/addon-rauthy-values.yaml
+      to: values.yaml
+    - from: e2e/fixtures/addon-rauthy-probe.py
+      to: probe.py
   tokens:
     admin: addon-rauthy-lane-admin
     developer: addon-rauthy-lane-developer
@@ -881,9 +893,16 @@ addon-rauthy-signin:
   module: github.com/pyvvo/funcd-addons
   dir: rauthy
   stage:
-    - addon.yaml
+    - app
     - from: e2e/fixtures/rauthy-signin-funcdconfig.yaml
       to: funcdconfig.yaml
+    # The caller of ADR-0338's case, from pyvvo/funcd-functions.
+    - from: apps/addon-caller/caller
+      module: github.com/pyvvo/funcd-functions
+      to: caller
+    - from: apps/addon-caller/fixtures/addon-caller.yaml
+      module: github.com/pyvvo/funcd-functions
+      to: addon-caller.yaml
     # traefik/whoami answers the headers it gets, behind the oidc stance.
     - from: e2e/fixtures/rauthy-signin-whoami-addon.yaml
       to: rauthy-signin-whoami-addon.yaml
@@ -899,7 +918,7 @@ addon-rauthy-signin:
 
 addon-rauthy-restore:
   description: rauthy, an add-on built outside funcd, backed up from its own hiqlite snapshots to an S3 server in the VM and restored in place on real containerd (ADR-0333) — a client registered before the Backup is kept and one after it is gone, through two engine starts under the hold; then funcd is killed while rauthy starts with restore.env, and the next start ends the Restore Interrupted, keeps the hold, and runs rauthy without restore.env.
-  # rauthy's Addon is rauthy/addon.yaml of pyvvo/funcd-addons; the lane's IdentityProvider, its backups and its daemon
+  # rauthy's Addon is rauthy/app/addon.yaml of pyvvo/funcd-addons; the lane's IdentityProvider, its backups and its daemon
   # config are funcd's fixtures, the S3 server's key and the workload Secrets the todo App's test fixtures. versitygw
   # (Apache-2.0), the S3 server, is built for the VM at the app-todo lane's pinned version, in a writable copy.
   module: github.com/pyvvo/funcd-addons
@@ -908,7 +927,7 @@ addon-rauthy-restore:
   build:
     - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.9.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" versitygw
   stage:
-    - addon.yaml
+    - app
     - versitygw
     - from: e2e/fixtures/addon-rauthy-funcdconfig.yaml
       to: funcdconfig.yaml

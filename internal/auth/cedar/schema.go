@@ -62,7 +62,7 @@ const (
 //nolint:gochecknoglobals // the assembled default capability registry (ADR-0116)
 var defaultRegistry, _ = NewRegistry(
 	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability(), LakeCapability(), SQLCapability(),
-		SecretCapability()},
+		SecretCapability(), AddonCapability()},
 	[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource(), AddonObjectPrincipalSource()},
 )
 

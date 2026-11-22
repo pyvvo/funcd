@@ -48,7 +48,7 @@ On a server, an engine reaches nothing outward: funcd fences its network, and on
 
 ## The Addon
 
-rauthy's [`addon.yaml`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/addon.yaml), part by part:
+rauthy's [`addon.yaml`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/app/addon.yaml), part by part:
 
 - `kind: IdentityProvider` is the kind users declare, at `/apis/funcd.io/v1alpha1/namespaces/<ns>/identityproviders`.
   funcdctl takes it as `IdentityProvider`, `identityprovider` or `identityproviders`. A lower-case word that ends in
@@ -74,12 +74,76 @@ rauthy's [`addon.yaml`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/a
 - `restore.path` and `restore.env` are where funcd puts a copy back and the environment of the start that loads it,
   with `${{ restore.file }}` the copy's path. They lie under `storage.path`, apart from `snapshot.path`.
 
+## Settings kinds
+
+Some engines keep a setting behind their own API, often for their whole instance, such as rauthy's password policy. An
+Addon gives such a setting a kind of its own in `settings`. An object of a settings kind runs no engine: it names its
+target, an object of the Addon's `kind` in the same namespace, and the kind's Function applies it to that target's
+engine.
+
+```yaml
+settings:
+  - kind: RauthyPasswordPolicy
+    target: spec.config.provider
+    resync: 5m
+    function:
+      ref: rauthy-settings
+    schema:
+      type: object
+      additionalProperties: false
+      properties:
+        provider:
+          type: string
+        lengthMin:
+          type: integer
+        lengthMax:
+          type: integer
+      required:
+        - provider
+        - lengthMin
+        - lengthMax
+    constraints:
+      count:
+        perTarget: 1
+      immutable:
+        - spec.config.provider
+      rules:
+        - rule: ${{ object.spec.config.lengthMin <= object.spec.config.lengthMax }}
+          message: lengthMin must not exceed lengthMax
+```
+
+- `kind` is served at its plural, as the Addon's own kind is, and is unique across the platform.
+- `target` is a string field under `spec.config` that the schema requires.
+- `function.ref` names the kind's Function in the target's namespace.
+- `schema` checks each object's `spec.config`, with a 422 naming the property.
+- `constraints` are checked when an object is written, under the namespace's lock, and a refusal is 400:
+  - `count.perTarget` and `count.perNamespace` bound the objects of the kind;
+  - `unique` lists fields whose value no two objects of the namespace share;
+  - `immutable` lists fields that a replace cannot change;
+  - each `rules` entry is a `${{ }}` condition over `object`, `oldObject` on a replace, and `others`, the namespace's
+    other objects of the kind, of which a rule can read the length.
+
+A settings object takes no `bindings`, `ingress`, `resources` or `deletion`. Settings objects count toward
+`addons.maxSettingsPerNamespace`, 200 by default, and not toward the engines' `addons.maxObjectsPerNamespace`.
+
+### The kind's Function
+
+The kind's Function is a Function of the target's namespace that binds the target in `spec.bindings.addon`; funcd
+creates nothing for it, and a target may name its own in `spec.functions`. funcd calls it with each target's full
+list, as a CloudEvent of type `funcd.addon.settings` whose data holds `kind`, `cause` (`start`, `change`, `retry` or
+`resync`), `target` (its `kind`, its `name` and the `alias` that binds it) and `objects` (each one's `name`, `uid`,
+`generation` and `config`). The Function applies the whole list through `ctx.addon.fetch`, idempotently, puts the
+engine's default back for an empty list, and answers `{"results": [...]}`, each result an object's `name`, `ok`, and a
+`reason` and a `message` when it is not ok, in at most 1 MiB. A call past `addons.settingsTimeout`, 30 seconds by
+default, fails, and funcd calls again after a backoff. rauthy's is
+[`settings/rauthy-settings.mjs`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/settings/rauthy-settings.mjs).
+
 ## Test it under funcdctl dev
 
 `funcdctl dev` runs an add-on's engine on the local Docker or containerd, and its admin token registers an Addon:
 
 ```sh
-funcdctl --token funcd-dev-admin-token apply -f rauthy/addon.yaml
+funcdctl --token funcd-dev-admin-token apply -f rauthy/app/addon.yaml
 funcdctl rauthy keys --admin-email admin@login.localhost
 funcdctl apply -f identityprovider.yaml
 funcdctl get identityproviders -n default
@@ -97,6 +161,7 @@ admin URLs. Each funcd-addons release builds the plugins for Linux and macOS and
 
 ## Publish it
 
-An add-on of funcd's lives in its own folder of funcd-addons: `addon.yaml`, `examples/`, `README.md` and
+An add-on of funcd's lives in its own folder of funcd-addons: `app/`, its App template, which holds `addon.yaml`,
+`app.yaml` and `resources/`; `settings/`, the code of its settings kinds' Function; `examples/`, `README.md` and
 `plugin/funcdctl-<addon>/`. Its CI checks every manifest (block style, an image pinned by digest, known kinds), tests
 the plugin and runs the e2e; release-please tags each release, which attaches `<addon>.yaml`.

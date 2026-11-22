@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-10-10; accepted 2026-10-10)
 - **Superseded in part by**: [ADR-0236](0236-sql-in-apps.md) (2026-10-12): Decision 4's pre-hook start gate also
   waits for the SQL databases the hook Function binds.
+- **Superseded in part by**: [ADR-0339](0339-an-add-ons-versions-are-revisions-each-object-pins.md) (2026-11-22) — Decision 2 (the hook input names each add-on part's move).
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit

@@ -1,5 +1,6 @@
 # The Addon of the app behind the lane's oidc stance: traefik/whoami answers the headers of each request it gets, so the
 # suite reads the principal headers the edge set (ADR-0335 Decision 8). Its engine is an upstream entry, with no shim.
+# Its private path /private is the one the lane's caller is refused (ADR-0338).
 apiVersion: funcd.io/v1alpha1
 kind: Addon
 metadata:
@@ -10,5 +11,7 @@ spec:
   runtimes:
     - containerd
   port: 80
+  privatePaths:
+    - /private
   readiness:
     path: /health

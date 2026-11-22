@@ -26,6 +26,14 @@ type AppRevisionSpec struct {
 	// HookInput is the data of this revision's hook calls, set by the stamp when the spec has a hook (ADR-0214
 	// Decision 2).
 	HookInput *AppHookInput `json:"hookInput,omitempty" doc:"The data that each hook call of this revision receives, fixed when the revision was created. Set only when its spec has a hook."`
+	// AddonRevisions records each add-on kind's revision for the App's parts (ADR-0339 Decision 3).
+	AddonRevisions []AppAddonRevision `json:"addonRevisions,omitempty" doc:"The AddonRevision of each add-on kind of the App's addons parts, set when the revision was created: the Addon's current revision, or for the spec of a kept revision that was current once, that revision's records. A part runs its kind's record once this revision is applied."`
+}
+
+// AppAddonRevision is one add-on kind's revision in an AppRevision (ADR-0339 Decision 3).
+type AppAddonRevision struct {
+	Kind     string     `json:"kind" doc:"The add-on's kind."`
+	Revision ObjectName `json:"revision" doc:"The AddonRevision the App's parts of that kind run."`
 }
 
 // AppRevisionStatus is the rollout record (Decision 5): phase Deploying, Ready or Failed, and the conditions Applied,

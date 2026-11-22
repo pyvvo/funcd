@@ -632,7 +632,7 @@ func TestAppDevTemplateEntries(t *testing.T) {
 	require.NoError(t, err, "dot-entries, in resources/ too, the persist dir and app.lock are skipped")
 
 	for name, add := range map[string]func(t *testing.T, dir string){
-		"notes.txt: a template holds only app.yaml, app.lock and resources/*.yaml": func(t *testing.T, dir string) {
+		"notes.txt: a template holds only app.yaml, app.lock, addon.yaml and resources/*.yaml": func(t *testing.T, dir string) {
 			writeProject(t, dir, map[string]string{"notes.txt": "x"})
 		},
 		"resources/nested: resources/ holds only .yaml files, one level": func(t *testing.T, dir string) {

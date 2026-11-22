@@ -210,3 +210,15 @@ func TestAccessHashOfCountsSQL(t *testing.T) {
 	require.Equal(t, hex.EncodeToString(before[:])[:16], pooling.AccessHashOf(v1.FunctionSpec{}, nil, nil),
 		"the document of a Function with no spec.sql is the one before spec.sql existed")
 }
+
+// ADR-0338 Decision 1: an add-on binding is access too, in any order, and a Function with none keeps its key.
+func TestAccessHashOfCountsAddonBindings(t *testing.T) {
+	plain := v1.FunctionSpec{}
+	one := v1.FunctionSpec{Bindings: v1.FunctionBindings{Addon: []v1.FunctionAddon{{Alias: "idp", Object: "login"}}}}
+	other := v1.FunctionSpec{Bindings: v1.FunctionBindings{Addon: []v1.FunctionAddon{{Alias: "idp", Object: "admin-login"}}}}
+	both := v1.FunctionSpec{Bindings: v1.FunctionBindings{Addon: []v1.FunctionAddon{{Alias: "b", Object: "y"}, {Alias: "a", Object: "x"}}}}
+	swapped := v1.FunctionSpec{Bindings: v1.FunctionBindings{Addon: []v1.FunctionAddon{{Alias: "a", Object: "x"}, {Alias: "b", Object: "y"}}}}
+	require.NotEqual(t, pooling.AccessHashOf(plain, nil, nil), pooling.AccessHashOf(one, nil, nil))
+	require.NotEqual(t, pooling.AccessHashOf(one, nil, nil), pooling.AccessHashOf(other, nil, nil), "another object is other access")
+	require.Equal(t, pooling.AccessHashOf(both, nil, nil), pooling.AccessHashOf(swapped, nil, nil))
+}

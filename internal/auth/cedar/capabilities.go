@@ -29,6 +29,9 @@ var builtinS3Policies string
 //go:embed builtin_lake.cedar
 var builtinLakePolicies string
 
+//go:embed builtin_addon.cedar
+var builtinAddonPolicies string
+
 //go:embed builtin_sql.cedar
 var builtinSQLPolicies string
 
@@ -494,9 +497,41 @@ func SQLCapability() Capability { return sqlCapability(nil) }
 // `writers` set (ADR-0136).
 func SQLCapabilityWithWriters(w WriterLister) Capability { return sqlCapability(w) }
 
+// AddonCapability is the addon::call capability (ADR-0338 Decision 5): spec.bindings.addon → the `addonBindings` Set of
+// AddonObject entity-refs (binding-as-call-grant); the resource is the add-on object whose engine the call reaches. Like
+// lake::query it owns no writable resource: no WriterLister, no write action.
+func AddonCapability() Capability {
+	return Capability{
+		Name:            "addon",
+		Actions:         []auth.Action{auth.ActionAddonCall},
+		EmitsEntityType: entityTypeAddonObject,
+		Resource:        addonResource,
+		PrincipalBinding: PrincipalBinding{
+			Attr: "addonBindings",
+			Bind: bindFunction(func(fn *v1.Function) []v1.FunctionAddon { return fn.Spec.Bindings.Addon },
+				func(ns v1.NamespaceName, b v1.FunctionAddon) cedartypes.EntityUID {
+					return addonObjectUID(ns, b.Object)
+				}),
+		},
+		Builtin: builtinAddonPolicies,
+	}
+}
+
+// addonResource materializes the add-on object as a bare entity with its namespace attr, as lakeResource does; a
+// missing object still yields an evaluable entity (default-deny).
+func addonResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
+	if resource.Type != v1.KindAddonObject {
+		return nil, false, nil
+	}
+	uid := addonObjectUID(resource.Namespace, resource.Name)
+	return cedartypes.EntityMap{
+		uid: {UID: uid, Attributes: cedartypes.NewRecord(cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)})},
+	}, true, nil
+}
+
 // bindFunction is a PrincipalBinding.Bind over a Function's bindings, one entity per binding; a principal that is not a
 // Function contributes nothing.
-func bindFunction[B v1.FunctionSQL | v1.FunctionLake | v1.FunctionLink](bindings func(*v1.Function) []B, uid func(v1.NamespaceName, B) cedartypes.EntityUID) func(v1.NamespaceName, PrincipalObject) []cedartypes.EntityUID {
+func bindFunction[B v1.FunctionSQL | v1.FunctionLake | v1.FunctionLink | v1.FunctionAddon](bindings func(*v1.Function) []B, uid func(v1.NamespaceName, B) cedartypes.EntityUID) func(v1.NamespaceName, PrincipalObject) []cedartypes.EntityUID {
 	return func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
 		fn, ok := src.(*v1.Function)
 		if !ok {
@@ -597,7 +632,8 @@ func secretCapability(writers WriterLister) Capability {
 		Name:            "secret",
 		Actions:         []auth.Action{auth.ActionSecretRead, auth.ActionSecretWrite},
 		EmitsEntityType: entityTypeSecret,
-		// An add-on object is a principal of secret::read alone, so a Policy names it here (ADR-0332 Decision 4).
+		// An add-on object is a principal of secret::read (ADR-0332 Decision 4) and the resource of addon::call
+		// (ADR-0338 Decision 5), so a Policy names it under either capability.
 		SupportingEntityTypes: []cedartypes.EntityType{entityTypeAddonObject},
 		Resource: func(ctx context.Context, r MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
 			return secretResource(ctx, r, resource, writers)

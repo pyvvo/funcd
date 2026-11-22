@@ -1,6 +1,7 @@
 # ADR-0220: Dry-run engine — admit a write without storing it
 
 - **Status**: Implemented (2026-10-10; the implementation review passed on its second round, docs/reviews/adr-0220-implementation-claude-opus-5-5-2.md; accepted 2026-10-10)
+- **Superseded in part by**: [ADR-0337](0337-an-app-template-carries-its-add-on.md) (2026-11-22) — Decision 7 (deploy's dry run also checks the template's Addon; the engine is unchanged).
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit

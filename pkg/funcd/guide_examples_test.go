@@ -222,10 +222,11 @@ func applyOnFreshPlatform(t *testing.T, file string) error {
 	if slices.ContainsFunc(docs, func(d sdk.ManifestDocument) bool { return !d.Object.GroupVersionKind().Kind.Namespaced() }) {
 		token = guideAdminToken
 	}
+	// An Addon's image comes from a registry that addons.registries lists (the add-ons examples).
 	p, err := funcd.New(funcd.InMemory(), funcd.WithCredentials(
 		funcd.Credential{Token: guideDeveloperToken, Role: "developer", Namespaces: []string{"default"}},
 		funcd.Credential{Token: guideAdminToken, Role: "admin"},
-	))
+	), funcd.WithAddonRegistries("ghcr.io"))
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

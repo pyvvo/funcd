@@ -26,7 +26,8 @@ The template's `app.yaml`:
 
 ::include[../../../../../_repos/funcd-functions/apps/volumes/app/app.yaml]
 
-A template folder holds only `app.yaml`, `app.lock` and `resources/*.yaml`; an `app.yaml` that names images sets their
+A template folder holds only `app.yaml`, `app.lock`, `addon.yaml` and `resources/*.yaml`
+([carry an add-on](#carry-an-add-on)); an `app.yaml` that names images sets their
 `registry`, which `funcdctl dev` replaces with its own. A part declares no store of its own: a `resources` file
 declares each KV store, Bucket, SQL database, Lake, ConfigMap and Secret at its top level, and the part binds it.
 funcdctl replaces each `${{ … }}` expression when it renders. `resources/files.yaml` declares two Functions, each with
@@ -132,8 +133,9 @@ REVISION   VERSION   PHASE   STAMPED
 A **hook** is a Function of the App that funcd calls for each new revision: [`spec.hooks`](spec.md#appspechooks)
 lists `preApply` hooks, which run before the other parts change, such as a migration, and `postApply` hooks, once the
 revision is current. funcd calls each list in order, with a CloudEvent whose data is the
-[hook input](spec.md#apprevisionspechookinput): the event, `install`, `upgrade` or `rollback`, the App, and the current
-and new revisions with their versions.
+[hook input](spec.md#apprevisionspechookinput): the event, `install`, `upgrade` or `rollback`, the App, the current
+and new revisions with their versions, and for an App with add-on parts, each part whose add-on revision the new
+revision changes ([carry an add-on](#carry-an-add-on)).
 
 - Until every pre-hook succeeds, funcd writes only the pre-hooks and what they bind, and the current revision keeps
   serving; a failed pre-hook fails the revision with `HookFailed`.
@@ -170,6 +172,34 @@ $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get apprevisio
 ```
 
 Keep the example running: [Changes and deletion](#changes-and-deletion) deletes it.
+
+## Carry an add-on
+
+A template may carry the [add-on](../../services/addons/index.md) whose objects its App holds: `addon.yaml` beside
+`app.yaml` holds one Addon, with no namespace, and the App's `addons` section declares the objects of its kind, as `kv`
+declares a KV store: each entry has a `name`, the add-on's `kind` and the object's `config`, `bindings`, `ingress`,
+`resources` and `deletion`, or a `ref` alone.
+
+`funcdctl app deploy` applies the Addon before the App. An admin's deploy finds the Addon of the template's kind under
+any name: it creates the template's when there is none (`created Addon/rauthy`), updates one whose spec differs under
+its own name (`updated Addon/<name>`), and leaves one that agrees (`unchanged Addon/<name>`). A developer may not read
+an Addon, so a developer's deploy only checks that the kind is served in the namespace; when it is not, it applies
+nothing and exits 1: `Addon rauthy is not registered: an admin deploys this template first`. `funcdctl app render`
+prints the App alone, and the Addon's `${{ }}` are its own, never the template's values. `funcdctl dev` applies
+`addon.yaml` with its admin token before the App, again when the file changes, and deletes the Addon once the file
+goes.
+
+Each change of an Addon is a revision, `rauthy-1` then `rauthy-2`, and a newer one moves no engine. An App's revision
+records the revision of each add-on kind of its parts, and a part moves to that record once the App's revision is
+applied, so the pre-hooks run against the old engine and the post-hooks against the new one; the hook input's
+`addonRevisions` names each part's move. A rollback takes back the records of the revision it rolls back to, so the
+part returns to the older engine. A part only moves forward: a revision that fails does not move it back.
+
+An `addons` part is admitted against its Addon: a kind no Addon registers, a config that breaks the Addon's schema, or
+a Secret that the App's `secrets` do not declare is refused with 400 naming the entry. The part is Ready once its
+engine is, `status.children` names it under its add-on's kind (`IdentityProvider/web-auth-login`), a revision that drops
+it deletes it and its engine, and its storage follows its own `deletion`. Deleting the App deletes its parts; the
+Addon stays until an admin deletes it.
 
 ## Limits and quotas
 

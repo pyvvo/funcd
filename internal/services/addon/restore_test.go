@@ -58,8 +58,7 @@ func newRestoreRig(t *testing.T) *restoreRig {
 			Snapshot: &v1.AddonSnapshot{Path: "/app/data/backups"},
 			Restore: &v1.AddonRestore{Path: "/app/data/restore",
 				Env: map[string]string{fakeaddon.RestoreEnv: `${{ "file:" + restore.file }}`}}}}
-	_, err := st.Create(ctx, a)
-	require.NoError(t, err)
+	register(t, st, a)
 	rt := fakeaddon.New(t)
 	g := &heldGate{Gate: hold.Never}
 	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: rt, Modes: []string{v1.AddonRuntimeContainerd},

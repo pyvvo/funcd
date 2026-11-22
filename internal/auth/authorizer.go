@@ -88,6 +88,9 @@ const (
 	// ActionSQLWrite is the Cedar action for a SQL execute (ADR-0233): permitted only to the database's writers,
 	// its owner plus writer-role grants.
 	ActionSQLWrite Action = "sql::write"
+	// ActionAddonCall is the Cedar action for a call of an add-on object's engine through funcd (ADR-0338 Decision 5): a
+	// declared spec.bindings.addon binding grants it; a Policy forbid revokes it. Resource = an AddonObject.
+	ActionAddonCall Action = "addon::call"
 	// ActionSecretRead is the Cedar action for a read of a Secret's values (ADR-0321): a declared spec.bindings.secret
 	// binding grants it, to a Function or a Lake; a namespace Policy forbid revokes it. Resource = a Secret.
 	ActionSecretRead Action = "secret::read"

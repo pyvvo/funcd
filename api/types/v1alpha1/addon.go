@@ -40,6 +40,128 @@ type AddonSpec struct {
 	SecretKeys   []string          `json:"secretKeys,omitempty" doc:"The keys of an object's bound Secrets that reach the engine's environment. A bound Secret's other keys do not."`
 	Snapshot     *AddonSnapshot    `json:"snapshot,omitempty" doc:"Where the engine writes its own consistent copies, which a Backup of an object copies. Unset, a Backup that names an object of the add-on fails with reason NoSnapshot, and a resourceGroup scope leaves the add-on's objects out."`
 	Restore      *AddonRestore     `json:"restore,omitempty" doc:"How the engine loads a copy at its start, which an in-place Restore of an object puts in place. Unset, an object of the add-on cannot be restored."`
+	Settings     []AddonSettings   `json:"settings,omitempty" doc:"Kinds of settings objects that the add-on adds beside spec.kind. An object of one runs no engine: the kind's Function applies the objects of each target through the target's engine."`
+}
+
+// AddonSettings is a kind of settings objects (ADR-0340): each object runs no engine and names its target, an object of
+// the Addon's spec.kind in its namespace, whose settings the kind's Function applies (ADR-0341).
+type AddonSettings struct {
+	Kind        string                `json:"kind" doc:"The settings kind, a kind name as spec.kind is, served at its plural."`
+	Target      string                `json:"target" doc:"The string field under spec.config that names the object's target, such as spec.config.provider."`
+	Resync      Duration              `json:"resync,omitempty" doc:"How often funcd sends a target's objects again with no change, from 1s to 24h; unset is 10m."`
+	Function    AddonSettingsFunction `json:"function" doc:"The Function that applies a target's objects, named as a Workflow step names its Function. A target may name its own in its spec.functions."`
+	Schema      json.RawMessage       `json:"schema" doc:"The JSON Schema of the objects' spec.config, within funcd's contract profile. It must require the target field at each level."`
+	Constraints AddonConstraints      `json:"constraints,omitzero" doc:"What an object must keep at admission, beside its schema."`
+}
+
+// AddonSettingsFunction names a settings kind's Function, as a Workflow step's function.ref names one (ADR-0094).
+type AddonSettingsFunction struct {
+	Ref ObjectName `json:"ref" doc:"The name of an existing Function in the target's namespace, which funcd calls with each target's objects. funcd does not create or change it, and the objects wait while it is missing."`
+}
+
+// AddonConstraints are a settings kind's admission rules, each checked under the namespace's admission lock.
+type AddonConstraints struct {
+	Count     AddonCount  `json:"count,omitzero" doc:"How many objects of the kind a target or a namespace holds at most; 0 is no limit."`
+	Unique    []string    `json:"unique,omitempty" doc:"Fields under spec.config whose value no two objects of the kind in a namespace share."`
+	Immutable []string    `json:"immutable,omitempty" doc:"Fields under spec.config that a replace cannot change."`
+	Rules     []AddonRule `json:"rules,omitempty" doc:"Conditions over object, oldObject and others that a write must meet."`
+}
+
+// AddonCount bounds the objects of a settings kind.
+type AddonCount struct {
+	PerTarget    int `json:"perTarget,omitempty" minimum:"0" doc:"The most objects of the kind that name one target."`
+	PerNamespace int `json:"perNamespace,omitempty" minimum:"0" doc:"The most objects of the kind in a namespace."`
+}
+
+// AddonRule is a ${{ }} condition that an object of a settings kind must meet.
+type AddonRule struct {
+	Rule    string `json:"rule" doc:"A single ${{ }} condition over object, oldObject (on a replace) and others."`
+	Message string `json:"message" doc:"What a refusal says."`
+}
+
+// The bounds and the default of a settings kind's resync.
+const (
+	MinAddonResync     = Duration(time.Second)
+	MaxAddonResync     = Duration(24 * time.Hour)
+	DefaultAddonResync = Duration(10 * time.Minute)
+)
+
+// EffectiveResync is resync, DefaultAddonResync when unset.
+func (s *AddonSettings) EffectiveResync() time.Duration {
+	if s.Resync == 0 {
+		return time.Duration(DefaultAddonResync)
+	}
+	return time.Duration(s.Resync)
+}
+
+// SettingsKind is the settings kind named kind, compared as SameAddonKind compares; nil when the Addon adds none.
+func (s *AddonSpec) SettingsKind(kind string) *AddonSettings {
+	for i := range s.Settings {
+		if SameAddonKind(s.Settings[i].Kind, kind) {
+			return &s.Settings[i]
+		}
+	}
+	return nil
+}
+
+// Kinds are every kind the Addon adds: spec.kind, then its settings kinds.
+func (s *AddonSpec) Kinds() []string {
+	out := []string{s.Kind}
+	for _, st := range s.Settings {
+		out = append(out, st.Kind)
+	}
+	return out
+}
+
+// ConfigField is the segments under spec.config of a field path such as spec.config.provider, and whether p is one.
+func ConfigField(p string) ([]string, bool) {
+	rest, ok := strings.CutPrefix(p, "spec.config.")
+	if !ok || rest == "" {
+		return nil, false
+	}
+	segs := strings.Split(rest, ".")
+	return segs, !slices.Contains(segs, "")
+}
+
+// validateSettings checks each settings kind: its name, distinct from every other kind of the Addon, its target and
+// constraint paths under spec.config, its Function's name, its resync and its required schema.
+func (s *AddonSpec) validateSettings(op string) error {
+	for i, st := range s.Settings {
+		field := fmt.Sprintf("spec.settings[%d]", i)
+		switch {
+		case !addonKind.MatchString(st.Kind):
+			return fault.Invalidf(op, "%s.kind %q is not a kind name", field, st.Kind)
+		case funcdKind(st.Kind):
+			return fault.Invalidf(op, "%s.kind %q is a kind of funcd's own", field, st.Kind)
+		case slices.ContainsFunc(s.Kinds()[:i+1], func(k string) bool { return SameAddonKind(k, st.Kind) }):
+			return fault.Invalidf(op, "%s.kind %q is another kind of the Addon, whatever the case", field, st.Kind)
+		case !dnsLabel.MatchString(string(st.Function.Ref)):
+			return fault.Invalidf(op, "%s.function.ref %q is not a valid DNS-1123 name", field, st.Function.Ref)
+		case len(bytes.TrimSpace(st.Schema)) == 0:
+			return fault.Invalidf(op, "%s.schema is required", field)
+		case st.Resync != 0 && (st.Resync < MinAddonResync || st.Resync > MaxAddonResync):
+			return fault.Invalidf(op, "%s.resync %s is not from %s to %s", field, st.Resync, MinAddonResync, MaxAddonResync)
+		case st.Constraints.Count.PerTarget < 0 || st.Constraints.Count.PerNamespace < 0:
+			return fault.Invalidf(op, "%s.constraints.count must not be negative", field)
+		}
+		if _, ok := ConfigField(st.Target); !ok {
+			return fault.Invalidf(op, "%s.target %q is not a field under spec.config", field, st.Target)
+		}
+		for _, p := range slices.Concat(st.Constraints.Unique, st.Constraints.Immutable) {
+			if _, ok := ConfigField(p); !ok {
+				return fault.Invalidf(op, "%s.constraints field %q is not a field under spec.config", field, p)
+			}
+		}
+		for j, r := range st.Constraints.Rules {
+			if r.Rule == "" || r.Message == "" {
+				return fault.Invalidf(op, "%s.constraints.rules[%d] needs a rule and a message", field, j)
+			}
+		}
+		if c := bytes.TrimSpace(st.Schema); len(c) > 0 && c[0] != '{' {
+			return fault.Invalidf(op, "%s.schema must be a JSON Schema object", field)
+		}
+	}
+	return nil
 }
 
 // AddonSnapshot is the folder an add-on's engine writes its own copies to (ADR-0333 Decision 1).
@@ -98,9 +220,11 @@ type AddonStorage struct {
 	GID  int    `json:"gid,omitempty" minimum:"0" doc:"The group ID that owns the directory."`
 }
 
-// AddonStatus is the shared Status only, as RuntimeClassStatus is: each object reports its own state.
+// AddonStatus is the shared Status and the current revision (ADR-0339 Decision 1): each object reports its own state.
 type AddonStatus struct {
 	Status `json:",inline"`
+	// CurrentRevision is the revision a new or moved object pins.
+	CurrentRevision ObjectName `json:"currentRevision,omitempty" doc:"The AddonRevision of the Addon's latest spec: an object created, or edited outside an App, pins it, and an App's new revision records it. Empty until funcd has stamped the Addon's first revision."`
 }
 
 // GroupVersionKind returns the constant GVK for Addon.
@@ -219,6 +343,9 @@ func (a *Addon) Validate() error {
 			return err
 		}
 	}
+	if err := s.validateSettings(op); err != nil {
+		return err
+	}
 	return s.validateCopies(op)
 }
 
@@ -291,12 +418,19 @@ type AddonObject struct {
 
 // AddonObjectSpec is what a user declares in an object of an add-on's kind.
 type AddonObjectSpec struct {
-	Kind      string              `json:"kind,omitempty" doc:"The add-on's kind, which funcd sets from the path the object is written at."`
-	Config    json.RawMessage     `json:"config,omitempty" doc:"The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object."`
-	Bindings  AddonObjectBindings `json:"bindings,omitempty" doc:"What the object's engine uses."`
-	Ingress   *Ingress            `json:"ingress,omitempty" doc:"Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused."`
-	Resources ResourceSpec        `json:"resources,omitempty" doc:"The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine."`
-	Deletion  DeletionPolicy      `json:"deletion,omitempty" doc:"What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way."`
+	Kind      string                `json:"kind,omitempty" doc:"The add-on's kind, which funcd sets from the path the object is written at."`
+	Config    json.RawMessage       `json:"config,omitempty" doc:"The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object."`
+	Bindings  AddonObjectBindings   `json:"bindings,omitempty" doc:"What the object's engine uses."`
+	Ingress   *Ingress              `json:"ingress,omitempty" doc:"Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused."`
+	Resources ResourceSpec          `json:"resources,omitempty" doc:"The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine."`
+	Deletion  DeletionPolicy        `json:"deletion,omitempty" doc:"What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way."`
+	Functions []AddonObjectFunction `json:"functions,omitempty" doc:"The object's own Function for a settings kind of its Addon, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none."`
+}
+
+// AddonObjectFunction names a target's own Function for one settings kind (ADR-0341 Decision 3).
+type AddonObjectFunction struct {
+	Kind string     `json:"kind" doc:"A settings kind of the object's Addon, named once."`
+	Ref  ObjectName `json:"ref" doc:"A Function of the object's namespace that binds the object in its bindings.addon, which funcd calls with the object's settings objects of the kind. In an App, a Function the App declares."`
 }
 
 // AddonObjectBindings are what an add-on object's engine uses (ADR-0332 Decision 4).
@@ -309,6 +443,10 @@ type AddonObjectStatus struct {
 	Status  `json:",inline"`
 	Address string             `json:"address,omitempty" doc:"The engine's own address, its host and port, which only funcd reaches."`
 	Restore *AddonRestoreState `json:"restore,omitempty" doc:"The in-place Restore whose copy the engine loads: it goes once an engine started without restore.env is Ready, or once that Restore has failed or is gone. While it stands, the namespace is held."`
+	// AddonRevision is the revision the engine runs, and AppRevision, for an App's part, the App revision whose record
+	// it pins (ADR-0339 Decisions 2 and 3).
+	AddonRevision ObjectName `json:"addonRevision,omitempty" doc:"The AddonRevision whose spec the engine runs. A newer revision of the Addon moves no object: an edit of the object moves it to the Addon's current revision, and for an App's part, the App's revision moves it."`
+	AppRevision   ObjectName `json:"appRevision,omitempty" doc:"For an App's part, the AppRevision whose record for its kind it pins: the App's latest revision once that one is applied. A part moves forward only."`
 }
 
 // AddonRestoreState is the copy an in-place Restore placed for an add-on object's engine (ADR-0333 Decisions 3 and 4).
@@ -383,6 +521,14 @@ func (o *AddonObject) Validate() error {
 	for _, s := range o.Spec.Bindings.Secret {
 		if !dnsLabel.MatchString(string(s)) {
 			return fault.Invalidf(op, "spec.bindings.secret entry %q is not a valid DNS-1123 name", s)
+		}
+	}
+	for i, f := range o.Spec.Functions {
+		switch {
+		case !IsAddonKind(f.Kind):
+			return fault.Invalidf(op, "spec.functions[%d].kind %q is not an add-on's kind", i, f.Kind)
+		case !dnsLabel.MatchString(string(f.Ref)):
+			return fault.Invalidf(op, "spec.functions[%d].ref %q is not a valid DNS-1123 name", i, f.Ref)
 		}
 	}
 	if in := o.Spec.Ingress; in != nil {

@@ -123,12 +123,15 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `kibi` | 1KiB | `internal/platform/units/units.go` |
 | `mebi` | 1MiB | `internal/platform/units/units.go` |
 | `tebi` | 1TiB | `internal/platform/units/units.go` |
+| `addonProxyHeaderTimeout` | 10s | `pkg/funcd/addon_provider.go` |
+| `settingsReplyLimit` | 1MiB | `pkg/funcd/addon_provider.go` |
 | `feedWaitPoll` | 50ms | `pkg/funcd/binding_providers.go` |
 | `sensorDeliveryTimeout` | 30s | `pkg/funcd/binding_providers.go` |
 | `sqlFeedBootWait` | 30s | `pkg/funcd/binding_providers.go` |
 | `engineOutputBuf` | 64KiB | `pkg/funcd/engineoutput.go` |
 | `closeMargin` | 2s | `pkg/funcd/funcd.go` |
 | `defaultAddonObjectsPerNamespace` | 20 | `pkg/funcd/funcd.go` |
+| `defaultAddonSettingsPerNamespace` | 200 | `pkg/funcd/funcd.go` |
 | `defaultBucketsPerNamespace` | 100 | `pkg/funcd/funcd.go` |
 | `defaultCloseGrace` | 3s | `pkg/funcd/funcd.go` |
 | `defaultDeadletterMaxEntries` | 1000 | `pkg/funcd/funcd.go` |

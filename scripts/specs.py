@@ -34,8 +34,8 @@ DIAGRAM = re.compile(r"^#\s*diagram:\s*(.+)$", re.MULTILINE)
 MUTANT = re.compile(r"^#\s*mutant\s+([\w-]+):\s*(\S+)\s*$", re.MULTILINE)
 DECLARED = re.compile(r'^MUTANT = ""\s*$', re.MULTILINE)
 FRONT = re.compile(r"\A\s*---\n(.*?)\n---", re.DOTALL)
-ASSERTION = re.compile(r"^(?:always|exists|transition|always eventually|eventually always)\s+assertion\s+(\w+)\s*:",
-                       re.MULTILINE)
+ASSERTION = re.compile(r"^(?:always|exists|transition|always eventually|eventually always)\s+assertion\s+(\w+)\s*"
+                       r"(?:\([^)]*\))?\s*:", re.MULTILINE)
 ORACLE = re.compile(r"oracle: (docs/design/[\w/-]+\.fizz)#(\w+)")
 
 
@@ -69,7 +69,7 @@ class Run:
 def verdict(output: str) -> str:
     if "PASSED: Model checker completed successfully" in output:
         return "pass"
-    if m := re.search(r"FAILED: Model checker failed\. Invariant:\s+(\S+)", output):
+    if m := re.search(r"FAILED: Model checker failed\. (?:Transition )?Invariant:\s+(\S+)", output):
         return m.group(1)
     if "FAILED: Liveness check failed" in output:
         return "liveness"

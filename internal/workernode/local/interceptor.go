@@ -18,12 +18,12 @@ type Endpoint struct {
 	Causes  []*fault.KnownCause // nil: not yet described; empty: it answers no error
 }
 
-// Endpoints returns every endpoint of the local API: the four facets', registered over nil ports, then invoke, health
+// Endpoints returns every endpoint of the local API: the five facets', registered over nil ports, then invoke, health
 // and fetch (ADR-0330 Decision 8). It serves nothing.
 func Endpoints() []Endpoint {
 	var list endpointList
 	logger := slog.New(slog.DiscardHandler)
-	for _, f := range []Facet{KVFacet(nil), BlobFacet(nil), SQLFacet(nil), SecretFacet(nil)} {
+	for _, f := range []Facet{KVFacet(nil), BlobFacet(nil), SQLFacet(nil), SecretFacet(nil), AddonFacet(nil, AddonLimits{})} {
 		f.register(&list, Ref{}, logger)
 	}
 	registerInvoke(&list, logger, Ref{}, auth.Identity{}, nil, nil, nil)

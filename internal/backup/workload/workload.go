@@ -107,8 +107,9 @@ type Manifest struct {
 }
 
 // Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, Lakes, SQLDatabases, Function volumes then
-// add-on objects: by name, the stores of the App's kv, buckets, lakes and sql entries and its Functions' local volumes,
-// or the stores of the ResourceGroup and its add-on objects whose Addon declares a snapshot (ADR-0333 Decision 2). In
+// add-on objects: by name, the stores of the App's kv, buckets, lakes and sql entries, its Functions' local volumes and
+// its addons entries whose Addon declares a snapshot (ADR-0337 Decision 7), or the stores of the ResourceGroup and its
+// add-on objects whose Addon declares a snapshot (ADR-0333 Decision 2). In
 // each form a Bucket brings in the Lakes on its Lake prefixes as their own members, once, after the Lakes s names,
 // whichever App or ResourceGroup holds them (ADR-0312). A named member or App that does not exist is fault.NotFound
 // naming it; a scope over limits.CopyMembers is fault.Invalid naming the limit.
@@ -117,6 +118,7 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 	names := map[v1.Kind][]v1.ObjectName{
 		v1.KindKVStore: s.KVStores, v1.KindBucket: s.Buckets, v1.KindLake: s.Lakes, v1.KindSQLDatabase: s.Databases,
 	}
+	var parts []v1.ObjectName // the App's add-on parts, kept when their Addon declares a snapshot
 	switch {
 	case s.App != "":
 		obj, err := st.Get(ctx, v1.KindApp.GVK(), ns, s.App)
@@ -143,6 +145,9 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 					s.Volumes = append(s.Volumes, string(f.Name)+"/"+string(v.VolumeName()))
 				}
 			}
+		}
+		for _, e := range a.Spec.Addons {
+			parts = append(parts, cmp.Or(e.Name, e.Ref))
 		}
 	case s.ResourceGroup != "":
 		names = map[v1.Kind][]v1.ObjectName{}
@@ -194,7 +199,7 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 		return nil, err
 	}
 	out = append(out, vols...)
-	adds, err := addonMembers(ctx, st, ns, s)
+	adds, err := addonMembers(ctx, st, ns, s, parts)
 	if err != nil {
 		return nil, err
 	}
@@ -275,10 +280,10 @@ func volumeMembers(ctx context.Context, st store.Store, ns v1.NamespaceName, ref
 	return out, nil
 }
 
-// addonMembers resolves the add-on objects s names, or those of its ResourceGroup whose Addon declares a snapshot, in
-// name order, each under its add-on's kind (ADR-0333 Decision 2). A named object resolves whatever its Addon declares:
-// its Backup fails NoSnapshot at the run, with no check at apply.
-func addonMembers(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope) ([]Member, error) {
+// addonMembers resolves the add-on objects s names, or those of its ResourceGroup, or the App's parts, whose Addon
+// declares a snapshot, in name order, each under its add-on's kind (ADR-0333 Decision 2, ADR-0337 Decision 7). A named
+// object resolves whatever its Addon declares: its Backup fails NoSnapshot at the run, with no check at apply.
+func addonMembers(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope, parts []v1.ObjectName) ([]Member, error) {
 	const op = "workload.Resolve"
 	var out []Member
 	for _, n := range s.Addons {
@@ -288,7 +293,7 @@ func addonMembers(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1
 		}
 		out = append(out, Member{Kind: v1.Kind(obj.(*v1.AddonObject).Spec.Kind), Name: n})
 	}
-	if s.ResourceGroup == "" {
+	if s.ResourceGroup == "" && len(parts) == 0 {
 		return out, nil
 	}
 	addons, err := st.List(ctx, v1.KindAddon.GVK(), store.ListOptions{})
@@ -301,11 +306,22 @@ func addonMembers(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1
 			snapshots[v1.AddonPlural(a.Spec.Kind)] = true
 		}
 	}
-	objs, err := st.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{Namespace: ns, ResourceGroup: s.ResourceGroup})
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list the add-on objects of %q", ns)
+	var objs []v1.Object
+	if s.ResourceGroup != "" {
+		l, err := st.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{Namespace: ns, ResourceGroup: s.ResourceGroup})
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "list the add-on objects of %q", ns)
+		}
+		objs = l.Items
 	}
-	for _, o := range objs.Items {
+	for _, n := range parts {
+		obj, err := st.Get(ctx, v1.KindAddonObject.GVK(), ns, n)
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "member add-on object %s", n)
+		}
+		objs = append(objs, obj)
+	}
+	for _, o := range objs {
 		if ao, ok := o.(*v1.AddonObject); ok && snapshots[v1.AddonPlural(ao.Spec.Kind)] {
 			out = append(out, Member{Kind: v1.Kind(ao.Spec.Kind), Name: ao.Name})
 		}
