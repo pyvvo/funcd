@@ -88,3 +88,40 @@ func TestEngineSegmentsAndReads(t *testing.T) {
 	_, err = r.Read(ctx, logread.Query{Namespace: "default", Kind: "Lake"})
 	require.ErrorContains(t, err, "names its kind and its name")
 }
+
+// ADR-0342 Decision 2 with ADR-0083: an engine's JSONL segment compacts to Parquet under the same owner segment, the
+// compacted Row unchanged, and the read still names the kind and the object.
+func TestEngineSegmentsCompactToParquet(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mem, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mem.Close() })
+	start := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	clk := clock.NewManual(start)
+	sink, err := funclog.NewBlobSink(funclog.Deps{Bucket: mem, Clock: clk})
+	require.NoError(t, err)
+	engine := funclog.Resource{Namespace: "default", Kind: "Lake", Name: "sales", Replica: "0"}
+	require.NoError(t, sink.Append(ctx, engine, funclog.Entry{Time: start, Severity: funclog.SevInfo, Body: "lake line",
+		Source: funclog.SourceStderr}))
+	_, err = sink.Flush(ctx, engine)
+	require.NoError(t, err)
+	require.NoError(t, sink.Close())
+
+	clk.Advance(2 * time.Hour)
+	c, err := compact.New(compact.Deps{Bucket: mem, Clock: clk, Window: time.Hour})
+	require.NoError(t, err)
+	stats, err := c.CompactOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Windows)
+	objs, err := mem.List(ctx, "logs/default/lakes.sales/")
+	require.NoError(t, err)
+	require.Len(t, objs, 1)
+	require.True(t, strings.HasSuffix(objs[0].Key, ".parquet"), objs[0].Key)
+
+	lines, err := logread.NewBlobReader(mem).Read(ctx, logread.Query{Namespace: "default", Kind: "Lake", Name: "sales"})
+	require.NoError(t, err)
+	require.Len(t, lines, 1)
+	require.Equal(t, []string{"lake line", "stderr", "Lake", "sales", ""}, []string{lines[0].Body, lines[0].Source,
+		lines[0].Kind, lines[0].Name, lines[0].Function})
+}
