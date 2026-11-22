@@ -1,6 +1,8 @@
 # ADR-0342: An engine's output is kept and read as a Function's logs
 
-- **Status**: Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider's go-ahead ("Don't wait for me ... We should have this
+- **Status**: Implemented (2026-11-22), review passed and its lane cases passed on containerd (`addon-rauthy` at
+  8fe0f7ea, 121 s; `duckdb` and `sql` at b22e9cd2, 312 s and 229 s; [report](../reviews/adr-0342-implementation-claude-opus-5-5.md));
+  Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider's go-ahead ("Don't wait for me ... We should have this
   implemented, and the related lanes"), after three rounds of an independent judge, every Blocker and Major folded
 - **Date**: 2026-11-22
 - **Deciders**: green-0-rabbit
