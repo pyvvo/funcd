@@ -1,6 +1,7 @@
 # ADR-0342: An engine's output is kept and read as a Function's logs
 
-- **Status**: Proposed (2026-11-22)
+- **Status**: Accepted (2026-11-22), by the decider's go-ahead ("Don't wait for me ... We should have this
+  implemented, and the related lanes"), after three rounds of an independent judge, every Blocker and Major folded
 - **Date**: 2026-11-22
 - **Deciders**: green-0-rabbit
 - **Tags**: observability, logs, engines, addons, lake, sql
@@ -90,8 +91,8 @@ to the daemon log copy on a server (ADR-0276 Decision 4 stays); `funcdctl logs` 
   request, and one that owns no build would print every burst under ADR-0256 Decision 3; the decider refused that
   bloat. Rejected. So is printing a failed container's last 20 lines (ADR-0255 Decision 3): dev re-creates a failed
   engine at each pass, so a crash loop would print every pass. Printing them once, at the first failure since the
-  engine was last Ready, would need dev to track each engine's readiness, while the object's `EngineNotReady`, its
-  log file and `funcdctl logs` already show why; a later ADR can add it if dev proves too quiet.
+  engine was last Ready, is left out: the object's `EngineNotReady`, its log file and `funcdctl logs` already show
+  why; a later ADR can add it if dev proves too quiet.
 - **The engine pushes OTLP itself (`OTEL_EXPORTER_OTLP_ENDPOINT` to a funcd receiver)**: only engines with an
   OpenTelemetry SDK, and an engine's egress to funcd. Kept for F268's metrics, which need such a path anyway.
 
@@ -125,9 +126,10 @@ to the daemon log copy on a server (ADR-0276 Decision 4 stays); `funcdctl logs` 
    of funcd's is refused before any call, `workflowrun` naming `funcdctl workflow logs`. A bare name is a Function, as
    before.
 5. **Dev.** Under `funcdctl dev`, the Docker and nerdctl runtimes follow each engine container's stdout and stderr
-   from its start. Each line goes to the container's log file, `<process dir>/logs/<namespace>/<plural>.<name>.log`
-   beside the `dev.watch` logs, emptied when dev starts, and to dev's funclog store, past dev's printing tee. None
-   reaches dev's terminal or dev's own log: dev prints only `engine <kind>/<name>: <log file>`, once, as the container
+   from its start, splitting a line longer than 64 KiB as a server's worker pipe does (`workerpipe.DefaultLineBytes`).
+   Each line goes to the container's log file, `<process dir>/logs/<namespace>/<plural>.<name>.log` beside the
+   `dev.watch` logs, emptied when dev starts, and to dev's funclog store, past dev's printing tee; a failed append is
+   dropped unlogged. None reaches dev's terminal or dev's own log: dev prints only `engine <kind>/<name>: <log file>`, once, as the container
    first starts, as it prints a watch command's file (ADR-0255). This departs from a watch command's rule on purpose
    (ADR-0256 Decision 3 prints every burst of a command that owns no build). Lines written while dev stops are lost:
    dev stops the containers after the platform (ADR-0334 Decision 7).
@@ -253,6 +255,7 @@ drain (`pkg/funcd/logroutes.go`), so dev's stop waits for none of them.
 - [ ] A settings kind's plural and an unregistered plural answer 404; a non-engine kind of funcd's is refused locally.
 - [ ] `funcdctl logs <name>` still reads a Function.
 - [ ] Dev's terminal and dev's own log show no engine line; the log file and dev's store hold them.
+- [ ] Dev's stop waits for no follower, and a follower splits a line longer than 64 KiB.
 - [ ] The lane cases passed on containerd.
 
 ## Consequences
