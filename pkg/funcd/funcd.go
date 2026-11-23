@@ -879,9 +879,10 @@ func (p *Platform) buildControlPlane() error {
 		nestedCap = defaultNestedInFlightCap
 	}
 	invoker := local.NewNestedCapInvoker(local.NewInvoker(dpHolder), nestedCap, invokeMeter(c.telemetry))
-	// The Executor is built once the providers are: a worker's local API serves their facets, in list order (ADR-0310).
+	// The Executor is built once the providers are: a worker's local API serves their facets, in list order (ADR-0310),
+	// then the Job facet, which a run's worker reads its run from (ADR-0348 Decision 6).
 	if err := p.exec.build(execDeps{authz: cedarPDP, floor: p.floor, invoker: invoker, checks: deps,
-		facets: p.facets()}); err != nil {
+		facets: append(p.facets(), local.JobFacet(jobRuns{store: c.store}))}); err != nil {
 		return err
 	}
 

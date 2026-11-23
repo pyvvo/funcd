@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"slices"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 )
@@ -39,8 +40,31 @@ type JobSpec struct {
 	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty" doc:"The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Job waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key."`
 	Volumes            []VolumeEntry       `json:"volumes,omitempty" doc:"The directories each run's worker mounts. Apply refuses a Job with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A local volume is the Job's own, never a same-named Function's, and allows a concurrency of at most 1."`
 	Bindings           FunctionBindings    `json:"bindings,omitzero" doc:"What the code may use: KV tables, Bucket prefixes, SQL databases, Lakes and Functions, each under an alias, and ConfigMaps and Secrets. A binding is the grant: a call on an alias with no binding is refused with 403. Each store, Lake, ConfigMap and Secret it names must be declared at the root, in this spec's kv, buckets, sql, lakes, configMaps or secrets."`
-	Timeout            Duration            `json:"timeout,omitempty" doc:"The bound on each call of a run's handler, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops."`
-	Concurrency        int                 `json:"concurrency,omitempty" minimum:"1" maximum:"15" doc:"How many of the Job's runs may hold a worker at once: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued."`
+	Timeout            Duration            `json:"timeout,omitempty" doc:"The bound on each call of a run's handler, its preview's and its apply's, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops."`
+	Concurrency        int                 `json:"concurrency,omitempty" minimum:"1" maximum:"15" doc:"How many of the Job's runs may hold a worker at once, those Previewing included: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued."`
+	Approval           JobApproval         `json:"approval,omitzero" doc:"Whether a run waits for a person's approval of its preview before it runs. Unset, every run previews and waits."`
+}
+
+// The bounds and default of a Job's spec.approval.expiry (ADR-0348 Decision 1).
+const (
+	MinJobApprovalExpiry     = Duration(time.Minute)
+	MaxJobApprovalExpiry     = Duration(168 * time.Hour)
+	DefaultJobApprovalExpiry = Duration(24 * time.Hour)
+)
+
+// JobApproval is how a Job's runs are approved (ADR-0348 Decision 1): with Bypass a run runs at once, without it a run
+// previews first and waits for a person's approval of that preview.
+type JobApproval struct {
+	Bypass bool     `json:"bypass,omitempty" doc:"When true, a run runs at once, with no preview and no approval. Unset or false, a run first calls the code's preview, then waits in AwaitingApproval until a person approves or rejects it. A Job for unattended work sets it."`
+	Expiry Duration `json:"expiry,omitempty" doc:"How long a preview stays valid for its approval: 1m to 168h; unset means 24h. A preview older than this when it is approved, or when its run's slot frees after the approval, is previewed again: the run runs when the new preview is the same document, and waits for a new approval when it differs."`
+}
+
+// ExpiryOrDefault is the approval's expiry, 24h when unset.
+func (a JobApproval) ExpiryOrDefault() Duration {
+	if a.Expiry == 0 {
+		return DefaultJobApprovalExpiry
+	}
+	return a.Expiry
 }
 
 // JobStatus holds the observed state: the Revision of the latest spec, and the input and output schemas of its image.
@@ -84,6 +108,9 @@ func (j *Job) Validate() error {
 	}
 	if i := slices.IndexFunc(j.Spec.Volumes, func(v VolumeEntry) bool { return v.Type == VolumeLocal }); i >= 0 && c > 1 {
 		return fault.Invalidf(op, "spec.concurrency %d with spec.volumes[%d], a local volume: a local volume allows at most 1 run at once", c, i)
+	}
+	if e := j.Spec.Approval.Expiry; e != 0 {
+		return CheckDuration(op, "spec.approval.expiry", e, MinJobApprovalExpiry, MaxJobApprovalExpiry)
 	}
 	return nil
 }

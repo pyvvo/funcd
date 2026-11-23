@@ -32,6 +32,9 @@ func TestScenarioDocNamesTheConstant(t *testing.T) {
 		{reflect.TypeFor[EgressRule](), "To", strconv.Itoa(maxEgressDests)},
 		{reflect.TypeFor[EgressRule](), "Ports", strconv.Itoa(maxEgressPorts)},
 		{reflect.TypeFor[SiteRuntimeConfig](), "Values", strconv.Itoa(SiteRuntimeConfigMaxBytes)},
+		{reflect.TypeFor[JobApproval](), "Expiry", MinJobApprovalExpiry.String()},
+		{reflect.TypeFor[JobApproval](), "Expiry", MaxJobApprovalExpiry.String()},
+		{reflect.TypeFor[JobApproval](), "Expiry", DefaultJobApprovalExpiry.String()},
 	} {
 		doctag.Names(t, c.owner, c.field, c.want)
 	}

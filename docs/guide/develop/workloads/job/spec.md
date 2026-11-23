@@ -18,9 +18,10 @@ This page lists the spec and status fields of Job and JobRun, each with its type
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `approval` | object, [`Job.spec.approval`](#jobspecapproval) | Whether a run waits for a person's approval of its preview before it runs. Unset, every run previews and waits. |
 | `bindings` | object, [`Job.spec.bindings`](#jobspecbindings) | What the code may use: KV tables, Bucket prefixes, SQL databases, Lakes and Functions, each under an alias, and ConfigMaps and Secrets. A binding is the grant: a call on an alias with no binding is refused with 403. Each store, Lake, ConfigMap and Secret it names must be declared at the root, in this spec's kv, buckets, sql, lakes, configMaps or secrets. |
 | `buckets` | array of [`Job.spec.buckets[]`](#jobspecbuckets) | The Buckets the Job declares: by name it creates and owns one, and a Bucket of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.blob binds only a declared Bucket. |
-| `concurrency` | integer, 1 to 15 | How many of the Job's runs may hold a worker at once: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued. |
+| `concurrency` | integer, 1 to 15 | How many of the Job's runs may hold a worker at once, those Previewing included: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued. |
 | `configMaps` | array of [`Job.spec.configMaps[]`](#jobspecconfigmaps) | The ConfigMaps the Job declares: by name it defines one from its data, which goes with the Job, by ref it uses an existing one. spec.bindings.config binds only a declared ConfigMap. |
 | `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` | The name of the export that the shim calls once for each run, such as handle. A Job without one, or whose code has no such export, is not Ready, with ShapeInvalid. |
 | `image` | string | The OCI reference of the code's artifact: a registry reference with a tag or a digest, or an oci-layout:// reference to a layout on the server's disk. A Job whose image is missing, or cannot be resolved or pulled, starts no run. |
@@ -31,8 +32,15 @@ This page lists the spec and status fields of Job and JobRun, each with its type
 | `runtime` | string, a DNS-1123 label | The runtime that runs the code, such as nodejs22 or python314. A Job without one is not Ready, with ShapeInvalid, and one whose runtime this node cannot run is not Ready, with RuntimeUnavailable. |
 | `secrets` | array of [`Job.spec.secrets[]`](#jobspecsecrets) | The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Job waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key. |
 | `sql` | array of [`Job.spec.sql[]`](#jobspecsql) | The SQLDatabases the Job declares: by name it creates and owns one, and a database of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.sql binds only a declared database. |
-| `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The bound on each call of a run's handler, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops. |
+| `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The bound on each call of a run's handler, its preview's and its apply's, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops. |
 | `volumes` | array of [`Job.spec.volumes[]`](#jobspecvolumes) | The directories each run's worker mounts. Apply refuses a Job with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A local volume is the Job's own, never a same-named Function's, and allows a concurrency of at most 1. |
+
+### `Job.spec.approval`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `bypass` | boolean | When true, a run runs at once, with no preview and no approval. Unset or false, a run first calls the code's preview, then waits in AwaitingApproval until a person approves or rejects it. A Job for unattended work sets it. |
+| `expiry` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How long a preview stays valid for its approval: 1m to 168h; unset means 24h. A preview older than this when it is approved, or when its run's slot frees after the approval, is previewed again: the run runs when the new preview is the same document, and waits for a new approval when it differs. |
 
 ### `Job.spec.bindings`
 
@@ -305,25 +313,40 @@ This page lists the spec and status fields of Job and JobRun, each with its type
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `approve` | string, a sha256 digest | The digest of the preview that a person approves, status.preview.digest. A create that sets it is refused. An update may set or change it only while the run is AwaitingApproval and the digest is the run's preview's, else it is refused with 409, and only from a caller who may update the run's Job, else with 403. funcdctl job approve sets it. |
 | `cancel` | boolean | When true, the run is cancelled: a run that has not started ends Cancelled, and a running one has its worker stopped first, though its handler may have done part of its work. It may only turn true, and a run that has ended ignores it. funcdctl job cancel sets it. |
 | `input` | any JSON value | The run input, the data of the event that the handler receives. Over job.payloadLimit bytes, or off the input schema in the Job's status.contract, it is refused when the run is created. It is fixed once the run is created. |
 | `job` | string, required, a DNS-1123 label | The Job to run, in the run's namespace, fixed once the run is created. The run waits in Pending while that Job is missing or not Ready. |
+| `reject` | boolean | When true, the run ends Rejected and its handler never runs. A create that sets it is refused. An update may turn it true only while the run is Pending, Previewing or AwaitingApproval, and only from a caller who may update the run's Job; it may not turn false again. A rejection wins over an approval that funcd has not acted on yet. funcdctl job reject sets it. |
+| `rejectReason` | string, 0 to 512 characters | Why the run is rejected: the message of its Ready condition once it ends Rejected. It is set with spec.reject, and a create that sets it is refused. |
 
 ### `JobRun.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `approvedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When a person approved the run's preview. funcd runs a run only on an approval it recorded. |
+| `approvedBy` | string | The subject of the credential that approved the run, which funcd sets with approvedAt; empty with none. A preview made again with another document clears both. |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
 | `endedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the run ended. |
 | `imageDigest` | string | The digest of the image of the pinned Revision. |
 | `jobRevision` | string, a DNS-1123 label | The Revision of the Job that the run runs, pinned when it starts: an edit of the Job during the run changes nothing for it. |
 | `jobUID` | string | The UID of the run's Job, set when the run is created if the Job exists, else when it starts. A run whose Job is deleted, or re-created under a new UID, is cancelled. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
-| `phase` | string, one of `Pending`, `Running`, `Succeeded`, `Failed`, `Cancelled` | Where the run is: Pending while it waits for its Job or for a free slot, Running while its worker runs the handler. Succeeded, Failed and Cancelled are final, and the Ready condition gives the reason. |
+| `phase` | string, one of `Pending`, `Previewing`, `AwaitingApproval`, `Running`, `Succeeded`, `Failed`, `Cancelled`, `Rejected` | Where the run is: Pending while it waits for its Job or for a free slot, Previewing while its worker answers the code's preview, AwaitingApproval while it waits for a person to approve or reject that preview, and Running while its worker runs the handler. Succeeded, Failed, Cancelled and Rejected are final, and the Ready condition gives the reason. |
+| `preview` | object, [`JobRun.status.preview`](#jobrunstatuspreview) | The answer of the code's preview, which a person approves by its digest. Empty for a run of a Job with approval.bypass. |
+| `rejectedBy` | string | The subject of the credential that rejected the run, which funcd sets; empty with none. |
 | `result` | any JSON value | The handler's answer, once the run Succeeded. |
 | `startedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the run started running. |
 | `startedBy` | string | The subject of the credential that created the run, which funcd sets; empty when there was none. It records who started the run and grants nothing. |
-| `traceId` | string | The run's W3C trace ID, 32 lowercase hex characters. funcdctl job logs reads the run's logs by it. |
+| `traceId` | string | The run's W3C trace ID, 32 lowercase hex characters, the same for its preview and its run. funcdctl job logs reads the run's logs by it. |
+
+### `JobRun.status.preview`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `digest` | string, required | sha256: and the hex digest of the preview's bytes, which spec.approve names. |
+| `document` | any JSON value, required | The JSON document that the preview answered, or the run's input when the code has no preview. |
+| `previewedAt` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the preview answered. A preview older than its Job's approval.expiry is previewed again when it is approved, or when its run's slot frees after the approval. |
 
 ## Handler API
 

@@ -85,8 +85,11 @@ func (p inputPlugin) Before(ctx context.Context, c *invoke.Call) *invoke.Refusal
 
 type outputPlugin struct{ src Source }
 
-func (outputPlugin) Name() string                { return "contract-output" }
-func (outputPlugin) Applies(c *invoke.Call) bool { return applies(c) }
+func (outputPlugin) Name() string { return "contract-output" }
+
+// Applies is every call the input plugin checks but a run's preview, whose answer is a preview, not a result
+// (ADR-0348 Decision 2).
+func (outputPlugin) Applies(c *invoke.Call) bool { return applies(c) && c.Caller != invoke.JobPreview }
 
 func (p outputPlugin) After(ctx context.Context, c *invoke.Call, a *invoke.Answer) *invoke.Refusal {
 	const op = "contractcheck.output"
