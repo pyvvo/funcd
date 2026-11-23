@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,8 @@ spec:
 type addonCLIEnv struct {
 	admin, dev *sdk.Client
 	st         store.Store
+	url        string
+	stamped    bool // a stand-in for the Addon reconciler stamps each Addon's revision
 }
 
 func newAddonCLIEnv(t *testing.T) *addonCLIEnv {
@@ -79,9 +82,6 @@ func newAddonCLIEnvWith(t *testing.T, stamp bool) *addonCLIEnv {
 			Reserved: controlplane.ReservedPlurals()}),
 	})
 	require.NoError(t, err)
-	if stamp {
-		stampRevisions(t, st)
-	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	client := func(token string) *sdk.Client {
@@ -89,15 +89,21 @@ func newAddonCLIEnvWith(t *testing.T, stamp bool) *addonCLIEnv {
 		require.NoError(t, err)
 		return c
 	}
-	return &addonCLIEnv{admin: client(addonAdminToken), dev: client(devToken), st: st}
+	e := &addonCLIEnv{admin: client(addonAdminToken), dev: client(devToken), st: st, url: srv.URL}
+	if stamp {
+		e.stampRevisions(t, 0)
+	}
+	return e
 }
 
-// stampRevisions stands in for the Addon reconciler: it names each Addon's generation its current revision.
-func stampRevisions(t *testing.T, st store.Store) {
+// stampRevisions stands in for the Addon reconciler: delay after each write, it names the Addon's generation its
+// current revision.
+func (e *addonCLIEnv) stampRevisions(t *testing.T, delay time.Duration) {
 	t.Helper()
+	e.stamped = true
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	w, err := st.Watch(ctx, v1.KindAddon.GVK(), store.WatchOptions{})
+	w, err := e.st.Watch(ctx, v1.KindAddon.GVK(), store.WatchOptions{})
 	require.NoError(t, err)
 	go func() {
 		defer w.Stop()
@@ -106,8 +112,9 @@ func stampRevisions(t *testing.T, st store.Store) {
 			if !ok || ev.Type == store.Deleted || a.Status.CurrentRevision == v1.AddonRevisionName(a.Name, a.Generation) {
 				continue
 			}
+			time.Sleep(delay)
 			a.Status.CurrentRevision = v1.AddonRevisionName(a.Name, a.Generation)
-			_, _ = st.Update(ctx, a)
+			_, _ = e.st.Update(ctx, a)
 		}
 	}()
 }
@@ -152,7 +159,8 @@ func (e *addonCLIEnv) app(t *testing.T, name v1.ObjectName) (*v1.App, bool) {
 	return obj.(*v1.App), true
 }
 
-// register stores the template's Addon under name, as an admin would have.
+// register stores the template's Addon under name, as an admin would have, and returns once its revision is current
+// when the env stamps revisions: a stamp still due could meet the next deploy's update (#1531).
 func (e *addonCLIEnv) register(t *testing.T, name v1.ObjectName, body string) *v1.Addon {
 	t.Helper()
 	obj, err := sdk.DecodeManifest([]byte(body))
@@ -161,7 +169,14 @@ func (e *addonCLIEnv) register(t *testing.T, name v1.ObjectName, body string) *v
 	a.Name = name
 	out, err := e.admin.Apply(context.Background(), a)
 	require.NoError(t, err)
-	return out.(*v1.Addon)
+	written := out.(*v1.Addon)
+	if e.stamped {
+		require.Eventually(t, func() bool {
+			cur, err := e.st.Get(context.Background(), v1.KindAddon.GVK(), "", name)
+			return err == nil && cur.(*v1.Addon).Status.CurrentRevision == v1.AddonRevisionName(name, written.Generation)
+		}, cliWithin, 10*time.Millisecond, "Addon %s's revision is current", name)
+	}
+	return written
 }
 
 // scenario: addon-template-admin-install — with no Addon of the kind, an admin's deploy creates the template's Addon,
@@ -220,6 +235,34 @@ func TestScenarioAddonTemplateAdminUpdate(t *testing.T) {
 	require.Equal(t, "/auth/v1/health", updated.Spec.Readiness.Path)
 	_, made := e.addon(t, "rauthy")
 	require.False(t, made, "deploy finds the Addon by its kind, under any name")
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// The stand-in reconciler stamps a registered Addon a moment after the write, as the real one does. A stamp still due
+// once register returns can land between a deploy's list of the Addons and its update, which then answers 409: the
+// transport writes it there whenever it is still due.
+func TestIssue1531_DeployAfterRegisterMeetsNoStamp(t *testing.T) {
+	t.Parallel()
+	e := newAddonCLIEnvWith(t, false)
+	e.stampRevisions(t, 200*time.Millisecond)
+	e.register(t, "login-provider", rauthyTemplateAddon)
+	late := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if a, ok := e.addon(t, "login-provider"); ok && r.Method == http.MethodPut && a.Status.CurrentRevision == "" {
+			a.Status.CurrentRevision = v1.AddonRevisionName(a.Name, a.Generation)
+			_, err := e.st.Update(context.Background(), a)
+			require.NoError(t, err)
+		}
+		return http.DefaultTransport.RoundTrip(r)
+	})
+	admin, err := sdk.New(e.url, sdk.WithToken(addonAdminToken), sdk.WithHTTPClient(&http.Client{Transport: late}))
+	require.NoError(t, err)
+	newer := strings.Replace(rauthyTemplateAddon, "path: /auth/v1/ping", "path: /auth/v1/health", 1)
+	out, err := deployAs(admin, addonTemplate(t, newer), "-n", "team-a", "--no-wait")
+	require.NoError(t, err)
+	require.Equal(t, "updated Addon/login-provider\n", out)
 }
 
 // scenario: addon-template-developer-deploy — with the kind served, a developer's deploy applies the App alone.
