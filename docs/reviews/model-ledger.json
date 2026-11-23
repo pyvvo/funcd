@@ -14956,6 +14956,21 @@
   },
   {
     "date": "2026-11-23",
+    "issue": "1538",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 11,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1538-fix-claude-opus-5-5-4.md",
+    "notes": "round 4: round 3's Major fixed, for a later call and a waiting one; mutants 9/10; Minor (model): no test has a call waiting while the fill panics, so a done closed only on return survives"
+  },
+  {
+    "date": "2026-11-23",
     "issue": "1542",
     "phase": "fix",
     "model": "claude-opus-5-5",

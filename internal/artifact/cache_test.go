@@ -10,7 +10,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -29,6 +32,153 @@ func traceDisk(m *artifact.OrasMaterializer) *[]diskStep {
 	var steps []diskStep
 	artifact.TraceDisk(m, func(op durable.Op, path string) { steps = append(steps, diskStep{op, path}) })
 	return &steps
+}
+
+// Issue #1538: concurrent first uses of one artifact, as a Function's boot and a hook's contract check after a restart,
+// share one fill: every call gets the cached handler, and the pull is moved into the cache once.
+func TestIssue1538_ConcurrentFirstUsesShareOneFill(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ref := layoutRef(t, "v1")
+	dir, entry := goodBundle(t)
+	digest, err := artifact.PushBundle(ctx, ref, dir, entry, "", "")
+	require.NoError(t, err)
+	const rounds, callers = 20, 8
+	for range rounds {
+		cache := t.TempDir()
+		m := artifact.NewOrasMaterializer(cache, "")
+		var moves atomic.Int32
+		var mu sync.Mutex
+		pulls := map[string]bool{}
+		artifact.TraceDisk(m, func(op durable.Op, path string) {
+			switch {
+			case op == durable.Rename && filepath.Dir(path) == cache && !strings.HasSuffix(path, ".pulled"):
+				moves.Add(1)
+			case op == durable.SyncDir && filepath.Dir(path) == cache && strings.Contains(filepath.Base(path), ".pull-"):
+				mu.Lock()
+				pulls[path] = true
+				mu.Unlock()
+			}
+		})
+		fn := mkFunction(t, ref, digest)
+		paths, errs := make([]string, callers), make([]error, callers)
+		var wg sync.WaitGroup
+		for i := range callers {
+			wg.Go(func() { paths[i], errs[i] = m.Materialize(ctx, fn) })
+		}
+		wg.Wait()
+		for i := range callers {
+			require.NoError(t, errs[i])
+			require.Equal(t, paths[0], paths[i])
+		}
+		require.Equal(t, int32(1), moves.Load(), "the pull is moved into the cache once")
+		require.Len(t, pulls, 1, "one call pulls; the others find the cache filled")
+	}
+}
+
+// Issue #1538: a fill that panics still removes its record and wakes the calls that wait for it, so a call that waited
+// fills the cache instead of waiting for a fill that never ends.
+func TestIssue1538_PanickedFillLeavesNoWait(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ref := layoutRef(t, "v1")
+	dir, entry := goodBundle(t)
+	digest, err := artifact.PushBundle(ctx, ref, dir, entry, "", "")
+	require.NoError(t, err)
+	m := artifact.NewOrasMaterializer(filepath.Join(t.TempDir(), "cache"), "")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	artifact.TraceDisk(m, func(durable.Op, string) {
+		if first.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
+			panic("the first fill fails mid-step")
+		}
+	})
+	fn := mkFunction(t, ref, digest)
+	panicked := make(chan bool, 1)
+	go func() {
+		defer func() { panicked <- recover() != nil }()
+		_, _ = m.Materialize(ctx, fn)
+	}()
+	<-entered
+	short, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	waited := make(chan error, 1)
+	go func() { _, err := m.Materialize(short, fn); waited <- err }()
+	time.Sleep(100 * time.Millisecond) // the second call waits for the first's fill by then
+	close(release)
+	require.True(t, <-panicked, "the first fill panicked")
+	require.NoError(t, <-waited, "the call that waited fills the cache")
+}
+
+// heldFill is a materializer over a cache root that does not exist yet, whose first fill holds at its first durable
+// step, with its cache dir's lock, until release: entered closes once it holds there.
+func heldFill(t *testing.T) (m *artifact.OrasMaterializer, entered <-chan struct{}, release func()) {
+	t.Helper()
+	m = artifact.NewOrasMaterializer(filepath.Join(t.TempDir(), "cache"), "")
+	in, out := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	artifact.TraceDisk(m, func(durable.Op, string) {
+		if first.CompareAndSwap(false, true) {
+			close(in)
+			<-out
+		}
+	})
+	release = sync.OnceFunc(func() { close(out) })
+	t.Cleanup(release)
+	return m, in, release
+}
+
+// Issue #1538: a call that waits for another call's fill keeps its own context and ref. When the other fill fails, on
+// its cancelled context or on a ref that holds no artifact, the waiting call fills with its own; its own deadline ends
+// its wait.
+func TestIssue1538_EachCallKeepsItsOwnContextAndRef(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ref := layoutRef(t, "v1")
+	dir, entry := goodBundle(t)
+	digest, err := artifact.PushBundle(ctx, ref, dir, entry, "", "")
+	require.NoError(t, err)
+	for name, tc := range map[string]struct {
+		ref    string
+		cancel bool
+	}{
+		"another call's cancelled context": {ref: ref, cancel: true},
+		"another call's ref":               {ref: layoutRef(t, "v1")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, entered, release := heldFill(t)
+			firstCtx, cancelFirst := context.WithCancel(ctx)
+			defer cancelFirst()
+			first := make(chan error, 1)
+			go func() { _, err := m.Materialize(firstCtx, mkFunction(t, tc.ref, digest)); first <- err }()
+			<-entered
+			second := make(chan error, 1)
+			go func() { _, err := m.Materialize(ctx, mkFunction(t, ref, digest)); second <- err }()
+			time.Sleep(100 * time.Millisecond) // the second call waits for the first's fill by then
+			if tc.cancel {
+				cancelFirst()
+			}
+			release()
+			require.Error(t, <-first)
+			require.NoError(t, <-second, "the waiting call fills with its own context and ref")
+		})
+	}
+	t.Run("its own deadline", func(t *testing.T) {
+		m, entered, release := heldFill(t)
+		first := make(chan error, 1)
+		go func() { _, err := m.Materialize(ctx, mkFunction(t, ref, digest)); first <- err }()
+		t.Cleanup(func() { release(); <-first }) // the first fill ends before the cache's temp dir goes
+		<-entered
+		time.AfterFunc(time.Second, release)
+		short, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		_, err := m.Materialize(short, mkFunction(t, ref, digest))
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Less(t, time.Since(start), time.Second, "the wait ends at the call's own deadline")
+	})
 }
 
 // Issue #1244: a power loss soon after a pull must not leave the pulled marker beside a cache dir whose files never
