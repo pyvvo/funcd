@@ -43,9 +43,11 @@ const (
 type countingEngine struct {
 	*envEngine
 	teardowns atomic.Int32
+	teardownHold
 }
 
 func (e *countingEngine) Teardown(ctx context.Context, ref provider.ProviderRef) error {
+	e.waitHold()
 	e.teardowns.Add(1)
 	return e.envEngine.Teardown(ctx, ref)
 }
@@ -325,14 +327,37 @@ func TestScenarioLakeSecretForbidBeforeStart(t *testing.T) {
 // oracle: docs/design/lake/secret-forbid.fizz#AForbidReachesARunningEngine
 func TestScenarioLakeSecretForbidWhileRunning(t *testing.T) {
 	t.Parallel()
+	lakeSecretForbidWhileRunning(t, false)
+}
+
+// The Lake's hold writes BindingResolveFailed before it stops the engine, as the add-on hold does (#1535): with the
+// stop held past the status, the scenario's check still sees the stop.
+func TestIssue1535_LakeForbidWaitsForTheHoldsStop(t *testing.T) {
+	t.Parallel()
+	lakeSecretForbidWhileRunning(t, true)
+}
+
+// lakeSecretForbidWhileRunning is lake-secret-forbid-while-running's body; held holds the hold's engine stop until
+// after the status is read.
+func lakeSecretForbidWhileRunning(t *testing.T, held bool) {
+	t.Helper()
 	r, engine := newPolicyRig(t)
 	r.applyQuackLake(t)
 	require.Eventually(t, func() bool { return lakeEngineHasKey(r) }, policyWait, policyTick, "the engine runs with the key")
 	stopsBefore := engine.teardowns.Load()
+	release := func() {}
+	if held {
+		release = engine.holdTeardowns(t)
+	}
 
 	r.applyPolicy(t, "no-quack-for-lake", forbidRead(`Lake::"default/lake"`, "quack"))
 	require.Eventually(t, func() bool { reason, _ := r.lakeReady(t); return reason == "BindingResolveFailed" }, policyWait, policyTick)
-	require.Greater(t, engine.teardowns.Load(), stopsBefore, "the hold stops the running engine")
+	if held {
+		require.Equal(t, stopsBefore, engine.teardowns.Load(), "the stop is held past the status")
+		time.AfterFunc(100*time.Millisecond, release)
+	}
+	require.Eventually(t, func() bool { return engine.teardowns.Load() > stopsBefore }, policyWait, policyTick,
+		"the hold stops the running engine")
 }
 
 // A person's read of a Secret through the API stays RBAC's (ADR-0321 Decision 6): a forbid on every secret::read of the
