@@ -278,7 +278,7 @@ This page lists the spec and status fields of Job and JobRun, each with its type
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
-| `contract` | object, [`Job.status.contract`](#jobstatuscontract) | The input and output schemas of the current Revision's image, read by its digest. A new run's input is checked against the input schema; an image with none leaves the input unchecked. |
+| `contract` | object, [`Job.status.contract`](#jobstatuscontract) | The input and output schemas of the current Revision's image, read by its digest. A new run's input is checked against the input schema; an image with none holds the Job with ContractMissing. |
 | `currentRevision` | string, a DNS-1123 label | The Revision of the latest spec, named &lt;job&gt;-v&lt;generation&gt;. A run pins the current one when it starts, and keeps it until it ends. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |

@@ -4551,7 +4551,7 @@ components:
             - "null"
         contract:
           $ref: "#/components/schemas/WorkflowContract"
-          description: The input and output schemas of the current Revision's image, read by its digest. A new run's input is checked against the input schema; an image with none leaves the input unchecked.
+          description: The input and output schemas of the current Revision's image, read by its digest. A new run's input is checked against the input schema; an image with none holds the Job with ContractMissing.
         currentRevision:
           description: The Revision of the latest spec, named <job>-v<generation>. A run pins the current one when it starts, and keeps it until it ends.
           maxLength: 63

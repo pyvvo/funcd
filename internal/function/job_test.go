@@ -173,8 +173,9 @@ func TestJobKeepsTheRevisionsItsOpenRunsPin(t *testing.T) {
 	require.True(t, ok, "the current revision stays")
 }
 
-// ADR-0347 Decision 2: the reconciler reads the revision's contract by digest into status.contract; an image with none
-// leaves it unset, and one that does not compile holds the Job with ContractInvalid, as a Function's revision is held.
+// ADR-0347 Decision 2: the reconciler reads the revision's contract by digest into status.contract; where artifacts
+// carry no contracts, as funcdctl dev's, an image with none leaves it unset (TestJobWithoutContractIsHeld holds it
+// elsewhere), and one that does not compile holds the Job with ContractInvalid, as a Function's revision is held.
 func TestJobReadsItsContractByDigest(t *testing.T) {
 	t.Parallel()
 	h := newJobHarness(t)
@@ -192,8 +193,8 @@ func TestJobReadsItsContractByDigest(t *testing.T) {
 	h.editJob(t, "hello", func(s *v1.JobSpec) { s.Image = "oci://example/hello:v2" })
 	h.reconcileJob(t, "hello")
 	got = h.getJob(t, "hello")
-	require.Nil(t, got.Status.Contract, "an image with no contract leaves the input unchecked")
-	require.Equal(t, v1.ConditionTrue, readyOf(t, got).Status, "a Job whose image has no contract is Ready")
+	require.Nil(t, got.Status.Contract, "where artifacts carry no contracts, an image with none leaves the input unchecked")
+	require.Equal(t, v1.ConditionTrue, readyOf(t, got).Status, "there, a Job whose image has no contract is Ready")
 
 	h.inspector.blob = []byte(`{"input":{"type":"object","pattern":"("}}`)
 	h.editJob(t, "hello", func(s *v1.JobSpec) { s.Image = "oci://example/hello:v3" })

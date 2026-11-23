@@ -49,8 +49,9 @@ type jobRunContract struct{ r objectGetter }
 // NewJobRunContractAdmission returns the Validating admission that checks a new JobRun's spec.input against the input
 // schema in its Job's status.contract, with the rules and bounds of a call's contract check (ADR-0303), and refuses
 // one that breaks it with 422, naming each value under body.spec.input. A Job that is missing, unreadable or has no
-// contract, or whose contract is an earlier generation's, leaves the input unchecked: the run waits for its Job, and
-// its start checks the input against the revision it pins (ADR-0347 Decision 4).
+// contract yet, as one held with ContractMissing (ADR-0347 Decision 2, amended), or whose contract is an earlier
+// generation's, leaves the input to the run's start: the run waits for its Job, and its start checks the input against
+// the revision it pins (ADR-0347 Decision 4).
 func NewJobRunContractAdmission(r objectGetter) Admission { return jobRunContract{r: r} }
 
 func (jobRunContract) Name() string { return "jobrun-contract" }

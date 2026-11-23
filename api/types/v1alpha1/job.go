@@ -47,7 +47,7 @@ type JobSpec struct {
 type JobStatus struct {
 	Status          `json:",inline"`
 	CurrentRevision ObjectName        `json:"currentRevision,omitempty" doc:"The Revision of the latest spec, named <job>-v<generation>. A run pins the current one when it starts, and keeps it until it ends."`
-	Contract        *WorkflowContract `json:"contract,omitempty" doc:"The input and output schemas of the current Revision's image, read by its digest. A new run's input is checked against the input schema; an image with none leaves the input unchecked."`
+	Contract        *WorkflowContract `json:"contract,omitempty" doc:"The input and output schemas of the current Revision's image, read by its digest. A new run's input is checked against the input schema; an image with none holds the Job with ContractMissing."`
 }
 
 // GroupVersionKind returns the constant GVK for Job.
