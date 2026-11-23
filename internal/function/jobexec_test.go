@@ -125,9 +125,15 @@ func (h *execRig) end(t *testing.T, name string) *v1.JobRun {
 // serveRun gives the worker of run name its own endpoint: its health paths answer 200 at once, its call runs answer.
 func (h *execRig) serveRun(t *testing.T, name string, answer http.HandlerFunc) {
 	t.Helper()
+	h.serveRunWith(t, name, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, answer)
+}
+
+// serveRunWith serves run name's worker: health answers its probes, and answer every other call.
+func (h *execRig) serveRunWith(t *testing.T, name string, health, answer http.HandlerFunc) {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/health/") {
-			w.WriteHeader(http.StatusOK)
+			health(w, r)
 			return
 		}
 		answer(w, r)
@@ -309,7 +315,7 @@ func TestJobRunExecutorStartFailed(t *testing.T) {
 		h.run(t, "hello-a", `{}`, nil)
 		h.pass(t, "hello-a")
 		c := requireEnd(t, h.end(t, "hello-a"), v1.JobRunFailed, v1.JobRunStartFailed)
-		require.Contains(t, c.Message, "within runtime.bootTimeout 200ms")
+		require.True(t, strings.HasSuffix(c.Message, "within runtime.bootTimeout 200ms"), "no report, the timeout alone: %s", c.Message)
 		require.True(t, h.rt.wasRemoved(runID("hello-a")))
 	})
 	t.Run("exits", func(t *testing.T) {
@@ -323,6 +329,26 @@ func TestJobRunExecutorStartFailed(t *testing.T) {
 		h.pass(t, "hello-a")
 		c := requireEnd(t, h.end(t, "hello-a"), v1.JobRunFailed, v1.JobRunStartFailed)
 		require.Contains(t, c.Message, "exit code 1")
+	})
+	// ADR-0215: a worker whose last readiness answer was a dependency report fails with it too, its kind, binding,
+	// message and reason, as a Function's DependencyNotReady shows it.
+	t.Run("dependency-report", func(t *testing.T) {
+		t.Parallel()
+		h := newExecRig(t, 1<<10, func(d *function.Deps) { d.BootTimeout = 300 * time.Millisecond })
+		h.readyJob(t, nil)
+		h.serveRunWith(t, "hello-a", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/health/readiness" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"kind":"secret","binding":"api-keys","reason":"Forbidden","message":"read denied by policy default/no-reads"}`)
+		}, func(http.ResponseWriter, *http.Request) {})
+		h.run(t, "hello-a", `{}`, nil)
+		h.pass(t, "hello-a")
+		c := requireEnd(t, h.end(t, "hello-a"), v1.JobRunFailed, v1.JobRunStartFailed)
+		require.Contains(t, c.Message, `within runtime.bootTimeout 300ms: secret binding "api-keys": read denied by policy default/no-reads (Forbidden)`)
 	})
 }
 

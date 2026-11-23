@@ -20,6 +20,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // runPoll is how often an executor reads the runtime while it waits for its run's name to be free and for its worker
@@ -148,13 +149,15 @@ func (j *JobRunReconciler) nameFree(ctx context.Context, run *v1.JobRun) error {
 }
 
 // ready waits until worker id listens and answers its readiness read with 200 (ADR-0161), for at most
-// runtime.bootTimeout from its start; a worker that ends first never becomes ready.
+// runtime.bootTimeout from its start; a worker that ends first never becomes ready. A worker whose last readiness answer
+// was a dependency report fails with that report too, as a Function's DependencyNotReady carries it (ADR-0215).
 func (j *JobRunReconciler) ready(ctx context.Context, id runtime.InstanceID) (runtime.Instance, error) {
 	const op = "function.runReady"
 	r := j.r
 	by := time.Now().Add(r.bootTimeout)
 	tick := time.NewTicker(runPoll)
 	defer tick.Stop()
+	var last *local.DependencyReport
 	for {
 		in, err := r.runtime.Status(ctx, id)
 		switch {
@@ -163,11 +166,17 @@ func (j *JobRunReconciler) ready(ctx context.Context, id runtime.InstanceID) (ru
 		case in.State.Terminal():
 			return in, fault.Unavailablef(op, "the worker ended before it was ready (%s)", exitText(in.Exit))
 		case in.Port > 0:
-			if ok, _, _ := r.probeReadiness(ctx, in.IP, in.Port); ok {
+			ok, report, _ := r.probeReadiness(ctx, in.IP, in.Port)
+			if ok {
 				return in, nil
 			}
+			last = report
 		}
 		if !time.Now().Before(by) {
+			if last != nil {
+				return in, fault.Unavailablef(op, "the worker did not listen and become ready within runtime.bootTimeout %s: %s",
+					r.bootTimeout, runReport(last))
+			}
 			return in, fault.Unavailablef(op, "the worker did not listen and become ready within runtime.bootTimeout %s", r.bootTimeout)
 		}
 		select {
@@ -176,6 +185,15 @@ func (j *JobRunReconciler) ready(ctx context.Context, id runtime.InstanceID) (ru
 		case <-tick.C:
 		}
 	}
+}
+
+// runReport is a dependency report in a run's StartFailed message: reportMessage's kind, binding and message, with the
+// report's reason.
+func runReport(rep *local.DependencyReport) string {
+	if rep.Reason == "" {
+		return reportMessage(rep)
+	}
+	return reportMessage(rep) + " (" + rep.Reason + ")"
 }
 
 func exitText(ex runtime.Exit) string {
