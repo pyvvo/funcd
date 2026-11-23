@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 // The design-spec checker (ADR-0272) runs the pinned FizzBee of the dev shell on a copy of testdata/specs/gate.fizz:
@@ -28,9 +29,115 @@ func gateSpec(t *testing.T, replace ...string) string {
 	return spec
 }
 
+// specs runs the checker with its cache off, so every check runs FizzBee.
 func specs(t *testing.T, args ...string) (int, string) {
 	t.Helper()
-	return exitCode(t, exec.Command("python3", append([]string{"specs.py"}, args...)...))
+	cmd := exec.Command("python3", append([]string{"specs.py"}, args...)...)
+	cmd.Env = append(os.Environ(), "SPECS_CACHE=")
+	return exitCode(t, cmd)
+}
+
+// cachedCheck checks spec with the cache at cache, through a fizz wrapper that logs each call and carries note, and
+// returns the exit code, the output and how many times fizz ran so far.
+func cachedCheck(t *testing.T, spec, cache, note string, env ...string) (int, string, int) {
+	t.Helper()
+	real, err := exec.LookPath("fizz")
+	require.NoError(t, err)
+	dir := filepath.Dir(cache)
+	calls := filepath.Join(dir, "calls")
+	fizz := filepath.Join(dir, "fizz")
+	wrapper := "#!/bin/sh\n# " + note + "\necho run >> " + calls + "\nexec " + real + " \"$@\"\n"
+	require.NoError(t, os.WriteFile(fizz, []byte(wrapper), 0o755))
+	cmd := exec.Command("python3", "specs.py", "check", spec)
+	cmd.Env = append(os.Environ(), append([]string{"FIZZ=" + fizz, "SPECS_CACHE=" + cache}, env...)...)
+	code, out := exitCode(t, cmd)
+	logged, err := os.ReadFile(calls)
+	if err != nil && !os.IsNotExist(err) {
+		require.NoError(t, err)
+	}
+	return code, out, strings.Count(string(logged), "run\n")
+}
+
+// A check reuses a spec's pass while its text, the fizz command and the state budget stay the same, so CI runs no
+// FizzBee for the specs a change leaves alone, and prints the result it reused.
+func TestSpecCheckReusesAPass(t *testing.T) {
+	spec := gateSpec(t)
+	code, out := specs(t, "diagrams", spec)
+	require.Equal(t, 0, code, out)
+	cache := filepath.Join(t.TempDir(), "cache")
+	code, out, runs := cachedCheck(t, spec, cache, "one")
+	require.Equal(t, 0, code, out)
+	require.NotContains(t, out, "reused")
+	require.Positive(t, runs)
+
+	code, out, again := cachedCheck(t, spec, cache, "one")
+	require.Equal(t, 0, code, out)
+	require.Equal(t, runs, again, "a reused pass runs no fizz")
+	require.Contains(t, out, "gate.fizz: pass (")
+	require.Contains(t, out, " states, reused)")
+	require.Contains(t, out, "gate.fizz mutant skip-guard: fails AtMostOneOpen (reused)")
+	require.Contains(t, out, "gate.md: current")
+	require.Contains(t, out, "1 specs, 0 failing")
+}
+
+// A reused pass still compares the diagram: an edited diagram fails the check without a FizzBee run.
+func TestSpecCheckReusedPassComparesTheDiagram(t *testing.T) {
+	spec := gateSpec(t)
+	code, out := specs(t, "diagrams", spec)
+	require.Equal(t, 0, code, out)
+	cache := filepath.Join(t.TempDir(), "cache")
+	code, out, runs := cachedCheck(t, spec, cache, "one")
+	require.Equal(t, 0, code, out)
+	require.NoError(t, os.WriteFile(strings.TrimSuffix(spec, ".fizz")+".md", []byte("edited\n"), 0o644))
+	code, out, again := cachedCheck(t, spec, cache, "one")
+	require.Equal(t, 1, code, out)
+	require.Contains(t, out, "gate.md: STALE, run `just spec-diagrams`")
+	require.Equal(t, runs, again)
+}
+
+// A change to the spec's text, to the fizz command or to the state budget runs FizzBee again.
+func TestSpecCheckRunsAgainWhenAnInputChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name, edit, note string
+		env              []string
+	}{
+		{name: "the spec", edit: "\n# a new comment\n", note: "one"},
+		{name: "the fizz command", note: "two"},
+		{name: "the state budget", note: "one", env: []string{"SPECS_MAX_STATES=50000"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := gateSpec(t)
+			code, out := specs(t, "diagrams", spec)
+			require.Equal(t, 0, code, out)
+			cache := filepath.Join(t.TempDir(), "cache")
+			code, out, runs := cachedCheck(t, spec, cache, "one")
+			require.Equal(t, 0, code, out)
+			if tc.edit != "" {
+				text, err := os.ReadFile(spec)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(spec, append(text, tc.edit...), 0o644))
+			}
+			code, out, again := cachedCheck(t, spec, cache, tc.note, tc.env...)
+			require.Equal(t, 0, code, out)
+			require.NotContains(t, out, "reused")
+			require.Greater(t, again, runs)
+		})
+	}
+}
+
+// A failing check keeps nothing, also one whose model passes and whose mutant does not fail: the next check runs
+// FizzBee again and fails again.
+func TestSpecCheckKeepsNoFailure(t *testing.T) {
+	spec := gateSpec(t, "# mutant skip-guard:", "# mutant skip-nothing:")
+	code, out := specs(t, "diagrams", spec)
+	require.Equal(t, 0, code, out)
+	cache := filepath.Join(t.TempDir(), "cache")
+	code, out, runs := cachedCheck(t, spec, cache, "one")
+	require.Equal(t, 1, code, out)
+	code, out, again := cachedCheck(t, spec, cache, "one")
+	require.Equal(t, 1, code, out)
+	require.Contains(t, out, "gate.fizz mutant skip-nothing: PASSES")
+	require.Greater(t, again, runs)
 }
 
 // scenario: specs-checked
@@ -123,7 +230,7 @@ func TestSpecOverTheStateBudgetFails(t *testing.T) {
 	code, out := specs(t, "diagrams", spec)
 	require.Equal(t, 0, code, out)
 	cmd := exec.Command("python3", "specs.py", "check", spec)
-	cmd.Env = append(os.Environ(), "SPECS_MAX_STATES=1")
+	cmd.Env = append(os.Environ(), "SPECS_MAX_STATES=1", "SPECS_CACHE=")
 	code, out = exitCode(t, cmd)
 	require.Equal(t, 1, code, out)
 	require.Contains(t, out, "gate.fizz: over the 1-state budget")
@@ -207,4 +314,58 @@ func TestSpecOracleMarkers(t *testing.T) {
 	require.Contains(t, out, "gate_test.go:4: oracle marker names no assertion docs/design/demo/gate.fizz#Missing")
 	require.NotContains(t, out, "gate.fizz#AtMostOneOpen: no oracle test yet")
 	require.Contains(t, out, "1 specs, 1 failing: oracle markers")
+}
+
+// scenario: pushed-spec-checked
+func TestScenarioPushedSpecChecked(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("..", "lefthook.yml"))
+	require.NoError(t, err)
+	var hooks struct {
+		PrePush struct {
+			Commands map[string]struct {
+				Glob string `yaml:"glob"`
+				Run  string `yaml:"run"`
+			} `yaml:"commands"`
+		} `yaml:"pre-push"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &hooks))
+	hook := hooks.PrePush.Commands["specs"]
+	require.Equal(t, "docs/design/**/*.fizz", hook.Glob, "the hook runs only when a push carries a spec")
+
+	// push runs the hook's command as lefthook does, in a root holding the present files, with a stand-in for
+	// scripts/agent/d that logs its arguments and exits with code; it returns the exit code and the logged call.
+	push := func(pushed, present []string, code string) (int, string) {
+		root := t.TempDir()
+		for _, f := range present {
+			require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.Dir(f)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, f), nil, 0o644))
+		}
+		log := filepath.Join(root, "d.log")
+		d := filepath.Join(root, "scripts", "agent", "d")
+		require.NoError(t, os.MkdirAll(filepath.Dir(d), 0o755))
+		require.NoError(t, os.WriteFile(d, []byte("#!/bin/sh\necho \"$*\" >> '"+log+"'\nexit "+code+"\n"), 0o755))
+		cmd := exec.Command("sh", "-c", strings.ReplaceAll(hook.Run, "{push_files}", strings.Join(pushed, " ")))
+		cmd.Dir = root
+		status, _ := exitCode(t, cmd)
+		called, err := os.ReadFile(log)
+		if os.IsNotExist(err) {
+			return status, ""
+		}
+		require.NoError(t, err)
+		return status, strings.TrimSpace(string(called))
+	}
+
+	kept, gone := "docs/design/demo/gate.fizz", "docs/design/demo/old.fizz"
+	status, called := push([]string{kept, gone}, []string{kept}, "0")
+	require.Equal(t, 0, status)
+	require.Equal(t, "python3 scripts/specs.py check "+kept, called, "the pushed spec is checked, the deleted one left out")
+
+	status, called = push([]string{kept}, []string{kept}, "1")
+	require.NotEqual(t, 0, status, "a failing spec stops the push")
+	require.Equal(t, "python3 scripts/specs.py check "+kept, called)
+
+	status, called = push([]string{gone}, nil, "0")
+	require.Equal(t, 0, status)
+	require.Empty(t, called, "a push that only deletes a spec checks none")
 }

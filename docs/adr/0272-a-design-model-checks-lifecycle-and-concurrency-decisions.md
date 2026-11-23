@@ -3,6 +3,8 @@
 - **Status**: Implemented (2026-10-24), review passed with one non-blocking Minor ([report](../reviews/adr-0272-implementation-claude-opus-5-5.md)); Reviewing 2026-10-23;
   Accepted 2026-10-23 by the decider, with the triggers, the state budget, `just ci` running every spec and
   FizzBee's own skills left out; Proposed 2026-10-23, judged three rounds, every Major folded
+- **Amended in place**: 2026-11-23, by the decider on [#1525](https://github.com/pyvvo/funcd/pull/1525): CI no longer
+  runs the design specs; a git pre-push hook checks each spec that a push adds or changes (Decision 4)
 - **Superseded in part by**: [ADR-0313](0313-one-place-says-what-the-platform-does-and-who-decided-it.md) (2026-11-05) — Decision 7's list of what an amendment carries gains *Behavior rows*
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
@@ -50,6 +52,9 @@ only `Superseded by`. #1217 needs a one-item change of ADR-0271.
   non-zero naming the mutant: the guard it skips protects nothing the spec asserts.
 - `scenario: diagram-drift`: Given a spec edit that changes its states or transitions, When its diagram was not
   regenerated, Then `just check-specs` exits non-zero naming the diagram, and `just spec-diagrams` rewrites it.
+- `scenario: pushed-spec-checked` (amended 2026-11-23): Given commits that add or change a spec under `docs/design/`,
+  When they are pushed, Then the pre-push hook runs `specs.py check` on those specs only, a failing one stops the
+  push, and a spec the push deletes is left out.
 
 ## Scope
 
@@ -112,12 +117,13 @@ testing of Go code against a spec (FizzBee's MBT; a later ADR); performance mode
    step, or after its choices) and leaves the values as they were; the initial states and the true ends (not the
    bound's) are marked. FizzBee v0.5.4 draws none: it writes Graphviz files, and its web explorer draws one trace as a
    sequence diagram.
-4. **The tool.** FizzBee v0.5.4 (Apache-2.0) is pinned in `flake.nix` by the release digests GitHub publishes. The
-   dev shell keeps its Go checker and its pure-Python parser (10 MB; the Linux tarball also bundles a 500 MB Python)
-   behind a `fizz` command that parses on the dev shell's Python. `scripts/specs.py` (stdlib only) runs every spec in a
-   scratch directory; `just check-specs` runs it and `just ci` includes it; CI's fast lane also runs when
-   `docs/design/**` changes. A FizzBee upgrade is a pin change whose PR reruns every spec. FizzBee's own Claude skills
-   (`fizz install-skills`) are not installed: they fetch its unpinned main branch.
+4. **The tool** (amended 2026-11-23). FizzBee v0.5.4 (Apache-2.0) is pinned in `flake.nix` by the release digests
+   GitHub publishes. The dev shell keeps its Go checker and its pure-Python parser (10 MB; the Linux tarball also
+   bundles a 500 MB Python) behind a `fizz` command that parses on the dev shell's Python. `scripts/specs.py` (stdlib
+   only) runs every spec in a scratch directory, and `just check-specs` runs it. Neither `just ci` nor CI runs it:
+   lefthook's pre-push hook runs `specs.py check` on each spec that the pushed commits add or change, and a FizzBee
+   upgrade or a change of `scripts/specs.py` is checked with `just check-specs` before its push. FizzBee's own Claude
+   skills (`fizz install-skills`) are not installed: they fetch its unpinned main branch.
 5. **The gates.** The four ADR gates and the fix pipeline each gain one step:
    - draft (`adr`): check the triggers; write or update the part's spec; run `just check-specs`; fill the section;
    - judge (`adr-judge`): rerun the spec; a trigger with no model is a Blocker; an assertion that protects no
@@ -185,8 +191,8 @@ no variable to draw (# diagram: <var>)` · ``<topic>.md: current`` or ``STALE, r
 ## Implementation plan
 
 1. `flake.nix`: the `fizzbee` package, in `packages` and the dev shell; `scripts/specs.py`; `justfile`:
-   `check-specs`, `spec-diagrams`, and `check-specs` in `ci`; `.github/workflows/ci.yml`: a `design` filter
-   (`docs/design/**`) that also starts the fast lane; `.gitignore`: what `fizz` writes beside a spec run in place.
+   `check-specs` and `spec-diagrams`; `lefthook.yml`: the pre-push `specs` command (amended 2026-11-23: `check-specs`
+   left `ci`, and CI runs no spec); `.gitignore`: what `fizz` writes beside a spec run in place.
 2. The first spec: ADR-0270's bounded hold, `docs/design/function/key-renewal.fizz`, with review round 5's unbounded
    hold as its mutant, its diagram, and the oracle marker on `TestScenarioBrokenReplicaDoesNotBlockRenewal`.
 3. `.claude/skills/fizzbee/SKILL.md`; the steps of Decision 5 in the six skills and the template section of Decision 6
@@ -195,7 +201,8 @@ no variable to draw (# diagram: <var>)` · ``<topic>.md: current`` or ``STALE, r
 4. Tests: `scripts/specs_test.go` runs the dev shell's FizzBee on `scripts/testdata/specs/gate.fizz` (a gate that opens
    once): `TestScenarioSpecsChecked`, `TestScenarioBrokenAssertion`, `TestScenarioToothlessMutant`,
    `TestScenarioDiagramDrift`, and the diagram's exact text, a spec that names no bounds, the state budget, a mutant
-   that fails another assertion, and a dangling oracle marker.
+   that fails another assertion, and a dangling oracle marker. `TestScenarioPushedSpecChecked` runs the hook's command
+   with a stand-in for `scripts/agent/d` (amended 2026-11-23).
 5. Done when `just ci-full` and CI pass.
 
 ## Review checklist
@@ -206,6 +213,7 @@ no variable to draw (# diagram: <var>)` · ``<topic>.md: current`` or ``STALE, r
 - [ ] The scenario tests pass, and fail when `specs.py` skips the mutant, diagram or bounds check.
 - [ ] The six skills carry Decision 5's step; the `adr` skill carries Decision 6's section and Decision 7's form.
 - [ ] FizzBee comes only from the flake, by its published digest.
+- [ ] `just ci` and CI run no spec, and the pre-push hook checks the specs a push adds or changes (amended 2026-11-23).
 
 ## Consequences
 
@@ -215,6 +223,10 @@ no variable to draw (# diagram: <var>)` · ``<topic>.md: current`` or ``STALE, r
 - **(−)** A spec checks only what it models; facts of the code or the platform (two SQLite libraries blind to each
   other's locks, ext4's overhead) stay with the tests.
 - **(−)** The Linux release tarball is 352 MB; the Nix store fetches it once per pin change.
+- **(+)** CI spends no time on FizzBee (amended 2026-11-23): the spec check took 13 min 25 s of main's 24-minute `ci`
+  job on 2026-11-22, and FizzBee reached 9.3 GB of the runner's 15.7 GB.
+- **(−)** A spec pushed without the hook (a clone without lefthook, or `--no-verify`) reaches a PR unchecked, and a
+  FizzBee upgrade or a `scripts/specs.py` change is checked only when its author runs `just check-specs`.
 - **(−)** FizzBee is young. Experiment 0007 met two limits of v0.5.4: a top-level `func` is undefined inside an
   `if`, and an intended end reads as a deadlock unless `deadlock_detection: false`. Writing the first specs met six
   more: `x.field = oneof [...]` assigns nothing; `oneof` inside a literal does not parse; one step creating several

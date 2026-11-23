@@ -86,7 +86,8 @@ ADRs.
 A design model catches the defects a review of the text misses: an order of steps a stop can cut, a timer that
 drops what is still in use, two rules that disagree. Experiment 0007 found four known defects of that kind and one
 new one (#1217) from specs of 10 to 63 lines, each in under a second. Each assertion of a model becomes the oracle
-of a named test (`// oracle: docs/design/<part>/<topic>.fizz#<Assertion>`), and `just ci` reruns every model.
+of a named test (`// oracle: docs/design/<part>/<topic>.fizz#<Assertion>`), and a push reruns each model it adds or
+changes (a pre-push hook; CI runs none).
 
 Two rules keep the layers consistent. A change in one layer owes updates to the others in the same session (the
 propagation table in CLAUDE.md). And every element of a design is either grounded in something that exists, with
