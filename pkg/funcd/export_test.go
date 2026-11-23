@@ -51,6 +51,11 @@ func SetAnswerRecorderForTest(record func(operationID string, status int)) {
 	answerRecorder.Store(&record)
 }
 
+// SetFrugalStoresForTest is the test binary's hook of the in-memory stores: every platform New builds from then on
+// opens its in-memory event and run stores with the memtables and caches of their on-disk profile. A server never sets
+// it.
+func SetFrugalStoresForTest(on bool) { frugalStores.Store(on) }
+
 // LocalAPISocketForTest hands the external tests the socket of the local API that serves the Function ns/fn, the
 // path the reconciler sets as its FUNCD_INVOKE_SOCKET; the cause matrices of ADR-0330 dial it.
 func LocalAPISocketForTest(p *Platform, ns v1.NamespaceName, fn v1.ObjectName) (string, error) {

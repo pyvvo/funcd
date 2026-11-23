@@ -19,6 +19,19 @@ func TestBadgerInMemoryContract(t *testing.T) {
 	runstate.Contract(t, func(t *testing.T) runstate.Store { return open(t, Config{InMemory: true}) })
 }
 
+// The frugal in-memory backend, which pkg/funcd's tests take, satisfies the same contract with the on-disk memtable
+// and keeps the in-memory record cap.
+func TestBadgerFrugalInMemoryContract(t *testing.T) {
+	runstate.Contract(t, func(t *testing.T) runstate.Store { return open(t, Config{InMemory: true, Frugal: true}) })
+	frugal, defaults := open(t, Config{InMemory: true, Frugal: true}).(*store), open(t, Config{InMemory: true}).(*store)
+	if got := frugal.db.Opts().MemTableSize; got != memTableSize {
+		t.Fatalf("frugal memtable is %d bytes, want the on-disk %d", got, memTableSize)
+	}
+	if frugal.maxValue != defaults.maxValue {
+		t.Fatalf("frugal record cap is %d bytes, want the in-memory %d", frugal.maxValue, defaults.maxValue)
+	}
+}
+
 // The file backend opens at a temp dir and satisfies the same contract (durability
 // path), proving memory↔file parity.
 func TestBadgerFileContract(t *testing.T) {

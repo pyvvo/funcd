@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -570,6 +571,10 @@ type Platform struct {
 	shutdownErr  error
 }
 
+// frugalStores is the production side of SetFrugalStoresForTest: set, New opens the in-memory event and run stores
+// with Config.Frugal. A server never sets it.
+var frugalStores atomic.Bool //nolint:gochecknoglobals // set only by SetFrugalStoresForTest
+
 // New assembles the platform from opts, validates every required dependency, builds
 // the control plane (controller + reconcilers + API server), and binds the
 // control-plane listener (so Addr() is ready before Run). It returns a typed
@@ -816,7 +821,7 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0201: the event store holds the Sensor's dead letters and the BlobWatcher's seen lists, on disk when
 	// deadletterDataDir is set, else in memory. On disk, the seen lists an earlier release kept in the KV move in
 	// before the BlobWatcher is built; a failed move fails the start and keeps the KV records for the next one.
-	es, err := eventstore.Open(eventstore.Config{InMemory: c.deadletterDataDir == "", Dir: c.deadletterDataDir})
+	es, err := eventstore.Open(eventstore.Config{InMemory: c.deadletterDataDir == "", Frugal: frugalStores.Load(), Dir: c.deadletterDataDir})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "open event store")
 	}
@@ -1026,7 +1031,7 @@ func (p *Platform) buildControlPlane() error {
 	// waker (fail-closed to targets that resolve to a real Function), and two reconcilers — the
 	// Workflow reconciler materializes the owned step Function/KVStore fleet, the WorkflowRun
 	// reconciler drives a run through the engine and mirrors its status + status.runs link.
-	runs, rerr := wbadger.New(wbadger.Config{InMemory: c.workflowDataDir == "", Dir: c.workflowDataDir})
+	runs, rerr := wbadger.New(wbadger.Config{InMemory: c.workflowDataDir == "", Frugal: frugalStores.Load(), Dir: c.workflowDataDir})
 	if rerr != nil {
 		return fault.Wrapf(rerr, fault.KindOf(rerr), op, "build workflow run store")
 	}
