@@ -12,9 +12,8 @@
   Decision 2); [ADR-0170](0170-owner-garbage-collector.md) Decision 1 (the collector holds an engineless child:
   Decision 6), [ADR-0199](0199-app-resource.md) Decisions 6 and 7 and
   [ADR-0337](0337-an-app-template-carries-its-add-on.md) Decision 5 (an App's engineless parts go first: Decision 8)
-- **Relates to**: [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md) (the workloads
-  `Engineless` joins) · [ADR-0339](0339-an-add-ons-versions-are-revisions-each-object-pins.md) (the revision an object
-  pins) · [ADR-0190](0190-run-bound-to-its-revision.md) (a run holds what it uses) ·
+- **Relates to**: [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md) (the workloads) ·
+  [ADR-0339](0339-an-add-ons-versions-are-revisions-each-object-pins.md) (the pinned revision) ·
   [ADR-0272](0272-a-design-model-checks-lifecycle-and-concurrency-decisions.md) · F137 (Jobs) · F141 (InfraStack)
 
 ## Context & Need
@@ -38,6 +37,8 @@ kind's Function, and whoever deletes an object or its App.
   *Then* each Function's call lists only the objects it reconciles.
 - `scenario: engineless-resync` — *Given* `bunny-edge` Ready, *When* the kind's `resync` elapses, *Then* its Function
   gets the list again, cause `resync`.
+- `scenario: engineless-run-ends` — *Given* a JobRun in `bunny-edge`'s namespace, *When* it ends, *Then* every group of
+  the namespace is called at once, cause `run`.
 - `scenario: engineless-waits` — *Given* no Function `infrastack-reconciler`, or the Addon deleted after
   `bunny-edge`'s first pass, *Then* `bunny-edge` is `Pending` with `FunctionNotFound` or `AddonNotFound` and no call
   carries it; deleted then, it is held until they are back or `retain` is set.
@@ -63,7 +64,7 @@ kind's Function, and whoever deletes an object or its App.
 
 **In**: the `Engineless` workload and its attributes; the call, its groups, causes and status; the hold, its release
 and an App's order; the design model. **Out**: the InfraStack kind itself (F141, no ADR); Jobs and their runs (F137),
-which bring the `run` cause's trigger; what the Function reaches (F137, F140, F144); restoring an App's stacks from a
+whose JobRun's end Decision 4 reacts to; what the Function reaches (F137, F140, F144); restoring an App's stacks from a
 backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
 
 ## Constraints & Decision drivers
@@ -71,7 +72,7 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
 - Reuse ADR-0341's call: the full list per group, level-triggered, on a goroutine of its own, through the hooks'
   invoker; funcd never learns what the Function manages, and no pass waits on it.
 - The decider's answers of 2026-11-23: the hold (A); the kind's `function.ref`, which an object may override, one call
-  per Function; a run's end calls at once; a stack's variables are checked when its run is created (F137, not here).
+  per Function; a run's end calls at once.
 
 ## Alternatives considered
 
@@ -116,8 +117,9 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
    engineless; ADR-0341 Decision 3's other refusals stand, and in an App's part the `ref` names a Function the App
    declares. The Function binds no object: the call carries the objects' config, and what it starts it reaches through
    its own bindings (F137, F140). It must accept a cause it does not know.
-4. **A run's end.** The end of a run of a Job that the group's Function may start makes the group due, cause `run`.
-   F137's ADR names that binding and sends the event.
+4. **A run's end.** The end of any JobRun (F137) in a namespace makes every group of that namespace due, cause `run`,
+   so a Function that waits on a run hears of it at once. It needs no binding: the Function reads from its own state
+   which run ended, and a namespace's groups are few beside its runs' minutes.
 5. **The status.** As ADR-0341 Decision 4, with no target: `ok: true` is Ready at the generation sent; `ok: false` is
    its reason, such as `Planning`, `AwaitingApproval` or `Destroying`, else `ReconcileFailed`; a result left out is
    `NoResult`; a failed call makes each object `ReconcileFailed`, a call into a namespace held for its data (ADR-0290)
@@ -135,7 +137,8 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
    have carried (Decision 1), goes at once.
 7. **Retain.** With `retain` an object goes at its deletion: it leaves the next list, and the Function forgets it,
    leaving what it manages in place. Setting `retain` on a deleting object removes it at its next pass, with no call. A
-   deleting object whose Addon or Function is gone waits, with that reason, until it is back or `retain` is set.
+   deleting object whose Addon or Function is gone waits, with that reason, until it is back or `retain` is set. A
+   hold has no deadline, which would leave what the object manages with no record; its status names what it awaits.
 8. **An App's order.** The owner garbage collector removes an App's engineless parts first, and its other parts only
    once none remains. An App's prune keeps each part it drops, `InUse: <kind>/<name>`, while an engineless part it
    drops still exists. When an App's last engineless part goes, the add-on reconciler asks the collector to pass over
@@ -169,9 +172,8 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
   `DeletedAppGoes`.
 - **Result**: pass, 734 states, 0.5 s, FizzBee v0.5.4; wider (two calls before the deletion, two failed calls, two
   stops, 23 actions): pass, 2,856 states, 1.1 s.
-- **Left to tests**: several stacks and groups, a prune of a stack with its Job, a standalone stack whose Job someone
-  deletes, the uid check (an object retained and created again while a deleting call is in flight), the resync's
-  period and the backoff's length; the scenario tests hold them.
+- **Left to tests**: several groups, a prune of a stack with its Job, a Job deleted by hand, the uid check (an object
+  retained and created again while a deleting call is in flight), the resync and the backoff; the scenario tests.
 
 ## Behavior rows
 
@@ -179,8 +181,8 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
   5's reasons), "An engineless object deleted" (held once its first pass stored `status.workload`: 202, `Deleting`,
   writes kept, the ok that removes it), "An engineless object retained" (it goes and is forgotten) and "A deleting
   object whose Addon or Function is gone".
-- **funcdctl.md**: a new row for `funcdctl delete` of a held object (`deleting <kind>/<name>`); `app delete` waits
-  through each stack's destroy and approval.
+- **funcdctl.md** and **funcdctl-dev.md**: new rows for `funcdctl delete` of a held object (`deleting <kind>/<name>`),
+  `app delete`, which waits through each stack's destroy, and a held object under dev (Consequences).
 - **apps.md**: "A dropped part" (`:50`), "An App deleted" (`:52`) and "A revision drops an `addons` entry" (`:55`): an
   engineless part with `deletion: delete` is held, and the App's other parts wait for it, `InUse`.
 - **controller.md**: "An owner is deleted" (`:41`): an engineless child is held, not deleted.
@@ -188,8 +190,7 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
 
 ## Temporary workarounds
 
-- Until F137's ADR sends a run's end (Decision 4), the kind's `resync` stands in for the `run` cause. Exit: that ADR
-  wires the event; no code of this ADR emits `run`.
+None.
 
 ## Contracts
 
@@ -253,7 +254,8 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
    rows, `just generate` for the API reference, and `docs/design/addon/engineless-delete.fizz` with its diagram.
 6. Tests: one `TestScenario…` per scenario, named after it, in `internal/services/addon` and `pkg/funcd`, with a test
    kind and a TypeScript Function in `e2e/fixtures`; the oracle markers of the Design model; `just check-specs`.
-7. Done when `just ci-full` passes and CI is green. The PR closes #1533.
+7. Decision 4 and `engineless-run-ends` are built with F137's JobRun, by whichever of the two lands second.
+8. Done when `just ci-full` passes and CI is green. The PR closes #1533.
 
 ## Review checklist
 
@@ -274,16 +276,16 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
   destroys, their approvals included.
 - **(−)** The Function must apply each list idempotently, and tell an object sent with `deleting: true`, to destroy,
   from one that left the list, to forget.
-- **(−)** Under `funcdctl dev` a destroy on an Addon's runtime cannot run (ADR-0344), so dev's prune leaves such a
-  stack held until `retain`; the dev follow-up under F139 decides more.
+- **(−)** Under `funcdctl dev` a hold lasts while dev runs and, with `--persist`, across its restarts; without it, the
+  object goes with dev's store and what it manages stays, as `retain` would. A destroy on an Addon's runtime cannot
+  run there (ADR-0344), so such a stack stays held until `retain`.
 - **(−)** An engineless object has no snapshot: a Backup that names it fails `NoSnapshot`, and a hold never reaches a
   backup.
 - **(−)** An engineless object's first pass writes its status once more before its first call.
 
 ## Open questions
 
-- A deadline on a hold, after which an object goes as `retain` would: none for now; a board card if a stack's
-  destroy ever waits too long.
+None.
 
 ## References
 
@@ -293,5 +295,4 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
 - ADR-0170, ADR-0190, ADR-0199, ADR-0243, ADR-0272, ADR-0290, ADR-0332, ADR-0337, ADR-0339, ADR-0341, ADR-0344
 - `internal/services/addon/settings.go`, `internal/gc/gc.go` (`remove`, `InUse`), `internal/app/reconcile.go`
   (`prune`, `remove`), `internal/controlplane/addon.go` (`DeleteAddonObject`)
-- Kubernetes finalizers, the rejected general mechanism
-  (https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/)
+- Kubernetes finalizers, the rejected general mechanism: https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/
