@@ -5,6 +5,7 @@
 - **Superseded in part by**: [ADR-0194](0194-api-duration-strings.md) (2026-10-07) — the `time.Duration` Contracts line (172): `links[].timeout` is a duration string.
 - **Superseded in part by**: [ADR-0243](0243-http-functions.md) (2026-10-17) — Decisions 3, 4 and 5: the local API gains `/fetch/{alias}/{path...}` and `ctx.fetch`; `invoke` refuses an `http` target.
 - **Superseded in part by**: [ADR-0246](0246-bindings-under-spec.md) (2026-10-19) — where the binding lives: `spec.links` moves to `spec.bindings.links`; what it grants is unchanged.
+- **Superseded in part by**: [ADR-0346](0346-under-funcdctl-dev-a-worker-on-an-addons-runtime-runs-on-devs-container-engine.md) (2026-11-23) — Decision 3's transport (a dev container worker reaches the local API on a loopback listener of its own, its token proving the connection).
 - **Date**: 2026-06-21 (Accepted + **Implemented 2026-06-21** — review pass, see docs/reviews/adr-0064-implementation-claude-opus-4-8.md; post-judge: moved contract validation to the **target's shim**
   (the daemon-side `Invoke` forwards via the in-process `Handler.ServeHTTP` and **propagates** the shim's
   422/500 rather than re-validating — the daemon holds no per-function validator) [Major]; named the acyclic

@@ -486,7 +486,8 @@ auth driver, workload-token *enforcement*, traffic-split/canary rollout, the bot
 a per-Route `tls` override and edge mTLS (FEAT-0006 V2 refinements). Also not built: App
 tests (F119, ADR-0216 accepted), external SQL access and a shared SQL server (F134/F135, ideas), pooling under
 container execution (ADR-0173: a board card), and **InfraStack** (FEAT-0012: Jobs, runtimes from add-ons, the
-InfraStack add-on with its OpenTofu runtime — runtimes from add-ons (ADR-0344) and engineless kinds (ADR-0345) accepted, the other rows ideas), vector stores (FEAT-0013, ideas), the AI gateway (FEAT-0015, ADR-0280–0285
+InfraStack add-on with its OpenTofu runtime — runtimes from add-ons (ADR-0344, with their dev workers in ADR-0346) and engineless kinds (ADR-0345) accepted,
+the other rows ideas), vector stores (FEAT-0013, ideas), the AI gateway (FEAT-0015, ADR-0280–0285
 accepted) and per-namespace quotas (F208, an idea).
 
 ---

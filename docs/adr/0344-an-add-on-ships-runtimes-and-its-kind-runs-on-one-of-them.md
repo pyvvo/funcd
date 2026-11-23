@@ -5,6 +5,7 @@
 - **Amended in place**: 2026-11-23, by the decider on [#1526](https://github.com/pyvvo/funcd/pull/1526): the Jobs ADRs
   (F137) are implemented first, so this ADR gates Jobs as Functions (Decision 11), and under `funcdctl dev` a worker on
   an Addon's runtime runs on dev's container engine (Decision 13), as ADR-0346 decides
+- **Superseded in part by**: [ADR-0346](0346-under-funcdctl-dev-a-worker-on-an-addons-runtime-runs-on-devs-container-engine.md) (2026-11-23) — Decision 13's interim and `addon-runtime-process-driver`'s dev clause (under `funcdctl dev` such a worker runs on dev's container engine).
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, runtime, api, functions, jobs
