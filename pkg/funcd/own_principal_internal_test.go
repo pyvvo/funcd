@@ -76,9 +76,15 @@ func egressToExample(ns v1.NamespaceName, appliesTo ...v1.WorkloadRef) *v1.Egres
 // audit record the gateway writes.
 func egressConnect(t *testing.T, p *executor, pdp auth.Authorizer, src string) egress.AuditRecord {
 	t.Helper()
+	return egressConnectTo(t, p, pdp, src, "example.com")
+}
+
+// egressConnectTo is egressConnect to domain:443.
+func egressConnectTo(t *testing.T, p *executor, pdp auth.Authorizer, src, domain string) egress.AuditRecord {
+	t.Helper()
 	ref, ok := p.egressWorkers.Lookup(netip.MustParseAddr(src))
 	require.True(t, ok, "worker %s is indexed", src)
-	nd := auth.NetDestination{IP: netip.MustParseAddr("93.184.216.34"), Port: 443, Domains: []string{"example.com"}}
+	nd := auth.NetDestination{IP: netip.MustParseAddr("93.184.216.34"), Port: 443, Domains: []string{domain}}
 	resource := nd.Ref(ref.Namespace)
 	dec, err := pdp.Authorize(context.Background(), auth.Request{
 		Identity: auth.Identity{Principal: &ref},
@@ -100,42 +106,47 @@ func egressPlatform(t *testing.T, st store.Store, rt runtime.Runtime) (*executor
 	return p, pdp
 }
 
-// ADR-0351 Decision 6: a run's worker is indexed as the Job its stored run names in spec.job, so a policy that names
-// the Job lets it out and the Function of the Job's name stays in; a whole-namespace policy reaches no Job, and the
-// worker of a run no longer stored is not indexed.
-func TestJobRunEgressIsItsJob(t *testing.T) {
+// scenario: job-egress-named — a run's worker is indexed as the Job its stored run names in spec.job: an EgressPolicy
+// whose appliesTo names the Job lets the run reach api.example.com:443, and the Function of the Job's name stays in;
+// under a policy with an empty appliesTo alone, the run stays in. The worker of a run no longer stored is not indexed
+// (ADR-0351 Decision 6). The egress lane runs it on a real node, as its case job-egress-named.
+func TestScenarioJobEgressNamed(t *testing.T) {
 	t.Parallel()
-	meta := func(ns v1.NamespaceName, name v1.ObjectName) v1.ObjectMeta {
-		return v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"}
+	meta := func(name v1.ObjectName) v1.ObjectMeta {
+		return v1.ObjectMeta{Name: name, Namespace: "acme", ResourceGroup: "rg1"}
 	}
-	job := func(ns v1.NamespaceName) *v1.Job {
-		return &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob}, ObjectMeta: meta(ns, "tofu"),
-			Spec: v1.JobSpec{Runtime: "nodejs22", Handler: "handle", Image: "oci://x/tofu:1"}}
-	}
-	run := func(ns v1.NamespaceName, name v1.ObjectName) *v1.JobRun {
-		return &v1.JobRun{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJobRun.GVK().APIVersion(), Kind: v1.KindJobRun}, ObjectMeta: meta(ns, name),
-			Spec: v1.JobRunSpec{Job: "tofu"}}
-	}
-	fn := lakeFunction("acme")
-	fn.Name = "tofu"
-	st := store.New(memory.New())
-	seedObjects(t, st, fn, job("acme"), run("acme", "tofu-1"), egressToExample("acme", v1.JobOwner("tofu")),
-		job("solo"), run("solo", "tofu-2"), egressToExample("solo"))
-	rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
-	runningWorker(rt, "acme", "tofu-1", v1.KindJobRun, "10.63.0.6")
-	runningWorker(rt, "acme", "tofu", v1.KindFunction, "10.63.0.7")
-	runningWorker(rt, "acme", "gone-1", v1.KindJobRun, "10.63.0.8")
-	runningWorker(rt, "solo", "tofu-2", v1.KindJobRun, "10.63.0.9")
-	p, pdp := egressPlatform(t, st, rt)
+	for _, tc := range []struct {
+		name      string
+		appliesTo []v1.WorkloadRef
+		run, fn   bool
+	}{{"appliesTo the Job", []v1.WorkloadRef{v1.JobOwner("tofu")}, true, false}, {"empty appliesTo", nil, false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fn := lakeFunction("acme")
+			fn.Name = "tofu"
+			job := &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob}, ObjectMeta: meta("tofu"),
+				Spec: v1.JobSpec{Runtime: "nodejs22", Handler: "handle", Image: "oci://x/tofu:1"}}
+			run := &v1.JobRun{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJobRun.GVK().APIVersion(), Kind: v1.KindJobRun}, ObjectMeta: meta("tofu-1"),
+				Spec: v1.JobRunSpec{Job: "tofu"}, Status: v1.JobRunStatus{Phase: v1.JobRunRunning}}
+			policy := egressToExample("acme", tc.appliesTo...)
+			policy.Spec.Rules[0].To.Domains = []string{"api.example.com"}
+			st := store.New(memory.New())
+			seedObjects(t, st, fn, job, run, policy)
+			rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
+			runningWorker(rt, "acme", "tofu-1", v1.KindJobRun, "10.63.0.6")
+			runningWorker(rt, "acme", "tofu", v1.KindFunction, "10.63.0.7")
+			runningWorker(rt, "acme", "gone-1", v1.KindJobRun, "10.63.0.8")
+			p, pdp := egressPlatform(t, st, rt)
 
-	ref, ok := p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.6"))
-	require.True(t, ok)
-	require.Equal(t, auth.EntityRef{Type: v1.KindJob, Namespace: "acme", Name: "tofu"}, ref)
-	require.True(t, egressConnect(t, p, pdp, "10.63.0.6").Allowed, "the policy names the Job")
-	require.False(t, egressConnect(t, p, pdp, "10.63.0.7").Allowed, "the Function of the Job's name is not named")
-	_, ok = p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.8"))
-	require.False(t, ok, "the worker of a run no longer stored is not indexed")
-	require.False(t, egressConnect(t, p, pdp, "10.63.0.9").Allowed, "a whole-namespace policy reaches no Job")
+			ref, ok := p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.6"))
+			require.True(t, ok)
+			require.Equal(t, auth.EntityRef{Type: v1.KindJob, Namespace: "acme", Name: "tofu"}, ref)
+			require.Equal(t, tc.run, egressConnectTo(t, p, pdp, "10.63.0.6", "api.example.com").Allowed, "the run")
+			require.Equal(t, tc.fn, egressConnectTo(t, p, pdp, "10.63.0.7", "api.example.com").Allowed, "the Function of the Job's name")
+			_, ok = p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.8"))
+			require.False(t, ok, "the worker of a run no longer stored is not indexed")
+		})
+	}
 }
 
 // The forwarder listens on the bridge address, or on loopback with none, and on no other (ADR-0315): from another of the
