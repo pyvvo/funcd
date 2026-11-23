@@ -464,9 +464,10 @@ func TestScenarioJobWriterRole(t *testing.T) {
 	require.Contains(t, r.call(t, put)[0].Error, "403", "the role names the Job, not the Function of its name")
 }
 
-// Each of two runs that hold a worker at once has a local API socket of its own (ADR-0351 Decision 2). The scenario
-// job-runs-have-their-own-sockets reads each run through GET /job/run, ADR-0348's facet, which is not built yet.
-func TestJobRunsHaveTheirOwnSockets(t *testing.T) {
+// The scenario's GET /job/run assertion joins this test with ADR-0348's implementation (ruling: https://github.com/pyvvo/funcd/issues/1018#issuecomment-7116120716).
+// scenario: job-runs-have-their-own-sockets — two Running runs of a Job with concurrency 2 hold two different local API
+// sockets, and each run's ctx.run names that run (ADR-0351 Decision 2).
+func TestScenarioJobRunsHaveTheirOwnSockets(t *testing.T) {
 	t.Parallel()
 	r := newJobRig(t, false)
 	r.job(t, func(s *v1.JobSpec) { s.Concurrency = 2 })
