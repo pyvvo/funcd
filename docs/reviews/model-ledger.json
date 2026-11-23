@@ -14983,5 +14983,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1542-fix-claude-opus-5-5.md",
     "notes": "pass; with rauthy's snapshot folder emptied before the kill case, main fails it as the issue says (KILLED while, export NoSnapshot, Restore ExportFailed) and the fix passes it (its wait took about 15 s, KILLED while Loading); the wait holds when provider.Newest finds a quiet file; no finding"
+  },
+  {
+    "date": "2026-11-23",
+    "issue": "1546",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 11,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1546-fix-claude-opus-5-5.md",
+    "notes": "test-only flake fix; revert and M1 fail the regression test for the issue's reason; Minor (model): M2, the matrix's main platform back on the short limit, survives, and no test gives the too-large rows a late answer; Minor (model): addonCallLimit copies local.DefaultAddonCallTimeout; env: three timing-bound tests outside the change failed in full package runs at load 9-11"
   }
 ]
