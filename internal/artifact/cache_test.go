@@ -76,6 +76,30 @@ func TestIssue1538_ConcurrentFirstUsesShareOneFill(t *testing.T) {
 	}
 }
 
+// Issue #1538: a fill that panics still removes its record and wakes the calls that wait for it, so the next call fills
+// the cache instead of waiting for a fill that never ends.
+func TestIssue1538_PanickedFillLeavesNoWait(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ref := layoutRef(t, "v1")
+	dir, entry := goodBundle(t)
+	digest, err := artifact.PushBundle(ctx, ref, dir, entry, "", "")
+	require.NoError(t, err)
+	m := artifact.NewOrasMaterializer(filepath.Join(t.TempDir(), "cache"), "")
+	var first atomic.Bool
+	artifact.TraceDisk(m, func(durable.Op, string) {
+		if first.CompareAndSwap(false, true) {
+			panic("the first fill fails mid-step")
+		}
+	})
+	fn := mkFunction(t, ref, digest)
+	require.Panics(t, func() { _, _ = m.Materialize(ctx, fn) })
+	short, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err = m.Materialize(short, fn)
+	require.NoError(t, err, "the next call fills the cache")
+}
+
 // heldFill is a materializer over a cache root that does not exist yet, whose first fill holds at its first durable
 // step, with its cache dir's lock, until release: entered closes once it holds there.
 func heldFill(t *testing.T) (m *artifact.OrasMaterializer, entered <-chan struct{}, release func()) {

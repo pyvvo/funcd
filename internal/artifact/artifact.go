@@ -646,16 +646,7 @@ func (m *OrasMaterializer) fillOnce(ctx context.Context, op, ref, digest, cacheD
 		}
 		m.mu.Unlock()
 		if !waits {
-			f.err = m.fillCache(ctx, op, ref, digest, cacheDir)
-			if _, ok, _ := cachedArtifact(op, cacheDir); f.err == nil && !ok {
-				f.err = fault.Internalf(op, "artifact cache %q holds no handler after a pull", cacheDir)
-			}
-			f.ctxDone = ctx.Err() != nil
-			m.mu.Lock()
-			delete(m.fills, cacheDir)
-			m.mu.Unlock()
-			close(f.done)
-			return f.err
+			return m.lead(ctx, f, op, ref, digest, cacheDir)
 		}
 		select {
 		case <-f.done:
@@ -666,6 +657,23 @@ func (m *OrasMaterializer) fillOnce(ctx context.Context, op, ref, digest, cacheD
 			return f.err
 		}
 	}
+}
+
+// lead runs the fill f records, then removes the record and wakes the calls that wait for it however the fill ends, a
+// panic included: f.err is then still nil, so a waiting call checks the cache and fills it itself.
+func (m *OrasMaterializer) lead(ctx context.Context, f *fill, op, ref, digest, cacheDir string) error {
+	defer func() {
+		m.mu.Lock()
+		delete(m.fills, cacheDir)
+		m.mu.Unlock()
+		close(f.done)
+	}()
+	f.err = m.fillCache(ctx, op, ref, digest, cacheDir)
+	if _, ok, _ := cachedArtifact(op, cacheDir); f.err == nil && !ok {
+		f.err = fault.Internalf(op, "artifact cache %q holds no handler after a pull", cacheDir)
+	}
+	f.ctxDone = ctx.Err() != nil
+	return f.err
 }
 
 // Platforms implements function.PlatformResolver (ADR-0145): the platforms the artifact at digest provides,
