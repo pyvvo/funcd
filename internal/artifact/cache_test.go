@@ -76,8 +76,8 @@ func TestIssue1538_ConcurrentFirstUsesShareOneFill(t *testing.T) {
 	}
 }
 
-// Issue #1538: a fill that panics still removes its record and wakes the calls that wait for it, so the next call fills
-// the cache instead of waiting for a fill that never ends.
+// Issue #1538: a fill that panics still removes its record and wakes the calls that wait for it, so a call that waited
+// fills the cache instead of waiting for a fill that never ends.
 func TestIssue1538_PanickedFillLeavesNoWait(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -86,18 +86,30 @@ func TestIssue1538_PanickedFillLeavesNoWait(t *testing.T) {
 	digest, err := artifact.PushBundle(ctx, ref, dir, entry, "", "")
 	require.NoError(t, err)
 	m := artifact.NewOrasMaterializer(filepath.Join(t.TempDir(), "cache"), "")
+	entered, release := make(chan struct{}), make(chan struct{})
 	var first atomic.Bool
 	artifact.TraceDisk(m, func(durable.Op, string) {
 		if first.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
 			panic("the first fill fails mid-step")
 		}
 	})
 	fn := mkFunction(t, ref, digest)
-	require.Panics(t, func() { _, _ = m.Materialize(ctx, fn) })
+	panicked := make(chan bool, 1)
+	go func() {
+		defer func() { panicked <- recover() != nil }()
+		_, _ = m.Materialize(ctx, fn)
+	}()
+	<-entered
 	short, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	_, err = m.Materialize(short, fn)
-	require.NoError(t, err, "the next call fills the cache")
+	waited := make(chan error, 1)
+	go func() { _, err := m.Materialize(short, fn); waited <- err }()
+	time.Sleep(100 * time.Millisecond) // the second call waits for the first's fill by then
+	close(release)
+	require.True(t, <-panicked, "the first fill panicked")
+	require.NoError(t, <-waited, "the call that waited fills the cache")
 }
 
 // heldFill is a materializer over a cache root that does not exist yet, whose first fill holds at its first durable
