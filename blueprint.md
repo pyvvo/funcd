@@ -951,8 +951,10 @@ The control-plane REST API is the single front door for *all* clients — `funcd
 unit. It is an add-on with no engine, which ships its OpenTofu runtime: an add-on can ship runtimes for Functions, Jobs
 and its own kind. Each change runs as a `JobRun` of a generic run-to-completion `Job`, which is built as a Function is:
 its runtime is a shim with its tool, funcd's own or an add-on's. A run waits for a person's approval of its preview
-unless its Job says `bypass`. A stack's secret outputs reach Functions through a Secret that its Job owns. The [design report](docs/reports/infrastack-design.md) holds the study; no ADR decides it yet,
-so every name here is a placeholder.
+unless its Job says `bypass`. A stack's secret outputs reach Functions through a Secret that its Job owns. The [design report](docs/reports/infrastack-design.md) holds the study.
+ADR-0344 to ADR-0346 decide runtimes from add-ons and engineless kinds, and ADR-0347 to ADR-0351 the Job and its runs,
+their approval, a Function's start, an App's Jobs and the Job's own identity; the InfraStack add-on itself takes no
+ADR.
 
 ### Go best practices baked in
 

@@ -1,6 +1,8 @@
 # ADR-0116: Capability authorization framework — one registry for binding-as-grant
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md)
+  (2026-11-23) — the principal objects gain `*Job` (Decision 1).
 - **Date**: 2026-07-09
 - **Accepted**: 2026-07-09
 - **Implemented**: 2026-07-09

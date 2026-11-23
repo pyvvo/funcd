@@ -1,6 +1,9 @@
 # ADR-0003: Resource model & API typing (v1alpha1)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0347](0347-a-job-runs-its-handler-once-per-jobrun-in-a-worker-of-its-own.md)
+  (2026-11-23) — the Revision row: `spec.function` is no longer required, and a Job's Revision names its Job in
+  `spec.job` (Decision 2).
 - **Date**: 2026-06-14 (revised same day after judge review: added the optional `StatusObject`
   interface for generic status write-back; single-sourced scope on `Kind.Namespaced()` and added
   the shared `validateMeta` TypeMeta-consistency check; registry-completeness test; doc nits;

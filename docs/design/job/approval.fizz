@@ -1,0 +1,161 @@
+---
+# The approval of a run (ADR-0348 Decisions 2 to 6), for one run of a Job without approval.bypass. funcd previews the
+# run: the preview call answers a document, whose digest the run keeps with the time it was made, and the run waits for
+# an approval. Admission refuses an approval set when the run is created, and takes one only from a person who was
+# shown the preview, while its digest is the run's preview. An approved run waits for a slot, and time may pass the
+# Job's expiry meanwhile. On an approval and when the slot frees, funcd applies a fresh preview that the approval names,
+# and previews a stale one again in the slot: an identical document goes on to the apply, a different one waits for a
+# new approval. A person may reject the run, and funcd may restart once: a preview in flight is called again, an apply
+# ends Interrupted. Environment: the controller runs one worker, so a pass is one step; the clock is the Expire action;
+# a preview answers the same document as the last or a new one. Left out: other runs' slots and the apply's own call,
+# which ADR-0347's model holds; a cancel; tests hold those.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 20
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant apply-unmatched: AppliesWhatWasApproved
+# mutant apply-stale: NoStaleApply
+# mutant no-slot-time-check: NoStaleApply
+# mutant approve-after-reject: RejectedNeverRuns
+# mutant approve-at-create: ApprovedByAPerson
+# mutant no-repreview: liveness
+
+# apply-unmatched: funcd applies the run's preview without checking that the approval names it.
+# apply-stale: funcd queues and applies a preview older than the expiry.
+# no-slot-time-check: funcd checks the expiry at the approval only, not when the slot frees.
+# approve-after-reject: an approval applies a run that a person rejected.
+# approve-at-create: admission takes an approval set when the run is created.
+# no-repreview: funcd leaves a stale approved preview as it is.
+MUTANT = ""
+
+action Init:
+    phase = "pending"
+    preview = 0
+    fresh = False
+    shown = 0
+    approved = 0
+    byperson = False
+    rejected = False
+    applied = 0
+    appliedfresh = False
+    expiries = 0
+    stops = 0
+
+# The run's creator sets an approval of the digest that its first preview will have: admission refuses it.
+atomic action CreateApproved:
+    require MUTANT == "approve-at-create"
+    require phase == "pending" and preview == 0 and approved == 0
+    approved = 1
+
+# A pass starts the run's preview in a free slot.
+atomic fair action StartPreview:
+    require phase == "pending"
+    require not rejected
+    phase = "previewing"
+
+# The preview answers: the first document, then the same as the last or a new one, each new one with a new digest. A
+# preview again whose document keeps the approved digest goes on to the apply in the slot it holds.
+atomic fair action PreviewAnswers:
+    require phase == "previewing"
+    same = oneof [True, False]
+    if preview == 0 or not same:
+        preview += 1
+    fresh = True
+    if approved > 0 and approved == preview and not rejected:
+        applied = preview
+        appliedfresh = True
+        phase = "running"
+    else:
+        phase = "awaiting"
+
+# funcdctl job approve shows a person the run's preview.
+atomic action Show:
+    require phase == "awaiting"
+    require shown != preview
+    shown = preview
+
+# The person approves what they were shown; admission takes it only while it is the run's preview.
+atomic action Approve:
+    require phase == "awaiting"
+    require shown > 0 and shown == preview
+    require approved != shown
+    approved = shown
+    byperson = True
+
+atomic action Reject:
+    require phase in ["pending", "previewing", "awaiting", "queued"]
+    require not rejected
+    rejected = True
+
+# The preview grows older than the Job's expiry.
+atomic action Expire:
+    require fresh
+    require expiries < 2
+    fresh = False
+    expiries += 1
+
+# A pass ends a rejected run.
+atomic fair action EndRejected:
+    require rejected
+    require phase in ["pending", "previewing", "awaiting", "queued"]
+    if MUTANT == "approve-after-reject":
+        require approved == 0
+    phase = "rejected"
+
+# A pass acts on an approval: a fresh preview that it names waits for a slot; a stale one is previewed again.
+atomic fair action OnApproval:
+    require phase == "awaiting"
+    require approved > 0
+    if MUTANT != "approve-after-reject":
+        require not rejected
+    if MUTANT != "apply-unmatched":
+        require approved == preview
+    if MUTANT == "no-repreview":
+        require fresh
+    if fresh or MUTANT == "apply-stale":
+        phase = "queued"
+    else:
+        phase = "previewing"
+
+# The slot frees: a pass applies a fresh preview, and previews a stale one again in that slot.
+atomic fair action StartApply:
+    require phase == "queued"
+    if MUTANT != "approve-after-reject":
+        require not rejected
+    if fresh or MUTANT == "apply-stale" or MUTANT == "no-slot-time-check":
+        applied = preview
+        appliedfresh = fresh
+        phase = "running"
+    else:
+        phase = "previewing"
+
+# funcd restarts once: a preview in flight is called again, an apply ends Interrupted.
+atomic action Restart:
+    require stops < 1
+    require phase in ["previewing", "running"]
+    stops += 1
+    if phase == "previewing":
+        phase = "pending"
+    else:
+        phase = "interrupted"
+
+always assertion AppliesWhatWasApproved:
+    return phase != "running" or applied == approved
+
+always assertion NoStaleApply:
+    return phase != "running" or appliedfresh
+
+always assertion RejectedNeverRuns:
+    return not (rejected and phase == "running")
+
+always assertion ApprovedByAPerson:
+    return phase != "running" or byperson
+
+# Every run ends applied, rejected or interrupted, or waits on a person: no approval names its current preview.
+eventually always assertion NoApprovalStuck:
+    if phase in ["running", "rejected", "interrupted"]:
+        return True
+    return phase == "awaiting" and approved != preview

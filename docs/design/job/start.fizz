@@ -1,0 +1,59 @@
+---
+# A Function's start of a run (ADR-0349 Decision 2), delivered at least once: a Sensor or a workflow step calls the
+# Function, whose handler starts a run named from its event's id; the call's answer may be lost, and the caller then
+# sends the call again. The facet creates the run when no run has the name, and answers the run's name when a run of
+# the bound Job with the same input already has it. Environment: the store creates a name at most once; the caller
+# sends a failed call again until one succeeds. Left out: a run of another Job or input under the name (409) and the
+# run's admission; tests hold those.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 10
+  crash_on_yield: false
+---
+# diagram: caller
+# mutant unnamed-retry: AtMostOneRun
+# mutant conflict-on-retry: liveness
+
+# unnamed-retry: the handler starts the run with no name, so the server names each start anew.
+# conflict-on-retry: the facet answers 409 for the run that the first start created.
+MUTANT = ""
+
+action Init:
+    caller = "sending"
+    runs = 0
+    lost = 0
+    answer = "none"
+
+# The handler starts the run: the facet creates it, or answers the run that already has the name.
+atomic fair action Start:
+    require caller == "sending"
+    if MUTANT == "unnamed-retry" or runs == 0:
+        runs += 1
+        answer = "created"
+    elif MUTANT == "conflict-on-retry":
+        answer = "conflict"
+    else:
+        answer = "exists"
+    caller = "waiting"
+
+# The answer reaches the caller: a 409 fails the call, which the caller sends again.
+atomic fair action Deliver:
+    require caller == "waiting"
+    if answer == "conflict":
+        caller = "sending"
+    else:
+        caller = "done"
+
+# The answer is lost once, and the caller sends the call again.
+atomic action Lose:
+    require caller == "waiting"
+    require lost < 1
+    lost += 1
+    caller = "sending"
+
+always assertion AtMostOneRun:
+    return runs <= 1
+
+eventually always assertion CallerSucceeds:
+    return caller == "done"

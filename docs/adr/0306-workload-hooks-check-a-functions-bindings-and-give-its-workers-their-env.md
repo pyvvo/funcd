@@ -6,6 +6,8 @@
   today's gate order, a ConfigMap may still move the S3 endpoint, the Executor's own env stays outside the hooks, and
   `memberEnv`'s delete loop goes)
 - **Superseded in part by**: [ADR-0346](0346-under-funcdctl-dev-a-worker-on-an-addons-runtime-runs-on-devs-container-engine.md) (2026-11-23) — Decision 1 (a workload hook also names the keys of its env that hold funcd's loopback address).
+- **Superseded in part by**: [ADR-0347](0347-a-job-runs-its-handler-once-per-jobrun-in-a-worker-of-its-own.md)
+  (2026-11-23) — the hook signatures: they take the fields a Job shares and the subject's kind (Decision 5).
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, function, worker-env, bindings, refactor

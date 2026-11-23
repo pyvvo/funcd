@@ -3,6 +3,8 @@
 - **Status**: Implemented (2026-10-24), review passed with two Minors, both fixed ([report](../reviews/adr-0275-implementation-claude-opus-5-5.md)); Reviewing 2026-10-24; Accepted 2026-10-24 by an `adr-batch` run the decider delegated ("you have batch"); judged twice:
   round 1's two Majors (a Lake applied again binds its retained bucket by `ref`; SQLDatabase owners are not
   Function-only, now #1235) and its Minors folded, round 2 accepted
+- **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md)
+  (2026-11-23) — `PrefixOwner` becomes `WorkloadRef`, with the kind Job (Decision 3).
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: s3, authorization, bucket, lake, api

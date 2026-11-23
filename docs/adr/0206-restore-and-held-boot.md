@@ -5,6 +5,9 @@
 - **Superseded in part by**: [ADR-0227](0227-disaster-recovery-implementation-addenda.md) (2026-10-11; lines at 74f8e604) — Decision 6's "`restore run` and ADR-0207 write it" (130), by Decision 3.2.
 - **Superseded in part by**: [ADR-0288](0288-a-boot-reclaim-quarantines-data-no-object-names.md) (2026-10-25) — Decision 6's "the boot reclaims run at the next start after it": they move the data into the quarantine
 - **Superseded in part by**: [ADR-0293](0293-a-lakes-catalog-lives-in-a-platform-catalog-store.md) (2026-10-27) — Decision 6's orphan walk: it also reads the catalog store
+- **Superseded in part by**: [ADR-0347](0347-a-job-runs-its-handler-once-per-jobrun-in-a-worker-of-its-own.md)
+  (2026-11-23) — Decision 2 step 4: a restore also ends the restored JobRuns that have not ended, `Cancelled` with
+  `Restored` (Decision 7).
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, restore, hold, workflow, eventing, backup
