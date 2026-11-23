@@ -32,6 +32,9 @@ var localGot = &localErrors{}
 
 // The e2e build has its own TestMain, in app_revision_e2e_test.go, which ends the same way, with no answer check.
 func TestMain(m *testing.M) {
+	// The parallel matrix tests keep dozens of platforms open at once: at Badger's defaults, the two in-memory stores
+	// of each one hold 166 MB, which ran CI's runner out of memory.
+	funcd.SetFrugalStoresForTest(true)
 	got := &answers{}
 	funcd.SetAnswerRecorderForTest(got.record)
 	local.SetErrorRecorderForTest(localGot.record)

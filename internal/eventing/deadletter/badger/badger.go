@@ -37,6 +37,9 @@ const keyPrefix = "dl/"
 type Config struct {
 	// InMemory runs Badger fully in memory (tests/dev) — no files, no disk.
 	InMemory bool
+	// Frugal gives an in-memory instance the memtables and caches of the on-disk profile instead of Badger's
+	// defaults, whose 64 MiB memtable is allocated at open. Only a test binary that keeps many platforms open sets it.
+	Frugal bool
 	// Dir is the on-disk data directory when InMemory is false (production: <dataDir>/eventstore).
 	Dir string
 }
@@ -55,20 +58,27 @@ type owned struct {
 // Options is the Badger profile of a dead-letter instance: in memory, or the RAM-frugal on-disk profile.
 func Options(cfg Config) badger.Options {
 	var bopts badger.Options
-	if cfg.InMemory {
+	switch {
+	case cfg.InMemory && cfg.Frugal:
+		bopts = frugal(badger.DefaultOptions("").WithInMemory(true))
+	case cfg.InMemory:
 		bopts = badger.DefaultOptions("").WithInMemory(true)
-	} else {
+	default:
 		// RAM-frugal profile matching the run-state / metastore engines (ADR-0065/0094).
-		bopts = badger.DefaultOptions(cfg.Dir).
+		bopts = frugal(badger.DefaultOptions(cfg.Dir)).
 			WithSyncWrites(true).
-			WithNumMemtables(2).
-			WithMemTableSize(memTableSize).
 			WithValueLogFileSize(valueLogFileSize).
-			WithBlockCacheSize(blockCacheSize).
-			WithIndexCacheSize(indexCacheSize).
 			WithCompression(options.None)
 	}
 	return bopts.WithLoggingLevel(badger.ERROR)
+}
+
+// frugal sizes the memtables and the caches of the RAM-frugal profile.
+func frugal(o badger.Options) badger.Options {
+	return o.WithNumMemtables(2).
+		WithMemTableSize(memTableSize).
+		WithBlockCacheSize(blockCacheSize).
+		WithIndexCacheSize(indexCacheSize)
 }
 
 // New opens a dead-letter store on the configured backend and returns it as deadletter.Store.

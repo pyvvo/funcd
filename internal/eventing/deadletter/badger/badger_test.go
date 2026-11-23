@@ -3,6 +3,7 @@ package badger_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -16,15 +17,35 @@ import (
 // TestBadgerContract runs the shared deadletter.Store contract against the Badger driver in in-memory mode
 // (hermetic — no files): put/get/list/delete + the retention sweep (TTL + per-ns cap).
 func TestBadgerContract(t *testing.T) {
+	deadletter.Contract(t, func(t *testing.T) deadletter.Store { return newStore(t, badger.Config{InMemory: true}) })
+}
+
+// TestBadgerFrugalContract runs the same contract against the frugal in-memory profile, which pkg/funcd's tests take:
+// the memtables and caches of the on-disk profile, and the in-memory value threshold.
+func TestBadgerFrugalContract(t *testing.T) {
+	frugal, disk := badger.Options(badger.Config{InMemory: true, Frugal: true}), badger.Options(badger.Config{Dir: t.TempDir()})
+	sizes := func(o bdb.Options) []int64 {
+		return []int64{o.MemTableSize, int64(o.NumMemtables), o.BlockCacheSize, o.IndexCacheSize}
+	}
+	if got, want := sizes(frugal), sizes(disk); !slices.Equal(got, want) {
+		t.Fatalf("frugal memtable size, memtables, block and index caches are %v, want the on-disk %v", got, want)
+	}
+	if want := badger.Options(badger.Config{InMemory: true}).ValueThreshold; frugal.ValueThreshold != want {
+		t.Fatalf("frugal value threshold is %d bytes, want the in-memory %d", frugal.ValueThreshold, want)
+	}
 	deadletter.Contract(t, func(t *testing.T) deadletter.Store {
-		t.Helper()
-		s, err := badger.New(badger.Config{InMemory: true})
-		if err != nil {
-			t.Fatalf("open badger DLQ: %v", err)
-		}
-		t.Cleanup(func() { _ = s.Close() })
-		return s
+		return newStore(t, badger.Config{InMemory: true, Frugal: true})
 	})
+}
+
+func newStore(t *testing.T, cfg badger.Config) deadletter.Store {
+	t.Helper()
+	s, err := badger.New(cfg)
+	if err != nil {
+		t.Fatalf("open badger DLQ: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
 }
 
 // TestBadgerOnDBContract runs the same contract against the dl/ tenant over a DB its caller owns (ADR-0201).
