@@ -11,7 +11,8 @@ import (
 )
 
 // ADR-0351 Decision 3: every owner names its kind and its name, on the wire as {kind, name}, and each field takes only
-// its kinds: a table and a Secret a Function or a Job, a database and a prefix a Lake too.
+// its kinds: a table and a Secret a Function or a Job, a database and a prefix a Lake too, at a store's root and where a
+// workload declares it.
 func TestOwnersNameTheirKind(t *testing.T) {
 	t.Parallel()
 	meta := ObjectMeta{Name: "x", Namespace: "team", ResourceGroup: "rg1"}
@@ -25,6 +26,13 @@ func TestOwnersNameTheirKind(t *testing.T) {
 	prefix := func(o WorkloadRef) error {
 		return (&Bucket{TypeMeta: tm(KindBucket), ObjectMeta: meta, Spec: BucketSpec{Prefixes: []BucketPrefix{{Name: "p", Owner: o}}}}).Validate()
 	}
+	kvTable := func(o WorkloadRef) error {
+		return (&KVStore{TypeMeta: tm(KindKVStore), ObjectMeta: meta, Spec: KVStoreSpec{Tables: []KVTable{{Name: "t", Owner: o}}}}).Validate()
+	}
+	declaredTable := func(o WorkloadRef) error {
+		return (&Function{TypeMeta: tm(KindFunction), ObjectMeta: meta, Spec: FunctionSpec{Runtime: "nodejs22", Handler: "handle",
+			Image: "oci://x/fn:1", KVStores: []KVStoreEntry{{Name: "state", KVStoreSpec: KVStoreSpec{Tables: []KVTable{{Name: "t", Owner: o}}}}}}}).Validate()
+	}
 	for _, tc := range []struct {
 		what  string
 		check func(WorkloadRef) error
@@ -34,6 +42,9 @@ func TestOwnersNameTheirKind(t *testing.T) {
 		{"a Secret's owner", secret, []WorkloadRef{FunctionOwner("tofu"), JobOwner("tofu"), {}}, []WorkloadRef{LakeOwner("tofu"), {Kind: KindApp, Name: "tofu"}}},
 		{"a database's owner", db, []WorkloadRef{FunctionOwner("tofu"), JobOwner("tofu"), LakeOwner("tofu")}, []WorkloadRef{{Kind: KindSite, Name: "tofu"}, JobOwner("Not_A_Label")}},
 		{"a prefix's owner", prefix, []WorkloadRef{FunctionOwner("tofu"), JobOwner("tofu"), LakeOwner("tofu")}, []WorkloadRef{{Kind: KindWorkflow, Name: "tofu"}}},
+		{"a table's owner", kvTable, []WorkloadRef{FunctionOwner("tofu"), JobOwner("tofu"), {}},
+			[]WorkloadRef{LakeOwner("tofu"), {Kind: KindApp, Name: "tofu"}, FunctionOwner("Not_A_Label")}},
+		{"a declared table's owner", declaredTable, []WorkloadRef{FunctionOwner("x"), JobOwner("tofu"), {}}, []WorkloadRef{LakeOwner("tofu")}},
 	} {
 		for _, o := range tc.ok {
 			require.NoError(t, tc.check(o), "%s %v", tc.what, o)

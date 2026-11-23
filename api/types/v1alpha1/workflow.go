@@ -528,11 +528,7 @@ func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) err
 	}
 	for i := range s.KVStores {
 		for j, t := range w.Spec.KVStores[i].Tables {
-			off := ownerOff(t.Owner)
-			if off == "" && t.Owner.Kind == KindLake {
-				off = "is a Lake, which owns no table"
-			}
-			if off != "" {
+			if off := ownerOff(t.Owner); off != "" {
 				return fault.Invalidf(op, "spec.kv[%d].tables[%d].owner %s %s", i, j, t.Owner, off)
 			}
 		}

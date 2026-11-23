@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"fmt"
+
 	"github.com/pyvvo/funcd/api/fault"
 )
 
@@ -127,6 +129,9 @@ func validateTables(op, path string, tables []KVTable) error {
 			return fault.Invalidf(op, "%s[%d].name %q is duplicated", path, i, tb.Name)
 		}
 		seen[tb.Name] = true
+		if err := tb.Owner.validate(op, fmt.Sprintf("%s[%d].owner", path, i), KindFunction, KindJob); err != nil {
+			return err // a Lake owns a prefix or a database, never a table (ADR-0351 Decision 3)
+		}
 	}
 	return nil
 }
