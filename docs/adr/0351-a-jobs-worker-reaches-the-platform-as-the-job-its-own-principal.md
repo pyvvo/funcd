@@ -1,6 +1,6 @@
 # ADR-0351: A Job's worker reaches the platform as the Job, its own principal
 
-- **Status**: Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
+- **Status**: Reviewing (2026-11-23, implemented); Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: jobs, security, cedar, local-api, egress, s3
