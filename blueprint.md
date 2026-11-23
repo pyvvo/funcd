@@ -948,10 +948,10 @@ The control-plane REST API is the single front door for *all* clients — `funcd
 
 **The other direction: funcd runs infrastructure-as-code ([FEAT-0012](docs/feat/0012-feat-infrastack.md)).** An
 `InfraStack` keeps an OpenTofu module's stack applied, as Crossplane does on Kubernetes but with the whole module as the
-unit. Each change runs as a `JobRun` of a generic run-to-completion `Job`, which is built as a Function is: its runtime
-plugin is a shim with its tool, so a run goes on either runtime driver. A run waits for a person's approval of its
-preview unless the stack says `bypass`. The stack's outputs reach Functions as a
-ConfigMap and a Secret. The [design report](docs/reports/infrastack-design.md) holds the study; no ADR decides it yet,
+unit. It is an add-on with no engine, which ships its OpenTofu runtime: an add-on can ship runtimes for Functions, Jobs
+and its own kind. Each change runs as a `JobRun` of a generic run-to-completion `Job`, which is built as a Function is:
+its runtime is a shim with its tool, funcd's own or an add-on's. A run waits for a person's approval of its preview
+unless its Job says `bypass`. A stack's secret outputs reach Functions through a Secret that its Job owns. The [design report](docs/reports/infrastack-design.md) holds the study; no ADR decides it yet,
 so every name here is a placeholder.
 
 ### Go best practices baked in
