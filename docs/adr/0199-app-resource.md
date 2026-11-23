@@ -14,6 +14,7 @@
   Functions of two Workflows, and the scenario `app-shared-writer-refused` gains that case. The normal rule (correct a
   frozen ADR through a superseding ADR) is preserved for every other ADR.
 - **Superseded in part by**: [ADR-0288](0288-a-boot-reclaim-quarantines-data-no-object-names.md) (2026-10-25) — Decision 7's boot purge of every Bucket prefix whose Bucket no longer exists: the start moves those objects into the quarantine
+- **Superseded in part by**: [ADR-0345](0345-a-function-reconciles-an-engineless-kind-and-a-deletion-waits-for-its-destroy.md) (2026-11-23) — Decisions 6 and 7 (an App's engineless parts go first; its other parts wait while one exists, on a prune and on the App's deletion).
 - **Date**: 2026-10-08 (judged in three rounds: five lenses, then three, then one, each finding checked by a skeptic)
 - **Deciders**: green-0-rabbit
 - **Tags**: app, lifecycle, controller, admission, gc, ownership

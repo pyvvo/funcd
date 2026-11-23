@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-11-22), review passed and its lane case passed on containerd (`addon-rauthy` at d46b7c03, 99 s;
   [report](../reviews/adr-0341-implementation-claude-opus-5-5.md)); Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider ("I accept all ADR"), after three rounds of an independent judge, every Blocker and Major
   folded
+- **Superseded in part by**: [ADR-0345](0345-a-function-reconciles-an-engineless-kind-and-a-deletion-waits-for-its-destroy.md) (2026-11-23) — Decisions 3 and 8 (an engineless object's `spec.functions` may name its own kind; `addons.settingsTimeout` bounds the engineless call too).
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, reconcile, functions

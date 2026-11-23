@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0186](0186-containerd-clean-slate-at-boot.md) (2026-10-05) — Decision 2 "a stored image is used as is" (lines 110-111), on the private containerd only: a stored image lasts one funcd run.
+- **Superseded in part by**: [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md) (2026-11-23) — Decisions 2 and 4 (a runtime resolves to funcd's own, then to an Addon's, then as here; three new `RuntimeUnavailable` causes).
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, shim, function, containerd, process

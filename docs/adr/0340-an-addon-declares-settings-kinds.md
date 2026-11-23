@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-11-22), review passed with ADR-0341's `spec.functions` refusal
   ([report](../reviews/adr-0340-implementation-claude-opus-5-5.md)); Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider ("I accept all ADR"), after four rounds of an independent judge, every Blocker and Major
   folded
+- **Superseded in part by**: [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md) (2026-11-23) — Decision 1 (an Addon's settings kinds sit in the attributes of its engine's entry).
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, admission, kinds, expressions
