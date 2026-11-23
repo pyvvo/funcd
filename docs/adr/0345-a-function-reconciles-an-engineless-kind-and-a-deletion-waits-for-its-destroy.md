@@ -37,7 +37,7 @@ kind's Function, and whoever deletes an object or its App.
   *Then* each Function's call lists only the objects it reconciles.
 - `scenario: engineless-resync` — *Given* `bunny-edge` Ready, *When* the kind's `resync` elapses, *Then* its Function
   gets the list again, cause `resync`.
-- `scenario: engineless-run-ends` — *When* a run's end is reported for `bunny-edge`'s namespace, *Then* each group of
+- `scenario: engineless-run-ends` — *Given* a JobRun in `bunny-edge`'s namespace, *When* it ends, *Then* each group of
   the namespace is called, cause `run`, at once or when its call in flight ends.
 - `scenario: engineless-waits` — *Given* no Function `infrastack-reconciler`, or the Addon deleted after
   `bunny-edge`'s first pass, *Then* `bunny-edge` is `Pending` with `FunctionNotFound` or `AddonNotFound` and no call
@@ -116,9 +116,9 @@ calls over a stream; a general finalizer mechanism.
    engineless; ADR-0341 Decision 3's other refusals stand, and in an App's part the `ref` names a Function the App
    declares. The Function binds no object: the call carries the objects' config, and what it starts it reaches through
    its own bindings (F137, F140). It must accept a cause it does not know.
-4. **A run's end.** The end of any JobRun (F137) in a namespace makes every group of that namespace due, cause `run`,
-   at once, or when its call in flight ends. It needs no binding: the Function reads from its own state which run
-   ended. The add-on reconciler takes the end through `RunEnded`, which this ADR builds and F137's JobRun calls.
+4. **A run's end.** The end of any JobRun (F137, built before this ADR) in a namespace makes every group of that
+   namespace due, cause `run`, at once, or when its call in flight ends: the add-on reconciler watches JobRuns. It
+   needs no binding: the Function reads from its own state which run ended.
 5. **The status.** As ADR-0341 Decision 4, with no target: `ok: true` is Ready at the generation sent; `ok: false` is
    its reason, such as `Planning`, `AwaitingApproval` or `Destroying`, else `ReconcileFailed`; a result left out is
    `NoResult`; a failed call makes each object `ReconcileFailed`, a call into a namespace held for its data (ADR-0290)
@@ -223,9 +223,6 @@ type CallObject struct {
 // AddonObjectStatus gains the workload of the object's kind, stored at its first pass (Decision 1).
 Workload Workload `json:"workload,omitempty"`
 
-// RunEnded makes each group of ns due, cause run (Decision 4); F137's JobRun calls it at each run's end.
-func (r *Reconciler) RunEnded(ns v1.NamespaceName)
-
 // DeleteAddonObject removes obj, or holds it as Decision 6 says and returns it (internal/gc).
 func DeleteAddonObject(ctx context.Context, s store.Store, obj *v1.AddonObject) (held *v1.AddonObject, err error)
 
@@ -254,7 +251,7 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
    rows, `just generate` for the API reference, and `docs/design/addon/engineless-delete.fizz` with its diagram.
 6. Tests: one `TestScenario…` per scenario, named after it, in `internal/services/addon` and `pkg/funcd`, with a test
    kind and a TypeScript Function in `e2e/fixtures`; the oracle markers of the Design model; `just check-specs`.
-7. `RunEnded` and `engineless-run-ends` are built and tested here; F137's implementation calls it (its feat row says so).
+7. The JobRun watch of Decision 4 maps a JobRun that ended to the engineless groups of its namespace.
 8. Done when `just ci-full` passes and CI is green. The PR closes #1533.
 
 ## Review checklist
@@ -277,8 +274,10 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
 - **(−)** An engineless object's first pass writes its status before its first call. The Function must apply each list
   idempotently, and tell an object sent with `deleting: true`, to destroy, from one that left the list, to forget.
 - **(−)** Under `funcdctl dev` a hold lasts while dev runs and, with `--persist`, across its restarts; without it, the
-  object goes with dev's store and what it manages stays, as `retain` would. A destroy on an Addon's runtime cannot
-  run there (ADR-0344), so such a stack stays held until `retain`.
+  object goes with dev's store and what it manages stays, as `retain` would. Dev runs add-on engines on Docker
+  (ADR-0334) but workers only on the process driver, so a destroy Job on an Addon's runtime is `RuntimeUnavailable`
+  there (ADR-0344) and its stack stays held until `retain`, until F139's dev-workers ADR, after the Jobs ADRs, runs
+  such workers on that Docker driver.
 - **(−)** Restores stay as FEAT-0009 decided them, and app-todo's D cases run them: an App's backup copies no
   engineless object, which has no snapshot (`scope.app`, ADR-0337 Decision 7), but copies the stores its Function
   keeps state in; one cannot be restored in place (no `restore`, ADR-0333); after a host loss, `funcd restore run`
