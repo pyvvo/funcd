@@ -68,7 +68,7 @@ func mustWorkerSpec(t *testing.T, r *Reconciler, fn *v1.Function, artifactPath s
 	r.addBindingEnv(shared, bindEnv) // the config hook comes before them, so its keys win
 	own, issue, gate := r.ownWorkerEnv(functionWorkload(fn))
 	require.Nil(t, gate)
-	spec, err := r.workerSpec(t.Context(), fn, "", 0, artifactPath, workerEnv{shared: shared, own: own, issue: issue})
+	spec, err := r.workerSpec(t.Context(), functionWorkload(fn), "", functionWorker(fn, 0), artifactPath, workerEnv{shared: shared, own: own, issue: issue})
 	require.NoError(t, err)
 	return spec
 }

@@ -139,11 +139,11 @@ func (r *Reconciler) dropVolume(ctx context.Context, in volume.Info) error {
 	return r.volumes.Adopt(ctx, in.ID, "")
 }
 
-// workerVolumes reserves a new emptyDir of each emptyDir volume for the worker replica of fn is about to create, each
-// taking over the space of the one the worker it replaces held (#1207), and returns every volume's mount and env value
+// workerVolumes reserves a new emptyDir of each emptyDir volume for the worker id of w is about to create, each taking
+// over the space of the one the worker it replaces held (#1207), and returns every volume's mount and env value
 // (ADR-0262 Decisions 2 and 3). A local volume is reserved again, idempotently, for its path.
-func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runtime.InstanceID) ([]runtime.Mount, map[string]string, error) {
-	if len(fn.Spec.Volumes) == 0 {
+func (r *Reconciler) workerVolumes(ctx context.Context, w workload, id runtime.InstanceID) ([]runtime.Mount, map[string]string, error) {
+	if len(w.spec.Volumes) == 0 {
 		return nil, nil, nil
 	}
 	if r.volumes == nil {
@@ -159,10 +159,10 @@ func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runt
 		return nil, nil, err
 	}
 	var mounts []runtime.Mount
-	env := make(map[string]string, len(fn.Spec.Volumes))
+	env := make(map[string]string, len(w.spec.Volumes))
 	var empty []volume.ID
-	for _, v := range fn.Spec.Volumes {
-		vid := localID(functionWorkload(fn), v.VolumeName())
+	for _, v := range w.spec.Volumes {
+		vid := localID(w, v.VolumeName())
 		var host string
 		if v.Type == v1.VolumeEmptyDir {
 			vid.Worker = token
@@ -176,7 +176,7 @@ func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runt
 				empty = append(empty, vid)
 			}
 		} else {
-			host, err = r.volumes.Reserve(ctx, vid, fn.UID, v.Bytes(), cmp.Or(v.Deletion, v1.DeletionRetain))
+			host, err = r.volumes.Reserve(ctx, vid, w.meta().UID, v.Bytes(), cmp.Or(v.Deletion, v1.DeletionRetain))
 		}
 		if err != nil {
 			r.dropEmptyDirs(ctx, append(empty, old...))

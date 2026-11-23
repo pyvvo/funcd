@@ -65,6 +65,20 @@ func (c *Client) RunLogs(ctx context.Context, ns v1.NamespaceName, run v1.Object
 	return c.readLines(ctx, op, u+"/logs", o, o.Step)
 }
 
+// JobRunLogs reads a JobRun's logs (ADR-0347 Decision 8): its worker's own lines, raw output included, with the lines
+// that the calls it made wrote under its trace. Scoped as Logs is, by the right to get JobRuns in the namespace.
+func (c *Client) JobRunLogs(ctx context.Context, ns v1.NamespaceName, run v1.ObjectName, o LogsOptions) ([]logread.Line, error) {
+	const op = "sdk.JobRunLogs"
+	if ns == "" || run == "" {
+		return nil, fault.Invalidf(op, "namespace and run are required")
+	}
+	u, err := c.itemURL(v1.KindJobRun, ns, run)
+	if err != nil {
+		return nil, err
+	}
+	return c.readLines(ctx, op, u+"/logs", o, "")
+}
+
 // readLines reads the lines that the logs route u answers, filtered as o asks; step goes to a run's route only.
 func (c *Client) readLines(ctx context.Context, op, u string, o LogsOptions, step string) ([]logread.Line, error) {
 	q := url.Values{}

@@ -23,12 +23,10 @@ type ContractInspector interface {
 	Inspect(ctx context.Context, image, digest string) ([]byte, error)
 }
 
-// jobNeedsContract is the one switch of a Job whose image carries no contract.
-//
-// TODO(ADR-0347 Decision 2, a question for the decider): F137 checks a run's input against "the Job's contract, which
-// its image carries as a Function's does", which argues for the Function's ContractMissing gate (#1084), while Decision
-// 2 says an image with none leaves the input unchecked. false follows Decision 2.
-const jobNeedsContract = false
+// jobNeedsContract holds a Job whose image carries no contract with ContractMissing, as a cloudevent Function's is where
+// artifacts carry their contracts (#1084): the decider's choice on #1015, which amended ADR-0347 Decision 2 on
+// 2026-11-23.
+const jobNeedsContract = true
 
 // JobReconciler is the reconciler of the Job kind (ADR-0347 Decision 2), on the Function reconciler's deps, stamp and
 // workload hooks: it stamps a Revision per generation, reads its contract by digest into status.contract, sets Ready
@@ -143,8 +141,9 @@ func notReady(job *v1.Job, g gateFailure) time.Duration {
 }
 
 // contract reads the contract that job's image at digest delivers into the shape of status.contract, and holds job with
-// ContractInvalid when it does not compile, as a Function's revision is held (ADR-0303 Decision 3). An image with no
-// contract leaves it nil.
+// ContractInvalid when it does not compile, as a Function's revision is held (ADR-0303 Decision 3), and with
+// ContractMissing when it carries none and artifacts carry their contracts (jobNeedsContract). Where they do not, as
+// under funcdctl dev's file artifacts, an image with none leaves it nil, as it leaves a Function unchecked.
 func (j *JobReconciler) contract(ctx context.Context, job *v1.Job, digest string) (*v1.WorkflowContract, *gateFailure, error) {
 	r := j.r
 	if r.inspector == nil {
@@ -152,8 +151,8 @@ func (j *JobReconciler) contract(ctx context.Context, job *v1.Job, digest string
 	}
 	blob, err := r.inspector.Inspect(ctx, job.Spec.Image, digest)
 	switch {
-	case fault.KindOf(err) == fault.NotFound && jobNeedsContract:
-		msg := contractMissingError{digest: digest}.Error()
+	case fault.KindOf(err) == fault.NotFound && jobNeedsContract && r.requiresContract():
+		msg := "artifact " + digest + " carries no I/O contract; a Job needs one, as a cloudevent Function does (ADR-0347 Decision 2)"
 		return nil, &gateFailure{reason: reasonContractMissing, message: msg, phase: v1.PhaseFailed}, nil
 	case fault.KindOf(err) == fault.NotFound:
 		return nil, nil, nil

@@ -106,7 +106,7 @@ func TestScenarioLocalSurvives(t *testing.T) {
 	dir := first.Env["FUNCD_VOLUME_STATE"]
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "orders.db"), []byte("rows"), 0o600))
 	for _, rev := range []v1.ObjectName{"", "cart-2", "cart-3"} {
-		spec, err := r.workerSpec(t.Context(), fn, rev, 0, "/art/app.mjs", workerEnv{})
+		spec, err := r.workerSpec(t.Context(), functionWorkload(fn), rev, functionWorker(fn, 0), "/art/app.mjs", workerEnv{})
 		require.NoError(t, err)
 		require.Equal(t, dir, spec.Env["FUNCD_VOLUME_STATE"])
 		b, err := os.ReadFile(filepath.Join(spec.Env["FUNCD_VOLUME_STATE"], "orders.db"))
@@ -332,7 +332,7 @@ func TestIssue1207_ReplacedWorkerKeepsItsEmptyDirSpace(t *testing.T) {
 	_ = mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 	require.ErrorIs(t, inner.Book(t.Context(), waiting, 2<<20), volume.ErrCapacity, "the capacity holds no 2 MiB beside the worker")
 	s.steal = func() { _ = inner.Book(context.Background(), waiting, 2<<20) }
-	_, err = r.workerSpec(t.Context(), fn, "", 0, "/art/app.mjs", workerEnv{})
+	_, err = r.workerSpec(t.Context(), functionWorkload(fn), "", functionWorker(fn, 0), "/art/app.mjs", workerEnv{})
 	require.NoError(t, err, "the replacement worker gets its emptyDir")
 	require.ErrorIs(t, inner.Book(t.Context(), waiting, 2<<20), volume.ErrCapacity, "the waiting volume took no space of the replaced worker")
 }

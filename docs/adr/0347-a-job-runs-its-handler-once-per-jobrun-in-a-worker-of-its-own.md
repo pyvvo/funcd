@@ -1,6 +1,7 @@
 # ADR-0347: A Job runs its handler once per JobRun, in a worker of its own
 
 - **Status**: Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
+- **Amended in place**: 2026-11-23, by the decider on [#1015](https://github.com/pyvvo/funcd/issues/1015#issuecomment-7113370643): an image with no contract holds the Job with ContractMissing (Decision 2)
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: jobs, runtime, control-plane, revisions, cli
@@ -87,8 +88,9 @@ Function starting a run (F257); an App's `jobs` (F271); the InfraStack add-on (F
    ADR-0172's read-only rule holds. Its name is `<job>-v<generation>`, cut and hashed past 63 characters as ADR-0172
    Decision 4 with `-v<generation>` last: a Function's Revision name ends in `-<digits>`, so the two never meet. The
    reconciler reads the revision's contract by digest (`artifact.Inspect`) into `status.contract`; an image with none
-   leaves the input unchecked. The Job is Ready once its revision is stamped and the checks a Function passes before
-   its first worker pass (the shape gate, ADR-0149's runtime gate, ADR-0306's checks), with the Function's reasons.
+   holds the Job with `ContractMissing`, as a cloudevent Function's (#1084; amended 2026-11-23). The Job is Ready once
+   its revision is stamped and the checks a Function passes before its first worker pass (the shape gate, ADR-0149's
+   runtime gate, ADR-0306's checks), with the Function's reasons.
    It keeps its current revision and those of runs not ended, and deletes the others; the owner collector (ADR-0170)
    removes a deleted Job's revisions and the stores it owns, as a Function's.
 3. **A run.** A `JobRun` names its Job in `spec.job` and carries `spec.input`, both fixed at creation; `spec.cancel`

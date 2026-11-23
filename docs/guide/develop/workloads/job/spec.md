@@ -337,3 +337,4 @@ The table lists each described operation of these kinds, with its method and pat
 | `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/jobruns/{name}` | [Read a JobRun](../../../api/workloads/jobrun/get.md) |
 | `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/jobruns/{name}` | [Replace a JobRun](../../../api/workloads/jobrun/replace.md) |
 | `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/jobruns/{name}` | [Delete a JobRun](../../../api/workloads/jobrun/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/jobruns/{name}/logs` | [Read the logs of a JobRun](../../../api/workloads/jobrun/get-logs.md) |

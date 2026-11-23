@@ -141,15 +141,16 @@ func contractFileName(path string) (dir, name string, ok bool) {
 	return "", "", false
 }
 
-// functionDocument returns the Function document named name among the *.yaml files at the top level of dir and its
-// file, or nil when there is none (a step, an App part). Contract files and documents that do not decode as funcd
-// resources are skipped; two Functions named name are an error naming both files (ADR-0247 Decisions 3 and 4).
-func functionDocument(op, dir, name string) (*v1.Function, string, error) {
+// workloadDocument returns the Function or the Job document named name among the *.yaml files at the top level of dir
+// and its file, or nil when there is none (a step, an App part). Contract files and documents that do not decode as
+// funcd resources are skipped; two documents named name are an error naming both files (ADR-0247 Decisions 3 and 4,
+// ADR-0347 Decision 9).
+func workloadDocument(op, dir, name string) (v1.Object, string, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
 	if err != nil {
 		return nil, "", fault.Internalf(op, "list %s: %v", dir, err)
 	}
-	var found *v1.Function
+	var found v1.Object
 	var foundFile string
 	for _, f := range files {
 		if _, _, isContract := contractFileName(f); isContract {
@@ -160,14 +161,18 @@ func functionDocument(op, dir, name string) (*v1.Function, string, error) {
 			return nil, "", derr
 		}
 		for _, d := range docs {
-			fn, isFn := d.(*v1.Function)
-			if !isFn || string(fn.Name) != name {
+			switch d.(type) {
+			case *v1.Function, *v1.Job:
+			default:
+				continue
+			}
+			if string(d.GetName()) != name {
 				continue
 			}
 			if found != nil {
-				return nil, "", fault.Invalidf(op, "two Functions named %q: %s and %s", name, foundFile, f)
+				return nil, "", fault.Invalidf(op, "two documents named %q: %s and %s", name, foundFile, f)
 			}
-			found, foundFile = fn, f
+			found, foundFile = d, f
 		}
 	}
 	return found, foundFile, nil
@@ -264,14 +269,14 @@ func pythonSourceDir(op, dir, name string) (string, error) {
 	return dir, nil
 }
 
-// typesCmd writes funcd_types.py or funcd.d.ts from a contract file and its Function document (ADR-0247 Decision 3):
-// FuncInput and FuncOutput from the contract file, and the binding types of the Function named after it in the same
-// folder, if any. DX-only.
+// typesCmd writes funcd_types.py or funcd.d.ts from a contract file and its Function or Job document (ADR-0247 Decision
+// 3, ADR-0347 Decision 9): FuncInput and FuncOutput from the contract file, or JobInput, JobOutput and a JobContext
+// for a Job's, and the binding types of the document named after it in the same folder, if any. DX-only.
 func (a *cli) typesCmd() *cobra.Command {
 	var file, outDir string
 	cmd := &cobra.Command{
 		Use:   "types -f <name>.contract.yaml",
-		Short: "Generate FuncInput/FuncOutput + binding types from a contract file and its Function (.py / .d.ts; DX-only)",
+		Short: "Generate FuncInput/FuncOutput (JobInput/JobOutput for a Job) + binding types from a contract file and its Function or Job (.py / .d.ts; DX-only)",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			const op = "funcdctl types"
@@ -286,18 +291,26 @@ func (a *cli) typesCmd() *cobra.Command {
 			if _, _, err := gateContract(op, c); err != nil {
 				return err
 			}
-			fn, fnFile, err := functionDocument(op, dir, name)
+			doc, docFile, err := workloadDocument(op, dir, name)
 			if err != nil {
 				return err
 			}
-			var bindings v1.FunctionBindings
-			if fn != nil {
-				if fn.Spec.Runtime != c.Runtime || fn.Spec.Protocol.Normalized() != c.Protocol.Normalized() {
-					return fault.Invalidf(op, "%s and %s disagree on the runtime or protocol of %q", fnFile, path, name)
-				}
-				bindings = fn.Spec.Bindings
+			generate, spec := sdk.GenerateTypes, (*v1.FunctionSpec)(nil)
+			switch d := doc.(type) {
+			case *v1.Function:
+				spec = &d.Spec
+			case *v1.Job:
+				s := d.Spec.FunctionSpec()
+				generate, spec = sdk.GenerateJobTypes, &s
 			}
-			files, err := sdk.GenerateTypes(c, bindings)
+			var bindings v1.FunctionBindings
+			if spec != nil {
+				if spec.Runtime != c.Runtime || spec.Protocol.Normalized() != c.Protocol.Normalized() {
+					return fault.Invalidf(op, "%s and %s disagree on the runtime or protocol of %q", docFile, path, name)
+				}
+				bindings = spec.Bindings
+			}
+			files, err := generate(c, bindings)
 			if err != nil {
 				return err
 			}

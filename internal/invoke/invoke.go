@@ -27,6 +27,7 @@ const (
 	SensorAction                    // a Sensor's function action (ADR-0108)
 	AppHook                         // an App's lifecycle hook (ADR-0214)
 	AddonSettings                   // a settings kind's Function, called from its target's pass (ADR-0341)
+	JobRun                          // a JobRun's one call to its worker (ADR-0347)
 )
 
 // String names the caller in logs and test failures.
@@ -44,6 +45,8 @@ func (c Caller) String() string {
 		return "AppHook"
 	case AddonSettings:
 		return "AddonSettings"
+	case JobRun:
+		return "JobRun"
 	}
 	return "Caller(?)"
 }

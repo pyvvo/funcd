@@ -81,6 +81,7 @@
   "getInvocation": "workloads/invocation/get",
   "getJob": "workloads/job/get",
   "getJobRun": "workloads/jobrun/get",
+  "getJobRunLogs": "workloads/jobrun/get-logs",
   "getKVStore": "services/kvstore/get",
   "getLake": "services/lake/get",
   "getLakeLogs": "services/lake/get-logs",

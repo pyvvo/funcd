@@ -968,13 +968,6 @@ func (p *Platform) buildControlPlane() error {
 	jobs := fnReconciler.Jobs()
 	ctrl.Register(v1.KindJob.GVK(), jobs)
 	ctrl.Watches(v1.KindJobRun.GVK(), jobs.MapRun)
-	// ADR-0347 Decisions 4 to 8: the runs' one status writer, still under the platform's and the namespaces' holds; a
-	// Job's change reaches its runs, and a run that ends frees a slot for those that wait
-	p.jobRuns = fnReconciler.Runs(function.RunsConfig{MaxRunning: c.jobMaxRunning, Retention: c.jobRetention,
-		Enqueue: ctrl.Enqueue, Hold: c.gate(), NamespaceHold: c.nsGate()})
-	ctrl.Register(v1.KindJobRun.GVK(), p.jobRuns)
-	ctrl.Watches(v1.KindJob.GVK(), p.jobRuns.MapJob)
-	ctrl.Watches(v1.KindJobRun.GVK(), p.jobRuns.MapRun)
 	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
 	ctrl.Watches(v1.KindRevision.GVK(), fnReconciler.MapRevision)
 	ctrl.Watches(v1.KindRestore.GVK(), fnReconciler.MapRestore) // a Restore into a volume clears DataMissing (ADR-0262)
@@ -1003,6 +996,15 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0303: the contract plugins come last, so they check the envelope the data plane built.
 	callChain := invoke.NewChain(append(dataplane.Plugins(edgeEnforcer, targetLimiter, c.callGate(), c.invokeDefaultTimeout),
 		contractcheck.Plugins(fnReconciler)...)...)
+	// ADR-0347 Decisions 4 to 8: the runs' one status writer, still under the platform's and the namespaces' holds, whose
+	// executors call through the chain; a Job's change reaches its runs, and a run that ends frees a slot for those that
+	// wait
+	p.jobRuns = fnReconciler.Runs(function.RunsConfig{MaxRunning: c.jobMaxRunning, PayloadLimit: c.jobPayloadLimit,
+		Retention: c.jobRetention, Enqueue: ctrl.Enqueue, Hold: c.gate(), NamespaceHold: c.nsGate(), Chain: callChain,
+		Client: workerClient(calls, 0)})
+	ctrl.Register(v1.KindJobRun.GVK(), p.jobRuns)
+	ctrl.Watches(v1.KindJob.GVK(), p.jobRuns.MapJob)
+	ctrl.Watches(v1.KindJobRun.GVK(), p.jobRuns.MapRun)
 	// ADR-0309: eventing builds its parts once the workload core exists, since its Sensors call through the Function
 	// reconciler's endpoints, the activator and the call chain.
 	if err := p.eventing.build(eventingDeps{fanout: fanout, events: es, quota: p.checker, endpoints: fnReconciler.Endpoints(),

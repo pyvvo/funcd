@@ -90,11 +90,18 @@ func (cs *contracts) compiled(digest, dir string) (*contractcheck.Pair, error) {
 }
 
 // ContractOf returns the compiled contract of the revision that serves a call to ref (ADR-0303 Decision 2): a pinned
-// step's revision; else a pooled Function's status.currentRevision; else status.servingRevision, then
+// step's or run's revision; else a pooled Function's status.currentRevision; else status.servingRevision, then
 // status.currentRevision. fn is the Function the data plane read, or nil on a client path. An http Function, or one
 // with no revision yet, has none.
 func (r *Reconciler) ContractOf(ctx context.Context, ref activator.FunctionRef, fn *v1.Function) (*contractcheck.Pair, error) {
 	const op = "function.ContractOf"
+	if fn == nil && ref.Revision != "" {
+		// a run's call names its Job at the revision it pins, which names its Job in spec.job (ADR-0347 Decision 5)
+		rev, err := r.getRevision(ctx, ref.Namespace, ref.Revision)
+		if err == nil && rev.Spec.Job != "" {
+			return r.jobRevisionContract(ctx, ref, rev)
+		}
+	}
 	if fn == nil {
 		obj, err := r.store.Get(ctx, v1.KindFunction.GVK(), ref.Namespace, ref.Name)
 		if err != nil {
@@ -131,4 +138,20 @@ func (r *Reconciler) ContractOf(ctx context.Context, ref activator.FunctionRef, 
 		return nil, err
 	}
 	return r.contracts.compiled(digest, filepath.Dir(path))
+}
+
+// jobRevisionContract is the compiled contract of a Job's revision rev, which a run's call to ref pins: none when rev is
+// not ref's Job's, or its image carries none (ADR-0347 Decisions 2 and 5).
+func (r *Reconciler) jobRevisionContract(ctx context.Context, ref activator.FunctionRef, rev *v1.Revision) (*contractcheck.Pair, error) {
+	if rev.Spec.Job != ref.Name || r.materializer == nil {
+		return nil, nil
+	}
+	fn := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction},
+		ObjectMeta: v1.ObjectMeta{Namespace: ref.Namespace, Name: ref.Name, UID: ref.UID},
+		Spec:       v1.FunctionSpec{Runtime: rev.Spec.Runtime, Handler: rev.Spec.Handler, Image: rev.Spec.Image, ImageDigest: rev.Spec.ImageDigest}}
+	path, err := r.materialize(ctx, fn)
+	if err != nil {
+		return nil, err
+	}
+	return r.contracts.compiled(rev.Spec.ImageDigest, filepath.Dir(path))
 }

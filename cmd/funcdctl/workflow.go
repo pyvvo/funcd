@@ -140,7 +140,7 @@ func (a *cli) workflowRunCmd() *cobra.Command {
 		Short: "Start a workflow run (creates a WorkflowRun; omit run-name for a server-generated <workflow>-<id>)",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			raw, err := readInput(input)
+			raw, err := readInput("funcdctl workflow run", input)
 			if err != nil {
 				return err
 			}
@@ -409,15 +409,15 @@ func nsOrDefault(ns string) string {
 	return ns
 }
 
-// readInput resolves a run-input flag: empty ⇒ nil, @file ⇒ the file's bytes, else the literal JSON.
-func readInput(in string) (json.RawMessage, error) {
+// readInput resolves a run-input flag of command op: empty ⇒ nil, @file ⇒ the file's bytes, else the literal JSON.
+func readInput(op, in string) (json.RawMessage, error) {
 	if in == "" {
 		return nil, nil
 	}
 	if strings.HasPrefix(in, "@") {
 		data, err := os.ReadFile(in[1:]) //nolint:gosec // path is a user-supplied CLI argument
 		if err != nil {
-			return nil, fault.Invalidf("funcdctl workflow run", "read input file %q: %v", in[1:], err)
+			return nil, fault.Invalidf(op, "read input file %q: %v", in[1:], err)
 		}
 		return data, nil
 	}

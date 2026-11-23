@@ -166,6 +166,81 @@ func RegisterEngineLogs(api huma.API, q LogQuerier, authz auth.Authorizer, kinds
 	})
 }
 
+// jobRunLogsInput is the logs read of a JobRun (ADR-0347 Decision 8). Its path params are typed as logsInput's are.
+type jobRunLogsInput struct {
+	Namespace v1.NamespaceName `path:"namespace" doc:"The run's namespace."`
+	Name      v1.ObjectName    `path:"name" doc:"The run's name."`
+	LogFilters
+}
+
+// RegisterJobRunLogs registers GET …/jobruns/{name}/logs (ADR-0347 Decision 8). It authorizes get/JobRun in the
+// namespace, then answers the run's own lines, its worker's raw output included, with the lines that the calls the run
+// made wrote under its status.traceId, oldest first and at most limit of them.
+func RegisterJobRunLogs(api huma.API, q LogQuerier, s RunLogGetter, authz auth.Authorizer) {
+	huma.Register(api, Describe(huma.Operation{
+		OperationID: "getJobRunLogs",
+		Method:      http.MethodGet,
+		Path:        apiPrefix + "/namespaces/{namespace}/jobruns/{name}/logs",
+		Tags:        []string{"JobRun"},
+	}, "Read the logs of a JobRun", slices.Concat([]ErrorCase{unauthorized(),
+		forbidden("read JobRuns in the namespace"),
+		problem(fault.NotFound, "No JobRun of that name exists in the namespace.", "Check the name and the namespace."),
+		badPath("namespace or the name")}, logFilterCases())...,
+	), func(ctx context.Context, in *jobRunLogsInput) (*logsOutput, error) {
+		if err := authorizeLogs(ctx, authz, v1.KindJobRun, in.Namespace); err != nil {
+			return nil, wrapFaultError(err)
+		}
+		if _, err := parseSince(in.Since); err != nil {
+			return nil, wrapFaultError(err)
+		}
+		if _, ok := logread.SeverityNumber(in.Severity); !ok {
+			return nil, wrapFaultError(fault.Invalidf("controlplane.jobrunlogs", "unknown severity %q", in.Severity))
+		}
+		obj, err := s.Get(ctx, v1.KindJobRun.GVK(), in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		run, ok := obj.(*v1.JobRun)
+		if !ok {
+			return nil, wrapFaultError(fault.Internalf("controlplane.jobrunlogs", "object %q is not a JobRun", in.Name))
+		}
+		out, err := readLogs(ctx, q, in.LogFilters, logread.Query{Namespace: string(in.Namespace), Kind: string(v1.KindJobRun),
+			Name: string(in.Name)})
+		if err != nil || run.Status.TraceID == "" {
+			return out, err
+		}
+		// the trace's read skips the runs' own segments, which the read above took (logread's engine rule)
+		calls, err := readLogs(ctx, q, in.LogFilters, logread.Query{Namespace: string(in.Namespace), TraceID: run.Status.TraceID})
+		if err != nil {
+			return nil, err
+		}
+		lines := append(out.Body.Items, calls.Body.Items...)
+		slices.SortStableFunc(lines, func(a, b logread.Line) int { return time.Time(a.Time).Compare(time.Time(b.Time)) })
+		out.Body.Items = lines[max(len(lines)-logLimit(in.Limit), 0):]
+		return out, nil
+	})
+}
+
+// logLimit is the most lines a read answers for limit, as logread bounds it.
+func logLimit(limit int) int {
+	if limit <= 0 {
+		return logread.DefaultLimit
+	}
+	return min(limit, logread.MaxLimit)
+}
+
+// RegisterStubJobRunLogs registers the JobRun logs operation with inert deps, for spec generation (ADR-0347).
+func RegisterStubJobRunLogs(api huma.API) {
+	RegisterJobRunLogs(api, stubLogQuerier{}, stubRunGetter{}, stubLogAuthorizer{})
+}
+
+// stubRunGetter backs RegisterStubJobRunLogs: spec generation never reads a run.
+type stubRunGetter struct{}
+
+func (stubRunGetter) Get(context.Context, v1.GroupVersionKind, v1.NamespaceName, v1.ObjectName) (v1.Object, error) {
+	return nil, fault.NotFoundf("controlplane.stub", "no store")
+}
+
 // RunLogGetter is the minimal metastore view the run-log querier needs (ADR-0106): Get a WorkflowRun
 // (for its status.traceId) and, for a run with no pinned spec, its Workflow. store.Store satisfies it.
 type RunLogGetter interface {

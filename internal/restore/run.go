@@ -47,6 +47,8 @@ type Report struct {
 	PausedByRestore   []string        `json:"pausedByRestore,omitempty"`
 	AlreadyPaused     []string        `json:"alreadyPaused,omitempty"`
 	RecordsWithoutRun []string        `json:"recordsWithoutRun,omitempty"`
+	// CancelledByRestore are the JobRuns it ended Cancelled with Restored, for a person to start again (ADR-0347 Decision 7).
+	CancelledByRestore []string `json:"cancelledByRestore,omitempty"`
 }
 
 // Options configure Run and Inspect. Source is the target opened with the operator's restore credential
@@ -467,6 +469,7 @@ func (r *restoring) holdRuns(ctx context.Context, rep *Report) error {
 		if _, err := r.st.Update(ctx, run); err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "end JobRun %s/%s", run.Namespace, run.Name)
 		}
+		rep.CancelledByRestore = append(rep.CancelledByRestore, string(run.Namespace)+"/"+string(run.Name))
 	}
 	l, err := r.st.List(ctx, v1.KindWorkflowRun.GVK(), store.ListOptions{})
 	if err != nil {

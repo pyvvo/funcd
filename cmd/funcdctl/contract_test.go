@@ -236,6 +236,15 @@ func TestScenarioTypesFromContract(t *testing.T) {
 		require.Contains(t, body, "count: int")
 		require.Contains(t, body, `kv: Literal["pycounters"]`)
 	})
+	t.Run("with-job", func(t *testing.T) { // ADR-0347 Decision 9
+		t.Parallel()
+		job := strings.Replace(counterFunction("python314"), "kind: Function", "kind: Job", 1)
+		body, err := types(t, writeTree(t, map[string]string{"counter.contract.yaml": counterContract, "counter.yaml": job}))
+		require.NoError(t, err)
+		require.Contains(t, body, "class JobInput(TypedDict)")
+		require.Contains(t, body, `kv: Literal["pycounters"]`)
+		require.Contains(t, body, "class JobContext:\n    run: RunInfo")
+	})
 	t.Run("io-only", func(t *testing.T) {
 		t.Parallel()
 		body, err := types(t, writeTree(t, map[string]string{"counter.contract.yaml": counterContract}))

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -13,10 +14,13 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/contract"
 	"github.com/pyvvo/funcd/internal/contractcheck"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/invoke"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -34,13 +38,17 @@ type runAnswer struct {
 type runLauncher func(ctx context.Context, run *v1.JobRun, job *v1.Job, rev *v1.Revision) runAnswer
 
 // RunsConfig tunes the run reconciler: the job.* keys (ADR-0347), the controller's enqueue, through which an executor
-// that ends brings its run's pass, and the holds under which it acts on no run (ADR-0206 Decision 6, ADR-0290).
+// that ends brings its run's pass, the holds under which it acts on no run (ADR-0206 Decision 6, ADR-0290), and the
+// invoke chain and client of a run's call (ADR-0302); a nil Client sets X-Funcd-Timeout-Ms over the default transport.
 type RunsConfig struct {
 	MaxRunning    int
+	PayloadLimit  int64
 	Retention     time.Duration
 	Enqueue       func(controller.Request)
 	Hold          hold.Gate
 	NamespaceHold hold.NamespaceGate
+	Chain         *invoke.Chain
+	Client        *http.Client
 }
 
 // JobRunReconciler is the reconciler of the JobRun kind and the runs' one status writer (ADR-0347 Decisions 4 to 8,
@@ -65,7 +73,12 @@ func (r *Reconciler) Runs(cfg RunsConfig) *JobRunReconciler {
 	if cfg.Enqueue == nil {
 		cfg.Enqueue = func(controller.Request) {}
 	}
-	return &JobRunReconciler{r: r, cfg: cfg, launch: r.launchRun, execs: &runExecutions{byUID: map[v1.UID]*execution{}}}
+	if cfg.Client == nil {
+		cfg.Client = &http.Client{Transport: activator.DeadlineTransport(httpx.NodeTransport())}
+	}
+	j := &JobRunReconciler{r: r, cfg: cfg, execs: &runExecutions{byUID: map[v1.UID]*execution{}}}
+	j.launch = j.execute
+	return j
 }
 
 // Reconcile is one pass over a JobRun. While the platform or the run's namespace is held it acts on no run and leaves
@@ -459,13 +472,6 @@ func (j *JobRunReconciler) runsWhere(ctx context.Context, ns v1.NamespaceName, k
 
 // Close stops every executor, and so every run's worker, and waits for them to end, as funcd stops.
 func (j *JobRunReconciler) Close() { j.execs.stopAll() }
-
-// launchRun is the run's executor (ADR-0347 Decision 5).
-//
-// TODO(ADR-0347 Decision 5): the worker and the call land with the executor; until then a started run ends StartFailed.
-func (r *Reconciler) launchRun(context.Context, *v1.JobRun, *v1.Job, *v1.Revision) runAnswer {
-	return runAnswer{phase: v1.JobRunFailed, reason: v1.JobRunStartFailed, message: "this funcd has no run executor"}
-}
 
 // runExecutions are the executors of this process's runs, keyed by the run's UID (ADR-0347 Decision 4).
 type runExecutions struct {

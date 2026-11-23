@@ -360,12 +360,16 @@ func tenantOf(r Resource) string {
 // segmentKey partitions objects as logs/<ns>/<fn>/<date>/<unixnano>-<replica>.otlp.jsonl, <fn> an engine's
 // <plural>.<name> (ADR-0342 Decision 2).
 func segmentKey(res Resource, now time.Time) string {
-	owner := res.Function
-	if res.Kind != "" {
-		owner = compact.EngineSegment(res.Kind, res.Name)
-	}
 	return fmt.Sprintf("logs/%s/%s/%s/%d-%s.otlp.jsonl",
-		res.Namespace, owner, now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), keyReplica(res.Replica))
+		res.Namespace, res.segment(), now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), keyReplica(res.Replica))
+}
+
+// segment is the <fn> part of res's keys: its Function, or for the object of a Kind, <plural>.<name>.
+func (res Resource) segment() string {
+	if res.Kind != "" {
+		return compact.EngineSegment(res.Kind, res.Name)
+	}
+	return res.Function
 }
 
 // maxKeyReplica bounds the replica part of a segment key. A run-root span's replica is its run record name,

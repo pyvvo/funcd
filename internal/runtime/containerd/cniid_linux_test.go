@@ -220,6 +220,21 @@ func TestScenario_LeftoverOldFormAttachmentReleased(t *testing.T) {
 	})
 }
 
+// ADR-0347 Decision 5: a run's worker is named after the run, so two runs of one Job that pin one revision never share
+// a container, and a run's names meet no Function worker's.
+func TestContainerNamesOfARun(t *testing.T) {
+	ctrID, cniID := containerNames(v1alpha1.KindJobRun, "default", "hello-x1y2z", "hello-v1", "0")
+	require.Equal(t, "hello-x1y2z.run", ctrID)
+	require.Equal(t, "default.hello-x1y2z.run", cniID)
+	other, _ := containerNames(v1alpha1.KindJobRun, "default", "hello-a1b2c", "hello-v1", "0")
+	require.NotEqual(t, ctrID, other)
+	for _, rev := range []string{"", "hello-x1y2z-1"} {
+		fn, fnCNI := containerNames(v1alpha1.KindFunction, "default", "hello-x1y2z", rev, "0")
+		require.NotEqual(t, ctrID, fn)
+		require.NotEqual(t, cniID, fnCNI)
+	}
+}
+
 // scenario: other-worker-names-unchanged (ADR-0179)
 func TestScenario_OtherWorkerNamesUnchanged(t *testing.T) {
 	for _, tc := range []struct {

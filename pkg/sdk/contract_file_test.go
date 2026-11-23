@@ -142,6 +142,27 @@ func TestGenerateTypesNode(t *testing.T) {
 	require.Contains(t, string(files["funcd.d.ts"]), "export interface FuncBindings {\n}\n", "the I/O types only")
 }
 
+// ADR-0347 Decision 9: a Job's contract file emits JobInput and JobOutput, its binding context and a JobContext whose
+// run is the RunInfo of its run.
+func TestGenerateJobTypes(t *testing.T) {
+	t.Parallel()
+	files, err := sdk.GenerateJobTypes(counterFile(t, "nodejs22"), counterBindings())
+	require.NoError(t, err)
+	ts := string(files["funcd.d.ts"])
+	for _, want := range []string{"export interface JobInput", "export interface JobOutput", `export interface JobBindings {
+  kv: "pycounters";`, `phase: "run";`, "startedBy: string;", "export interface JobContext {\n  run: RunInfo;\n}"} {
+		require.Contains(t, ts, want)
+	}
+	require.NotContains(t, ts, "FuncInput")
+	files, err = sdk.GenerateJobTypes(counterFile(t, "python314"), counterBindings())
+	require.NoError(t, err)
+	py := string(files["funcd_types.py"])
+	for _, want := range []string{"class JobInput(TypedDict)", "class JobOutput(TypedDict)", `kv: Literal["pycounters"]`,
+		"class RunInfo:", `phase: Literal["run"]`, "class JobContext:\n    run: RunInfo"} {
+		require.Contains(t, py, want)
+	}
+}
+
 // An http Function has no I/O contract to type.
 func TestGenerateTypesRefusesHTTP(t *testing.T) {
 	t.Parallel()

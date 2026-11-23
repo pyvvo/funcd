@@ -412,7 +412,8 @@ func TestRestoreRun_MarksBackupSchedules(t *testing.T) {
 }
 
 // TestRestoreRun_EndsOpenJobRuns (ADR-0347 Decision 7): restore run ends every restored JobRun that has not ended
-// Cancelled with Restored, since the backup cannot say whether it ran since, and leaves an ended one as it was.
+// Cancelled with Restored, since the backup cannot say whether it ran since, lists them in its report, which funcdctl
+// hold status shows, and leaves an ended one as it was.
 //
 // Serial: it reopens the Badger directory the restore closed, which a parallel test's forked child can hold locked
 // (#1149).
@@ -428,6 +429,11 @@ func TestRestoreRun_EndsOpenJobRuns(t *testing.T) {
 	n := newNode(t, nil, "")
 	_, err := n.restore("run", "latest", "--from", s.target)
 	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(n.dataDir, hold.ReportFile))
+	require.NoError(t, err)
+	var rep restore.Report
+	require.NoError(t, json.Unmarshal(data, &rep))
+	require.ElementsMatch(t, []string{"team/hello-running", "team/hello-pending"}, rep.CancelledByRestore, "the hold's evidence names them")
 	eng, err := badgerstore.Open(filepath.Join(n.dataDir, "store"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = eng.Close() })

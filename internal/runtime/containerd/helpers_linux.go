@@ -13,7 +13,6 @@ import (
 	"github.com/containerd/errdefs"
 
 	"github.com/pyvvo/funcd/api/fault"
-	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -77,9 +76,9 @@ func portWritten(dir string) bool {
 // reportFile is the name of an engine's report in its boot dir (ADR-0276).
 const reportFile = "report"
 
-// report returns the report an engine worker wrote in its boot dir, or "" for a Function or for none (ADR-0276).
+// report returns the report an engine worker wrote in its boot dir, or "" for a shim worker or for none (ADR-0276).
 func report(sb *worker) string {
-	if sb.ownerKind == v1alpha1.KindFunction {
+	if shimOwner(sb.ownerKind) {
 		return ""
 	}
 	return readReport(sb.bootDir)

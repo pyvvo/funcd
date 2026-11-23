@@ -177,6 +177,23 @@ func TestJobAnswersMatrix(t *testing.T) {
 			row("replaceJobRun", "fixed once the run is created", e, ask{what: "another input", method: http.MethodPut,
 				path: runs + "/run", token: answersDev, body: jsonOf(t, jobRun("run", "hello", `{"x":1}`)),
 				detail: "a run's spec.job and spec.input are fixed once it is created"}),
+
+			row("getJobRunLogs", "", e, ask{what: "the logs", method: http.MethodGet, path: runs + "/run/logs", token: answersDev,
+				detail: `"items"`}),
+			row("getJobRunLogs", "carries no bearer token", e, ask{what: "no credential", method: http.MethodGet,
+				path: runs + "/run/logs", detail: "missing bearer token"}),
+			row("getJobRunLogs", "do not allow it", e, ask{what: "another namespace's developer", method: http.MethodGet,
+				path: runs + "/run/logs", token: answersOther, detail: `read logs in "default" denied`}),
+			row("getJobRunLogs", "No JobRun of that name", e, ask{what: "a missing run", method: http.MethodGet,
+				path: runs + "/ghost/logs", token: answersDev, detail: "ghost"}),
+			row("getJobRunLogs", "The since parameter", e, ask{what: "a since of neither form", method: http.MethodGet,
+				path: runs + "/run/logs?since=yesterday", token: answersDev, detail: `since "yesterday" is not`}),
+			row("getJobRunLogs", "The severity parameter", e, ask{what: "an unknown severity", method: http.MethodGet,
+				path: runs + "/run/logs?severity=loud", token: answersDev, detail: `unknown severity "loud"`}),
+			row("getJobRunLogs", "in the path is not", e, ask{what: "a name that is no DNS-1123 label", method: http.MethodGet,
+				path: runs + "/Not_A_Label/logs", token: answersDev, detail: "path.name"}),
+			row("getJobRunLogs", "The limit parameter", e, ask{what: "a limit that is no integer", method: http.MethodGet,
+				path: runs + "/run/logs?limit=many", token: answersDev, detail: "query.limit"}),
 		},
 	)
 	runMatrix(t, rows)

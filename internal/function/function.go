@@ -1963,7 +1963,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i, Platforms: platforms}); perr != nil {
 			return revisionPass{}, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
 		}
-		spec, serr := r.workerSpec(ctx, tmpl, rev, i, artifactPath, we)
+		spec, serr := r.workerSpec(ctx, functionWorkload(tmpl), rev, functionWorker(tmpl, i), artifactPath, we)
 		if serr != nil {
 			r.logger.Warn("could not start worker", "function", tmpl.Name, "replica", i, "err", serr)
 			retryAt = earlier(retryAt, r.boot.startResult(runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i), now, serr))
@@ -3258,6 +3258,13 @@ func (e contractMissingError) Error() string {
 	return "artifact " + e.digest + " carries no I/O contract; a cloudevent Function needs one (ADR-0090)"
 }
 
+// requiresContract reports whether the artifacts r materializes carry their I/O contract (ADR-0090), so a cloudevent
+// workload's artifact with none is refused (issue #1084).
+func (r *Reconciler) requiresContract() bool {
+	req, ok := r.materializer.(ContractRequirer)
+	return ok && req.RequiresContract()
+}
+
 // httpContractError is the materialize error of an http Function whose artifact carries an I/O contract, which it may
 // not (ADR-0243). No shim reads the contract to refuse it, so funcd does, as a shape failure (ADR-0304 Decision 3).
 type httpContractError struct{ digest string }
@@ -3282,7 +3289,7 @@ func (r *Reconciler) materialize(ctx context.Context, fn *v1.Function) (string, 
 		return path, nil
 	}
 	if !delivered {
-		if req, ok := r.materializer.(ContractRequirer); ok && req.RequiresContract() {
+		if r.requiresContract() {
 			return "", contractMissingError{digest: fn.Spec.ImageDigest}
 		}
 		return path, nil
@@ -3295,15 +3302,29 @@ func (r *Reconciler) materialize(ctx context.Context, fn *v1.Function) (string, 
 }
 
 // shimEnv is the env a solo shim worker starts from: the artifact path as the worker sees it, the
-// handler export (ADR-0030), FUNCD_FUNCTION, which the shim names its invocation spans after (ADR-0101), and
-// FUNCD_PROTOCOL, which tells it whether the export is an event handler or an http(app) one (ADR-0243).
-func shimEnv(fn *v1.Function, artifact string) map[string]string {
+// handler export (ADR-0030), and FUNCD_PROTOCOL, which tells it whether the export is an event handler or an http(app)
+// one (ADR-0243). The owner's own env follows (workerOf).
+func shimEnv(spec *v1.FunctionSpec, artifact string) map[string]string {
 	return map[string]string{
 		"FUNCD_ARTIFACT": artifact,
-		"FUNCD_HANDLER":  fn.Spec.Handler,
-		"FUNCD_FUNCTION": string(fn.Name),
-		"FUNCD_PROTOCOL": string(fn.Spec.Protocol.Normalized()),
+		"FUNCD_HANDLER":  spec.Handler,
+		"FUNCD_PROTOCOL": string(spec.Protocol.Normalized()),
 	}
+}
+
+// workerOf is who a worker runs for: a Function's replica, whose env names the Function (FUNCD_FUNCTION, after which
+// the shim names its invocation spans, ADR-0101), or a run's one worker, which carries the run's name and kind and no
+// Function's name (ADR-0347 Decision 5).
+type workerOf struct {
+	name    v1.ObjectName
+	kind    v1.Kind
+	replica int
+	env     map[string]string
+}
+
+// functionWorker is replica i of fn.
+func functionWorker(fn *v1.Function, i int) workerOf {
+	return workerOf{name: fn.Name, kind: v1.KindFunction, replica: i, env: map[string]string{"FUNCD_FUNCTION": string(fn.Name)}}
 }
 
 // addRecordBound passes funclog.maxRecordBytes to a shim or a pool host, which bounds each record line by it (ADR-0168).
@@ -3313,53 +3334,58 @@ func (r *Reconciler) addRecordBound(env map[string]string) {
 	}
 }
 
-// workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is configured, ADR-0030) it launches
-// the runtime shim with the materialized artifact and handler in the env; otherwise it runs the legacy long-lived
-// placeholder (ADR-0020). we is what the providers fn binds give its workers (bindings).
-func (r *Reconciler) workerSpec(ctx context.Context, fn *v1.Function, rev v1.ObjectName, replica int, artifactPath string, we workerEnv) (runtime.WorkerSpec, error) {
-	spec := runtime.WorkerSpec{Namespace: fn.Namespace, Name: fn.Name, OwnerKind: v1.KindFunction, Replica: replica, Image: string(fn.Spec.Runtime)}
+// workerSpec builds the runtime spec of worker wo of w's revision rev. In shim mode (a Materializer is configured,
+// ADR-0030) it launches the runtime shim with the materialized artifact and handler in the env; otherwise it runs the
+// legacy long-lived placeholder (ADR-0020). we is what the providers w binds give its workers (bindings). Only a
+// Function's worker gets the local API socket: a run's waits for its Job's principal (ADR-0347 Decision 5, F140).
+func (r *Reconciler) workerSpec(ctx context.Context, w workload, rev v1.ObjectName, wo workerOf, artifactPath string, we workerEnv) (runtime.WorkerSpec, error) {
+	m := w.meta()
+	spec := runtime.WorkerSpec{Namespace: m.Namespace, Name: wo.name, OwnerKind: wo.kind, Replica: wo.replica, Image: string(w.spec.Runtime)}
 	if r.materializer == nil {
 		// Legacy placeholder: a long-lived process stands in for the worker; real execution is the shim path (ADR-0030).
 		spec.Command = []string{"sleep", "86400"}
 		return spec, nil
 	}
-	volMounts, volEnv, err := r.workerVolumes(ctx, fn, runtime.NewInstanceID(fn.Namespace, fn.Name, rev, replica))
+	volMounts, volEnv, err := r.workerVolumes(ctx, w, runtime.NewInstanceID(m.Namespace, wo.name, rev, wo.replica))
 	if err != nil {
 		return runtime.WorkerSpec{}, err
 	}
-	sock, err := r.invokeSocket(fn)
-	if err != nil {
-		return runtime.WorkerSpec{}, err
+	sock := ""
+	if wo.kind == v1.KindFunction {
+		if sock, err = r.invokeSocket(w.fn()); err != nil {
+			return runtime.WorkerSpec{}, err
+		}
 	}
-	spec.Limits = r.limitsOf(ctx, fn)
+	spec.Limits = r.limitsOf(ctx, w.fn())
 	if r.endpointMode != EndpointNetnsFixedPort {
 		// Process mode (ADR-0030): ShimCommand launches the shim, which binds loopback and writes its port file; the
 		// worker sees the host paths, and its volumes are host directories with no mount (ADR-0262).
-		spec.Command = r.shimFor(fn.Spec.Runtime) // node by default; python* → the python shim (ADR-0049)
-		spec.Env = r.shimWorkerEnv(fn, artifactPath, filepath.Dir(artifactPath), sock, we, volEnv)
+		spec.Command = r.shimFor(w.spec.Runtime) // node by default; python* → the python shim (ADR-0049)
+		spec.Env = r.shimWorkerEnv(w, wo, artifactPath, filepath.Dir(artifactPath), sock, we, volEnv)
 		return spec, nil
 	}
 	// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command empty), the artifact is bind-mounted
 	// read-only, each volume is a bind of its leaf alone (ADR-0262), the local API socket is bound in at its in-container
 	// path, and the shim binds a fixed netns port.
-	spec.Image = r.imageFor(string(fn.Spec.Runtime))
+	spec.Image = r.imageFor(string(w.spec.Runtime))
 	spec.Mounts = append([]runtime.Mount{{Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true}}, volMounts...)
 	if sock != "" {
 		spec.Mounts = append(spec.Mounts, runtime.Mount{Source: sock, Target: containerInvokeSocket})
 		sock = containerInvokeSocket
 	}
-	spec.Env = r.shimWorkerEnv(fn, filepath.Join(containerArtifactDir, filepath.Base(artifactPath)), containerArtifactDir, sock, we, volEnv)
+	spec.Env = r.shimWorkerEnv(w, wo, filepath.Join(containerArtifactDir, filepath.Base(artifactPath)), containerArtifactDir, sock, we, volEnv)
 	spec.Env["FUNCD_PORT"] = strconv.Itoa(containerShimPort)
 	return spec, nil
 }
 
 // shimWorkerEnv is the env a solo shim worker starts with, artifact, bundleRoot and socket as the worker sees them: the
-// shim's own (shimEnv), the record bound (ADR-0168), the bundle's (ADR-0089), the local API socket, what the providers
-// fn binds give it, and FUNCD_VOLUME_<NAME> for each of its volumes (ADR-0262).
-func (r *Reconciler) shimWorkerEnv(fn *v1.Function, artifact, bundleRoot, socket string, we workerEnv, volEnv map[string]string) map[string]string {
-	env := shimEnv(fn, artifact)
+// shim's own (shimEnv), its owner's (workerOf), the record bound (ADR-0168), the bundle's (ADR-0089), the local API
+// socket, what the providers w binds give it, and FUNCD_VOLUME_<NAME> for each of its volumes (ADR-0262).
+func (r *Reconciler) shimWorkerEnv(w workload, wo workerOf, artifact, bundleRoot, socket string, we workerEnv, volEnv map[string]string) map[string]string {
+	env := shimEnv(w.spec, artifact)
+	maps.Copy(env, wo.env)
 	r.addRecordBound(env)
-	addBundleEnv(env, fn.Spec.Runtime, bundleRoot)
+	addBundleEnv(env, w.spec.Runtime, bundleRoot)
 	if socket != "" {
 		env["FUNCD_INVOKE_SOCKET"] = socket
 	}
