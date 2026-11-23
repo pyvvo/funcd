@@ -14818,5 +14818,20 @@
     "dod_total": 13,
     "report": "docs/reviews/adr-0343-implementation-claude-opus-5-5.md",
     "notes": "self-review (not independent, the decider's rule); scenario on a built SQL engine, Lake half on the fake engine; 2/2 mutants"
+  },
+  {
+    "date": "2026-11-23",
+    "issue": "1531",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1531-fix-claude-opus-5-5.md",
+    "notes": "independent reviewer; no findings (0 model, 0 issue, 0 adr, 0 env): register waits for the stand-in's stamp; revert fails 10/10 with the issue's 409, 3/3 mutants caught, 20/20 passes under -race. Routed: the decider's question in the issue, whether deploy's Addon update retries a Conflict (uncovered)"
   }
 ]
