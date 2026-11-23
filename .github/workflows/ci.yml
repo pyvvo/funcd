@@ -21,10 +21,10 @@ jobs:
   # pkg/funcd imports ~63% of the module, execs the language shims (pinned in go.mod,
   # ADR-0141), and rides the runtime images — so any of these paths changing means the heavy
   # suite must run. `nondocs`: anything but Markdown, LICENSE or a file under docs/ (the review ledger's JSON
-  # included; a push to main still runs the fast lane). `design`: the design specs and their diagrams under
-  # docs/design (ADR-0272), the behavior registry and the ADRs its rows cite (ADR-0313). A change with no `nondocs` file
-  # that touches one takes the `ci` job's light path in its pull_request and merge_group runs:
-  # `just check-hygiene check-specs check-behavior`, not the whole fast lane.
+  # included; a push to main still runs the fast lane). `design`: docs/design, the behavior registry and the ADRs its
+  # rows cite (ADR-0313). A change with no `nondocs` file that touches one takes the `ci` job's light path in its
+  # pull_request and merge_group runs: `just check-hygiene check-behavior`, not the whole fast lane. CI runs no design
+  # spec: lefthook's pre-push hook checks the specs a push adds or changes (ADR-0272, amended 2026-11-23).
   # `nonrelease`: anything but release-please's own files. The `ci` job needs `nonrelease` and either `nondocs` or
   # `design`, so a docs-only PR and a release PR skip it, while a release PR that also touches code still runs
   # it. A skipped required job still reports success, so neither is blocked.
@@ -119,9 +119,9 @@ jobs:
         if: needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.generated == 'true' || github.event_name == 'push'
         run: nix develop --command just ci
 
-      - name: Check the design specs, the behavior registry and the repository hygiene (docs only)
+      - name: Check the behavior registry and the repository hygiene (docs only)
         if: needs.changes.outputs.nondocs != 'true' && needs.changes.outputs.generated != 'true' && github.event_name != 'push'
-        run: nix develop --command just check-hygiene check-specs check-behavior
+        run: nix develop --command just check-hygiene check-behavior
 
   # Heavy lane — the pkg/funcd e2e scenarios (`-tags e2e`). Runs only when the change
   # touches code the suite depends on (the `changes` filter), and always on push to main
