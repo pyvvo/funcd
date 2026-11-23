@@ -10,6 +10,8 @@
     "site",
     "workflow",
     "workflowrun",
+    "job",
+    "jobrun",
     "configmap"
   ]
 }

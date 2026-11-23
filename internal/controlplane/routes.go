@@ -39,6 +39,8 @@ func RegisterRoutes(api huma.API, h Handlers) {
 	registerWorkflow(api, h)
 	registerWorkflowRun(api, h)
 	registerSensor(api, h)
+	registerJob(api, h)
+	registerJobRun(api, h)
 	registerAddon(api, h)
 	registerAddonRevision(api, h)
 	registerAddonObjects(api, h)

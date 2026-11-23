@@ -1,18 +1,9 @@
 package v1alpha1
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"strconv"
 
 	"github.com/pyvvo/funcd/api/fault"
-)
-
-// maxAddonRevisionName and addonRevisionHashLen shorten an AddonRevision's name as a Revision's is shortened: a
-// DNS-1123 label, with 8 hex digits of SHA-256 over the Addon's name when <addon>-<generation> is too long.
-const (
-	maxAddonRevisionName = 63
-	addonRevisionHashLen = 8
 )
 
 // AddonRevision is one frozen Addon spec (ADR-0339 Decision 1), cluster-scoped and named after the Addon and its
@@ -33,14 +24,7 @@ type AddonRevisionSpec struct {
 // AddonRevisionName is the name of the Addon's revision of generation n: <addon>-<n>, its name shortened with a hash of
 // it when that would pass 63 characters.
 func AddonRevisionName(addon ObjectName, n int64) ObjectName {
-	gen := strconv.FormatInt(n, 10)
-	name := string(addon)
-	if len(name)+1+len(gen) <= maxAddonRevisionName {
-		return ObjectName(name + "-" + gen)
-	}
-	sum := sha256.Sum256([]byte(name))
-	suffix := "-" + hex.EncodeToString(sum[:])[:addonRevisionHashLen] + "-" + gen
-	return ObjectName(name[:maxAddonRevisionName-len(suffix)] + suffix)
+	return revisionLabel(string(addon), strconv.FormatInt(n, 10))
 }
 
 // GroupVersionKind returns the constant GVK for AddonRevision.

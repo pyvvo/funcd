@@ -49,6 +49,31 @@ func TestRevisionName(t *testing.T) {
 	}
 }
 
+// ADR-0347 Decision 2: no Job's Revision name is ever a Function's, whatever the two names and generations, so a
+// Function and a Job of one name never stamp the same Revision.
+func TestJobRevisionNameNeverEqualsRevisionName(t *testing.T) {
+	t.Parallel()
+	var names []string
+	for n := 1; n <= 63; n++ {
+		names = append(names, strings.Repeat("a", n), "a"+strings.Repeat("-v", (n-1)/2))
+	}
+	gens := []int64{1, 2, 9, 10, 99, 100, 123456, math.MaxInt64}
+	functions := map[string]bool{}
+	for _, name := range names {
+		for _, gen := range gens {
+			fn := &v1.Function{}
+			fn.Name, fn.Generation = v1.ObjectName(name), gen
+			functions[revisionName(fn)] = true
+		}
+	}
+	for _, name := range names {
+		for _, gen := range gens {
+			job := string(v1.JobRevisionName(v1.ObjectName(name), gen))
+			require.Falsef(t, functions[job], "the Job revision %q is a Function revision name", job)
+		}
+	}
+}
+
 // ADR-0172 Decision 5: whose a stored Revision is.
 func TestRevisionOf(t *testing.T) {
 	t.Parallel()

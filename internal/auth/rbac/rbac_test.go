@@ -133,3 +133,30 @@ func TestRbacAuthorizationMatrix(t *testing.T) {
 		})
 	}
 }
+
+// ADR-0347 Decision 10: the built-in roles treat a Job as a Workflow and a JobRun as a WorkflowRun, for every role,
+// verb and namespace.
+func TestJobKindsActAsWorkflowKinds(t *testing.T) {
+	t.Parallel()
+	a := rbac.New()
+	ids := []auth.Identity{
+		{Subject: "root", Role: auth.RoleAdmin},
+		{Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
+		{Subject: "obs", Role: auth.RoleViewer, Namespaces: []v1.NamespaceName{"team-a"}},
+		{Subject: "robot", Role: auth.Role("robot"), Namespaces: []v1.NamespaceName{"team-a"}},
+	}
+	verbs := []auth.Verb{auth.VerbGet, auth.VerbList, auth.VerbCreate, auth.VerbUpdate, auth.VerbDelete}
+	for _, id := range ids {
+		for _, verb := range verbs {
+			for _, ns := range []v1.NamespaceName{"team-a", "team-b"} {
+				for job, workflow := range map[v1.Kind]v1.Kind{v1.KindJob: v1.KindWorkflow, v1.KindJobRun: v1.KindWorkflowRun} {
+					require.Equal(t, allowed(t, a, id, verb, workflow, ns), allowed(t, a, id, verb, job, ns),
+						"role=%s verb=%s kind=%s ns=%s", id.Role, verb, job, ns)
+				}
+			}
+		}
+	}
+	dev := ids[1]
+	require.True(t, allowed(t, a, dev, auth.VerbCreate, v1.KindJobRun, "team-a"), "a developer starts a run")
+	require.False(t, allowed(t, a, ids[2], auth.VerbCreate, v1.KindJobRun, "team-a"), "a viewer starts none")
+}

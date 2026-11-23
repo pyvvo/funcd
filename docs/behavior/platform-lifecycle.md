@@ -96,6 +96,9 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `defaultWorkflowPayloadLimit` | 256KiB | `internal/platform/config/config.go` |
 | `DefaultFunctionCPU` | 1 | `internal/platform/config/functions.go` |
 | `DefaultFunctionMemory` | 512Mi | `internal/platform/config/functions.go` |
+| `DefaultJobMaxRunning` | 4 | `internal/platform/config/job.go` |
+| `DefaultJobPayloadLimit` | 256KiB | `internal/platform/config/job.go` |
+| `DefaultJobRetention` | 720h | `internal/platform/config/job.go` |
 | `defaultKVBackupInterval` | 30s | `internal/platform/config/kvbackup.go` |
 | `defaultKVRebaseline` | 24h | `internal/platform/config/kvbackup.go` |
 | `defaultKVRebaselineRetry` | 1h | `internal/platform/config/kvbackup.go` |

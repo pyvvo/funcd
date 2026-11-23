@@ -91,6 +91,12 @@ func (h *storeHandlers) listObj(ctx context.Context, kind v1.Kind, ns v1.Namespa
 }
 
 func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Object) (v1.Object, error) {
+	return h.createObjStamped(ctx, kind, obj, nil)
+}
+
+// createObjStamped is createObj with stamp run on the admitted object once its status is cleared, to set the status that
+// the API server records at creation, such as a JobRun's startedBy (ADR-0347 Decision 3).
+func (h *storeHandlers) createObjStamped(ctx context.Context, kind v1.Kind, obj v1.Object, stamp func(context.Context, v1.Object) error) (v1.Object, error) {
 	if err := h.authorize(ctx, auth.VerbCreate, kind, obj.GetObjectMeta().Namespace); err != nil {
 		return nil, err
 	}
@@ -121,6 +127,11 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 	}
 	if admitted, err = withStatus(admitted, nil); err != nil {
 		return nil, err
+	}
+	if stamp != nil {
+		if err := stamp(ctx, admitted); err != nil {
+			return nil, err
+		}
 	}
 	withServerMeta(admitted, nil)
 	if dryRunFrom(ctx) { // ADR-0220: every step above is the real write's
@@ -205,6 +216,10 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 	case *v1.AddonObject:
 		o.TypeMeta = tm
 	case *v1.AddonRevision:
+		o.TypeMeta = tm
+	case *v1.Job:
+		o.TypeMeta = tm
+	case *v1.JobRun:
 		o.TypeMeta = tm
 	}
 }
@@ -824,7 +839,7 @@ type crudKind interface {
 		v1.Role | v1.RolesAssignment | v1.KVStore | v1.Bucket | v1.Lake | v1.SQLDatabase | v1.Policy |
 		v1.EgressPolicy | v1.Invocation | v1.RuntimeClass | v1.WorkerNode | v1.Gateway | v1.Workflow | v1.WorkflowRun |
 		v1.Sensor | v1.Site | v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore |
-		v1.Addon | v1.AddonObject | v1.AddonRevision
+		v1.Addon | v1.AddonObject | v1.AddonRevision | v1.Job | v1.JobRun
 }
 
 type objectPtr[T crudKind] interface {
@@ -1319,4 +1334,62 @@ func (h *storeHandlers) ReplaceSensor(ctx context.Context, ns v1.NamespaceName, 
 }
 func (h *storeHandlers) DeleteSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	return h.deleteObjIf(ctx, v1.KindSensor, ns, name, rv)
+}
+
+// ---- Job (ADR-0347) ----
+
+func (h *storeHandlers) GetJob(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Job, error) {
+	return typedObj[v1.Job](h.getObj(ctx, v1.KindJob, ns, name))
+}
+func (h *storeHandlers) CreateJob(ctx context.Context, job v1.Job) (v1.Job, error) {
+	return typedObj[v1.Job](h.createObj(ctx, v1.KindJob, &job))
+}
+func (h *storeHandlers) ListJobs(ctx context.Context, ns v1.NamespaceName) ([]v1.Job, error) {
+	return typedObjs[v1.Job](h.listObj(ctx, v1.KindJob, ns))
+}
+func (h *storeHandlers) ReplaceJob(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, job v1.Job) (v1.Job, error) {
+	return typedObj[v1.Job](h.replaceObj(ctx, v1.KindJob, ns, name, &job))
+}
+func (h *storeHandlers) DeleteJob(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindJob, ns, name, rv)
+}
+
+// ---- JobRun (ADR-0347) ----
+
+func (h *storeHandlers) GetJobRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.JobRun, error) {
+	return typedObj[v1.JobRun](h.getObj(ctx, v1.KindJobRun, ns, name))
+}
+func (h *storeHandlers) CreateJobRun(ctx context.Context, run v1.JobRun) (v1.JobRun, error) {
+	return typedObj[v1.JobRun](h.createObjStamped(ctx, v1.KindJobRun, &run, h.stampJobRun))
+}
+func (h *storeHandlers) ListJobRuns(ctx context.Context, ns v1.NamespaceName) ([]v1.JobRun, error) {
+	return typedObjs[v1.JobRun](h.listObj(ctx, v1.KindJobRun, ns))
+}
+func (h *storeHandlers) ReplaceJobRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.JobRun) (v1.JobRun, error) {
+	return typedObj[v1.JobRun](h.replaceObj(ctx, v1.KindJobRun, ns, name, &run))
+}
+func (h *storeHandlers) DeleteJobRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindJobRun, ns, name, rv)
+}
+
+// stampJobRun records on a new run what the API server sets (ADR-0347 Decision 3): status.startedBy, the caller's
+// identity subject, empty with none, a record that grants nothing; and status.jobUID, its Job's UID when the Job exists.
+// A replace keeps both, as it keeps the whole stored status.
+func (h *storeHandlers) stampJobRun(ctx context.Context, obj v1.Object) error {
+	run, ok := obj.(*v1.JobRun)
+	if !ok {
+		return nil
+	}
+	if id, ok := middleware.IdentityFrom(ctx); ok {
+		run.Status.StartedBy = id.Subject
+	}
+	job, err := h.store.Get(ctx, v1.KindJob.GVK(), run.Namespace, run.Spec.Job)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		return nil
+	case err != nil:
+		return fault.Wrapf(err, fault.KindOf(err), "controlplane.CreateJobRun", "read Job %q", run.Spec.Job)
+	}
+	run.Status.JobUID = job.GetObjectMeta().UID
+	return nil
 }

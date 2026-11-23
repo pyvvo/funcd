@@ -449,6 +449,39 @@ func registerSensor(api huma.API, h Handlers) {
 	})
 }
 
+// ===== Job (namespaced) — ADR-0347 =====
+
+func registerJob(api huma.API, h Handlers) {
+	registerNamespacedCRUD(api, crudRoutes[v1.Job]{
+		kind: "Job", kinds: "Jobs", path: "jobs",
+		list: h.ListJobs, create: h.CreateJob, get: h.GetJob, replace: h.ReplaceJob, remove: h.DeleteJob,
+		cases: &kindCases{},
+	})
+}
+
+// ===== JobRun (namespaced) — ADR-0347 =====
+
+func registerJobRun(api huma.API, h Handlers) {
+	// The jobrun-payload and jobrun-contract admissions check a create's input; jobrun-spec refuses a replace that
+	// changes spec.job or spec.input, or turns spec.cancel back (ADR-0347 Decision 3).
+	input := []ErrorCase{
+		problem(fault.PayloadTooLarge, "The run input in spec.input is larger than job.payloadLimit, 256 KiB by default.",
+			"Send a smaller input, and pass large data by reference, such as the key of an object in a Bucket."),
+		blank(http.StatusUnprocessableEntity, "The run input in spec.input breaks the input schema in the Job's "+
+			"status.contract; the detail names each value that breaks it.", "Correct the values that the detail names."),
+	}
+	fixed := problem(fault.Invalid, "The body changes the run's spec.job or spec.input, which are fixed once the run is "+
+		"created, or turns spec.cancel back to false.", "Keep spec.job and spec.input, and start a new run under another "+
+		"name to run other input. A cancelled run stays cancelled.")
+	registerNamespacedCRUD(api, crudRoutes[v1.JobRun]{
+		kind: "JobRun", kinds: "JobRuns", path: "jobruns",
+		list: h.ListJobRuns, create: h.CreateJobRun, get: h.GetJobRun, replace: h.ReplaceJobRun, remove: h.DeleteJobRun,
+		cases: &kindCases{create: input, replace: []ErrorCase{fixed},
+			words: map[sharedCase]wording{nameTaken: {fix: "Start a new run under another name: a run's spec.job and " +
+				"spec.input are fixed once it is created, so replacing the existing run cannot change them."}}},
+	})
+}
+
 // ===== Site (namespaced) — ADR-0139, FEAT-0003/F103 =====
 
 func registerSite(api huma.API, h Handlers) {

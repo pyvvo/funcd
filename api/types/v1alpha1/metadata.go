@@ -75,6 +75,10 @@ const (
 	// KindOIDCProvider is an OpenID Connect provider the edge signs users in with (ADR-0335, F261), whose client funcd
 	// registers under client.registration (ADR-0336, F262).
 	KindOIDCProvider Kind = "OIDCProvider"
+	// KindJob is work that runs to completion, built as a Function is; KindJobRun is one execution of a Job, which calls
+	// its handler at most once (ADR-0347, F137).
+	KindJob    Kind = "Job"
+	KindJobRun Kind = "JobRun"
 	// KindS3Identity is the external SigV4 S3 principal (ADR-0080): NOT a stored/CRUD resource —
 	// it has no metastore registration (no NewObject/AllKinds/handlers), it exists only as a Cedar
 	// principal type the cedar driver materializes for the external-sigv4 authz path. It is excluded
@@ -100,7 +104,7 @@ func (k Kind) Validate() error {
 		KindLake, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
 		KindIdentity, KindRole, KindRolesAssignment, KindSite, KindApp, KindAppRevision,
 		KindBackupSchedule, KindBackup, KindRestore, KindSQLDatabase, KindAddon, KindAddonObject, KindAddonRevision,
-		KindOIDCProvider:
+		KindOIDCProvider, KindJob, KindJobRun:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -458,6 +462,14 @@ func NewObject(k Kind) (Object, bool) {
 		p := &OIDCProvider{}
 		p.TypeMeta = typeMetaFor(k)
 		return p, true
+	case KindJob:
+		j := &Job{}
+		j.TypeMeta = typeMetaFor(k)
+		return j, true
+	case KindJobRun:
+		r := &JobRun{}
+		r.TypeMeta = typeMetaFor(k)
+		return r, true
 	default:
 		return nil, false
 	}
@@ -502,6 +514,8 @@ func AllKinds() []Kind {
 		KindAddonObject,
 		KindAddonRevision,
 		KindOIDCProvider,
+		KindJob,
+		KindJobRun,
 	}
 }
 

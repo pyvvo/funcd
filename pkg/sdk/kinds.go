@@ -83,6 +83,8 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindAddon:           {"addons", false},          // ADR-0332, F258
 	v1.KindAddonRevision:   {"addonrevisions", false},  // ADR-0339, F265
 	v1.KindOIDCProvider:    {"oidcproviders", true},    // ADR-0335, F261
+	v1.KindJob:             {"jobs", true},             // ADR-0347, F137
+	v1.KindJobRun:          {"jobruns", true},          // ADR-0347, F137
 }
 
 // kindAliases are short CLI tokens (kubectl-style) for a few common kinds.

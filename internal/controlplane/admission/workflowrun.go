@@ -45,19 +45,19 @@ func (a workflowRunPayload) Admit(_ context.Context, req Request) (v1.Object, er
 
 // --- workflowrun-contract (ADR-0098, F65): Create/Update on WorkflowRun ------------------------
 
-// workflowGetter is the read-only store lookup the contract admission needs (a subset of store.Store;
+// objectGetter is the read-only store lookup the run contract admissions need (a subset of store.Store;
 // the wiring adapts the real store). Kept local so the admission package stays a near-leaf.
-type workflowGetter interface {
+type objectGetter interface {
 	Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error)
 }
 
-type workflowRunContract struct{ r workflowGetter }
+type workflowRunContract struct{ r objectGetter }
 
 // NewWorkflowRunContractAdmission returns the Validating admission that checks a WorkflowRun's spec.input
 // against its parent Workflow's CACHED status.contract.input (ADR-0098) — zero registry I/O. A parent
 // that is absent or not-yet-Ready (no cached contract) is allowed: the engine's run-start gate is the
 // backstop, and a dangling spec.workflow is the run reconciler's concern.
-func NewWorkflowRunContractAdmission(r workflowGetter) Admission { return workflowRunContract{r: r} }
+func NewWorkflowRunContractAdmission(r objectGetter) Admission { return workflowRunContract{r: r} }
 
 func (workflowRunContract) Name() string { return "workflowrun-contract" }
 func (workflowRunContract) Phase() Phase { return Validating }

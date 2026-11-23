@@ -41,6 +41,7 @@ var Features = []Feature{
 	{"workloads/app", []v1.Kind{v1.KindApp, v1.KindAppRevision}},
 	{"workloads/site", []v1.Kind{v1.KindSite}},
 	{"workloads/workflow", []v1.Kind{v1.KindWorkflow, v1.KindWorkflowRun}},
+	{"workloads/job", []v1.Kind{v1.KindJob, v1.KindJobRun}},
 	{"workloads/configuration", []v1.Kind{v1.KindConfigMap}},
 	{"services/kv", []v1.Kind{v1.KindKVStore}},
 	{"services/bucket", []v1.Kind{v1.KindBucket}},

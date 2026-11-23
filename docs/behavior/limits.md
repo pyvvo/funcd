@@ -71,6 +71,9 @@ In Time, a name with a dot is a config key and one without is fixed in the code.
 
 | Value | Default | From |
 |---|---|---|
+| `job.maxRunning` | 4 | config |
+| `job.payloadLimit` | 262144 | config |
+| `job.retention` | 720h | config |
 | `floorReadEvery` | 1s | `internal/quota/floor.go` |
 | `idleAfter` | 10m | `internal/quota/quota.go` |
 | `measureTimeout` | 2m | `internal/quota/quota.go` |

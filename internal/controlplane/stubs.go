@@ -50,6 +50,8 @@ type StubHandlers struct {
 	addons           map[string]v1.Addon
 	addonRevisions   map[string]v1.AddonRevision
 	addonObjects     map[string]v1.AddonObject
+	jobs             map[string]v1.Job
+	jobRuns          map[string]v1.JobRun
 }
 
 // NewStubHandlers returns an initialized StubHandlers.
@@ -91,6 +93,8 @@ func NewStubHandlers() *StubHandlers {
 		addons:           make(map[string]v1.Addon),
 		addonRevisions:   make(map[string]v1.AddonRevision),
 		addonObjects:     make(map[string]v1.AddonObject),
+		jobs:             make(map[string]v1.Job),
+		jobRuns:          make(map[string]v1.JobRun),
 	}
 }
 
@@ -990,6 +994,50 @@ func (s *StubHandlers) ReplaceSensor(_ context.Context, ns v1.NamespaceName, nam
 
 func (s *StubHandlers) DeleteSensor(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	return stubDelete(s, s.sensors, "Sensor", nsKey(ns, name))
+}
+
+// ---- Job (ADR-0347) ----
+
+func (s *StubHandlers) GetJob(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Job, error) {
+	return stubGet(s, s.jobs, "Job", nsKey(ns, name))
+}
+
+func (s *StubHandlers) CreateJob(_ context.Context, job v1.Job) (v1.Job, error) {
+	return stubPut(s, s.jobs, "Job", nsKey(job.Namespace, job.Name), job, false)
+}
+
+func (s *StubHandlers) ListJobs(_ context.Context, ns v1.NamespaceName) ([]v1.Job, error) {
+	return stubList(s, s.jobs, ns)
+}
+
+func (s *StubHandlers) ReplaceJob(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, job v1.Job) (v1.Job, error) {
+	return stubPut(s, s.jobs, "Job", nsKey(ns, name), job, true)
+}
+
+func (s *StubHandlers) DeleteJob(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
+	return stubDelete(s, s.jobs, "Job", nsKey(ns, name))
+}
+
+// ---- JobRun (ADR-0347) ----
+
+func (s *StubHandlers) GetJobRun(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.JobRun, error) {
+	return stubGet(s, s.jobRuns, "JobRun", nsKey(ns, name))
+}
+
+func (s *StubHandlers) CreateJobRun(_ context.Context, run v1.JobRun) (v1.JobRun, error) {
+	return stubPut(s, s.jobRuns, "JobRun", nsKey(run.Namespace, run.Name), run, false)
+}
+
+func (s *StubHandlers) ListJobRuns(_ context.Context, ns v1.NamespaceName) ([]v1.JobRun, error) {
+	return stubList(s, s.jobRuns, ns)
+}
+
+func (s *StubHandlers) ReplaceJobRun(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.JobRun) (v1.JobRun, error) {
+	return stubPut(s, s.jobRuns, "JobRun", nsKey(ns, name), run, true)
+}
+
+func (s *StubHandlers) DeleteJobRun(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
+	return stubDelete(s, s.jobRuns, "JobRun", nsKey(ns, name))
 }
 
 // ---- AddonRevision (cluster-scoped, read-only, ADR-0339) ----

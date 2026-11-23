@@ -260,6 +260,20 @@ type Handlers interface {
 	ListSensors(ctx context.Context, ns v1.NamespaceName) ([]v1.Sensor, error)
 	ReplaceSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, se v1.Sensor) (v1.Sensor, error)
 	DeleteSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
+
+	// Job (namespaced) — ADR-0347
+	GetJob(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Job, error)
+	CreateJob(ctx context.Context, job v1.Job) (v1.Job, error)
+	ListJobs(ctx context.Context, ns v1.NamespaceName) ([]v1.Job, error)
+	ReplaceJob(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, job v1.Job) (v1.Job, error)
+	DeleteJob(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
+
+	// JobRun (namespaced) — ADR-0347
+	GetJobRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.JobRun, error)
+	CreateJobRun(ctx context.Context, run v1.JobRun) (v1.JobRun, error)
+	ListJobRuns(ctx context.Context, ns v1.NamespaceName) ([]v1.JobRun, error)
+	ReplaceJobRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.JobRun) (v1.JobRun, error)
+	DeleteJobRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
 }
 
 // NewAPI builds the huma API on a chi router and registers all operations against h.
@@ -430,10 +444,15 @@ func logFaultCause(ctx huma.Context, _ string, v any) (any, error) { //nolint:fo
 
 // wrapFaultError wraps a fault.Error as a huma StatusError. Exported for testing.
 // It converts the *fault.Error to a fault.Problem via fault.ToProblem (the single
-// Kind→status map), so the error body is RFC 9457 problem+json.
+// Kind→status map), so the error body is RFC 9457 problem+json. A huma error in err keeps its own status and
+// details: the 422 of an add-on object's config (ADR-0332 Decision 2) or of a JobRun's input (ADR-0347 Decision 3).
 func wrapFaultError(err error) error {
 	if err == nil {
 		return nil
+	}
+	var fe *faultError
+	if errors.As(err, &fe) {
+		return fe
 	}
 	return &faultError{Problem: fault.ToProblem(err), cause: err}
 }

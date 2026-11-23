@@ -34,6 +34,7 @@ func storeHeld(t *testing.T, st store.Store, scaling v1.Scaling, p v1.Phase, rea
 	rev := obj.(*v1.Revision)
 	rev.Name, rev.Namespace, rev.ResourceGroup = "f-1", "default", "rg1"
 	rev.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Name: "f"}, UID: uid, Controller: true}}
+	rev.Spec.Function, rev.Spec.Number = v1.ObjectRef{Kind: v1.KindFunction, Namespace: "default", Name: "f"}, 1
 	rev.Status.Phase = p
 	rev.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionFalse, Reason: reason})
 	_, err = st.Create(ctx, rev)

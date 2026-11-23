@@ -64,10 +64,11 @@ func chapters() []chapter {
 		{"Services", []string{"internal/kvstore", "internal/blob", "internal/sql", "internal/lake", "internal/services", "internal/provider"}, []string{"kvstore", "blob", "s3gateway", "lake", "sql"}},
 		{"Addons", []string{"internal/services/addon"}, []string{"addons"}},
 		{"Eventing", []string{"internal/bus", "internal/eventing", "internal/sensor", "internal/workflow", "internal/expr"}, []string{"workflow", "eventing"}},
+		{"Jobs", nil, nil},
 		{"Apps", []string{"internal/app"}, []string{"app"}},
 		{"Disaster recovery", []string{"internal/backup", "internal/restore", "internal/services/backup", "internal/platform/hold", "internal/snapshot"}, []string{"backup", "workloadBackup"}},
 		{"Health", []string{"internal/health"}, []string{"health"}},
-		{"Limits", []string{"internal/quota"}, nil},
+		{"Limits", []string{"internal/quota"}, []string{"job"}},
 		{"funcdctl dev", []string{"cmd/funcdctl", "pkg/sdk", "internal/provider/docker", "internal/provider/nerdctl"}, nil},
 		{"funcdctl", nil, nil},
 	}

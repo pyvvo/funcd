@@ -74,7 +74,6 @@ New words: Schema, Refused, DryRun, Store.
 | `MinAddonRestoreTimeout` | 1s | `api/types/v1alpha1/addon.go` |
 | `MinAddonResync` | 1s | `api/types/v1alpha1/addon.go` |
 | `maxPort` | 65535 | `api/types/v1alpha1/addon.go` |
-| `maxAddonRevisionName` | 63 | `api/types/v1alpha1/addonrevision.go` |
 | `maxAppConfigMapNameLength` | 52 | `api/types/v1alpha1/app.go` |
 | `maxAppNameLength` | 52 | `api/types/v1alpha1/app.go` |
 | `maxAppRevisionNumber` | 9999999999 | `api/types/v1alpha1/apprevision.go` |
@@ -94,12 +93,15 @@ New words: Schema, Refused, DryRun, Store.
 | `MaxTimerInterval` | 24h | `api/types/v1alpha1/function.go` |
 | `MaxWorkflowTimeout` | 168h | `api/types/v1alpha1/function.go` |
 | `MinTimerInterval` | 100ms | `api/types/v1alpha1/function.go` |
+| `MaxJobConcurrency` | 15 | `api/types/v1alpha1/job.go` |
+| `MaxJobTimeout` | `MaxWorkflowTimeout` | `api/types/v1alpha1/job.go` |
 | `DefaultMaxKeyBytes` | 1024 | `api/types/v1alpha1/kvstore.go` |
 | `DefaultMaxValueBytes` | 1MiB | `api/types/v1alpha1/kvstore.go` |
 | `MaxKeyBytesLimit` | 64000 | `api/types/v1alpha1/kvstore.go` |
 | `MaxValueBytesLimit` | 1MiB | `api/types/v1alpha1/kvstore.go` |
 | `nameSuffixHexBytes` | 4 | `api/types/v1alpha1/metadata.go` |
 | `MinCPU` | `0.01` | `api/types/v1alpha1/resources.go` |
+| `maxRevisionName` | 63 | `api/types/v1alpha1/revision.go` |
 | `SiteRuntimeConfigMaxBytes` | 32KiB | `api/types/v1alpha1/site.go` |
 | `maxListedMembers` | 5 | `internal/controlplane/admission/resourcegroup.go` |
 | `ownReadAttempts` | 5 | `internal/controlplane/handlers.go` |
