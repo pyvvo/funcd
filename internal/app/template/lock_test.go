@@ -309,6 +309,41 @@ func TestRenderPinsImages(t *testing.T) {
 	require.ErrorContains(t, err, "stale")
 }
 
+// ADR-0350 Decision 5: a jobs entry takes its image as a functions entry does: Lock pins the image's digest, the
+// rendered Job carries <registry>/<repo>:<version>@<digest>, and a literal image or an imageDigest is refused.
+func TestRenderPinsJobImage(t *testing.T) {
+	t.Parallel()
+	app := "name: shop\nversion: 1.0.0\nregistry: reg.example\nimages:\n  migrate: shop-migrate:1.2.0\n"
+	job := "jobs:\n  - name: shop-migrate\n    runtime: nodejs22\n    handler: handle\n    image: ${{ images.migrate }}\n"
+	tpl, err := Load(writeTemplate(t, app, map[string]string{"resources/job.yaml": job}))
+	require.NoError(t, err)
+	digest := fakeDigest("migrate")
+	reg := &fakeRegistry{digests: map[string]string{"reg.example/shop-migrate:1.2.0": digest}}
+	tpl.Lock, err = Lock(context.Background(), tpl, "reg.example", reg)
+	require.NoError(t, err)
+	require.Equal(t, LockedImage{Requested: "shop-migrate:1.2.0", Version: "1.2.0", Digest: digest}, tpl.Lock["migrate"])
+	a, err := Render(tpl, RenderInput{})
+	require.NoError(t, err)
+	require.Len(t, a.Spec.Jobs, 1)
+	require.Equal(t, "reg.example/shop-migrate:1.2.0@"+digest, a.Spec.Jobs[0].Image)
+	require.Empty(t, a.Spec.Jobs[0].ImageDigest, "the digest is in the image, never imageDigest")
+
+	for name, tc := range map[string]struct{ fragment, want string }{
+		"an imageDigest": {job + "    imageDigest: " + digest + "\n", "jobs[0].imageDigest: a digest comes only through images and app.lock"},
+		"a literal image": {strings.Replace(job, "${{ images.migrate }}", "reg.example/shop-migrate:1.2.0", 1),
+			"jobs[0].image: an image is exactly ${{ images.<name> }}"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tpl, err := Load(writeTemplate(t, app, map[string]string{"resources/job.yaml": tc.fragment}))
+			require.NoError(t, err)
+			tpl.Lock = map[string]LockedImage{"migrate": {Requested: "shop-migrate:1.2.0", Version: "1.2.0", Digest: digest}}
+			_, err = Render(tpl, RenderInput{})
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
 // ADR-0218 Decision 5: the moved-tag check warns for each tag at another digest and for each failed check.
 func TestMoved(t *testing.T) {
 	t.Parallel()

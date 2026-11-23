@@ -45,8 +45,8 @@ const appSchema = `{"type":"object","required":["name","namespace","version"],"p
 // The image and digest paths match case-insensitively, because the strict decode (encoding/json) matches a key to a
 // field without regard to case: a key in any letter case that decodes into one of these fields is routed.
 var (
-	imagePath  = regexp.MustCompile(`(?i)^(functions\[\d+\]|workflows\[\d+\]\.steps\[\d+\]\.function|sites\[\d+\])\.image$`)
-	digestPath = regexp.MustCompile(`(?i)^functions\[\d+\]\.imageDigest$`)
+	imagePath  = regexp.MustCompile(`(?i)^(functions\[\d+\]|jobs\[\d+\]|workflows\[\d+\]\.steps\[\d+\]\.function|sites\[\d+\])\.image$`)
+	digestPath = regexp.MustCompile(`(?i)^(functions|jobs)\[\d+\]\.imageDigest$`)
 	imageRef   = regexp.MustCompile(`^\s*\$\{\{\s*images\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}\s*$`)
 	specEntry  = regexp.MustCompile(`spec\.((?:hooks\.)?[A-Za-z]+)\[(\d+)\]`)
 )

@@ -380,8 +380,8 @@ func TestAppConfigChangeRolls(t *testing.T) {
 	})
 }
 
-// Decisions 7 and 9: app-parts refuses a Secret a Function, a Lake or an image step names and spec.secrets
-// does not declare, on create and on update; a ref step is exempt.
+// Decisions 7 and 9: app-parts refuses a Secret a Function, a Job (ADR-0350 Decision 1), a Lake or an image step names
+// and spec.secrets does not declare, on create and on update; a ref step is exempt.
 func TestAdmissionRefusesUndeclaredSecret(t *testing.T) {
 	st := store.New(memory.New())
 	billing := []v1.ObjectName{"todo-billing"}
@@ -402,6 +402,11 @@ func TestAdmissionRefusesUndeclaredSecret(t *testing.T) {
 			a.Spec.Functions[0].Bindings.Secret = append(a.Spec.Functions[0].Bindings.Secret, "todo-billing")
 		},
 			`spec.functions[0].bindings.secret[1]: Function/todo-api names Secret "todo-billing", which spec.secrets does not declare`},
+		{"a Job", func(a *v1.App) {
+			a.Spec.Jobs = []v1.AppJob{{Name: "todo-migrate", JobSpec: v1.JobSpec{Runtime: "nodejs22", Handler: "handle",
+				Image: "oci-layout://todo-migrate:1", Bindings: v1.FunctionBindings{Secret: billing}}}}
+		},
+			`spec.jobs[0].bindings.secret[0]: Job/todo-migrate names Secret "todo-billing", which spec.secrets does not declare`},
 		{"an image step", func(a *v1.App) { a.Spec.Workflows[0].Steps[0].Function.Bindings.Secret = billing },
 			`spec.workflows[0].steps[0].function.bindings.secret[0]: Workflow/todo-plan names Secret "todo-billing", which spec.secrets does not declare`},
 		{"a Lake", lake(billing),
@@ -425,6 +430,10 @@ func TestAdmissionRefusesUndeclaredSecret(t *testing.T) {
 				Function: &v1.FunctionStep{Ref: "todo-api", Bindings: v1.StepBindings{Secret: billing}}})
 		},
 		"a declared Lake Secret": lake([]v1.ObjectName{"todo-stripe-key"}),
+		"a declared Job Secret": func(a *v1.App) {
+			a.Spec.Jobs = []v1.AppJob{{Name: "todo-migrate", JobSpec: v1.JobSpec{Runtime: "nodejs22", Handler: "handle",
+				Image: "oci-layout://todo-migrate:1", Bindings: v1.FunctionBindings{Secret: []v1.ObjectName{"todo-stripe-key"}}}}}
+		},
 	} {
 		require.NoError(t, admit(t, st, partAdmissions(0), configApp(mutate), nil), name)
 	}
