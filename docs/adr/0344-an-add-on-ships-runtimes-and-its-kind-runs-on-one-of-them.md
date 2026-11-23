@@ -2,9 +2,9 @@
 
 - **Status**: Accepted (2026-11-23), by the decider ("accept"), after three rounds of an independent judge, every
   Blocker and Major folded
-- **Amended in place**: 2026-11-23, by the decider: the Jobs ADRs (F137) are implemented first, so this ADR gates Jobs
-  as Functions (Decision 11), and under `funcdctl dev` a worker on an Addon's runtime runs on dev's container engine
-  (Decision 13)
+- **Amended in place**: 2026-11-23, by the decider on [#1526](https://github.com/pyvvo/funcd/pull/1526): the Jobs ADRs
+  (F137) are implemented first, so this ADR gates Jobs as Functions (Decision 11), and under `funcdctl dev` a worker on
+  an Addon's runtime runs on dev's container engine (Decision 13), as ADR-0346 decides
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, runtime, api, functions, jobs
@@ -40,13 +40,11 @@ as `WithAddonRuntime` stay the provider that runs engines; a runtime an Addon sh
   pulls the image by digest with the server's Docker credential store, as an engine's, and the Function turns Ready.
 - `scenario: addon-runtime-wrong-workload` — *When* a Function names a runtime whose entry lists only `Job` or
   `Engine`, *Then* it fails with `RuntimeUnavailable` naming the Addon and the workloads, before any worker starts.
-- `scenario: addon-runtime-process-driver` (amended 2026-11-23) — *When* a Function names an Addon's runtime on a process
-  server, *Then* it fails with `RuntimeUnavailable`: no driver of that server runs an image.
-- `scenario: addon-runtime-job` (amended 2026-11-23) — *Given* `deno2` lists `Job`, *When* a Job names it, *Then* its runs run
-  `deno2`'s image; *when* a Job names a runtime that lists only `Function`, *Then* `RuntimeUnavailable`.
-- `scenario: addon-runtime-dev` (amended 2026-11-23) — *Given* `funcdctl dev` with Docker or nerdctl, *When* a Function or a
-  Job names `deno2`, *Then* its workers run `deno2`'s image there; *with* neither, *then* `RuntimeUnavailable` naming
-  what dev tried.
+- `scenario: addon-runtime-process-driver` (amended 2026-11-23) — *When* a Function names an Addon's runtime on a
+  process server, *Then* it fails with `RuntimeUnavailable`: no driver of that server runs an image.
+- `scenario: addon-runtime-job` (amended 2026-11-23) — *Given* `deno2` lists `Job`, *When* a Job names it, *Then* its
+  runs run `deno2`'s image; *when* a Job names a runtime that lists only `Function`, *Then* `RuntimeUnavailable`,
+  `ships it for Function, not for Jobs`.
 - `scenario: addon-runtime-appears` — *Given* a Function on `deno2` applied before `deno`, or while `deno2` listed only
   `Job`, *When* the admin applies `deno` with `Function`, *Then* the Function turns Ready with no change of its own.
 - `scenario: addon-runtime-pinned` — *Given* a Function Ready on `deno2`'s image A, *When* the admin updates `deno` to
@@ -114,11 +112,11 @@ shim protocol for runtimes built outside funcd (a follow-up under F139); image s
    writes' cluster-scoped lock (ADR-0340 Decision 2). A Function on it is `cloudevent`: `protocol: http` is refused.
 5. **Images.** An entry with `Function`, `Job` or `Engine` has an image pinned by digest, from a registry that
    `addons.registries` lists, checked when the Addon is written (ADR-0332 Decision 6), and pulled as an engine's is.
-6. **Resolution.** A Function's `spec.runtime` resolves to funcd's own runtime, else to an Addon's of that name, else
-   as ADR-0149 Decision 2 decides, so an Addon's runtime shadows an operator's of the same name, an override key added
+6. **Resolution.** A Function's `spec.runtime` resolves to funcd's own runtime, else to an Addon's of that name, else as
+   ADR-0149 Decision 2 decides, so an Addon's runtime shadows an operator's of the same name, an override key added
    later included, though running workers keep the operator's image until they stop (Decision 8). The gate reads the
-   stored Addons on each pass and fails the Function with `RuntimeUnavailable`, in ADR-0149 Decision 4's form, with
-   one of three new causes: `Addon "<addon>" ships it for <workloads>, not for Functions`; `it is an Addon's image,
+   stored Addons on each pass and fails the Function with `RuntimeUnavailable`, in ADR-0149 Decision 4's form, with one
+   of three new causes: `Addon "<addon>" ships it for <workloads>, not for <Functions|Jobs>`; `it is an Addon's image,
    which no driver of this server runs` (amended 2026-11-23); `the Addon that shipped it is gone`, for a Revision that
    recorded its image.
 7. **Recovery.** The Function controller watches Addons. A watch event carries no prior state (`controller.MapFunc`),
@@ -129,8 +127,9 @@ shim protocol for runtimes built outside funcd (a follow-up under F139); image s
    it never changes after. Only a change of the Function's spec makes a Revision with a newer image: an Addon update,
    or an App upgrade that moves its add-on parts (ADR-0339 Decision 3), moves none whose spec is unchanged.
 9. **Engines.** An engine runs where the add-on provider runtime (ADR-0087) runs images: containerd on a server, Docker
-   under `funcdctl dev` (ADR-0334). On a process server, whose provider runtime runs no image, an object of an engine
-   kind waits `Pending`, `RuntimeUnavailable`, naming the process driver. `WithAddonRuntime(r)` loses its modes.
+   or nerdctl under `funcdctl dev` (ADR-0334). On a process server, whose provider runtime runs no image, an object of
+   an engine kind waits `Pending`, `RuntimeUnavailable`, naming the process driver. `WithAddonRuntime(r)` loses its
+   modes.
 10. **Runtime-only Addons.** An Addon whose entries run no kind adds none, and is unique by its runtimes' names alone.
     An Addon may gain a kind once; a kind it has cannot change or go. An App template's `addon.yaml` must add a kind,
     since `app deploy` finds the template's Addon by it (ADR-0337 Decision 2): funcdctl's template loader refuses one
@@ -141,18 +140,17 @@ shim protocol for runtimes built outside funcd (a follow-up under F139); image s
 12. **Trust.** An Addon's runtime is trusted as its engine is: an admin's, pinned and allow-listed. Its workers' egress
     is governed as funcd's own runtimes' is: by the gateway when `server.network.egress` is on, by nothing when it is
     off (ADR-0117 Decisions 3 and 6).
-13. **Workers under `funcdctl dev`** (amended 2026-11-23). Dev runs a worker whose runtime is an Addon's image on the
-    container engine it runs add-on engines on (ADR-0334 Decision 1, Docker or nerdctl), and any other worker on the
-    process driver: `runtime.Pair` sends a worker whose spec names an image to that engine's worker driver, and any
-    other to the process driver. The driver publishes the shim's port on 127.0.0.1 and copies the worker's bundle into
-    a volume through a helper, as ADR-0334 copies an engine's files. With no engine, the worker fails
-    `RuntimeUnavailable` naming what dev tried, as an engine waits.
+13. **Workers under `funcdctl dev`** (amended 2026-11-23). Dev runs a worker on an Addon's runtime on the container
+    engine it runs add-on engines on (ADR-0334 Decision 1, Docker or nerdctl), and any other worker on the process
+    driver; ADR-0346 decides how, and until it is implemented such a worker is `RuntimeUnavailable` under dev, as on a
+    process server.
 
 ## Design model
 
 None. Nothing here adds a lock, a timer or a stop path: the gate reads the stored Addons on each pass, the watch only
 requeues, and Decision 8's one write fills an empty field in the Function's own pass before it starts a worker
-(workers start only there, in `internal/function`). ADR-0339's AddonRevision pin and `revisions.fizz` are unchanged.
+(workers start only there, in `internal/function`); a Job's holds only if F137's controller writes it in its own pass
+before a run starts (amended 2026-11-23). ADR-0339's AddonRevision pin and `revisions.fizz` are unchanged.
 
 ## Behavior rows
 
@@ -165,7 +163,6 @@ requeues, and Decision 8's one write fills an empty field in the Function's own 
   runtime with no image" (`:40`): an Addon's runtime is known at the gate and recovers when its Addon appears.
 - **functions.md**: beside "A tag that moved" (`:66`), a row: an Addon's new image moves no Revision.
 - **funcdctl.md** (`:30`) and **funcdctl-dev.md** (`:53`): a template's `addon.yaml` that adds no kind, exit 1.
-- **funcdctl-dev.md** (amended 2026-11-23): a new row "A worker on an Addon's runtime" (Decision 13).
 
 ## Temporary workarounds
 
@@ -218,12 +215,6 @@ type RevisionSpec struct {
 }
 
 func WithAddonRuntime(r provider.Runtime) Option // the provider runtime that runs engines (ADR-0087), no modes
-
-// Pair runs a worker whose spec has an Image on images, any other on process (Decision 13) (amended 2026-11-23).
-func Pair(process, images Runtime) Runtime // internal/runtime
-
-// NewWorkers is the worker driver over the container engine of dev's add-on engines (Decision 13) (amended 2026-11-23).
-func NewWorkers(ctx context.Context, eng Engine, key string, logger *slog.Logger) (runtime.Runtime, error)
 ```
 
 | Direction | What |
@@ -241,21 +232,20 @@ func NewWorkers(ctx context.Context, eng Engine, key string, logger *slog.Logger
    the override keys from the config) and Decision 10's kinds; `internal/app/template/load.go` (`readAddon`): the
    template rule.
 3. `internal/function`: Decision 6's order and causes, Decision 7's watch, and `runtimeImage` written by
-   `ensureRevision` as Decision 8 says and passed to the driver; `pkg/funcd/options.go`: Decision 9. (amended 2026-11-23):
-   the Job controller F137 built takes Decisions 6 to 8; `internal/runtime`: `Pair`; `internal/provider/docker`:
-   `NewWorkers`, nerdctl's through the same `Engine`; `cmd/funcdctl/dev.go`: `WithRuntime(Pair(process, workers))`.
+   `ensureRevision` as Decision 8 says and passed to the driver; `pkg/funcd/options.go`: Decision 9. (amended
+   2026-11-23): the Job controller F137 built takes Decisions 6 to 8.
 4. Manifests: `api/types/v1alpha1/examples/addons/addon.yaml` and `settings.yaml`,
    `e2e/fixtures/rauthy-signin-whoami-addon.yaml`; rauthy's `addon.yaml` released in pyvvo/funcd-addons, and its pin
    bumped in `go.mod` as a shim release is (ADR-0141).
 5. Docs: the guide's add-on pages, `just generate` for the API reference, the behavior rows above; the F139 row splits
-   its status, as ADR-0149 did for F12: `runtimes and dev workers: <status> · shim protocol: idea` (amended 2026-11-23); at acceptance,
-   the blueprint (`blueprint.md:44`, `:288`): an admin's Addon may ship a runtime image.
+   its status, as ADR-0149 did for F12: `runtimes: <status> · dev workers: <ADR-0346's> · shim protocol: idea` (amended
+   2026-11-23); at acceptance, the blueprint (`blueprint.md:44`, `:288`): an admin's Addon may ship a runtime image.
 6. Tests: one `TestScenario…` per scenario, named after it; table tests for every refusal of Decisions 3 to 5 and 10;
    the add-on, settings and runtime-availability tests on the new shape, `TestADR0149_MissingImageContainerd` and the
    `ruby3` lane case unchanged; a new containerd lane case, a Function on an Addon's runtime that ships a copy of
    `nodejs22`'s image from the lane's registry; `addon-rauthy`, `addon-rauthy-restore` and `addon-rauthy-signin` pass.
-7. Done when `just ci-full` and the lanes above pass and CI is green, after the Jobs ADRs are implemented (amended 2026-11-23).
-   The PR references #1017 and does not close it: the last of F139's ADRs does.
+7. Done when `just ci-full` and the lanes above pass and CI is green, after the Jobs ADRs are implemented (amended
+   2026-11-23). The PR references #1017 and does not close it: the last of F139's ADRs does.
 
 ## Review checklist
 
@@ -266,8 +256,7 @@ func NewWorkers(ctx context.Context, eng Engine, key string, logger *slog.Logger
 - [ ] `runtimeImage` is written at a Revision's creation, or once while no worker of it runs; an Addon update leaves it.
 - [ ] The new containerd lane case and the three rauthy lanes pass; rauthy's manifest is released and its pin bumped.
 - [ ] The guide, the API reference, the behavior rows, the F139 row and, at acceptance, the blueprint match.
-- [ ] A Job takes Decisions 6 to 8 as a Function does; under dev, a worker on an Addon's runtime runs on Docker or
-      nerdctl and any other on the process driver (amended 2026-11-23).
+- [ ] A Job takes Decisions 6 to 8 as a Function does (amended 2026-11-23).
 
 ## Consequences
 
@@ -279,12 +268,11 @@ func NewWorkers(ctx context.Context, eng Engine, key string, logger *slog.Logger
 - **(−)** A Function on an Addon's runtime has the bindings its image's shim builds in, and no vendored Python
   dependency: funcdctl bundles it as a non-Python Function, and `addBundleEnv` sets `PYTHONPATH` only for the Python
   family. F141's runtime carries its handler in its image; the shim-protocol follow-up decides the rest.
-- **(−)** Under `funcdctl dev` a worker on an Addon's runtime needs Docker or nerdctl, as an add-on engine does (amended 2026-11-23).
 
 ## Open questions
 
 - The shim protocol for runtimes built outside funcd, its version and its documentation: a follow-up ADR under F139;
-  dev workers are Decision 13 (amended 2026-11-23).
+  dev workers are ADR-0346's (amended 2026-11-23).
 - Image signatures: out of scope; a board card when the decider wants one.
 
 ## References
