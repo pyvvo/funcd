@@ -117,8 +117,18 @@ jobs:
 
       - name: Run CI (fmt check + lint + fast tests + build)
         if: needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.generated == 'true' || github.event_name == 'push'
-        run: nix develop --command just ci
+        run: |
+          echo "STEP pid $$ pgid $(ps -o pgid= -p $$) sid $(ps -o sid= -p $$)"
+          ps -eo pid,ppid,pgid,sid,user,args --forest | awk '$2 != 2 && $1 != 2' | cut -c1-160 | head -60
+          python3 .github/diag/canary.py &
+          ( last=0; while sleep 5; do u=$(free -m | awk '/Mem:/{print $3}'); w=$(free -m | awk '/Swap:/{print $3 "/" $2}'); d=$((u-last)); if [ "${d#-}" -ge 1000 ] || [ "$u" -ge 13000 ]; then echo "MEM $(date -u +%T) used=${u}MB swap=${w}MB $(head -1 /proc/pressure/memory) top: $(ps -eo rss=,comm= --sort=-rss | head -4 | awk '{printf "%s=%dMB ", $2, $1/1024}')"; last=$u; fi; done ) &
+          nix develop --command just ci
 
+      - name: Report memory kills
+        if: always()
+        run: |
+          free -m
+          sudo dmesg -T | grep -i -E 'out of memory|oom|killed process' | tail -20 || true
       - name: Check the design specs, the behavior registry and the repository hygiene (docs only)
         if: needs.changes.outputs.nondocs != 'true' && needs.changes.outputs.generated != 'true' && github.event_name != 'push'
         run: nix develop --command just check-hygiene check-specs check-behavior
