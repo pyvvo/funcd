@@ -53,25 +53,18 @@ func (j *JobRunReconciler) execute(ctx context.Context, run *v1.JobRun, job *v1.
 		return startFailed(err)
 	}
 	wo := runWorker(run, rev)
-	defer r.removeSocket(callerRef(w, wo)) // after the worker: its socket goes with the run (ADR-0351 Decision 2)
+	created := false
+	var unindex func()
+	defer func() { j.endWorker(ctx, id, callerRef(w, wo), created, unindex) }()
 	spec, err := r.workerSpec(ctx, w, rev.Name, wo, path, env.worker)
 	if err != nil {
 		return startFailed(err)
 	}
 	spec.Revision = rev.Name
 	if _, err := r.runtime.Create(ctx, spec); err != nil {
-		if rerr := r.releaseEmptyDirs(context.WithoutCancel(ctx), id); rerr != nil {
-			r.logger.WarnContext(ctx, "could not release a run's emptyDirs", "run", run.Name, "error", rerr)
-		}
 		return startFailed(err)
 	}
-	var unindex func()
-	defer func() {
-		j.removeWorker(ctx, id)
-		if unindex != nil {
-			unindex() // after the worker: an address reused later never acts as the Job
-		}
-	}()
+	created = true
 	if ctx.Err() != nil {
 		return runAnswer{phase: v1.JobRunCancelled, reason: v1.JobRunCancelledReason} // its worker goes at once
 	}
@@ -334,18 +327,30 @@ func handlerFailed(cause string) runAnswer {
 	return runAnswer{phase: v1.JobRunFailed, reason: v1.JobRunHandlerFailed, message: observability.StatusError(cause)}
 }
 
-// removeWorker stops worker id with its driver's grace, removes it and releases its emptyDirs, on a context of its own,
-// so an executor that ends on its run's cancel still clears its worker (ADR-0347 Decision 5).
-func (j *JobRunReconciler) removeWorker(ctx context.Context, id runtime.InstanceID) {
+// endWorker clears what a run's executor made, on a context of its own, so an executor that ends on its run's cancel
+// still clears it (ADR-0347 Decision 5): it stops worker id with its driver's grace, when it was created, then removes
+// the run's socket, its egress index entry and its emptyDirs, and removes the worker last. A run re-created under the
+// name waits only until no worker of it remains (nameFree), so it never binds this run's socket nor gets its emptyDirs
+// (ADR-0351 Decision 2).
+func (j *JobRunReconciler) endWorker(ctx context.Context, id runtime.InstanceID, ref local.Ref, created bool, unindex func()) {
 	ctx = context.WithoutCancel(ctx)
 	r := j.r
-	if err := r.stopWorker(ctx, id); err != nil && fault.KindOf(err) != fault.NotFound {
-		r.logger.WarnContext(ctx, "could not stop a run's worker", "instance", id, "error", err)
+	if created {
+		if err := r.stopWorker(ctx, id); err != nil && fault.KindOf(err) != fault.NotFound {
+			r.logger.WarnContext(ctx, "could not stop a run's worker", "instance", id, "error", err)
+		}
 	}
-	if err := r.runtime.Remove(ctx, id); err != nil && fault.KindOf(err) != fault.NotFound {
-		r.logger.WarnContext(ctx, "could not remove a run's worker", "instance", id, "error", err)
+	r.removeSocket(ref)
+	if unindex != nil {
+		unindex()
 	}
 	if err := r.releaseEmptyDirs(ctx, id); err != nil {
 		r.logger.WarnContext(ctx, "could not release a run's emptyDirs", "instance", id, "error", err)
+	}
+	if !created {
+		return
+	}
+	if err := r.runtime.Remove(ctx, id); err != nil && fault.KindOf(err) != fault.NotFound {
+		r.logger.WarnContext(ctx, "could not remove a run's worker", "instance", id, "error", err)
 	}
 }

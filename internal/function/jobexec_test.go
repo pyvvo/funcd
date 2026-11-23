@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,8 @@ import (
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/volume"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // execRig is the run reconciler with its own executor on the shim harness: the worker is built on the fake runtime, and
@@ -408,6 +411,113 @@ func TestJobRunWorkerIsInTheEgressIndexForItsCall(t *testing.T) {
 	_, ok := index.lookup(addr)
 	require.False(t, ok, "out of the index once the worker is removed")
 	require.True(t, h.rt.wasRemoved(runID("hello-a")))
+}
+
+// socketLog is a local API socket provider that records each socket bound and removed, in order.
+type socketLog struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (s *socketLog) SocketFor(ref local.Ref) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, "bind "+ref.String())
+	return "/absent/" + string(ref.Run) + ".sock", nil
+}
+
+func (*socketLog) PoolSocketFor(v1.NamespaceName, v1.ObjectName, []v1.ObjectName) (string, error) {
+	return "", nil
+}
+
+func (s *socketLog) Remove(ref local.Ref) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, "remove "+ref.String())
+}
+
+func (s *socketLog) log() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.events)
+}
+
+// heldIndex is an egress worker index whose first removal waits until free is called.
+type heldIndex struct {
+	once, freed  sync.Once
+	hit, release chan struct{}
+}
+
+func (x *heldIndex) free() { x.freed.Do(func() { close(x.release) }) }
+
+func (*heldIndex) Add(netip.Addr, auth.EntityRef) {}
+
+func (x *heldIndex) Remove(netip.Addr) {
+	first := false
+	x.once.Do(func() { first = true; close(x.hit) })
+	if first {
+		<-x.release
+	}
+}
+
+// releaseLog is a volume manager that records, at each release, whether the run's worker still exists.
+type releaseLog struct {
+	volume.Manager
+	present func() bool
+	mu      sync.Mutex
+	at      []bool
+}
+
+func (v *releaseLog) Release(ctx context.Context, id volume.ID) error {
+	v.mu.Lock()
+	v.at = append(v.at, v.present())
+	v.mu.Unlock()
+	return v.Manager.Release(ctx, id)
+}
+
+// ADR-0351 Decision 2: a run re-created under the name of a run whose executor still clears its worker meets nothing of
+// the old run. The old executor removes the run's socket, its egress index entry and its emptyDirs before its worker,
+// which the new run waits for: the new run binds a socket only once the old one is gone, and the old run's emptyDir is
+// released while its worker still exists.
+func TestJobRunReusedNameMeetsNothingOfTheOldRun(t *testing.T) {
+	t.Parallel()
+	socks := &socketLog{}
+	idx := &heldIndex{hit: make(chan struct{}), release: make(chan struct{})}
+	defer idx.free() // before the rig's cleanups: a failed assertion leaves no executor waiting
+	vols := &releaseLog{}
+	h := newExecRigWith(t, 1<<10, func(c *function.RunsConfig) { c.Egress = idx }, func(d *function.Deps) {
+		m, err := volume.New(volume.Options{Root: t.TempDir(), CapacityBytes: 2 << 20})
+		require.NoError(t, err)
+		vols.Manager = m
+		d.Volumes, d.InvokeSockets = vols, socks
+	})
+	present := func() bool {
+		all, _ := h.rt.List(context.Background(), "default")
+		return slices.ContainsFunc(all, func(in runtime.Instance) bool { return in.ID == runID("hello-a") })
+	}
+	vols.present = present
+	h.readyJob(t, func(s *v1.JobSpec) {
+		s.Volumes = []v1.VolumeEntry{{Name: "scratch", Type: v1.VolumeEmptyDir, SizeBytes: 1 << 20}}
+	})
+	h.run(t, "hello-a", `{}`, nil)
+	h.serveRun(t, "hello-a", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{}`) })
+	h.pass(t, "hello-a")
+	<-idx.hit
+	require.True(t, present(), "the old run's worker is removed last")
+	require.NoError(t, h.st.Delete(context.Background(), v1.KindJobRun.GVK(), "default", "hello-a", ""))
+	h.run(t, "hello-a", `{}`, nil)
+	h.pass(t, "hello-a")
+	time.Sleep(300 * time.Millisecond) // the new run's executor gets as far as the old worker lets it
+	const ref = "default/hello/hello-a"
+	require.Equal(t, []string{"bind " + ref, "remove " + ref}, socks.log(), "no bind while the old worker exists")
+	idx.free()
+	require.Eventually(t, func() bool { return len(socks.log()) >= 3 }, 5*time.Second, 10*time.Millisecond,
+		"the new run binds once the old worker is gone")
+	require.Equal(t, "bind "+ref, socks.log()[2])
+	vols.mu.Lock()
+	defer vols.mu.Unlock()
+	require.NotEmpty(t, vols.at)
+	require.True(t, vols.at[0], "the old run's emptyDir goes while its worker still exists")
 }
 
 // ADR-0347 Decision 6 and run.fizz EndIsFinal: a cancel stops the call and the worker of a Running run, which ends
