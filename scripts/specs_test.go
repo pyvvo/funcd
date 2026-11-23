@@ -324,29 +324,51 @@ func TestScenarioPushedSpecChecked(t *testing.T) {
 	var hooks struct {
 		PrePush struct {
 			Commands map[string]struct {
-				Glob string `yaml:"glob"`
-				Run  string `yaml:"run"`
+				Glob     string `yaml:"glob"`
+				UseStdin bool   `yaml:"use_stdin"`
+				Run      string `yaml:"run"`
 			} `yaml:"commands"`
 		} `yaml:"pre-push"`
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &hooks))
 	hook := hooks.PrePush.Commands["specs"]
 	require.Equal(t, "docs/design/**/*.fizz", hook.Glob, "the hook runs only when a push carries a spec")
+	require.True(t, hook.UseStdin, "the hook reads the pushed refs that git gives a pre-push hook")
 
-	// push runs the hook's command as lefthook does, in a root holding the present files, with a stand-in for
-	// scripts/agent/d that logs its arguments and exits with code; it returns the exit code and the logged call.
-	push := func(pushed, present []string, code string) (int, string) {
-		root := t.TempDir()
-		for _, f := range present {
-			require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.Dir(f)), 0o755))
-			require.NoError(t, os.WriteFile(filepath.Join(root, f), nil, 0o644))
-		}
-		log := filepath.Join(root, "d.log")
-		d := filepath.Join(root, "scripts", "agent", "d")
-		require.NoError(t, os.MkdirAll(filepath.Dir(d), 0o755))
-		require.NoError(t, os.WriteFile(d, []byte("#!/bin/sh\necho \"$*\" >> '"+log+"'\nexit "+code+"\n"), 0o755))
-		cmd := exec.Command("sh", "-c", strings.ReplaceAll(hook.Run, "{push_files}", strings.Join(pushed, " ")))
+	root, origin := t.TempDir(), t.TempDir()
+	git := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=test", "-c", "user.email=test@funcd.invalid",
+			"-c", "commit.gpgsign=false"}, args...)...)
 		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+		return strings.TrimSpace(string(out))
+	}
+	write := func(f, body string) {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.Dir(f)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, f), []byte(body), 0o644))
+	}
+	git("init", "-q", "-b", "main")
+	git("init", "-q", "--bare", origin)
+	git("remote", "add", "origin", origin)
+	// The stand-in for scripts/agent/d and its log stay out of every commit.
+	write(".git/info/exclude", "scripts/\nd.log\n")
+	write("docs/design/demo/base.fizz", "base")
+	write("docs/design/demo/old.fizz", "old")
+	git("add", "-A")
+	git("commit", "-q", "-m", "base")
+	git("push", "-q", "origin", "main")
+
+	// push runs the hook's command as lefthook does, with git's pre-push line for the branch on its stdin and a
+	// stand-in for scripts/agent/d that logs its arguments and exits with code; it returns the exit code and the call.
+	log := filepath.Join(root, "d.log")
+	push := func(local, remote, code string) (int, string) {
+		write("scripts/agent/d", "#!/bin/sh\necho \"$*\" >> '"+log+"'\nexit "+code+"\n")
+		require.NoError(t, os.Chmod(filepath.Join(root, "scripts", "agent", "d"), 0o755))
+		_ = os.Remove(log)
+		cmd := exec.Command("sh", "-c", hook.Run)
+		cmd.Dir = root
+		cmd.Stdin = strings.NewReader("refs/heads/feature " + local + " refs/heads/feature " + remote + "\n")
 		status, _ := exitCode(t, cmd)
 		called, err := os.ReadFile(log)
 		if os.IsNotExist(err) {
@@ -355,17 +377,36 @@ func TestScenarioPushedSpecChecked(t *testing.T) {
 		require.NoError(t, err)
 		return status, strings.TrimSpace(string(called))
 	}
+	zero := strings.Repeat("0", 40)
 
-	kept, gone := "docs/design/demo/gate.fizz", "docs/design/demo/old.fizz"
-	status, called := push([]string{kept, gone}, []string{kept}, "0")
+	git("switch", "-q", "-c", "feature")
+	write("docs/design/demo/gate.fizz", "gate")
+	require.NoError(t, os.Remove(filepath.Join(root, "docs/design/demo/old.fizz")))
+	write("docs/notes.md", "notes")
+	git("add", "-A")
+	git("commit", "-q", "-m", "feature")
+	first := git("rev-parse", "HEAD")
+	status, called := push(first, zero, "0")
 	require.Equal(t, 0, status)
-	require.Equal(t, "python3 scripts/specs.py check "+kept, called, "the pushed spec is checked, the deleted one left out")
+	require.Equal(t, "python3 scripts/specs.py check docs/design/demo/gate.fizz", called,
+		"a branch's first push checks the spec its commits add, not every spec the branch holds, and not the deleted one")
 
-	status, called = push([]string{kept}, []string{kept}, "1")
+	status, called = push(first, zero, "1")
 	require.NotEqual(t, 0, status, "a failing spec stops the push")
-	require.Equal(t, "python3 scripts/specs.py check "+kept, called)
+	require.Equal(t, "python3 scripts/specs.py check docs/design/demo/gate.fizz", called)
 
-	status, called = push([]string{gone}, nil, "0")
+	git("push", "-q", "origin", "feature")
+	write("docs/design/demo/base.fizz", "base, changed")
+	git("commit", "-q", "-am", "change base")
+	second := git("rev-parse", "HEAD")
+	status, called = push(second, first, "0")
+	require.Equal(t, 0, status)
+	require.Equal(t, "python3 scripts/specs.py check docs/design/demo/base.fizz", called,
+		"a later push checks only the specs of the commits the remote does not have")
+
+	git("rm", "-q", "docs/design/demo/base.fizz")
+	git("commit", "-q", "-m", "drop base")
+	status, called = push(git("rev-parse", "HEAD"), second, "0")
 	require.Equal(t, 0, status)
 	require.Empty(t, called, "a push that only deletes a spec checks none")
 }

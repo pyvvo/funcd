@@ -20,6 +20,31 @@ import (
 // is not retried, and a margin.
 const stallWait = 30 * time.Second
 
+// Issue #1538: concurrent first uses of one artifact from one ref share its pull, so a stalled registry costs them one
+// bounded wait together, not one each after the other (#697).
+func TestIssue1538_StalledPullIsSharedByItsRef(t *testing.T) {
+	host, requests := stallregistry.Start(t)
+	m := artifact.NewOrasMaterializer(t.TempDir(), "")
+	fn := &v1.Function{}
+	fn.Spec.Image = host + "/shared/fn:latest"
+	fn.Spec.ImageDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+	const callers = 3
+	done := make(chan error, callers)
+	for range callers {
+		go func() { _, err := m.Materialize(context.Background(), fn); done <- err }()
+	}
+	timeout := time.After(stallWait)
+	for range callers {
+		select {
+		case err := <-done:
+			require.Error(t, err)
+		case <-timeout:
+			t.Fatalf("a call still waits on the stalled registry after %s", stallWait)
+		}
+	}
+	require.Equal(t, 1, requests("shared"), "the calls share one pull")
+}
+
 // A registry that accepts a request and never answers ends the call after one bounded wait, so the reconcile that
 // made it fails and the controller's only worker moves on (#697). The whole platform's case is in tests/chaos.
 func TestIssue697_StalledRegistryCallEnds(t *testing.T) {
