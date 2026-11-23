@@ -162,10 +162,9 @@ calls over a stream; a general finalizer mechanism.
   which cuts the call in flight and clears what funcd knows of its calls, the hold staying in the store; no crash on
   yield.
 - **Environment**: the Function answers only while it exists; the destroy run needs its Job and an approval, which
-  comes; no writer clears `status.workload` (the API keeps the stored status, `handlers.go:261` and `:301-303`, and an
-  App writes only a part's spec, `internal/app/reconcile.go:560-579`); every delete is conditional on the version it
-  read (`gc.go:428`, `handlers.go:407`), so a mark stored meanwhile makes it conflict and retry, as the model's atomic
-  `CollectStack` assumes.
+  comes; no writer clears `status.workload` (the API keeps the stored status, `handlers.go:261`, `:301-303`; an App
+  writes only a part's spec, `internal/app/reconcile.go:560-579`); every delete is conditional on the version it read
+  (`gc.go:428`, `handlers.go:407`), so a mark stored meanwhile makes it retry, as the atomic `CollectStack` assumes.
 - **Mutants**: `no-order` fails `PartsOutliveTheStack`; `no-hold`, `gone-on-any-answer`, `ok-from-live-call` and
   `call-before-mark` (a call before the first pass stored the mark) fail `NoStackGoesUndestroyed`; `no-retry` fails
   `DeletedAppGoes`.
@@ -184,8 +183,7 @@ calls over a stream; a general finalizer mechanism.
   `app delete`, which waits through each stack's destroy, and a held object under dev (Consequences).
 - **apps.md**: "A dropped part" (`:50`), "An App deleted" (`:52`) and "A revision drops an `addons` entry" (`:55`): an
   engineless part with `deletion: delete` is held, and the App's other parts wait for it, `InUse`.
-- **controller.md**: "An owner is deleted" (`:41`): an engineless child is held, not deleted.
-- **limits.md**: "A settings call's time and answer" (`:61`) covers an engineless kind's call.
+- **controller.md** (`:41`): an engineless child is held, not deleted; **limits.md** (`:61`): the timeout covers this call.
 
 ## Temporary workarounds
 
@@ -281,8 +279,11 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
 - **(−)** Under `funcdctl dev` a hold lasts while dev runs and, with `--persist`, across its restarts; without it, the
   object goes with dev's store and what it manages stays, as `retain` would. A destroy on an Addon's runtime cannot
   run there (ADR-0344), so such a stack stays held until `retain`.
-- **(−)** An engineless object has no snapshot: a Backup that names it fails `NoSnapshot`, and a hold never reaches a
-  backup. Whatever brings it back, a Restore or its App, brings its spec, and its Function applies it again.
+- **(−)** Restores stay as FEAT-0009 decided them, and app-todo's D cases run them: an App's backup copies no
+  engineless object, which has no snapshot (`scope.app`, ADR-0337 Decision 7), but copies the stores its Function
+  keeps state in; one cannot be restored in place (no `restore`, ADR-0333); after a host loss, `funcd restore run`
+  brings it back as at the point, mark and deletion included, and its Function applies it again once the namespace's
+  hold, if any, is released.
 
 ## Open questions
 
