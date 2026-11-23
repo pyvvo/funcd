@@ -1,6 +1,6 @@
 # ADR-0344: An add-on ships runtimes, and its kind runs on one of them
 
-- **Status**: Proposed (2026-11-23), judged twice: round 2's Blocker, two Majors and six Minors folded
+- **Status**: Proposed (2026-11-23), judged three times: no Blocker or Major open; round 3's Minor and nits folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, runtime, api, functions, jobs
@@ -71,8 +71,6 @@ outside funcd (follow-ups under F139); image signatures; wasm.
 ## Constraints & Decision drivers
 
 - No node is deployed, so the Addon API may break with no migration.
-- Reuse what decides and pulls today: ADR-0149's gate, which already refuses the `duckdb` engine image as a Function
-  runtime, and the driver's pull rule, which already admits an image from `addons.registries` (`cmd/funcd/main.go`).
 - The blueprint promises platform-owned runtime containers and no arbitrary images (`blueprint.md:44`, `:288`): an
   Addon's runtime is an admin's, pinned by digest from a listed registry; the blueprint says so at acceptance.
 - The decider's shape of 2026-11-23: `spec` holds only `runtimes`; the kind, its config and its settings sit with the
@@ -110,10 +108,10 @@ outside funcd (follow-ups under F139); image signatures; wasm.
    `addons.registries` lists, checked when the Addon is written (ADR-0332 Decision 6), and pulled as an engine's is.
 6. **Resolution.** A Function's `spec.runtime` resolves to funcd's own runtime, else to an Addon's of that name, else
    as ADR-0149 Decision 2 decides, so an Addon's runtime shadows an operator's of the same name, an override key added
-   later included. The gate reads the stored Addons on each pass and fails the Function with `RuntimeUnavailable`, in
-   ADR-0149 Decision 4's form, with one of three new causes: `Addon "<addon>" ships it for <workloads>, not for
-   Functions`; `it is an Addon's image, which the process driver does not run`; `the Addon that shipped it is gone`,
-   for a Revision that recorded its image.
+   later included, though running workers keep the operator's image until they stop (Decision 8). The gate reads the
+   stored Addons on each pass and fails the Function with `RuntimeUnavailable`, in ADR-0149 Decision 4's form, with
+   one of three new causes: `Addon "<addon>" ships it for <workloads>, not for Functions`; `it is an Addon's image,
+   which the process driver does not run`; `the Addon that shipped it is gone`, for a Revision that recorded its image.
 7. **Recovery.** The Function controller watches Addons. A watch event carries no prior state (`controller.MapFunc`),
    so each change requeues every Function whose `spec.runtime` is none of funcd's own.
 8. **The pin.** A Revision records the image of the Addon runtime that serves it in `spec.runtimeImage`, as it records
@@ -142,13 +140,13 @@ requeues, and Decision 8's one write fills an empty field in the Function's own 
 ## Behavior rows
 
 - **addons.md**: "An Addon's runtimes" (`:29`) becomes the runtimes an Addon ships, with Decisions 2 to 5's refusals;
-  "An Addon's kind", "image" and "config and env" (`:26` to `:28`) read the entry that runs the kind; "An Addon
-  changed or deleted" (`:30`): an update requeues the Functions on its runtimes and moves no image, a delete fails
-  them at their next pass; "An object on a process server" (`:46`) names the process driver.
+  "An Addon's kind", "image" and "config and env" (`:26` to `:28`) read the entry that runs the kind, and an Addon
+  gains a kind once, never changed or dropped; "An Addon changed or deleted" (`:30`): an update requeues the Functions
+  on its runtimes and moves no image, a delete fails them at their next pass; "An object on a process server" (`:46`)
+  names the process driver.
 - **workers.md**: "A `WorkerNode` or `RuntimeClass` object" (`:39`): `spec.runtime` may pick an Addon's image; "A
   runtime with no image" (`:40`): an Addon's runtime is known at the gate and recovers when its Addon appears.
-- **functions.md**: the hard-gate reasons (`:38`) gain Decision 6's causes; beside "A tag that moved" (`:66`), a row:
-  an Addon's new image moves no Revision.
+- **functions.md**: beside "A tag that moved" (`:66`), a row: an Addon's new image moves no Revision.
 - **funcdctl.md** (`:30`) and **funcdctl-dev.md** (`:53`): a template's `addon.yaml` that adds no kind, exit 1.
 
 ## Temporary workarounds
