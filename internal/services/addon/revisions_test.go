@@ -20,9 +20,7 @@ import (
 
 const webAuthUID v1.UID = "uid-of-web-auth"
 
-// revRig is an Addon rauthy with the revisions rauthy-1 to rauthy-3, rauthy-3 current, each with GEN set to its name
-// but rauthy-1's; the AppRevisions holder-1 and holder-2, of another App, record rauthy-1 and rauthy-2, so the
-// Addon's reconciler keeps them.
+// revRig is the Addon rauthy over a memory store, with its reconciler and a fake runtime.
 type revRig struct {
 	ctx context.Context
 	st  store.Store
@@ -30,7 +28,28 @@ type revRig struct {
 	rt  *fakeaddon.Runtime
 }
 
+// newRevRig is the Addon rauthy with the revisions rauthy-1 to rauthy-3, rauthy-3 current, each with GEN set to its
+// name but rauthy-1's; the AppRevisions holder-1 and holder-2, of another App, record rauthy-1 and rauthy-2, so the
+// Addon's reconciler keeps them.
 func newRevRig(t *testing.T) *revRig {
+	t.Helper()
+	rig := newUnstampedRig(t)
+	for i, rev := range []v1.ObjectName{"rauthy-1", "rauthy-2"} {
+		rig.record(t, "holder", "uid-of-holder", int64(i+1), rev, v1.ConditionTrue)
+	}
+	rig.stamp(t)
+	for _, gen := range []string{"rauthy-2", "rauthy-3"} {
+		cur := rig.addon(t)
+		cur.Spec.Env = map[string]string{"GEN": gen}
+		_, err := rig.st.Update(rig.ctx, cur)
+		require.NoError(t, err)
+		rig.stamp(t)
+	}
+	return rig
+}
+
+// newUnstampedRig is the Addon rauthy at its first generation, which its reconciler has not stamped yet.
+func newUnstampedRig(t *testing.T) *revRig {
 	t.Helper()
 	ctx := context.Background()
 	st := store.New(memory.New())
@@ -41,21 +60,9 @@ func newRevRig(t *testing.T) *revRig {
 	rt := fakeaddon.New(t)
 	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: rt, Modes: []string{v1.AddonRuntimeContainerd}})
 	require.NoError(t, err)
-	rig := &revRig{ctx: ctx, st: st, r: r, rt: rt}
 	_, err = st.Create(ctx, a)
 	require.NoError(t, err)
-	for i, rev := range []v1.ObjectName{"rauthy-1", "rauthy-2"} {
-		rig.record(t, "holder", "uid-of-holder", int64(i+1), rev, v1.ConditionTrue)
-	}
-	rig.stamp(t)
-	for _, gen := range []string{"rauthy-2", "rauthy-3"} {
-		cur := rig.addon(t)
-		cur.Spec.Env = map[string]string{"GEN": gen}
-		_, err = st.Update(ctx, cur)
-		require.NoError(t, err)
-		rig.stamp(t)
-	}
-	return rig
+	return &revRig{ctx: ctx, st: st, r: r, rt: rt}
 }
 
 func (g *revRig) addon(t *testing.T) *v1.Addon {
@@ -90,14 +97,17 @@ func (g *revRig) appRevision(t *testing.T, n int64, rev v1.ObjectName, applied v
 }
 
 // record stores the AppRevision <app>-<n> of the App app of uid, recording rev for IdentityProvider, Applied as applied
-// says.
+// says; an empty rev records nothing for the kind, as a stamp does while its Addon has no revision.
 func (g *revRig) record(t *testing.T, app v1.ObjectName, uid v1.UID, n int64, rev v1.ObjectName, applied v1.ConditionStatus) {
 	t.Helper()
 	ref := v1.ObjectRef{Kind: v1.KindApp, Namespace: "default", Name: app}
 	ar := &v1.AppRevision{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAppRevision},
 		ObjectMeta: v1.ObjectMeta{Name: v1.AppRevisionName(app, n), Namespace: "default", ResourceGroup: "rg1",
 			OwnerReferences: []v1.OwnerReference{{ObjectRef: ref, UID: uid, Controller: true}}},
-		Spec: v1.AppRevisionSpec{App: ref, Number: n, AddonRevisions: []v1.AppAddonRevision{{Kind: "IdentityProvider", Revision: rev}}}}
+		Spec: v1.AppRevisionSpec{App: ref, Number: n}}
+	if rev != "" {
+		ar.Spec.AddonRevisions = []v1.AppAddonRevision{{Kind: "IdentityProvider", Revision: rev}}
+	}
 	ar.Status.Conditions.Set(v1.Condition{Type: "Applied", Status: applied})
 	obj, err := g.st.Get(g.ctx, v1.KindAppRevision.GVK(), "default", ar.Name)
 	if fault.KindOf(err) == fault.NotFound {
@@ -180,6 +190,32 @@ func TestScenarioAddonRevisionSuperseded(t *testing.T) {
 	app, rev, gen := g.pass(t)
 	require.Equal(t, []v1.ObjectName{"web-auth-3", "rauthy-3"}, []v1.ObjectName{app, rev})
 	require.Equal(t, "rauthy-3", gen, "the engine runs rauthy-3's spec")
+}
+
+// An App revision stamped while its Addon had no revision records none for the kind, and its part pins the Addon's
+// current revision: once the Addon's first revision is stamped, the part that already follows that App revision takes
+// it (#1536).
+func TestIssue1536_PartTakesTheAddonsFirstRevision(t *testing.T) {
+	t.Parallel()
+	g := newUnstampedRig(t)
+	g.part(t)
+	g.appRevision(t, 1, "", v1.ConditionTrue)
+	app, rev, _ := g.pass(t)
+	require.Equal(t, []v1.ObjectName{"web-auth-1", ""}, []v1.ObjectName{app, rev}, "no revision to pin yet")
+
+	g.stamp(t)
+	app, rev, _ = g.pass(t)
+	require.Equal(t, []v1.ObjectName{"web-auth-1", "rauthy-1"}, []v1.ObjectName{app, rev}, "the Addon's first revision")
+	require.NotNil(t, g.rt.Engine(provider.ProviderRef{Namespace: "default", Name: "web-auth-login"}), "its engine runs")
+
+	cur := g.addon(t)
+	cur.Spec.Env = map[string]string{"GEN": "rauthy-2"}
+	_, err := g.st.Update(g.ctx, cur)
+	require.NoError(t, err)
+	g.stamp(t)
+	app, rev, gen := g.pass(t)
+	require.Equal(t, []v1.ObjectName{"web-auth-1", "rauthy-1"}, []v1.ObjectName{app, rev}, "the pin does not follow the Addon by itself")
+	require.Empty(t, gen, "the engine keeps rauthy-1's spec")
 }
 
 // A part waits Pending, Progressing, until its App's first revision is Applied (ADR-0339 Decision 3).

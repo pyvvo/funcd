@@ -218,7 +218,8 @@ func partOf(o *v1.AddonObject) (v1.OwnerReference, bool) {
 // followApp moves an App's part forward only (ADR-0339 Decision 3): to the record for its kind of the App's latest
 // AppRevision, once that revision is Applied and its number is higher than the one the part follows. A superseded
 // revision is never a target, and a revision's number comes from its name, so a pruned one still compares. A latest
-// revision with no record for the kind, stamped while its Addon had none, gives the current revision.
+// revision with no record for the kind, stamped while its Addon had none, gives the current revision, also to a part
+// that already follows it with none pinned, once the Addon has one (#1536).
 func (r *Reconciler) followApp(ctx context.Context, a *v1.Addon, o *v1.AddonObject, app v1.OwnerReference) error {
 	res, err := r.store.List(ctx, v1.KindAppRevision.GVK(), store.ListOptions{Namespace: o.Namespace})
 	if err != nil {
@@ -237,7 +238,9 @@ func (r *Reconciler) followApp(ctx context.Context, a *v1.Addon, o *v1.AddonObje
 	if c, ok := latest.Status.Conditions.Get(condApplied); !ok || c.Status != v1.ConditionTrue {
 		return nil
 	}
-	if o.Status.AppRevision != "" && latest.Spec.Number <= revisionNumber(app.Name, o.Status.AppRevision) {
+	moves := o.Status.AppRevision == "" || latest.Spec.Number > revisionNumber(app.Name, o.Status.AppRevision)
+	unpinned := o.Status.AppRevision == latest.Name && o.Status.AddonRevision == ""
+	if !moves && !unpinned {
 		return nil
 	}
 	o.Status.AppRevision = latest.Name
