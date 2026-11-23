@@ -6,6 +6,7 @@
   me", "until we ship entirely the new feature"), after two rounds of an independent judge (a subagent), every
   Blocker and Major folded
 - **Superseded in part by**: [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md) (2026-11-23) — Decision 1 (`WithAddonRuntime` takes no modes).
+- **Superseded in part by**: [ADR-0346](0346-under-funcdctl-dev-a-worker-on-an-addons-runtime-runs-on-devs-container-engine.md) (2026-11-23) — Decisions 6 and 7 (dev's worker containers and volumes carry the key with their own role, and `--persist` keeps the engines' volumes only).
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, funcdctl, dev, docker, auth

@@ -5,6 +5,7 @@
   judged three times under the adr-judge skill, last verdict accept; the decider accepted the choices the draft made:
   today's gate order, a ConfigMap may still move the S3 endpoint, the Executor's own env stays outside the hooks, and
   `memberEnv`'s delete loop goes)
+- **Superseded in part by**: [ADR-0346](0346-under-funcdctl-dev-a-worker-on-an-addons-runtime-runs-on-devs-container-engine.md) (2026-11-23) — Decision 1 (a workload hook also names the keys of its env that hold funcd's loopback address).
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, function, worker-env, bindings, refactor
