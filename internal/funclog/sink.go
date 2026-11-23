@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/funclog/compact"
 	"github.com/pyvvo/funcd/internal/platform/clock"
@@ -296,8 +297,12 @@ func marshalOTLP(res Resource, entries []Entry, now time.Time) ([]byte, error) {
 	logs := plog.NewLogs()
 	rl := logs.ResourceLogs().AppendEmpty()
 	ra := rl.Resource().Attributes()
-	if res.Kind != "" { // an engine's records (ADR-0342 Decision 2)
-		ra.PutStr("source", "engine")
+	if res.Kind != "" { // an engine's records (ADR-0342 Decision 2), or a run's shim worker's (ADR-0347 Decision 8)
+		source := "engine"
+		if res.Kind == string(v1.KindJobRun) {
+			source = "function"
+		}
+		ra.PutStr("source", source)
 		ra.PutStr("namespace", res.Namespace)
 		ra.PutStr("kind", res.Kind)
 		ra.PutStr("name", res.Name)

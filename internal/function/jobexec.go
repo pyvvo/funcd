@@ -118,11 +118,12 @@ func runWorker(run *v1.JobRun, rev *v1.Revision) workerOf {
 	}}
 }
 
-// nameFree waits until no worker of the run's name remains: the worker of a run deleted under that name may still be
-// stopping (ADR-0347 Decision 6), and a worker under the same name would meet it. Only a cancel of the run ends the
-// wait early.
+// nameFree waits until no worker of the run's name remains, for at most runtime.bootTimeout, the bound its own
+// worker's start has: the worker of a run deleted under that name may still be stopping (ADR-0347 Decision 6), and a
+// worker under the same name would meet it.
 func (j *JobRunReconciler) nameFree(ctx context.Context, run *v1.JobRun) error {
 	const op = "function.runNameFree"
+	by := time.Now().Add(j.r.bootTimeout)
 	tick := time.NewTicker(runPoll)
 	defer tick.Stop()
 	for {
@@ -132,6 +133,9 @@ func (j *JobRunReconciler) nameFree(ctx context.Context, run *v1.JobRun) error {
 		}
 		if !slices.ContainsFunc(all, func(in runtime.Instance) bool { return in.OwnerKind == v1.KindJobRun && in.Name == run.Name }) {
 			return nil
+		}
+		if !time.Now().Before(by) {
+			return fault.Unavailablef(op, "a worker of an earlier run named %q remains after runtime.bootTimeout %s", run.Name, j.r.bootTimeout)
 		}
 		select {
 		case <-ctx.Done():
@@ -244,8 +248,8 @@ func (j *JobRunReconciler) refused(rf *invoke.Refusal) runAnswer {
 const errorBodyMax = 4 << 10
 
 // answerOf maps the worker's answer to the run's end (ADR-0347 Decision 5): a 2xx Succeeded with the body as the result,
-// or PayloadLimitExceeded over job.payloadLimit, and HandlerFailed when the body is no JSON, which a result must be; a
-// 422 InputSchemaMismatch; any other answer HandlerFailed with its cause's first line.
+// or PayloadLimitExceeded over job.payloadLimit; a 422 InputSchemaMismatch; any other answer HandlerFailed with its
+// cause's first line, a 2xx whose body is not JSON included, since a result is JSON.
 func (j *JobRunReconciler) answerOf(status int, body io.Reader) runAnswer {
 	switch {
 	case status >= 200 && status < 300:
@@ -259,7 +263,7 @@ func (j *JobRunReconciler) answerOf(status int, body io.Reader) runAnswer {
 		case len(bytes.TrimSpace(got)) == 0:
 			return runAnswer{phase: v1.JobRunSucceeded}
 		case !json.Valid(got):
-			return handlerFailed(fmt.Sprintf("the handler answered %d with a body that is not JSON", status))
+			return handlerFailed(fmt.Sprintf("the handler answered %d, and the answer is not JSON", status))
 		}
 		return runAnswer{phase: v1.JobRunSucceeded, result: got}
 	case status == http.StatusUnprocessableEntity:

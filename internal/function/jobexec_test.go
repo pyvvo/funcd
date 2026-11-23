@@ -22,6 +22,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // execRig is the run reconciler with its own executor on the shim harness: the worker is built on the fake runtime, and
@@ -247,7 +248,7 @@ func TestJobRunExecutorAnswers(t *testing.T) {
 		"ok":        {status: http.StatusOK, body: `[1,2]`, phase: v1.JobRunSucceeded, result: `[1,2]`},
 		"empty":     {status: http.StatusNoContent, phase: v1.JobRunSucceeded},
 		"over":      {status: http.StatusOK, body: `"` + strings.Repeat("x", 40) + `"`, phase: v1.JobRunFailed, reason: v1.JobRunPayloadLimitExceeded, says: "job.payloadLimit 32"},
-		"not-json":  {status: http.StatusOK, body: `hi`, phase: v1.JobRunFailed, reason: v1.JobRunHandlerFailed, says: "not JSON"},
+		"not-json":  {status: http.StatusOK, body: `hi`, phase: v1.JobRunFailed, reason: v1.JobRunHandlerFailed, says: "the answer is not JSON"},
 		"thrown":    {status: http.StatusInternalServerError, body: `{"error":"boom\nat handle"}`, phase: v1.JobRunFailed, reason: v1.JobRunHandlerFailed, says: "the handler answered 500: boom"},
 		"off-input": {status: http.StatusUnprocessableEntity, body: `{"error":"event data does not match the input contract"}`, phase: v1.JobRunFailed, reason: v1.JobRunInputSchemaMismatch, says: "does not match"},
 	} {
@@ -374,6 +375,23 @@ func TestJobRunExecutorWaitsForItsName(t *testing.T) {
 	require.Len(t, h.createdFor("hello-a", "hello-v1"), 1)
 }
 
+// ADR-0347 Decision 6: a worker of the run's name that is still there runtime.bootTimeout after the run started ends it
+// StartFailed, the bound its own worker's start has, and no worker of it is created.
+func TestJobRunExecutorGivesUpOnItsName(t *testing.T) {
+	t.Parallel()
+	h := newExecRig(t, 1<<10, func(d *function.Deps) { d.BootTimeout = 300 * time.Millisecond })
+	h.readyJob(t, nil)
+	stale := runtime.NewInstanceID("default", "hello-a", "hello-v0", 0)
+	_, err := h.rt.Create(context.Background(), runtime.WorkerSpec{Namespace: "default", Name: "hello-a", OwnerKind: v1.KindJobRun, Revision: "hello-v0"})
+	require.NoError(t, err)
+	require.NoError(t, h.rt.Start(context.Background(), stale))
+	h.run(t, "hello-a", `{}`, nil)
+	h.pass(t, "hello-a")
+	c := requireEnd(t, h.end(t, "hello-a"), v1.JobRunFailed, v1.JobRunStartFailed)
+	require.Contains(t, c.Message, "remains after runtime.bootTimeout 300ms")
+	require.Empty(t, h.createdFor("hello-a", "hello-v1"))
+}
+
 // ADR-0347 Decision 5: the contract plugins read a run's call by its pinned revision, which names its Job in spec.job:
 // the revision's delivered contract, never a same-named Function's.
 func TestContractOfAJobRevision(t *testing.T) {
@@ -391,4 +409,35 @@ func TestContractOfAJobRevision(t *testing.T) {
 	none, err := h.r.ContractOf(context.Background(), activator.FunctionRef{Namespace: "default", Name: "other", Revision: "hello-v1"}, nil)
 	require.NoError(t, err)
 	require.Nil(t, none, "a revision of another Job serves no call to this one")
+
+	gets := &countingStore{Store: h.st}
+	cached := function.ReconcilerWithStore(t, h.deps, gets)
+	ref := activator.FunctionRef{Namespace: "default", Name: "hello", Revision: "hello-v1", UID: job.UID}
+	for range 3 {
+		_, err := cached.ContractOf(context.Background(), ref, nil)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, gets.revisions(), "a stamped revision is read once, not on each call")
+}
+
+// countingStore counts the Revision reads it serves.
+type countingStore struct {
+	store.Store
+	mu  sync.Mutex
+	got int
+}
+
+func (s *countingStore) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	if gvk.Kind == v1.KindRevision {
+		s.mu.Lock()
+		s.got++
+		s.mu.Unlock()
+	}
+	return s.Store.Get(ctx, gvk, ns, name)
+}
+
+func (s *countingStore) revisions() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.got
 }

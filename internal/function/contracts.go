@@ -29,10 +29,42 @@ func (e contractInvalidError) Error() string {
 	return "artifact " + e.digest + " carries a contract funcd cannot compile: " + e.err.Error()
 }
 
-// contracts caches each artifact digest's compiled contract (ADR-0303 Decision 2): a digest names one blob.
+// contracts caches each artifact digest's compiled contract (ADR-0303 Decision 2): a digest names one blob. It also
+// keeps, for each revision a client-path call pinned, whether it is a Job's and that revision's contract.
 type contracts struct {
-	mu    sync.Mutex
-	pairs map[string]*contractcheck.Pair
+	mu     sync.Mutex
+	pairs  map[string]*contractcheck.Pair
+	pinned map[pinnedKey]pinnedRevision
+}
+
+// pinnedKey names a pinned revision by its namespace, its name and its owner's UID: a Job re-created under its name
+// stamps revisions of the same names.
+type pinnedKey struct {
+	ns   v1.NamespaceName
+	name v1.ObjectName
+	uid  v1.UID
+}
+
+// pinnedRevision is what a pinned revision is to a call: a Job's, with its contract, or a Function's.
+type pinnedRevision struct {
+	job  bool
+	pair *contractcheck.Pair
+}
+
+func (cs *contracts) pinnedOf(k pinnedKey) (pinnedRevision, bool) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	p, ok := cs.pinned[k]
+	return p, ok
+}
+
+func (cs *contracts) pin(k pinnedKey, p pinnedRevision) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.pinned == nil {
+		cs.pinned = map[pinnedKey]pinnedRevision{}
+	}
+	cs.pinned[k] = p
 }
 
 // compiled returns the compiled contract of the blob in dir, the bundle root of digest, from the cache when it holds
@@ -97,9 +129,9 @@ func (r *Reconciler) ContractOf(ctx context.Context, ref activator.FunctionRef, 
 	const op = "function.ContractOf"
 	if fn == nil && ref.Revision != "" {
 		// a run's call names its Job at the revision it pins, which names its Job in spec.job (ADR-0347 Decision 5)
-		rev, err := r.getRevision(ctx, ref.Namespace, ref.Revision)
-		if err == nil && rev.Spec.Job != "" {
-			return r.jobRevisionContract(ctx, ref, rev)
+		job, pair, err := r.pinnedJobContract(ctx, ref)
+		if err != nil || job {
+			return pair, err
 		}
 	}
 	if fn == nil {
@@ -138,6 +170,30 @@ func (r *Reconciler) ContractOf(ctx context.Context, ref activator.FunctionRef, 
 		return nil, err
 	}
 	return r.contracts.compiled(digest, filepath.Dir(path))
+}
+
+// pinnedJobContract reports whether the revision a client-path call to ref pins is a Job's, and its contract. A stamped
+// revision never changes (ADR-0172), so it is read once per revision; one that cannot be read is left to the Function
+// path, which answers it.
+func (r *Reconciler) pinnedJobContract(ctx context.Context, ref activator.FunctionRef) (bool, *contractcheck.Pair, error) {
+	key := pinnedKey{ns: ref.Namespace, name: ref.Revision, uid: ref.UID}
+	if p, ok := r.contracts.pinnedOf(key); ok {
+		return p.job, p.pair, nil
+	}
+	rev, err := r.getRevision(ctx, ref.Namespace, ref.Revision)
+	if err != nil {
+		return false, nil, nil
+	}
+	if rev.Spec.Job == "" {
+		r.contracts.pin(key, pinnedRevision{})
+		return false, nil, nil
+	}
+	pair, err := r.jobRevisionContract(ctx, ref, rev)
+	if err != nil {
+		return true, nil, err
+	}
+	r.contracts.pin(key, pinnedRevision{job: true, pair: pair})
+	return true, pair, nil
 }
 
 // jobRevisionContract is the compiled contract of a Job's revision rev, which a run's call to ref pins: none when rev is

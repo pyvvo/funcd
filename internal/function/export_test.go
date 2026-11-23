@@ -71,3 +71,13 @@ func RunsWith(r *Reconciler, cfg RunsConfig, launch func(ctx context.Context, ru
 	}
 	return j
 }
+
+// ReconcilerWithStore is a reconciler on deps with st as its store.
+func ReconcilerWithStore(t interface{ Fatal(...interface{}) }, deps Deps, st store.Store) *Reconciler {
+	deps.Store = st
+	r, err := NewReconciler(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}

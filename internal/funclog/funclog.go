@@ -78,7 +78,8 @@ type Entry struct {
 
 // Resource is the OTLP Resource identity stamped on every record — the F54 query-time scoping
 // key. Tenant = Namespace today; explicit for later multi-tenant scoping. A Function's records name it in Function; an
-// engine's name the kind its object is served as and the object, in Kind and Name (ADR-0342 Decision 2).
+// engine's name the kind its object is served as and the object, in Kind and Name (ADR-0342 Decision 2), and a run's
+// shim worker's name the kind JobRun and the run, under a shim's source (ADR-0347 Decision 8).
 type Resource struct {
 	Namespace string
 	Function  string
