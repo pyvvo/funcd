@@ -947,7 +947,7 @@ The control-plane REST API is the single front door for *all* clients — `funcd
 - this is an outlook deliverable (needs a stabilized API + API-key auth), not a V1 item; it is called out here so the API is designed provider-friendly from the start (stable IDs, list/filter by resource group and tags, idempotent apply).
 
 **The other direction: funcd runs infrastructure-as-code ([FEAT-0012](docs/feat/0012-feat-infrastack.md)).** An
-`InfraStack` keeps a Pulumi program's stack applied, as Crossplane does on Kubernetes but with the whole program as the
+`InfraStack` keeps an OpenTofu module's stack applied, as Crossplane does on Kubernetes but with the whole module as the
 unit. Each change runs as a `JobRun` of a generic run-to-completion `Job`, which is built as a Function is: its runtime
 plugin is a shim with its tool, so a run goes on either runtime driver. A run waits for a person's approval of its
 preview unless the stack says `bypass`. The stack's outputs reach Functions as a
