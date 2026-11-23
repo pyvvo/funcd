@@ -48,9 +48,16 @@ func TestIssue1538_ConcurrentFirstUsesShareOneFill(t *testing.T) {
 		cache := t.TempDir()
 		m := artifact.NewOrasMaterializer(cache, "")
 		var moves atomic.Int32
+		var mu sync.Mutex
+		pulls := map[string]bool{}
 		artifact.TraceDisk(m, func(op durable.Op, path string) {
-			if op == durable.Rename && filepath.Dir(path) == cache && !strings.HasSuffix(path, ".pulled") {
+			switch {
+			case op == durable.Rename && filepath.Dir(path) == cache && !strings.HasSuffix(path, ".pulled"):
 				moves.Add(1)
+			case op == durable.SyncDir && filepath.Dir(path) == cache && strings.Contains(filepath.Base(path), ".pull-"):
+				mu.Lock()
+				pulls[path] = true
+				mu.Unlock()
 			}
 		})
 		fn := mkFunction(t, ref, digest)
@@ -65,6 +72,7 @@ func TestIssue1538_ConcurrentFirstUsesShareOneFill(t *testing.T) {
 			require.Equal(t, paths[0], paths[i])
 		}
 		require.Equal(t, int32(1), moves.Load(), "the pull is moved into the cache once")
+		require.Len(t, pulls, 1, "one call pulls; the others find the cache filled")
 	}
 }
 
