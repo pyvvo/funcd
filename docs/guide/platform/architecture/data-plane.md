@@ -3,17 +3,17 @@ title: Data plane
 description: How a call goes through the edge, the invoke chain and the activator to a worker that the Executor runs.
 ---
 
-![An HTTP client's call reaches the edge, which routes it to a Site's files, a Lake's gateway or a Function. A call to a Function, from the edge or from inside funcd, runs the invoke chain. The activator then hands it to a worker that the Executor runs](../../assets/data-plane.drawio.svg)
+![An HTTP client's call reaches the edge, which routes it to a Site's files, a Lake's gateway, an add-on object's engine or a Function. A call to a Function, from the edge or from inside funcd, runs the invoke chain. The activator then hands it to a worker that the Executor runs](../../assets/data-plane.drawio.svg)
 
-The data plane serves the calls. An HTTP client's call reaches the edge, which has a listener of its own and routes
-the call to a Site's files, a Lake's gateway or a Function. A call to a Function runs the invoke chain, whether it
-comes from the edge or from inside funcd. The calls from inside funcd are a Function's call over a link, a workflow
-step, a Sensor's action and an App's hook. The activator then hands the call to a ready worker, and starts one when
-the Function has none. The Executor runs the workers.
+The data plane serves the calls. An HTTP client's call reaches the edge, which has a listener of its own and routes the
+call to a Site's files, a Lake's gateway, an add-on object's engine or a Function. A call to a Function runs the invoke
+chain, whether it comes from the edge or from inside funcd. The calls from inside funcd are a Function's call over a
+link, a workflow step, a Sensor's action and an App's hook. The activator then hands the call to a ready worker, and
+starts one when the Function has none. The Executor runs the workers.
 
 ## Edge
 
-![The edge terminates TLS and refuses a call over its limits with 429, 503 or 413. It matches the call to a Route or a Function's name, else it answers 404. It hands a Function's call to the invoke chain, serves a Site's files from its Bucket, and passes a Lake's queries to its gateway](../../assets/data-plane-edge.drawio.svg)
+![The edge terminates TLS and refuses a call over its limits with 429, 503 or 413. It matches the call to a Route or a Function's name, else it answers 404. It hands a Function's call to the invoke chain, serves a Site's files from its Bucket, passes a Lake's queries to its gateway, and passes an add-on object's calls to its engine](../../assets/data-plane-edge.drawio.svg)
 
 The edge listens on `server.dataPlaneAddr`, apart from the API. By default, it uses a free port on loopback. It
 terminates TLS when `server.tls.enabled` is set, with a self-signed certificate by default, with a certificate that the
@@ -26,7 +26,8 @@ The edge then matches the call against the rules of the Ready Routes. The longes
 A rule with no host answers on `<namespace>.<baseDomain>`, or on any host when its namespace is `default`. When no rule
 matches, `/function/<name>` calls the Function by name, unless its namespace's `defaultExposure` is `explicit`. Any
 other call gets 404. The edge passes a Function's call to the invoke chain, serves a Site's files from its Bucket
-prefix, and passes a Lake's queries to the Lake's gateway.
+prefix, passes a Lake's queries to the Lake's gateway, and passes a call to an add-on object's host to its engine,
+under its Addon's `basePath`, with 404 for one of its private paths.
 
 ## Invoke chain
 
@@ -62,17 +63,22 @@ With `replicas` above 1, every call goes to the lowest listening replica, and th
 
 ## Executor
 
-![The controller's pass of a Function asks the Executor to start or stop its workers. runtime.mode picks the process driver, the default, or containerd with crun on Linux as root. Around each worker, the Executor sets up its local API socket, its egress, its volumes and the capture of its logs](../../assets/data-plane-executor.drawio.svg)
+![The controller's pass of a Function, or of an object that runs an engine, asks the Executor to start or stop its workers. runtime.mode picks the process driver, the default, or containerd with crun on Linux as root. Around each worker, the Executor sets up its local API socket, its egress, its volumes and the capture of its logs](../../assets/data-plane-executor.drawio.svg)
 
 The Executor runs the workers that the controller's pass of a Function asks for. `runtime.mode` picks its driver. The
 default, `process`, runs each worker as a host process, without isolation, enforced limits or volumes. `containerd`,
 on Linux as root, runs each worker in its own container with crun, on its own network. Several Functions can share
 one pooled worker, but only on `process`.
 
+The passes of Lakes, SQLDatabases and add-on objects ask the Executor for their engines, which it runs on the same
+driver. On containerd, an add-on's engine is fenced: it admits connections only from loopback and funcd's bridge
+address, so a Function reaches it only through funcd, with `ctx.addon.fetch` on its local API, or with any HTTP client
+through the add-on proxy, which checks the Function's token.
+
 Around each worker, the Executor opens its local API socket under `<dataDir>/invoke`. When `server.network.egress` is
 on, it applies the worker's egress through the fence, the egress gateway and the DNS forwarder. It mounts the worker's
 volumes, `emptyDir` or `local`, and captures its logs to the `funcd-system` bucket in Blob, where `funcdctl logs`
-reads them.
+reads them. It captures an engine's output there too, which `funcdctl logs <kind>/<name>` reads.
 
 A worker must listen within `runtime.bootTimeout`, 1 min, and answer its readiness check before it takes calls. A
 worker that exits after it listened is replaced after `runtime.supervisionPeriod`, 10 s. A worker that keeps crashing
