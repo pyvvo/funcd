@@ -149,6 +149,20 @@ testcases:
   # leaving hiqlite's crash marker, which a start without restore.env passes.
   - name: funcd killed while rauthy starts with restore.env ends the Restore Interrupted, held, and rauthy runs without it
     steps:
+      # hiqlite moved the copy it restored out of its snapshot folder, which may then hold no snapshot until its next
+      # tick, and the Restore's export Backup copies one unchanged for 2 s (ADR-0333 Decision 2).
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            b={{.store}}/state_machine/backups
+            for i in $(seq 60); do
+              f=$(ls -tr $b 2>/dev/null | grep -v "~$" | head -1)
+              if [ -n "$f" ] && [ $(( $(date +%s) - $(stat -c %Y "$b/$f") )) -ge 3 ]; then echo "QUIET=$f"; break; fi
+              sleep 1
+            done'
+        info: "a quiet snapshot → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "QUIET=backup_"
       - type: exec
         script: |
           {{.avmsh}} '
