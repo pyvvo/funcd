@@ -20,9 +20,7 @@ import (
 
 const webAuthUID v1.UID = "uid-of-web-auth"
 
-// revRig is an Addon rauthy with the revisions rauthy-1 to rauthy-3, rauthy-3 current, each with GEN set to its name
-// but rauthy-1's; the AppRevisions holder-1 and holder-2, of another App, record rauthy-1 and rauthy-2, so the
-// Addon's reconciler keeps them.
+// revRig is the Addon rauthy over a memory store, with its reconciler and a fake runtime.
 type revRig struct {
 	ctx context.Context
 	st  store.Store
@@ -30,6 +28,9 @@ type revRig struct {
 	rt  *fakeaddon.Runtime
 }
 
+// newRevRig is the Addon rauthy with the revisions rauthy-1 to rauthy-3, rauthy-3 current, each with GEN set to its
+// name but rauthy-1's; the AppRevisions holder-1 and holder-2, of another App, record rauthy-1 and rauthy-2, so the
+// Addon's reconciler keeps them.
 func newRevRig(t *testing.T) *revRig {
 	t.Helper()
 	rig := newUnstampedRig(t)
@@ -206,6 +207,15 @@ func TestIssue1536_PartTakesTheAddonsFirstRevision(t *testing.T) {
 	app, rev, _ = g.pass(t)
 	require.Equal(t, []v1.ObjectName{"web-auth-1", "rauthy-1"}, []v1.ObjectName{app, rev}, "the Addon's first revision")
 	require.NotNil(t, g.rt.Engine(provider.ProviderRef{Namespace: "default", Name: "web-auth-login"}), "its engine runs")
+
+	cur := g.addon(t)
+	cur.Spec.Env = map[string]string{"GEN": "rauthy-2"}
+	_, err := g.st.Update(g.ctx, cur)
+	require.NoError(t, err)
+	g.stamp(t)
+	app, rev, gen := g.pass(t)
+	require.Equal(t, []v1.ObjectName{"web-auth-1", "rauthy-1"}, []v1.ObjectName{app, rev}, "the pin does not follow the Addon by itself")
+	require.Empty(t, gen, "the engine keeps rauthy-1's spec")
 }
 
 // A part waits Pending, Progressing, until its App's first revision is Applied (ADR-0339 Decision 3).
