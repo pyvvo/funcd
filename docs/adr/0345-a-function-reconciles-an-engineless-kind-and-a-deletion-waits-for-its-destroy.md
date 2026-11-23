@@ -1,6 +1,6 @@
 # ADR-0345: A Function reconciles an engineless kind's objects, and a deletion waits for its destroy
 
-- **Status**: Proposed (2026-11-23), judged three times: round 3's Major folded
+- **Status**: Proposed (2026-11-23), judged four times: no Blocker or Major open; round 4's Minor folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, reconcile, functions, deletion, apps
@@ -160,7 +160,10 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
   which cuts the call in flight and clears what funcd knows of its calls, the hold staying in the store; no crash on
   yield.
 - **Environment**: the Function answers only while it exists; the destroy run needs its Job and an approval, which
-  comes.
+  comes; no writer clears `status.workload` (the API keeps the stored status, `handlers.go:261` and `:301-303`, and an
+  App writes only a part's spec, `internal/app/reconcile.go:560-579`); every delete is conditional on the version it
+  read (`gc.go:428`, `handlers.go:407`), so a mark stored meanwhile makes it conflict and retry, as the model's atomic
+  `CollectStack` assumes.
 - **Mutants**: `no-order` fails `PartsOutliveTheStack`; `no-hold`, `gone-on-any-answer`, `ok-from-live-call` and
   `call-before-mark` (a call before the first pass stored the mark) fail `NoStackGoesUndestroyed`; `no-retry` fails
   `DeletedAppGoes`.
