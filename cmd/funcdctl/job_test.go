@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
@@ -161,4 +163,101 @@ func TestCLIJobVerbs(t *testing.T) {
 	obj, err = c.Get(ctx, v1.KindJobRun, "team-a", "hello-second")
 	require.NoError(t, err)
 	require.True(t, obj.(*v1.JobRun).Spec.Cancel)
+}
+
+// ADR-0348 Decision 7: funcdctl job approve prints the preview's document and digest and asks to confirm, then sets
+// spec.approve to that digest; with no terminal it names --digest, and --digest approves with no question, the server
+// refusing a digest of another preview (409). reject sets spec.reject and the reason; describe shows the decisions.
+func TestCLIJobApproveAndReject(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c, _, st := newTestServerVia(t, nil, func(d *controlplane.Deps) {
+		d.Admissions = []admission.Admission{admission.NewJobRunSpecAdmission(), admission.NewJobRunApprovalAdmission(d.Authorizer)}
+	})
+	job := &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob},
+		ObjectMeta: v1.ObjectMeta{Name: "tofu", Namespace: "team-a", ResourceGroup: "rg1"},
+		Spec:       v1.JobSpec{Runtime: "nodejs22", Handler: "handle", Image: "oci-layout://layout/tofu:1.0.0"}}
+	_, err := c.Apply(ctx, job)
+	require.NoError(t, err)
+	d1, d2 := "sha256:"+strings.Repeat("1", 64), "sha256:"+strings.Repeat("2", 64)
+	for _, name := range []string{"tofu-a", "tofu-b", "tofu-c"} {
+		var out bytes.Buffer
+		require.NoError(t, execCLI(&out, c, "job", "run", "tofu", name, "-n", "team-a", "--resource-group", "rg1"))
+		obj, err := st.Get(ctx, v1.KindJobRun.GVK(), "team-a", v1.ObjectName(name))
+		require.NoError(t, err)
+		run := obj.(*v1.JobRun)
+		run.Status.Phase = v1.JobRunAwaitingApproval
+		run.Status.Preview = &v1.JobRunPreview{Digest: d2, Document: json.RawMessage(`{"summary":"2 to add"}`),
+			PreviewedAt: v1.NewTimestamp(time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC))}
+		_, err = st.Update(ctx, run)
+		require.NoError(t, err)
+	}
+	approve := func(in io.Reader, args ...string) (string, error) {
+		var out bytes.Buffer
+		root := newRootCmdWith(&out, c)
+		root.SetIn(in)
+		root.SetArgs(append([]string{"job", "approve", "-n", "team-a"}, args...))
+		err := root.Execute()
+		return out.String(), err
+	}
+	runOf := func(name string) *v1.JobRun {
+		obj, err := c.Get(ctx, v1.KindJobRun, "team-a", v1.ObjectName(name))
+		require.NoError(t, err)
+		return obj.(*v1.JobRun)
+	}
+
+	out, err := approve(strings.NewReader("n\n"), "tofu-a")
+	require.NoError(t, err)
+	require.Contains(t, out, `"summary": "2 to add"`, "the preview's document")
+	require.Contains(t, out, "digest: "+d2)
+	require.Contains(t, out, "not approved")
+	require.Empty(t, runOf("tofu-a").Spec.Approve)
+
+	pr, pw, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pr.Close(); _ = pw.Close() })
+	_, err = approve(pr, "tofu-a")
+	require.ErrorContains(t, err, "--digest "+d2, "a pipe is no terminal to confirm on")
+
+	out, err = approve(strings.NewReader("y\n"), "tofu-a")
+	require.NoError(t, err)
+	require.Contains(t, out, "approved tofu-a ("+d2+")")
+	approved := runOf("tofu-a")
+	require.Equal(t, d2, approved.Spec.Approve)
+	require.Equal(t, "dev", approved.Status.ApprovedBy)
+
+	_, err = approve(strings.NewReader(""), "tofu-b", "--digest", d1)
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "a digest of another preview: %v", err)
+	require.ErrorContains(t, err, d2)
+	_, err = approve(strings.NewReader(""), "tofu-b", "--digest", d2)
+	require.NoError(t, err)
+	require.Equal(t, d2, runOf("tofu-b").Spec.Approve)
+
+	var buf bytes.Buffer
+	require.NoError(t, execCLI(&buf, c, "job", "reject", "tofu-c", "-n", "team-a", "--reason", "too wide"))
+	require.Equal(t, "rejected tofu-c\n", buf.String())
+	rejected := runOf("tofu-c")
+	require.True(t, rejected.Spec.Reject)
+	require.Equal(t, "too wide", rejected.Spec.RejectReason)
+	require.Equal(t, "dev", rejected.Status.RejectedBy)
+
+	buf.Reset()
+	require.NoError(t, execCLI(&buf, c, "job", "describe", "tofu-a", "-n", "team-a"))
+	for _, want := range []string{"preview: " + d2, `{"summary":"2 to add"}`, "approved by: dev", "digest: " + d2} {
+		require.Contains(t, buf.String(), want)
+	}
+	buf.Reset()
+	require.NoError(t, execCLI(&buf, c, "job", "describe", "tofu-c", "-n", "team-a"))
+	require.Contains(t, buf.String(), "rejected by: dev")
+
+	obj, err := st.Get(ctx, v1.KindJobRun.GVK(), "team-a", "tofu-c")
+	require.NoError(t, err)
+	ended := obj.(*v1.JobRun)
+	ended.Status.End(v1.JobRunRejected, v1.JobRunRejectedReason, "too wide", v1.NewTimestamp(time.Now()))
+	_, err = st.Update(ctx, ended)
+	require.NoError(t, err)
+	_, err = approve(strings.NewReader("y\n"), "tofu-c")
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "only a run AwaitingApproval shows a preview to approve")
+	require.ErrorContains(t, execCLI(&buf, c, "job", "reject", "tofu-a", "-n", "team-a", "--reason", strings.Repeat("x", 513)),
+		"more than 512")
 }

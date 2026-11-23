@@ -23,7 +23,8 @@ type fakeLauncher struct {
 	st      store.Store
 	mu      sync.Mutex
 	calls   map[v1.ObjectName]int
-	stored  map[v1.ObjectName]v1.JobRunPhase // the run's stored phase when its executor started
+	kinds   map[v1.ObjectName][]function.RunCall // each call's kind, in order
+	stored  map[v1.ObjectName]v1.JobRunPhase     // the run's stored phase when its executor started
 	answers map[v1.ObjectName]chan function.RunAnswer
 	stopped map[v1.ObjectName]bool
 }
@@ -39,11 +40,12 @@ func (f *fakeLauncher) answerOf(name v1.ObjectName) chan function.RunAnswer {
 	return ch
 }
 
-func (f *fakeLauncher) launch(ctx context.Context, run *v1.JobRun, _ *v1.Revision) function.RunAnswer {
+func (f *fakeLauncher) launch(ctx context.Context, run *v1.JobRun, _ *v1.Revision, call function.RunCall) function.RunAnswer {
 	obj, err := f.st.Get(context.Background(), v1.KindJobRun.GVK(), run.Namespace, run.Name)
 	ch := f.answerOf(run.Name)
 	f.mu.Lock()
 	f.calls[run.Name]++
+	f.kinds[run.Name] = append(f.kinds[run.Name], call)
 	if err == nil {
 		f.stored[run.Name] = obj.(*v1.JobRun).Status.Phase
 	}
@@ -63,6 +65,12 @@ func (f *fakeLauncher) callsOf(name v1.ObjectName) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls[name]
+}
+
+func (f *fakeLauncher) kindsOf(name v1.ObjectName) []function.RunCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]function.RunCall(nil), f.kinds[name]...)
 }
 
 func (f *fakeLauncher) storedOf(name v1.ObjectName) v1.JobRunPhase {
@@ -131,12 +139,24 @@ func newRunHarness(t *testing.T, maxRunning int) *runHarness {
 	})
 	rh := &runHarness{jobHarness: &jobHarness{harness: h, inspector: in}, clk: clk, hold: &fakeHold{},
 		ended: make(chan v1.ObjectName, 16)}
-	rh.exec = &fakeLauncher{st: h.st, calls: map[v1.ObjectName]int{}, stored: map[v1.ObjectName]v1.JobRunPhase{},
+	rh.exec = &fakeLauncher{st: h.st, calls: map[v1.ObjectName]int{}, kinds: map[v1.ObjectName][]function.RunCall{},
+		stored:  map[v1.ObjectName]v1.JobRunPhase{},
 		answers: map[v1.ObjectName]chan function.RunAnswer{}, stopped: map[v1.ObjectName]bool{}}
 	rh.runs = function.RunsWith(h.r, function.RunsConfig{MaxRunning: maxRunning, Retention: time.Hour, Hold: rh.hold,
 		NamespaceHold: rh.hold, Enqueue: func(req controller.Request) { rh.ended <- req.Name }}, rh.exec.launch)
 	t.Cleanup(rh.runs.Close)
 	return rh
+}
+
+// createJob creates Job name with approval.bypass, so its runs run as ADR-0347 decides; edit may turn it off.
+func (h *runHarness) createJob(t *testing.T, name string, edit func(*v1.JobSpec)) *v1.Job {
+	t.Helper()
+	return h.jobHarness.createJob(t, name, func(s *v1.JobSpec) {
+		s.Approval.Bypass = true
+		if edit != nil {
+			edit(s)
+		}
+	})
 }
 
 // readyJob creates Job name and passes it once, so it is Ready.

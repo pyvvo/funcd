@@ -1,6 +1,11 @@
 package main
 
 import (
+	"bufio"
+	"cmp"
+	"encoding/json"
+	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -13,13 +18,15 @@ import (
 )
 
 // jobCmd groups the run verbs of a Job (ADR-0347 Decision 10), as workflowCmd does a Workflow's: run, runs, logs,
-// describe and cancel, over the JobRun surface; cancel sets spec.cancel.
+// describe and cancel, over the JobRun surface; cancel sets spec.cancel. approve and reject set a person's decision on
+// a run's preview (ADR-0348 Decision 7).
 func (a *cli) jobCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "job",
-		Short: "Run Jobs and read their runs (run|runs|logs|describe|cancel)",
+		Short: "Run Jobs and read their runs (run|runs|logs|describe|cancel|approve|reject)",
 	}
-	cmd.AddCommand(a.jobRunCmd(), a.jobRunsCmd(), a.jobLogsCmd(), a.jobDescribeCmd(), a.jobCancelCmd())
+	cmd.AddCommand(a.jobRunCmd(), a.jobRunsCmd(), a.jobLogsCmd(), a.jobDescribeCmd(), a.jobCancelCmd(),
+		a.jobApproveCmd(), a.jobRejectCmd())
 	return cmd
 }
 
@@ -104,7 +111,7 @@ func (a *cli) jobRunsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
-	cmd.Flags().StringVar(&phase, "phase", "", "filter by run phase (Pending|Running|Succeeded|Failed|Cancelled)")
+	cmd.Flags().StringVar(&phase, "phase", "", "filter by run phase (Pending|Previewing|AwaitingApproval|Running|Succeeded|Failed|Cancelled|Rejected)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: json")
 	return cmd
 }
@@ -146,10 +153,10 @@ func (a *cli) jobLogsCmd() *cobra.Command {
 	return cmd
 }
 
-// jobDescribeCmd shows a run: its phase and reason, the revision and digest it ran, who started it, its times and its
-// result. `-o json` prints the object.
+// jobDescribeCmd shows a run: its phase and reason, the revision and digest it ran, who started it, its preview and who
+// approved or rejected it, its times and its result. `-o json` prints the object.
 func (a *cli) jobDescribeCmd() *cobra.Command {
-	return a.runDescribeCmd("job", v1.KindJobRun, "Show a run: phase, reason, revision, digest, who started it, its times and its result",
+	return a.runDescribeCmd("job", v1.KindJobRun, "Show a run: phase, reason, revision, digest, who started it, its preview, who approved or rejected it, its times and its result",
 		func(obj v1.Object) error { return a.renderJobRunDescribe(obj.(*v1.JobRun)) })
 }
 
@@ -165,6 +172,16 @@ func (a *cli) renderJobRunDescribe(run *v1.JobRun) error {
 	}
 	if run.Status.StartedBy != "" {
 		lines = append(lines, "started by: "+termSafe(run.Status.StartedBy))
+	}
+	if p := run.Status.Preview; p != nil {
+		lines = append(lines, "preview: "+p.Digest+"   previewed: "+p.PreviewedAt.String(), "  "+termSafe(string(p.Document)))
+	}
+	if run.Status.ApprovedBy != "" || !run.Status.ApprovedAt.IsZero() {
+		lines = append(lines, "approved by: "+termSafe(run.Status.ApprovedBy)+"   approved: "+run.Status.ApprovedAt.String()+
+			"   digest: "+run.Spec.Approve)
+	}
+	if run.Status.RejectedBy != "" {
+		lines = append(lines, "rejected by: "+termSafe(run.Status.RejectedBy))
 	}
 	if start := time.Time(run.Status.StartedAt); !start.IsZero() {
 		times := "started: " + run.Status.StartedAt.String()
@@ -213,5 +230,144 @@ func (a *cli) jobCancelCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
+	return cmd
+}
+
+// jobApproveCmd approves a run's preview (ADR-0348 Decision 7): it prints the preview's document and digest and, on a
+// terminal, asks to confirm, then sets spec.approve to that digest; --digest approves the digest it names with no
+// question, for scripts. The server takes the approval only while it names the run's current preview.
+func (a *cli) jobApproveCmd() *cobra.Command {
+	var ns, digest string
+	cmd := &cobra.Command{
+		Use:   "approve <run>",
+		Short: "Approve a run's preview: show its document and digest and ask to confirm, or approve --digest with no question",
+		Long: "Approve a run's preview, so the run runs exactly what it previewed.\n\n" +
+			"Without --digest, the command prints the preview's document and digest and, on a terminal, asks to confirm. " +
+			"With --digest, it approves that digest with no question, for scripts. funcd refuses an approval that names " +
+			"another preview than the run's current one with 409, and one from a caller who may not update the run's Job with 403.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			const op = "funcdctl job approve"
+			c, err := a.sdkClient()
+			if err != nil {
+				return err
+			}
+			name, space := v1.ObjectName(args[0]), v1.NamespaceName(nsOrDefault(ns))
+			if digest == "" {
+				if digest, err = a.confirmPreview(cmd, c, space, name); err != nil || digest == "" {
+					return err
+				}
+			}
+			if _, err := applyRead(cmd.Context(), c, v1.KindJobRun, space, name, func(obj v1.Object) (bool, error) {
+				run := obj.(*v1.JobRun)
+				if run.Spec.Approve == digest && !run.Status.ApprovedAt.IsZero() {
+					return false, nil
+				}
+				run.Spec.Approve = digest
+				return true, nil
+			}); err != nil {
+				return fault.Wrapf(err, fault.KindOf(err), op, "approve %s", name)
+			}
+			return a.writef("approved %s (%s)\n", name, digest)
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
+	cmd.Flags().StringVar(&digest, "digest", "", "approve this preview digest, sha256:<hex>, with no question (default: show the preview and ask)")
+	return cmd
+}
+
+// confirmPreview prints run's preview and asks a person to confirm it: the digest to approve once they answer yes, ""
+// when they answer anything else. With no terminal to ask on, it fails and names --digest.
+func (a *cli) confirmPreview(cmd *cobra.Command, c *sdk.Client, ns v1.NamespaceName, name v1.ObjectName) (string, error) {
+	const op = "funcdctl job approve"
+	obj, err := c.Get(cmd.Context(), v1.KindJobRun, ns, name)
+	if err != nil {
+		return "", err
+	}
+	run := obj.(*v1.JobRun)
+	if run.Status.Phase != v1.JobRunAwaitingApproval || run.Status.Preview == nil {
+		return "", fault.Conflictf(op, "run %s is %s, and only a run AwaitingApproval shows a preview to approve", name,
+			cmp.Or(run.Status.Phase, v1.JobRunPending))
+	}
+	p := run.Status.Preview
+	doc, err := json.MarshalIndent(p.Document, "", "  ")
+	if err != nil {
+		doc = p.Document
+	}
+	if err := a.writef("preview of %s, made %s:\n%s\ndigest: %s\n", name, p.PreviewedAt.String(), termSafeLines(string(doc)), p.Digest); err != nil {
+		return "", err
+	}
+	in, ok := answerSource(cmd)
+	if !ok {
+		return "", fault.Invalidf(op, "no terminal to confirm on: pass --digest %s to approve this preview", p.Digest)
+	}
+	if err := a.writef("approve this preview? [y/N] "); err != nil {
+		return "", err
+	}
+	answer, _ := bufio.NewReader(in).ReadString('\n')
+	if !strings.EqualFold(strings.TrimSpace(answer), "y") && !strings.EqualFold(strings.TrimSpace(answer), "yes") {
+		return "", a.writef("not approved\n")
+	}
+	return p.Digest, nil
+}
+
+// answerSource is where approve reads a person's answer: stdin when it is a terminal, or a reader a test set; none for
+// a pipe or a file.
+func answerSource(cmd *cobra.Command) (io.Reader, bool) {
+	in := cmd.InOrStdin()
+	f, isFile := in.(*os.File)
+	if !isFile {
+		return in, true
+	}
+	st, err := f.Stat()
+	if err != nil || st.Mode()&os.ModeCharDevice == 0 {
+		return nil, false
+	}
+	return f, true
+}
+
+// termSafeLines is termSafe for each line of s, so a document keeps its lines.
+func termSafeLines(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = termSafe(l)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// jobRejectCmd rejects a run that has not started running (ADR-0348 Decision 7): it sets spec.reject and
+// spec.rejectReason, and the run ends Rejected without running its handler.
+func (a *cli) jobRejectCmd() *cobra.Command {
+	var ns, reason string
+	cmd := &cobra.Command{
+		Use:   "reject <run>",
+		Short: "Reject a run that has not started running, so it ends Rejected and its handler never runs",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			const op = "funcdctl job reject"
+			if len(reason) > v1.MaxJobRunRejectReason {
+				return fault.Invalidf(op, "--reason is %d bytes, more than %d", len(reason), v1.MaxJobRunRejectReason)
+			}
+			c, err := a.sdkClient()
+			if err != nil {
+				return err
+			}
+			name := v1.ObjectName(args[0])
+			if _, err := applyRead(cmd.Context(), c, v1.KindJobRun, v1.NamespaceName(nsOrDefault(ns)), name,
+				func(obj v1.Object) (bool, error) {
+					run := obj.(*v1.JobRun)
+					if run.Spec.Reject {
+						return false, nil
+					}
+					run.Spec.Reject, run.Spec.RejectReason = true, reason
+					return true, nil
+				}); err != nil {
+				return err
+			}
+			return a.writef("rejected %s\n", name)
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
+	cmd.Flags().StringVar(&reason, "reason", "", "why the run is rejected, at most 512 bytes: the message of its Ready condition")
 	return cmd
 }

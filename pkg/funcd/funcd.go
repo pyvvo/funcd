@@ -1184,10 +1184,11 @@ func (p *Platform) buildControlPlane() error {
 			// ADR-0094: a run's workflow/input/replay are fixed at creation — a second run under a taken name is a Conflict.
 			admission.NewWorkflowRunSpecImmutableAdmission(),
 			// ADR-0347 Decision 3: a JobRun's input within job.payloadLimit and its Job's contract, its spec fixed but a
-			// one-way cancel.
+			// one-way cancel; ADR-0348: an approval and a rejection, by a caller who may update the Job.
 			admission.NewJobRunPayloadAdmission(c.jobPayloadLimit),
 			admission.NewJobRunContractAdmission(storeReader{c.store}),
 			admission.NewJobRunSpecAdmission(),
+			admission.NewJobRunApprovalAdmission(c.authorizer),
 			// ADR-0170: a ResourceGroup is deleted only when it has no member (or with force, members first).
 			admission.NewResourceGroupDeletionProtectionAdmission(r),
 			// ADR-0222: a schedule's recipients and target, a Backup's ttl, immutable records, and update on the

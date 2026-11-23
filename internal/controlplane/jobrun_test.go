@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,7 +37,8 @@ func newJobServer(t *testing.T, payloadLimit int64) (http.Handler, store.Store) 
 			viewToken: {Subject: "obs", Role: auth.RoleViewer, Namespaces: []v1.NamespaceName{"team-a"}},
 		}),
 		Admissions: []admission.Admission{admission.NewJobRunPayloadAdmission(payloadLimit),
-			admission.NewJobRunContractAdmission(st), admission.NewJobRunSpecAdmission()},
+			admission.NewJobRunContractAdmission(st), admission.NewJobRunSpecAdmission(),
+			admission.NewJobRunApprovalAdmission(rbac.New())},
 	})
 	require.NoError(t, err)
 	return h, st
@@ -147,6 +150,59 @@ func TestJobRunAdmissionAnswers(t *testing.T) {
 	rec = do(t, srv, http.MethodPut, jobRunBase+"/r1", devToken, jobRunBody(t, "r1", "hello", `{"name":"Bob"}`, ""))
 	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 	require.Contains(t, problem(t, rec.Body.Bytes()).Detail, "spec.job and spec.input are fixed")
+}
+
+// ADR-0348 Decisions 3 and 5: a create with an approval is refused with 422; an update that approves the preview of a
+// run AwaitingApproval gets status.approvedAt and status.approvedBy from the API server, never from the body, one
+// naming another digest 409 with the current one, and a rejection status.rejectedBy.
+func TestJobRunApprovalThroughTheAPI(t *testing.T) {
+	t.Parallel()
+	srv, st := newJobServer(t, 1024)
+	ctx := context.Background()
+	d1, d2 := "sha256:"+strings.Repeat("1", 64), "sha256:"+strings.Repeat("2", 64)
+
+	var withApproval map[string]interface{}
+	require.NoError(t, json.Unmarshal(jobRunBody(t, "early", "hello", "", ""), &withApproval))
+	withApproval["spec"].(map[string]interface{})["approve"] = d1
+	rec := do(t, srv, http.MethodPost, jobRunBase, devToken, mustJSON(t, withApproval))
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "body.spec.approve")
+
+	for _, name := range []string{"tofu-a", "tofu-b"} {
+		rec = do(t, srv, http.MethodPost, jobRunBase, devToken, jobRunBody(t, name, "hello", "", ""))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		obj, err := st.Get(ctx, v1.KindJobRun.GVK(), "team-a", v1.ObjectName(name))
+		require.NoError(t, err)
+		run := obj.(*v1.JobRun)
+		run.Status.Phase, run.Status.Preview = v1.JobRunAwaitingApproval, &v1.JobRunPreview{Digest: d2, Document: json.RawMessage(`{}`)}
+		_, err = st.Update(ctx, run)
+		require.NoError(t, err)
+	}
+	decide := func(token, name string, edit func(spec map[string]interface{})) *httptest.ResponseRecorder {
+		var body map[string]interface{}
+		require.NoError(t, json.Unmarshal(jobRunBody(t, name, "hello", "", `{"approvedBy":"mallory","rejectedBy":"mallory"}`), &body))
+		edit(body["spec"].(map[string]interface{}))
+		return do(t, srv, http.MethodPut, jobRunBase+"/"+name, token, mustJSON(t, body))
+	}
+
+	rec = decide(devToken, "tofu-a", func(spec map[string]interface{}) { spec["approve"] = d1 })
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	require.Contains(t, problem(t, rec.Body.Bytes()).Detail, d2, "the 409 names the current digest")
+	require.Equal(t, http.StatusForbidden, decide(viewToken, "tofu-a", func(spec map[string]interface{}) { spec["approve"] = d2 }).Code)
+
+	rec = decide(devToken, "tofu-a", func(spec map[string]interface{}) { spec["approve"] = d2 })
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	approved := decodeRun(t, rec.Body.Bytes())
+	require.Equal(t, d2, approved.Spec.Approve)
+	require.Equal(t, "dev", approved.Status.ApprovedBy, "the caller's subject, never the body's")
+	require.False(t, approved.Status.ApprovedAt.IsZero())
+	require.True(t, approved.Approved())
+
+	rec = decide(devToken, "tofu-b", func(spec map[string]interface{}) { spec["reject"], spec["rejectReason"] = true, "too wide" })
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	rejected := decodeRun(t, rec.Body.Bytes())
+	require.Equal(t, "dev", rejected.Status.RejectedBy)
+	require.Empty(t, rejected.Status.ApprovedBy)
 }
 
 func mustJSON(t *testing.T, v interface{}) []byte {

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,13 +34,13 @@ const runPoll = 50 * time.Millisecond
 // errNoWorkers ends each run of a platform built with no materializer, which loads no handler.
 var errNoWorkers = errors.New("this platform runs no workers: it has no materializer, so no run's handler can run")
 
-// execute is a run's executor (ADR-0347 Decisions 5 and 6). Once no worker of the run's name remains, it creates one
-// worker of the pinned revision, as a solo Function worker of that runtime is built, waits for it to listen and
-// become ready within runtime.bootTimeout, and calls it once through the invoke chain. The Job's timeout runs from the
-// worker's start. The worker is stopped and removed at every end, at once when ctx is cancelled; the answer of a
-// cancelled executor is never written. A platform with no materializer runs no worker that could call a handler, only
-// a Function's stand-in (ADR-0020), so its runs end StartFailed at once.
-func (j *JobRunReconciler) execute(ctx context.Context, run *v1.JobRun, job *v1.Job, rev *v1.Revision) runAnswer {
+// execute is a run's executor (ADR-0347 Decisions 5 and 6), for its preview or its apply (ADR-0348 Decision 2). Once
+// no worker of the run's name remains, it creates one worker of the pinned revision, as a solo Function worker of that
+// runtime is built, waits for it to listen and become ready within runtime.bootTimeout, and calls it once through the
+// invoke chain. The Job's timeout runs from the worker's start. The worker is stopped and removed at every end, at once
+// when ctx is cancelled; the answer of a cancelled executor is never written. A platform with no materializer runs no
+// worker that could call a handler, only a Function's stand-in (ADR-0020), so its runs end StartFailed at once.
+func (j *JobRunReconciler) execute(ctx context.Context, run *v1.JobRun, job *v1.Job, rev *v1.Revision, kind runCall) runAnswer {
 	r := j.r
 	if r.materializer == nil {
 		return startFailed(errNoWorkers)
@@ -91,7 +93,7 @@ func (j *JobRunReconciler) execute(ctx context.Context, run *v1.JobRun, job *v1.
 		return startFailed(err)
 	}
 	unindex = j.indexEgress(run, in)
-	a := j.call(callCtx, run, job, rev, in)
+	a := j.call(callCtx, run, job, rev, in, kind)
 	if t, over := timedOut(ctx, callCtx, job); over {
 		return t
 	}
@@ -230,42 +232,53 @@ func exitText(ex runtime.Exit) string {
 	return cmp.Or(string(ex.Cause), "no exit status")
 }
 
-// call makes the run's one call to worker in through the invoke chain (ADR-0347 Decision 5): caller JobRun, Target
-// the Job at its pinned revision, so only the contract plugins apply to it, with the run's traceparent. The client
-// sets X-Funcd-Timeout-Ms from ctx's deadline, the Job's timeout, and no other.
-func (j *JobRunReconciler) call(ctx context.Context, run *v1.JobRun, job *v1.Job, rev *v1.Revision, in runtime.Instance) runAnswer {
-	body, err := runEvent(run)
+// The event types of a run's two calls (ADR-0347 Contracts, ADR-0348 Decision 2).
+const (
+	runEventType     = "funcd.job.run"
+	previewEventType = "funcd.job.preview"
+)
+
+// call makes the run's one call of kind to worker in through the invoke chain (ADR-0347 Decision 5): caller JobRun,
+// or JobPreview for its preview (ADR-0348 Decision 2), Target the Job at its pinned revision, so only the contract
+// plugins apply to it, with the run's traceparent. The client sets X-Funcd-Timeout-Ms from ctx's deadline, the Job's
+// timeout, and no other.
+func (j *JobRunReconciler) call(ctx context.Context, run *v1.JobRun, job *v1.Job, rev *v1.Revision, in runtime.Instance, kind runCall) runAnswer {
+	caller, eventType, answer, failed := invoke.JobRun, runEventType, j.answerOf, handlerFailed
+	if kind == callPreview {
+		caller, eventType, answer, failed = invoke.JobPreview, previewEventType, j.previewOf, previewFailed
+	}
+	body, err := runEvent(run, eventType)
 	if err != nil {
-		return handlerFailed("encode the run's event: " + err.Error())
+		return failed("encode the run's event: " + err.Error())
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, instanceURL(run.Namespace, run.Name, in), bytes.NewReader(body))
 	if err != nil {
-		return handlerFailed("build the call: " + err.Error())
+		return failed("build the call: " + err.Error())
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("traceparent", "00-"+run.Status.TraceID+"-"+observability.NewSpanID()+"-01")
-	call := &invoke.Call{Caller: invoke.JobRun, Request: req,
+	call := &invoke.Call{Caller: caller, Request: req,
 		Target: activator.FunctionRef{Namespace: run.Namespace, Name: job.Name, Revision: rev.Name, UID: job.UID}}
 	if rf := j.cfg.Chain.Admit(ctx, call); rf != nil {
-		return j.refused(rf)
+		return refused(rf, answer, failed)
 	}
 	if rf := j.cfg.Chain.Before(ctx, call); rf != nil {
-		return j.refused(rf)
+		return refused(rf, answer, failed)
 	}
 	resp, err := j.cfg.Client.Do(call.Request)
 	if err != nil {
-		return handlerFailed("the call failed: " + err.Error())
+		return failed("the call failed: " + err.Error())
 	}
 	defer httpx.CloseBody(resp.Body)
 	if rf := j.cfg.Chain.After(ctx, call, invoke.NewAnswer(resp)); rf != nil {
-		return j.refused(rf)
+		return refused(rf, answer, failed)
 	}
-	return j.answerOf(resp.StatusCode, resp.Body)
+	return answer(resp.StatusCode, resp.Body)
 }
 
-// runEvent is the body of a run's call (ADR-0347 Contracts): a CloudEvent whose id is the run's UID and whose data is
-// its input, null without one.
-func runEvent(run *v1.JobRun) ([]byte, error) {
+// runEvent is the body of a run's call (ADR-0347 Contracts): a CloudEvent of eventType whose id is the run's UID and
+// whose data is its input, null without one.
+func runEvent(run *v1.JobRun, eventType string) ([]byte, error) {
 	data := run.Spec.Input
 	if len(data) == 0 {
 		data = json.RawMessage("null")
@@ -276,16 +289,44 @@ func runEvent(run *v1.JobRun) ([]byte, error) {
 		Source      string          `json:"source"`
 		ID          string          `json:"id"`
 		Data        json.RawMessage `json:"data"`
-	}{"1.0", "funcd.job.run", "funcd://" + string(run.Namespace) + "/job/" + string(run.Spec.Job), string(run.UID), data})
+	}{"1.0", eventType, "funcd://" + string(run.Namespace) + "/job/" + string(run.Spec.Job), string(run.UID), data})
 }
 
 // refused maps a refusal of the chain as ADR-0302 Decision 3 says: one with its own status and body as the worker's
 // answer, a problem as a failed call.
-func (j *JobRunReconciler) refused(rf *invoke.Refusal) runAnswer {
+func refused(rf *invoke.Refusal, answer func(int, io.Reader) runAnswer, failed func(string) runAnswer) runAnswer {
 	if rf.Status != 0 {
-		return j.answerOf(rf.Status, bytes.NewReader(rf.Body))
+		return answer(rf.Status, bytes.NewReader(rf.Body))
 	}
-	return handlerFailed("the call was refused: " + rf.Error())
+	return failed("the call was refused: " + rf.Error())
+}
+
+// previewOf maps the worker's answer to a preview call (ADR-0348 Decision 2): a 2xx JSON answer within
+// job.payloadLimit is the preview, its digest sha256: of the answer's bytes, an empty one the document null; a larger
+// one ends the run Failed with PayloadLimitExceeded, and any other answer Failed with PreviewFailed and its cause's
+// first line.
+func (j *JobRunReconciler) previewOf(status int, body io.Reader) runAnswer {
+	if status < 200 || status >= 300 {
+		return previewFailed(fmt.Sprintf("the preview answered %d: %s", status, causeOf(body)))
+	}
+	got, err := io.ReadAll(io.LimitReader(body, j.cfg.PayloadLimit+1))
+	switch {
+	case err != nil:
+		return previewFailed("read the preview: " + err.Error())
+	case int64(len(got)) > j.cfg.PayloadLimit:
+		return runAnswer{phase: v1.JobRunFailed, reason: v1.JobRunPayloadLimitExceeded,
+			message: fmt.Sprintf("the preview exceeds job.payloadLimit %d bytes", j.cfg.PayloadLimit)}
+	case len(bytes.TrimSpace(got)) == 0:
+		got = []byte("null")
+	case !json.Valid(got):
+		return previewFailed(fmt.Sprintf("the preview answered %d, and the answer is not JSON", status))
+	}
+	sum := sha256.Sum256(got)
+	return runAnswer{preview: &v1.JobRunPreview{Digest: "sha256:" + hex.EncodeToString(sum[:]), Document: got}}
+}
+
+func previewFailed(cause string) runAnswer {
+	return runAnswer{phase: v1.JobRunFailed, reason: v1.JobRunPreviewFailed, message: observability.StatusError(cause)}
 }
 
 // errorBodyMax is how much of an error answer the run's message reads, before its first line is cut.

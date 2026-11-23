@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -233,6 +234,13 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 // conditional on the stored object's resourceVersion, so the guard's verdict holds for the write. Without a client
 // version a write that lost to a concurrent one starts over from the read (retryOwnRead).
 func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, obj v1.Object, guard func(context.Context, v1.Object) error) (v1.Object, error) {
+	return h.replaceObjWith(ctx, kind, ns, name, obj, guard, nil)
+}
+
+// replaceObjWith is replaceObjIf with stamp run on the admitted object once it holds the stored status, to set the
+// status that the API server records on an update, such as a JobRun's approvedBy (ADR-0348 Decision 3).
+func (h *storeHandlers) replaceObjWith(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, obj v1.Object,
+	guard func(context.Context, v1.Object) error, stamp func(ctx context.Context, admitted, stored v1.Object)) (v1.Object, error) {
 	if err := h.authorize(ctx, auth.VerbUpdate, kind, ns); err != nil {
 		return nil, err
 	}
@@ -275,6 +283,9 @@ func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.Na
 		}
 		if admitted, err = withStatus(admitted, cur); err != nil {
 			return nil, false, err
+		}
+		if stamp != nil {
+			stamp(ctx, admitted, cur)
 		}
 		withServerMeta(admitted, cur)
 		admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion
@@ -1366,7 +1377,28 @@ func (h *storeHandlers) ListJobRuns(ctx context.Context, ns v1.NamespaceName) ([
 	return typedObjs[v1.JobRun](h.listObj(ctx, v1.KindJobRun, ns))
 }
 func (h *storeHandlers) ReplaceJobRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.JobRun) (v1.JobRun, error) {
-	return typedObj[v1.JobRun](h.replaceObj(ctx, v1.KindJobRun, ns, name, &run))
+	return typedObj[v1.JobRun](h.replaceObjWith(ctx, v1.KindJobRun, ns, name, &run, nil, stampJobRunDecision))
+}
+
+// stampJobRunDecision records on an admitted update of a run what the API server sets (ADR-0348 Decisions 3 and 5):
+// on an approval that admission took, status.approvedAt and status.approvedBy, the caller's identity subject, empty
+// with none; on a rejection, status.rejectedBy. The pass acts only on an approval whose approvedAt this wrote.
+func stampJobRunDecision(ctx context.Context, admitted, stored v1.Object) {
+	run, ok := admitted.(*v1.JobRun)
+	if !ok {
+		return
+	}
+	old, ok := stored.(*v1.JobRun)
+	if !ok {
+		return
+	}
+	id, _ := middleware.IdentityFrom(ctx)
+	if run.Spec.Approve != old.Spec.Approve {
+		run.Status.ApprovedAt, run.Status.ApprovedBy = v1.NewTimestamp(time.Now()), id.Subject
+	}
+	if run.Spec.Reject && !old.Spec.Reject {
+		run.Status.RejectedBy = id.Subject
+	}
 }
 func (h *storeHandlers) DeleteJobRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	return h.deleteObjIf(ctx, v1.KindJobRun, ns, name, rv)

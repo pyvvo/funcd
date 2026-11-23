@@ -28,16 +28,27 @@ import (
 )
 
 // runAnswer is how a run's executor ended: the phase, reason and message the pass writes, and the handler's result
-// once it Succeeded (ADR-0347 Decision 5).
+// once it Succeeded (ADR-0347 Decision 5); or, for a preview call that answered, the preview, with no phase
+// (ADR-0348 Decision 2).
 type runAnswer struct {
 	phase           v1.JobRunPhase
 	reason, message string
 	result          json.RawMessage
+	preview         *v1.JobRunPreview // its digest and document; the pass sets when it was made
 }
 
-// runLauncher boots a started run's worker and makes its one call (ADR-0347 Decision 5). It returns once the worker is
-// stopped and removed; a cancelled ctx stops the worker at once.
-type runLauncher func(ctx context.Context, run *v1.JobRun, job *v1.Job, rev *v1.Revision) runAnswer
+// runCall is which of its calls a run's executor makes: the apply, which runs the handler, or the preview, which
+// calls the module's preview (ADR-0348 Decision 2).
+type runCall int
+
+const (
+	callApply runCall = iota
+	callPreview
+)
+
+// runLauncher boots a started run's worker and makes its one call of kind call (ADR-0347 Decision 5, ADR-0348
+// Decision 2). It returns once the worker is stopped and removed; a cancelled ctx stops the worker at once.
+type runLauncher func(ctx context.Context, run *v1.JobRun, job *v1.Job, rev *v1.Revision, call runCall) runAnswer
 
 // RunsConfig tunes the run reconciler: the job.* keys (ADR-0347), the controller's enqueue, through which an executor
 // that ends brings its run's pass, the holds under which it acts on no run (ADR-0206 Decision 6, ADR-0290), and the
@@ -64,9 +75,10 @@ type EgressIndex interface {
 }
 
 // JobRunReconciler is the reconciler of the JobRun kind and the runs' one status writer (ADR-0347 Decisions 4 to 8,
-// ADR-0146 Decision 4). A pass starts a Pending run once its Job is Ready and a slot is free, with one write that stores
-// it Running before its executor exists; it writes the executor's answer while the run is Running, and ends a run on a
-// cancel, a deleted Job or pin, and a restart.
+// ADR-0348, ADR-0146 Decision 4). A pass gives a Pending run a slot once its Job is Ready and one is free, with one
+// write that stores it Previewing or Running before its executor exists; it writes the executor's answer while the run
+// is stored so, keeps a previewed run AwaitingApproval until a person approves or rejects it, and ends a run on a
+// cancel, a rejection, a deleted Job or pin, and a restart.
 type JobRunReconciler struct {
 	r      *Reconciler
 	cfg    RunsConfig
@@ -126,19 +138,21 @@ func (j *JobRunReconciler) Reconcile(ctx context.Context, req controller.Request
 	}
 	switch {
 	case start != nil:
-		// only once the run is stored Running does its executor start (ADR-0347 Decision 4)
-		j.execs.start(written.(*v1.JobRun), start.job, start.rev, j.launch, j.cfg.Enqueue)
-	case run.Status.Phase.Ended():
-		// once its end is stored: a write that conflicts finds the answer again on the next pass
+		// only once the run is stored Previewing or Running does its executor start (ADR-0347 Decision 4); it takes
+		// the place of the preview's executor that ended
+		j.execs.start(written.(*v1.JobRun), start.job, start.rev, start.call, j.launch, j.cfg.Enqueue)
+	case run.Status.Phase.Ended(), run.Status.Phase == v1.JobRunAwaitingApproval:
+		// once its end or its preview is stored: a write that conflicts finds the answer again on the next pass
 		j.execs.forget(run.UID)
 	}
 	return res, nil
 }
 
-// runStart is what a pass that starts a run hands its executor: the Job and the revision the run pins.
+// runStart is what a pass that gives a run a slot hands its executor: the Job, the revision the run pins and the call.
 type runStart struct {
-	job *v1.Job
-	rev *v1.Revision
+	job  *v1.Job
+	rev  *v1.Revision
+	call runCall
 }
 
 // pass sets run's status from its Job, its executor and the clock, and returns when to look again and the start it
@@ -155,17 +169,26 @@ func (j *JobRunReconciler) pass(ctx context.Context, run *v1.JobRun) (controller
 		return controller.Result{}, nil, err
 	}
 	gone := run.Status.JobUID != "" && (job == nil || job.UID != run.Status.JobUID)
-	if run.Status.Phase == v1.JobRunRunning {
+	switch run.Status.Phase {
+	case v1.JobRunRunning:
 		res, err := j.running(ctx, run, gone, now)
 		return res, nil, err
+	case v1.JobRunPreviewing:
+		return j.previewing(ctx, run, job, gone, now)
 	}
+	// a rejection wins over an approval that no pass has acted on yet (ADR-0348 Decision 5)
 	switch {
+	case run.Spec.Reject:
+		reject(run, now)
+		return controller.Result{}, nil, nil
 	case run.Spec.Cancel:
-		run.Status.End(v1.JobRunCancelled, v1.JobRunCancelledReason, "spec.cancel: the run never started", now)
+		run.Status.End(v1.JobRunCancelled, v1.JobRunCancelledReason, "spec.cancel: the run never ran", now)
 		return controller.Result{}, nil, nil
 	case gone:
 		run.Status.End(v1.JobRunCancelled, v1.JobRunJobDeleted, jobGoneMessage(run), now)
 		return controller.Result{}, nil, nil
+	case run.Status.Phase == v1.JobRunAwaitingApproval && !run.Approved():
+		return j.awaiting(ctx, run, now)
 	case job == nil:
 		return j.pending(run, v1.JobRunJobNotFound, fmt.Sprintf("no Job %q in namespace %q", run.Spec.Job, run.Namespace)), nil, nil
 	case !jobReady(job):
@@ -195,14 +218,140 @@ func (j *JobRunReconciler) pass(ctx context.Context, run *v1.JobRun) (controller
 		run.Status.End(v1.JobRunFailed, v1.JobRunInputSchemaMismatch, off, now)
 		return controller.Result{}, nil, nil
 	}
-	// the one write that starts the run: its pin, its Job's UID, the digest, its start and its trace (ADR-0347 Decision 4)
-	run.Status.Phase, run.Status.JobRevision, run.Status.JobUID = v1.JobRunRunning, pin, job.UID
-	run.Status.ImageDigest, run.Status.StartedAt = rev.Spec.ImageDigest, now
+	res, start := j.take(run, job, rev, now)
+	return res, start, nil
+}
+
+// take is the one write that gives run its slot, before its executor exists, keeping the pin and the trace the run
+// already holds (ADR-0347 Decision 4, ADR-0348 Decisions 2 and 4). A run of a Job with approval.bypass goes Running, as
+// does an approved run whose preview is within its Job's approval.expiry; an approved run whose preview is older
+// previews again in this slot, with PreviewExpired; any other run previews first.
+func (j *JobRunReconciler) take(run *v1.JobRun, job *v1.Job, rev *v1.Revision, now v1.Timestamp) (controller.Result, *runStart) {
+	run.Status.JobRevision, run.Status.JobUID, run.Status.ImageDigest = rev.Name, job.UID, rev.Spec.ImageDigest
 	if run.Status.TraceID == "" {
 		run.Status.TraceID, _ = observability.NewTraceContext()
 	}
-	run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionUnknown, Message: fmt.Sprintf("the worker of revision %q runs the handler", pin)})
-	return controller.Result{RequeueAfter: j.r.supervisionPeriod}, &runStart{job: job, rev: rev}, nil
+	call, reason := callApply, ""
+	switch {
+	case job.Spec.Approval.Bypass:
+	case run.Approved():
+		if !previewFresh(run, job, now) {
+			call, reason = callPreview, v1.JobRunPreviewExpired
+		}
+	default:
+		call = callPreview
+	}
+	if call == callPreview {
+		run.Status.Phase = v1.JobRunPreviewing
+		msg := fmt.Sprintf("the worker of revision %q answers the preview", rev.Name)
+		if reason != "" {
+			msg = fmt.Sprintf("the approved preview is older than the Job's approval.expiry %s, so the worker of revision %q "+
+				"previews it again", job.Spec.Approval.ExpiryOrDefault(), rev.Name)
+		}
+		run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionUnknown, Reason: reason, Message: msg})
+		return controller.Result{RequeueAfter: j.r.supervisionPeriod}, &runStart{job: job, rev: rev, call: callPreview}
+	}
+	run.Status.Phase, run.Status.StartedAt = v1.JobRunRunning, now
+	run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionUnknown, Message: fmt.Sprintf("the worker of revision %q runs the handler", rev.Name)})
+	return controller.Result{RequeueAfter: j.r.supervisionPeriod}, &runStart{job: job, rev: rev, call: callApply}
+}
+
+// previewFresh reports whether run's preview is within its Job's approval.expiry at now, the end included (ADR-0348
+// Decision 4): checked on an approval and when the slot frees, never on a timer.
+func previewFresh(run *v1.JobRun, job *v1.Job, now v1.Timestamp) bool {
+	made := time.Time(run.Status.Preview.PreviewedAt)
+	return !time.Time(now).After(made.Add(time.Duration(job.Spec.Approval.ExpiryOrDefault())))
+}
+
+// awaiting is the pass of a run that waits for a person to approve or reject its preview (ADR-0348 Decisions 3 to 5):
+// it holds no worker and no slot and waits with no deadline, ended only once its pin goes. An approval, a rejection, a
+// cancel and a change of its Job bring its next pass.
+func (j *JobRunReconciler) awaiting(ctx context.Context, run *v1.JobRun, now v1.Timestamp) (controller.Result, *runStart, error) {
+	_, err := j.r.getRevision(ctx, run.Namespace, run.Status.JobRevision)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		run.Status.End(v1.JobRunCancelled, v1.JobRunJobDeleted, fmt.Sprintf("revision %q of Job %q is gone", run.Status.JobRevision, run.Spec.Job), now)
+	case err != nil:
+		return controller.Result{}, nil, fault.Wrapf(err, fault.KindOf(err), "function.ReconcileJobRun", "get revision %q", run.Status.JobRevision)
+	}
+	return controller.Result{}, nil, nil
+}
+
+// previewing is the pass of a run stored Previewing (ADR-0348 Decisions 2, 4 and 5). A rejection, a cancel, or its Job
+// or pin gone stops the preview's executor and, once its worker is gone, ends the run. The preview's answer is stored
+// with the time it was made: an approved run previewed again whose document keeps the approved digest goes on to
+// Running in the slot it holds, any other waits AwaitingApproval for a new approval; a failed preview ends the run.
+func (j *JobRunReconciler) previewing(ctx context.Context, run *v1.JobRun, job *v1.Job, gone bool, now v1.Timestamp) (controller.Result, *runStart, error) {
+	x := j.execs.get(run.UID)
+	if x == nil {
+		// no executor in this process: funcd stopped during the preview, which is called again (ADR-0348 Decision 2)
+		repreview(run)
+		return controller.Result{Requeue: true}, nil, nil
+	}
+	reason, why := "", ""
+	var rev *v1.Revision
+	switch {
+	case run.Spec.Reject:
+		reason = v1.JobRunRejectedReason
+	case run.Spec.Cancel:
+		reason, why = v1.JobRunCancelledReason, "spec.cancel: the preview's worker was stopped, and the handler never ran"
+	case gone:
+		reason, why = v1.JobRunJobDeleted, jobGoneMessage(run)
+	default:
+		var err error
+		rev, err = j.r.getRevision(ctx, run.Namespace, run.Status.JobRevision)
+		if fault.KindOf(err) == fault.NotFound {
+			reason, why = v1.JobRunJobDeleted, fmt.Sprintf("revision %q of Job %q is gone", run.Status.JobRevision, run.Spec.Job)
+		} else if err != nil {
+			return controller.Result{}, nil, fault.Wrapf(err, fault.KindOf(err), "function.ReconcileJobRun", "get revision %q", run.Status.JobRevision)
+		}
+	}
+	if reason != "" {
+		x.cancel()
+	}
+	if !x.finished() {
+		return controller.Result{RequeueAfter: j.r.supervisionPeriod}, nil, nil // its executor's end enqueues the run
+	}
+	switch reason {
+	case "":
+	case v1.JobRunRejectedReason:
+		reject(run, now)
+		return controller.Result{}, nil, nil
+	default:
+		run.Status.End(v1.JobRunCancelled, reason, why, now)
+		return controller.Result{}, nil, nil
+	}
+	if x.answer.preview == nil {
+		run.Status.End(x.answer.phase, x.answer.reason, x.answer.message, now)
+		return controller.Result{}, nil, nil
+	}
+	preview := *x.answer.preview
+	preview.PreviewedAt = now
+	run.Status.Preview = &preview
+	if run.Approved() {
+		// a stale approved preview made again with the approved digest: exactly what was approved runs (Decision 4)
+		run.Status.Phase, run.Status.StartedAt = v1.JobRunRunning, now
+		run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionUnknown, Message: fmt.Sprintf("the worker of revision %q runs the handler", rev.Name)})
+		return controller.Result{RequeueAfter: j.r.supervisionPeriod}, &runStart{job: job, rev: rev, call: callApply}, nil
+	}
+	run.Status.ApprovedBy, run.Status.ApprovedAt = "", v1.Timestamp{}
+	run.Status.Phase = v1.JobRunAwaitingApproval
+	run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionUnknown,
+		Message: fmt.Sprintf("the run waits for a person to approve or reject its preview %s", preview.Digest)})
+	return controller.Result{}, nil, nil
+}
+
+// repreview puts a run that funcd stopped while it was Previewing back to Pending, keeping its pin, its trace and an
+// approval it holds, so it previews again once it has a slot (ADR-0348 Decision 2).
+func repreview(run *v1.JobRun) {
+	run.Status.Phase = v1.JobRunPending
+	run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse,
+		Message: "funcd stopped while the run was Previewing: it previews again once it has a slot"})
+}
+
+// reject ends run Rejected, with spec.rejectReason as its message (ADR-0348 Decision 5).
+func reject(run *v1.JobRun, now v1.Timestamp) {
+	run.Status.End(v1.JobRunRejected, v1.JobRunRejectedReason, cmp.Or(run.Spec.RejectReason, "spec.reject: the run was rejected before it ran"), now)
 }
 
 // running is the pass of a run stored Running. A cancel, or its Job or pin gone, stops its executor and, once the worker
@@ -289,10 +438,31 @@ type jobKey struct {
 	name v1.ObjectName
 }
 
+// holdsSlot reports whether run holds a worker: Running, or Previewing (ADR-0348 Decision 2).
+func holdsSlot(run *v1.JobRun) bool {
+	return run.Status.Phase == v1.JobRunRunning || run.Status.Phase == v1.JobRunPreviewing
+}
+
+// waitsForSlot reports whether run waits for a slot: Pending, or AwaitingApproval with an approval recorded, and
+// neither cancelled nor rejected (ADR-0347 Decision 4, ADR-0348 Decision 4). A run that waits for a person takes none.
+func waitsForSlot(run *v1.JobRun) bool {
+	switch run.Status.Phase {
+	case "", v1.JobRunPending:
+	case v1.JobRunAwaitingApproval:
+		if !run.Approved() {
+			return false
+		}
+	default:
+		return false
+	}
+	return !run.Spec.Cancel && !run.Spec.Reject
+}
+
 // slotFor is why run takes no slot now, "" when it takes one (ADR-0347 Decision 4): a slot needs fewer of its Job's
-// runs Running than the Job's concurrency (unset 1) and fewer of the node's than job.maxRunning. The node's free slots
-// go to the oldest waiting runs whose Job is Ready and has one free, by creation time then name, so a Job at its limit
-// holds no other back. A run of a held namespace, a cancelled run and one whose Job changed UID take none.
+// runs holding a worker, Running or Previewing, than the Job's concurrency (unset 1) and fewer of the node's than
+// job.maxRunning. The node's free slots go to the oldest waiting runs whose Job is Ready and has one free, by creation
+// time then name, so a Job at its limit holds no other back. A run of a held namespace, a cancelled or rejected run, one
+// that waits for a person and one whose Job changed UID take none.
 func (j *JobRunReconciler) slotFor(ctx context.Context, run *v1.JobRun) (string, error) {
 	l, err := j.r.store.List(ctx, v1.KindJobRun.GVK(), store.ListOptions{})
 	if err != nil {
@@ -304,10 +474,10 @@ func (j *JobRunReconciler) slotFor(ctx context.Context, run *v1.JobRun) (string,
 		other, ok := o.(*v1.JobRun)
 		switch {
 		case !ok || other.Status.Phase.Ended():
-		case other.Status.Phase == v1.JobRunRunning:
+		case holdsSlot(other):
 			running[jobKey{other.Namespace, other.Spec.Job}]++
 			total++
-		case !other.Spec.Cancel && !j.cfg.NamespaceHold.HeldIn(other.Namespace):
+		case waitsForSlot(other) && !j.cfg.NamespaceHold.HeldIn(other.Namespace):
 			waiting = append(waiting, other)
 		}
 	}
@@ -402,9 +572,10 @@ func (j *JobRunReconciler) inputOff(ctx context.Context, run *v1.JobRun, job *v1
 		strings.Join(parts, "; "))), nil
 }
 
-// Boot ends every run stored Running Failed with Interrupted (ADR-0347 Decision 7). It runs after the drivers' sweeps
+// Boot ends every run stored Running Failed with Interrupted (ADR-0347 Decision 7), and puts every run stored
+// Previewing back to Pending, so its preview is called again (ADR-0348 Decision 2). It runs after the drivers' sweeps
 // removed every leftover worker and before the run reconciler starts any run, held or not, since it starts nothing:
-// no run is called twice, and none restarts on its own.
+// no handler is called twice, and no run's apply starts again on its own.
 func (j *JobRunReconciler) Boot(ctx context.Context) error {
 	const op = "function.BootJobRuns"
 	l, err := j.r.store.List(ctx, v1.KindJobRun.GVK(), store.ListOptions{})
@@ -414,10 +585,16 @@ func (j *JobRunReconciler) Boot(ctx context.Context) error {
 	now := v1.NewTimestamp(j.r.clock.Now())
 	for _, o := range l.Items {
 		run, ok := o.(*v1.JobRun)
-		if !ok || run.Status.Phase != v1.JobRunRunning {
+		switch {
+		case !ok:
+			continue
+		case run.Status.Phase == v1.JobRunRunning:
+			run.Status.End(v1.JobRunFailed, v1.JobRunInterrupted, interruptedMessage, now)
+		case run.Status.Phase == v1.JobRunPreviewing:
+			repreview(run)
+		default:
 			continue
 		}
-		run.Status.End(v1.JobRunFailed, v1.JobRunInterrupted, interruptedMessage, now)
 		if _, err := j.r.store.Update(ctx, run); err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "end jobrun %s/%s", run.Namespace, run.Name)
 		}
@@ -460,12 +637,13 @@ func (j *JobRunReconciler) MapJob(ctx context.Context, obj v1.Object) []controll
 	return j.runsWhere(ctx, m.Namespace, func(run *v1.JobRun) bool { return run.Spec.Job == m.Name && !run.Status.Phase.Ended() })
 }
 
-// MapRun maps a run that ended to the waiting runs of the node, one of which may take the slot it freed.
+// MapRun maps a run that holds no slot, one that ended or waits for a person, to the waiting runs of the node, one of
+// which may take the slot it freed.
 func (j *JobRunReconciler) MapRun(ctx context.Context, obj v1.Object) []controller.Request {
-	if run, ok := obj.(*v1.JobRun); !ok || !run.Status.Phase.Ended() {
+	if run, ok := obj.(*v1.JobRun); !ok || (!run.Status.Phase.Ended() && run.Status.Phase != v1.JobRunAwaitingApproval) {
 		return nil
 	}
-	return j.runsWhere(ctx, "", func(run *v1.JobRun) bool { return !run.Status.Phase.Ended() && run.Status.Phase != v1.JobRunRunning })
+	return j.runsWhere(ctx, "", waitsForSlot)
 }
 
 func (j *JobRunReconciler) runsWhere(ctx context.Context, ns v1.NamespaceName, keep func(*v1.JobRun) bool) []controller.Request {
@@ -510,8 +688,9 @@ func (x *execution) finished() bool {
 	}
 }
 
-// start runs launch for run on a goroutine of its own, which keeps the answer and enqueues the run when it ends.
-func (e *runExecutions) start(run *v1.JobRun, job *v1.Job, rev *v1.Revision, launch runLauncher, enqueue func(controller.Request)) {
+// start runs launch for run's call on a goroutine of its own, which keeps the answer and enqueues the run when it ends.
+// It takes the place of the run's executor that ended, its preview's.
+func (e *runExecutions) start(run *v1.JobRun, job *v1.Job, rev *v1.Revision, call runCall, launch runLauncher, enqueue func(controller.Request)) {
 	ctx, cancel := context.WithCancel(context.Background())
 	x := &execution{ns: run.Namespace, name: run.Name, cancel: cancel, done: make(chan struct{})}
 	e.mu.Lock()
@@ -521,7 +700,7 @@ func (e *runExecutions) start(run *v1.JobRun, job *v1.Job, rev *v1.Revision, lau
 	go func() {
 		defer e.live.Done()
 		defer cancel()
-		x.answer = launch(ctx, run, job, rev)
+		x.answer = launch(ctx, run, job, rev, call)
 		close(x.done)
 		enqueue(controller.Request{GVK: v1.KindJobRun.GVK(), Namespace: run.Namespace, Name: run.Name})
 	}()
