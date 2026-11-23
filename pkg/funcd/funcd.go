@@ -735,8 +735,8 @@ func (p *Platform) buildControlPlane() error {
 		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.LakeCapability(),
 			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapabilityWithWriters(writerLister),
 			cedarauth.AddonCapability()},
-		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.LakePrincipalSource(),
-			cedarauth.AddonObjectPrincipalSource()},
+		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.JobPrincipalSource(),
+			cedarauth.LakePrincipalSource(), cedarauth.AddonObjectPrincipalSource()},
 	)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar capability registry")

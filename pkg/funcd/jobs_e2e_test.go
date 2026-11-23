@@ -16,7 +16,6 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/store"
@@ -26,8 +25,7 @@ import (
 )
 
 // The scenarios of ADR-0347 on the process driver and the real Node shim. A handler that must run until the test lets
-// it waits for a file, which gate names and open creates. The shims do not pass context.run yet, so nothing here reads
-// it.
+// it waits for a file, which gate names and open creates.
 
 const runWithin = 10 * time.Second
 
@@ -65,19 +63,7 @@ func callsOf(t *testing.T, calls string) int {
 // deployJob pushes src, with the {input, output} contract ("" is {}), as funcdctl push does and applies Job name.
 func (h *shimRig) deployJob(t *testing.T, name, src, input string, edit func(*v1.JobSpec)) {
 	t.Helper()
-	side := func(s string) []byte {
-		if s == "" {
-			s = `{}`
-		}
-		return []byte(s)
-	}
-	contractBlob, err := artifact.ContractBlob(side(input), side(""))
-	require.NoError(t, err)
-	file := filepath.Join(t.TempDir(), name+".mjs")
-	require.NoError(t, os.WriteFile(file, []byte(src), 0o600))
-	ref := "oci-layout://" + h.layout + ":" + name + "-" + fmt.Sprint(time.Now().UnixNano())
-	digest, err := artifact.Push(context.Background(), ref, file, contractBlob, "", "")
-	require.NoError(t, err)
+	ref, digest := funcd.PushJob(t, h.layout, name, src, input)
 	job := h.getJob(t, name)
 	if job == nil {
 		job = &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob},
@@ -87,7 +73,7 @@ func (h *shimRig) deployJob(t *testing.T, name, src, input string, edit func(*v1
 	if edit != nil {
 		edit(&job.Spec)
 	}
-	_, err = h.c.Apply(context.Background(), job)
+	_, err := h.c.Apply(context.Background(), job)
 	require.NoError(t, err)
 }
 

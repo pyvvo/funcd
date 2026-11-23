@@ -99,7 +99,7 @@ func (c *Calls) bound(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRe
 			return nil, fault.Wrapf(err, fault.KindOf(err), op, "authorize addon::call on %q", name)
 		}
 		if !dec.Allowed {
-			return nil, local.ErrAddonForbidden.Errorf(op, "the Function may not call %q: %s", name, dec.Reason)
+			return nil, local.ErrAddonForbidden.Errorf(op, "the %s may not call %q: %s", fn.Kind, name, dec.Reason)
 		}
 	}
 	got, err := c.store.Get(ctx, v1.KindAddonObject.GVK(), ns, name)
