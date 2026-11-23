@@ -1,6 +1,6 @@
 # ADR-0345: A Function reconciles an engineless kind's objects, and a deletion waits for its destroy
 
-- **Status**: Proposed (2026-11-23), judged twice: round 2's Major and Minors folded
+- **Status**: Proposed (2026-11-23), judged three times: round 3's Major folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, reconcile, functions, deletion, apps
@@ -11,9 +11,7 @@
   the object's own engineless kind: Decision 3) and Decision 8 (`addons.settingsTimeout` bounds this call too:
   Decision 2); [ADR-0170](0170-owner-garbage-collector.md) Decision 1 (the collector holds an engineless child:
   Decision 6), [ADR-0199](0199-app-resource.md) Decisions 6 and 7 and
-  [ADR-0337](0337-an-app-template-carries-its-add-on.md) Decision 5 (an App's engineless parts go first: Decision 8);
-  [ADR-0339](0339-an-add-ons-versions-are-revisions-each-object-pins.md) Decision 1 (a pinned revision outlives its
-  Addon: Decision 9)
+  [ADR-0337](0337-an-app-template-carries-its-add-on.md) Decision 5 (an App's engineless parts go first: Decision 8)
 - **Relates to**: [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md) (the workloads
   `Engineless` joins) · [ADR-0339](0339-an-add-ons-versions-are-revisions-each-object-pins.md) (the revision an object
   pins) · [ADR-0190](0190-run-bound-to-its-revision.md) (a run holds what it uses) ·
@@ -40,13 +38,13 @@ kind's Function, and whoever deletes an object or its App.
   *Then* each Function's call lists only the objects it reconciles.
 - `scenario: engineless-resync` — *Given* `bunny-edge` Ready, *When* the kind's `resync` elapses, *Then* its Function
   gets the list again, cause `resync`.
-- `scenario: engineless-waits` — *Given* no Addon for the kind, or no Function `infrastack-reconciler`, *Then*
-  `bunny-edge` is `Pending` with `AddonNotFound` or `FunctionNotFound` and no call carries it; deleted then, it is held
-  until they are back or `retain` is set.
-- `scenario: engineless-delete-held` — *Given* `bunny-edge` with `deletion: delete`, sent to its Function or not,
-  *When* it is deleted, *Then* the DELETE answers 202, it stays with `metadata.deletionTimestamp` set and `Deleting`,
-  its next call carries it with `deleting: true`, it reports the Function's reason, such as `Destroying`, and it goes
-  on the Function's ok to it.
+- `scenario: engineless-waits` — *Given* no Function `infrastack-reconciler`, or the Addon deleted after
+  `bunny-edge`'s first pass, *Then* `bunny-edge` is `Pending` with `FunctionNotFound` or `AddonNotFound` and no call
+  carries it; deleted then, it is held until they are back or `retain` is set.
+- `scenario: engineless-delete-held` — *Given* `bunny-edge` with `deletion: delete` past its first pass, sent to its
+  Function or not, *When* it is deleted, *Then* the DELETE answers 202, it stays with `metadata.deletionTimestamp` set
+  and `Deleting`, its next call carries it with `deleting: true`, it reports the Function's reason, such as
+  `Destroying`, and it goes on the Function's ok to it; deleted before its first pass, it goes at once.
 - `scenario: engineless-delete-in-flight` — *Given* a call that carries `bunny-edge` live, *When* `bunny-edge` is
   deleted and that call answers ok, *Then* it stays held, and the next call carries it with `deleting: true`.
 - `scenario: engineless-retain` — *Given* `deletion: retain`, the default, *When* it is deleted, *Then* it goes at
@@ -71,8 +69,7 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
 ## Constraints & Decision drivers
 
 - Reuse ADR-0341's call: the full list per group, level-triggered, on a goroutine of its own, through the hooks'
-  invoker; funcd never learns what the Function manages, and no pass waits on it. A deletion never destroys by
-  default: `deletion` keeps ADR-0332's default, `retain`.
+  invoker; funcd never learns what the Function manages, and no pass waits on it.
 - The decider's answers of 2026-11-23: the hold (A); the kind's `function.ref`, which an object may override, one call
   per Function; a run's end calls at once; a stack's variables are checked when its run is created (F137, not here).
 
@@ -84,6 +81,7 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
 | Kubernetes' finalizers, which any controller may set on any object | general | every delete path and kind would read them, for one kind's need | Rejected |
 | The Function destroys what leaves the list | no hold at all | a lost or empty list destroys a stack, and `retain` cannot be told from `delete` | Rejected |
 | Hold only an object a call has carried, its pinned revision the proof | an unsent object goes at once | a pass starts its call before it stores the pin (`revisions.go:185`, `settings.go:231`), so a crash leaves an applied stack unheld | Rejected |
+| Keep a deleted Addon's pinned revisions as the proof | the revision already names the workload | revisions are named `<addon>-<generation>`, so a re-created Addon of the name stalls, and an engine object would run the deleted Addon's spec | Rejected |
 | Refuse every write to a deleting object, 409 | no edit while it goes | funcdctl's apply re-applies on every 409 as a race (`dev_reload.go:26-33`, `app.go:540`) | Rejected |
 | The App alone waits for a destroy | no API change | a standalone object, or a DELETE of an App's part, escapes it | Rejected |
 
@@ -94,7 +92,8 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
    (the objects' schema, ADR-0332), `function` (`ref`, required, as a settings kind's, ADR-0341 Decision 3) and
    `resync` (1s to 24h, unset 10m, as a settings kind's). An image or any other attribute is refused, 400 naming it.
    An engineless object pins its AddonRevision as an engine's object does (ADR-0339 Decisions 2 and 3), and its
-   Function and resync come from that revision.
+   Function and resync come from that revision. Its first pass stores `status.workload: Engineless`, and no call
+   carries it before that write is stored.
 2. **The call.** An engineless object's group is its namespace, its kind and its Function: the `ref` of its
    `spec.functions` entry for its own kind, else the kind's `function.ref`. In the object's pass, the list is every
    object of the group, sorted by name, deleting ones included, and a call is due as in ADR-0341 Decision 1: no call
@@ -125,14 +124,15 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
    included. A new or edited object is `Pending` with `Progressing` until the answer for its generation. One whose
    Addon, pinned revision or Function is missing is `Pending` with `AddonNotFound`, `AddonRevisionNotFound` (ADR-0339)
    or `FunctionNotFound`, and no call carries it.
-6. **The hold.** An engineless object whose `spec.deletion` is `delete` is held at its deletion, whether or not a call
-   has carried it: the API's DELETE, the owner garbage collector and an App's prune remove it through
+6. **The hold.** An object whose `status.workload` is `Engineless` and whose `spec.deletion` is `delete` is held at
+   its deletion, whether or not a call has carried it yet: the API's DELETE, the owner garbage collector and an App's
+   prune remove it through
    `DeleteAddonObject`, which sets its `metadata.deletionTimestamp` instead. The DELETE answers 202 with the object,
    with `If-Match` checked as today, and 202 again for a deleting object. A write to a deleting object is stored, and
    it stays deleting. Its group's lists carry it with `deleting: true`. Only an ok answer to a call that carried it so,
    at its uid, removes it; a call sent before its deletion removes nothing. Any other answer writes its status, Ready
-   False with the answer's reason, `Deleting` until the first. Its kind is engineless by the AddonRevision it pins,
-   else by its Addon as it is now; an object whose kind neither names goes at once.
+   False with the answer's reason, `Deleting` until the first. An object with no `status.workload`, which no call can
+   have carried (Decision 1), goes at once.
 7. **Retain.** With `retain` an object goes at its deletion: it leaves the next list, and the Function forgets it,
    leaving what it manages in place. Setting `retain` on a deleting object removes it at its next pass, with no call. A
    deleting object whose Addon or Function is gone waits, with that reason, until it is back or `retain` is set.
@@ -140,9 +140,6 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
    once none remains. An App's prune keeps each part it drops, `InUse: <kind>/<name>`, while an engineless part it
    drops still exists. When an App's last engineless part goes, the add-on reconciler asks the collector to pass over
    its namespace (`gc.CollectNamespace`), so the rest goes then, not at the next sweep.
-9. **Pinned revisions.** The collector keeps an AddonRevision whose Addon is gone while an object pins it or an
-   AppRevision records it, as it keeps an unused one (ADR-0339 Decision 1), so an engineless object of a deleted
-   Addon is still held at its deletion and waits `AddonNotFound`. The revision goes once neither holds.
 
 ## Design model
 
@@ -158,16 +155,17 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
 
 - **Bounds**: one App with one stack, its Job and its Function; one call before the deletion, one failed call, one
   stop; 1 concurrent action (each step is atomic: a pass runs on the controller's one worker, a call is its send and
-  its answer); 15 actions, the smallest at which every run ends, and each mutant fails at it.
+  its answer); 16 actions, the smallest at which every run ends, and each mutant fails at it.
 - **Faults**: a call in flight at the deletion; a failed call, or one that finds its Function gone; funcd's stop,
   which cuts the call in flight and clears what funcd knows of its calls, the hold staying in the store; no crash on
   yield.
 - **Environment**: the Function answers only while it exists; the destroy run needs its Job and an approval, which
   comes.
-- **Mutants**: `no-order` fails `PartsOutliveTheStack`; `no-hold`, `gone-on-any-answer` and `ok-from-live-call` fail
-  `NoStackGoesUndestroyed`; `no-retry` fails `DeletedAppGoes`.
-- **Result**: pass, 726 states, 0.5 s, FizzBee v0.5.4; wider (two calls before the deletion, two failed calls, two
-  stops, 22 actions): pass, 2,844 states, 1.0 s.
+- **Mutants**: `no-order` fails `PartsOutliveTheStack`; `no-hold`, `gone-on-any-answer`, `ok-from-live-call` and
+  `call-before-mark` (a call before the first pass stored the mark) fail `NoStackGoesUndestroyed`; `no-retry` fails
+  `DeletedAppGoes`.
+- **Result**: pass, 734 states, 0.5 s, FizzBee v0.5.4; wider (two calls before the deletion, two failed calls, two
+  stops, 23 actions): pass, 2,856 states, 1.1 s.
 - **Left to tests**: several stacks and groups, a prune of a stack with its Job, a standalone stack whose Job someone
   deletes, the uid check (an object retained and created again while a deleting call is in flight), the resync's
   period and the backoff's length; the scenario tests hold them.
@@ -175,9 +173,9 @@ backup (FEAT-0009); calls over a stream; a general finalizer mechanism.
 ## Behavior rows
 
 - **addons.md**: "An Addon's runtimes" (`:29`) gains `Engineless`; new rows "An engineless object's status" (Decision
-  5's reasons), "An engineless object deleted" (the hold: 202, `Deleting`, writes kept, the ok that removes it), "An
-  engineless object retained" (it goes and is forgotten) and "A deleting object whose Addon or Function is gone"; "An
-  Addon changed or deleted" (`:30`) and "An unused revision" (`:32`): a pinned revision outlives its Addon.
+  5's reasons), "An engineless object deleted" (held once its first pass stored `status.workload`: 202, `Deleting`,
+  writes kept, the ok that removes it), "An engineless object retained" (it goes and is forgotten) and "A deleting
+  object whose Addon or Function is gone".
 - **funcdctl.md**: a new row for `funcdctl delete` of a held object (`deleting <kind>/<name>`); `app delete` waits
   through each stack's destroy and approval.
 - **apps.md**: "A dropped part" (`:50`), "An App deleted" (`:52`) and "A revision drops an `addons` entry" (`:55`): an
@@ -221,6 +219,9 @@ type CallObject struct {
 	Config     json.RawMessage `json:"config"`
 }
 
+// AddonObjectStatus gains the workload of the object's kind, stored at its first pass (Decision 1).
+Workload Workload `json:"workload,omitempty"`
+
 // DeleteAddonObject removes obj, or holds it as Decision 6 says and returns it (internal/gc).
 func DeleteAddonObject(ctx context.Context, s store.Store, obj *v1.AddonObject) (held *v1.AddonObject, err error)
 
@@ -236,10 +237,11 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
 
 1. `api/types/v1alpha1`: `WorkloadEngineless`, the two attributes and Decision 1's refusals in `Validate`; the docs of
    `deletionTimestamp` (`metadata.go`) and of an add-on object's `deletion`.
-2. `internal/services/addon`: `objects.go`, the step of an engineless object (groups, digest, causes, the goroutine,
-   the status, the removal on an ok to a deleting call and on `retain`), sharing `settings.go`'s call state and
-   backoff; `reconcile.go` routes an engineless object to it; a watch of Functions requeues the objects each reconciles.
-3. `internal/gc`: `DeleteAddonObject`, which `remove` calls, Decision 8's wait and Decision 9's kept revision;
+2. `internal/services/addon`: `objects.go`, the step of an engineless object (the `status.workload` write before any
+   call, groups, digest, causes, the goroutine, the status, the removal on an ok to a deleting call and on `retain`),
+   sharing `settings.go`'s call state and backoff; `reconcile.go` routes an engineless object to it; a watch of
+   Functions requeues the objects each reconciles.
+3. `internal/gc`: `DeleteAddonObject`, which `remove` calls, and Decision 8's wait;
    `internal/app`: `remove` and `prune`, `InUse`; `internal/controlplane`: the handler, the `{plural}` DELETE route's
    202 with its body in the OpenAPI, and `spec.functions`' new entry in the object's admission and in `app-parts`;
    `cmd/funcdctl`: `delete` prints `deleting` for a 202.
@@ -255,8 +257,8 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
 - [ ] No pass waits on a call; one call at most runs per group, with its whole list, sent again at a start.
 - [ ] A held object goes only on an ok to a call that carried it with `deleting: true`, at its uid, or on `retain`.
 - [ ] Every delete path (the API, the collector, an App's prune) holds through `DeleteAddonObject`.
-- [ ] An App's other parts outlive its engineless parts, on a deletion and on a prune; a pinned revision outlives
-      its Addon.
+- [ ] An App's other parts outlive its engineless parts, on a deletion and on a prune.
+- [ ] A call carries an object only once its `status.workload` is stored.
 - [ ] A write to a deleting object keeps it deleting; a second DELETE answers 202 with the object.
 - [ ] The spec passes `just check-specs`, and each assertion has its oracle marker on a passing test.
 
@@ -272,14 +274,13 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
 - **(−)** Under `funcdctl dev` a destroy on an Addon's runtime cannot run (ADR-0344), so dev's prune leaves such a
   stack held until `retain`; the dev follow-up under F139 decides more.
 - **(−)** An engineless object has no snapshot: a Backup that names it fails `NoSnapshot`, and a hold never reaches a
-  backup. An object deleted after its Addon went, with no pass of it stored, goes at once, as `retain` would.
-- **(−)** An Addon's revisions linger after it while objects pin them, for engine kinds too.
+  backup.
+- **(−)** An engineless object's first pass writes its status once more before its first call.
 
 ## Open questions
 
 - A deadline on a hold, after which an object goes as `retain` would: none for now; a board card if a stack's
   destroy ever waits too long.
-- The binding through which a Function starts a Job's runs, and the run's end event: F137's ADR (Decision 4).
 
 ## References
 

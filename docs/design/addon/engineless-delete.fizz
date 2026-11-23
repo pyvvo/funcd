@@ -1,6 +1,8 @@
 ---
-# The deletion hold of an engineless add-on object (ADR-0345 Decisions 6 to 8), for one App whose parts are a stack
-# (an engineless object with deletion: delete), the Job its Function runs and that Function. funcd's pass sends the
+# The deletion hold of an engineless add-on object (ADR-0345 Decisions 2 and 6 to 8), for one App whose parts are a
+# stack (an engineless object with deletion: delete), the Job its Function runs and that Function. The stack's first
+# pass stores its status.workload, and only then may a call carry it; a deletion holds a stack that has the mark and
+# removes one that has none, which no call has carried. funcd's pass sends the
 # stack's group its list while no call is in flight: before the deletion with deleting: false, which the Function
 # answers ok once it has applied the stack, after it with deleting: true. Someone deletes the App. The owner garbage
 # collector marks the stack deleting instead of removing it, and removes the App's other parts, the Job and the
@@ -16,7 +18,7 @@
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
-  max_actions: 15
+  max_actions: 16
   crash_on_yield: false
 ---
 # diagram: stack
@@ -24,12 +26,14 @@ options:
 # mutant no-hold: NoStackGoesUndestroyed
 # mutant gone-on-any-answer: NoStackGoesUndestroyed
 # mutant ok-from-live-call: NoStackGoesUndestroyed
+# mutant call-before-mark: NoStackGoesUndestroyed
 # mutant no-retry: liveness
 
 # no-order: the collector removes the Job and the Function with the stack, not after it.
 # no-hold: the collector removes the stack at once, as it removes any other part.
 # gone-on-any-answer: funcd removes the stack at its first answer, ok or not.
 # ok-from-live-call: an ok answer to a call sent before the deletion removes the stack.
+# call-before-mark: a call carries the stack before its first pass has stored the mark.
 # no-retry: a failed call is not sent again.
 MUTANT = ""
 
@@ -46,6 +50,8 @@ action Init:
     answer = "none"
     answerdel = False
     applies = 0
+    marked = False
+    sent = False
     fails = 0
     stops = 0
 
@@ -53,11 +59,17 @@ atomic action DeleteApp:
     require app == "live"
     app = "deleted"
 
-# The owner garbage collector: an App's engineless part first, held at its deletion.
+# The stack's first pass stores its status.workload.
+atomic fair action FirstPass:
+    require stack == "live"
+    require not marked
+    marked = True
+
+# The owner garbage collector: an App's engineless part first, held at its deletion when it has the mark.
 atomic fair action CollectStack:
     require app == "deleted"
     require stack == "live"
-    if MUTANT == "no-hold":
+    if MUTANT == "no-hold" or not marked:
         stack = "gone"
     else:
         stack = "deleting"
@@ -76,10 +88,13 @@ atomic fair action Send:
     require stack != "gone"
     require call == "idle"
     require fn
+    if MUTANT != "call-before-mark":
+        require marked
     if stack == "live":
         require applies < 1
         applies += 1
     call = "sent"
+    sent = True
     sentdel = stack == "deleting"
 
 # The Function answers for the stack as it was sent: ok once a live stack is applied; for a deleting one, it starts the
@@ -152,7 +167,7 @@ always assertion PartsOutliveTheStack:
     return stack == "gone" or (job and fn)
 
 always assertion NoStackGoesUndestroyed:
-    return stack != "gone" or app == "live" or destroyed or retained
+    return stack != "gone" or app == "live" or not sent or destroyed or retained
 
 always eventually assertion DeletedAppGoes:
     return app == "live" or (stack == "gone" and not job and not fn)
