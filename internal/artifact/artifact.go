@@ -610,12 +610,70 @@ type OrasMaterializer struct {
 
 	mu        sync.Mutex
 	platforms map[string][]v1.OCIPlatform // per digest; an artifact digest is immutable
+	fills     map[string]*fill            // per cache dir, the fill under way (#1538)
+}
+
+// fill is one call's fill of a cache dir from ref. err, and whether the call's own context had ended, are written
+// before done closes; the close is what makes them visible to the calls that wait.
+type fill struct {
+	ref     string
+	done    chan struct{}
+	err     error
+	ctxDone bool
 }
 
 // NewOrasMaterializer builds the OCI-backed Materializer caching under artifactDir, for a node running
 // node ("" ⇒ the daemon's own platform).
 func NewOrasMaterializer(artifactDir string, node v1.OCIPlatform) *OrasMaterializer {
-	return &OrasMaterializer{artifactDir: artifactDir, node: nodeOrHost(node), platforms: map[string][]v1.OCIPlatform{}}
+	return &OrasMaterializer{artifactDir: artifactDir, node: nodeOrHost(node), platforms: map[string][]v1.OCIPlatform{},
+		fills: map[string]*fill{}}
+}
+
+// fillOnce fills cacheDir from ref unless another call is filling it, since two fills of one cache dir remove, rename
+// over or read the dir the other just moved into place (#1538). A call waits for that fill on its own context. It then
+// takes the fill's error when the fill pulled from its ref and did not end with its caller's context, so concurrent
+// first uses share one registry wait (#697); otherwise it checks the cache again and fills it itself.
+func (m *OrasMaterializer) fillOnce(ctx context.Context, op, ref, digest, cacheDir string) error {
+	for {
+		if _, ok, _ := cachedArtifact(op, cacheDir); ok {
+			return nil
+		}
+		m.mu.Lock()
+		f, waits := m.fills[cacheDir]
+		if !waits {
+			f = &fill{ref: ref, done: make(chan struct{})}
+			m.fills[cacheDir] = f
+		}
+		m.mu.Unlock()
+		if !waits {
+			return m.lead(ctx, f, op, ref, digest, cacheDir)
+		}
+		select {
+		case <-f.done:
+		case <-ctx.Done():
+			return fault.Wrapf(ctx.Err(), fault.Unavailable, op, "wait for artifact cache %q", cacheDir)
+		}
+		if f.err != nil && f.ref == ref && !f.ctxDone {
+			return f.err
+		}
+	}
+}
+
+// lead runs the fill f records, then removes the record and wakes the calls that wait for it however the fill ends, a
+// panic included: f.err is then still nil, so a waiting call checks the cache and fills it itself.
+func (m *OrasMaterializer) lead(ctx context.Context, f *fill, op, ref, digest, cacheDir string) error {
+	defer func() {
+		m.mu.Lock()
+		delete(m.fills, cacheDir)
+		m.mu.Unlock()
+		close(f.done)
+	}()
+	f.err = m.fillCache(ctx, op, ref, digest, cacheDir)
+	if _, ok, _ := cachedArtifact(op, cacheDir); f.err == nil && !ok {
+		f.err = fault.Internalf(op, "artifact cache %q holds no handler after a pull", cacheDir)
+	}
+	f.ctxDone = ctx.Err() != nil
+	return f.err
 }
 
 // Platforms implements function.PlatformResolver (ADR-0145): the platforms the artifact at digest provides,
@@ -665,7 +723,7 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 	if path, ok, err := cachedArtifact(op, cacheDir); ok {
 		return path, err
 	}
-	if err := m.fillCache(ctx, op, ref, digest, cacheDir); err != nil {
+	if err := m.fillOnce(ctx, op, ref, digest, cacheDir); err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", fn.Namespace, fn.Name)
 	}
 	path, ok, err := cachedArtifact(op, cacheDir)
