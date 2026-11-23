@@ -14818,5 +14818,20 @@
     "dod_total": 13,
     "report": "docs/reviews/adr-0343-implementation-claude-opus-5-5.md",
     "notes": "self-review (not independent, the decider's rule); scenario on a built SQL engine, Lake half on the fake engine; 2/2 mutants"
+  },
+  {
+    "date": "2026-11-23",
+    "adr": "0272",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0272-amendment-implementation-claude-opus-5-5.md",
+    "notes": "amendment of 2026-11-23: just ci and CI run no spec; a pre-push hook checks the specs a push adds or changes; self-reviewed, not independent"
   }
 ]
