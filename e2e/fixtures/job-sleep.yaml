@@ -1,0 +1,12 @@
+# ADR-0347: a Job whose run sleeps for its input's ms; the job lane cancels one run and crashes funcd during another.
+apiVersion: funcd.io/v1alpha1
+kind: Job
+metadata:
+  name: sleeper
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:job-sleep
+  concurrency: 2

@@ -10,7 +10,8 @@
 #             github.com/pyvvo/funcd-python or github.com/pyvvo/funcd-functions (the example Apps), resolved
 #             by scripts/moddir.sh (module cache or go.work). Absent = the funcd repo root. The language
 #             repos commit their example builds.
-#   dir     — the example directory, relative to the module root; source of the staged files.
+#   dir     — the example directory, relative to the module root; source of the staged files. Absent = a lane
+#             that runs no example: it stages funcd's own fixtures, each a {from} entry, with no build or copy.
 #   copy    — true = build in a writable copy (the module cache is read-only): the whole module goes to
 #             .modcopy/lane/<module>, so the example's relative references still resolve.
 #   build   — host shell commands (run in the lane's dir, in order, with FUNCD_ROOT set to the funcd checkout) that
@@ -954,3 +955,30 @@ addon-rauthy-restore:
     developer: addon-rauthy-restore-lane-developer
   # Only an admin registers an Addon and restores in place, so the suite applies every manifest itself.
   venom: e2e/addon-rauthy-restore.venom.yml
+
+job:
+  description: A Job's runs on real containerd (ADR-0347) — a run that ends Succeeded with no container left, a cancel that stops the run's container within the grace, and a funcd crash during a run that leaves it Interrupted with no container.
+  stage:
+    - from: e2e/fixtures/job-sleep.mjs
+      to: job-sleep.mjs
+    - from: e2e/fixtures/job-sleep.contract.json
+      to: job-sleep.contract.json
+    - from: e2e/fixtures/job-sleep.yaml
+      to: job-sleep.yaml
+    - from: e2e/fixtures/job-input-short.json
+      to: job-input-short.json
+    - from: e2e/fixtures/job-input-long.json
+      to: job-input-long.json
+    - from: e2e/fixtures/job-funcdconfig.yaml
+      to: funcdconfig.yaml
+  push:
+    - artifact: job-sleep.mjs
+      ref: job-sleep
+  apply:
+    - job-sleep.yaml
+  ready:
+    kind: job
+    names:
+      - sleeper
+    tries: 60
+  venom: e2e/job.venom.yml

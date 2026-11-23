@@ -1,0 +1,1 @@
+{"runtime":"nodejs22","input":{"type":"object","properties":{"ms":{"type":"integer","minimum":0}},"additionalProperties":false},"output":{"type":"object","properties":{"slept":{"type":"integer"}},"required":["slept"],"additionalProperties":false}}

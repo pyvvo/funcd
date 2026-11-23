@@ -67,7 +67,11 @@ def main() -> None:
     spec = lanes[name]
     roots: dict[str, str] = {}
     module = spec.get("module")
-    example_dir = os.path.join(module_root(module, roots), spec["dir"])
+    if "dir" not in spec and (
+        spec.get("copy") or spec.get("build") or not all(isinstance(f, dict) for f in spec["stage"])
+    ):
+        sys.exit(f"lane {name!r} has no dir, so each stage entry must be a {{from}} mapping, with no build or copy")
+    example_dir = os.path.join(module_root(module, roots), spec.get("dir", ""))
     if spec.get("copy"):
         # A module lane copies its WHOLE module, so the example's relative references (a uv path dep on
         # ../../shim) still resolve. Lane copies live apart from the dev copies scripts/example-copy.sh

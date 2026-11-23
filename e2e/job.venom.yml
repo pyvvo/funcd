@@ -1,0 +1,114 @@
+# Venom e2e suite for the job containerd lane (ADR-0347): the runs of the Job `sleeper`, each in a container of its own
+# named <run>.run on real containerd. Every step drives funcdctl in the VM, co-located with the daemon.
+#
+# It proves, end to end:
+#   1. job-run-succeeds — a run ends Succeeded with its result, and its container is gone after the answer.
+#   2. job-cancel-stops-run — a cancel stops the run's container within the driver's grace and ends it Cancelled.
+#   3. job-restart-interrupts — funcd killed while a run runs: at its next start the run is Failed with Interrupted,
+#      and the drivers' boot sweep has removed its container.
+name: jobs — a run, a cancel that stops its container, and a crash during a run (ADR-0347, containerd lane)
+
+vars:
+  vmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -c"
+  ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
+
+testcases:
+  - name: job-run-succeeds — a run ends Succeeded with its result, and no container of it remains
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl job run sleeper lane-ok --input @/opt/lane/job-input-short.json'
+        info: "job run lane-ok → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl get jobrun lane-ok -n default -o json' | python3 -c 'import sys,json;s=json.load(sys.stdin).get("status",{});print("PHASE="+s.get("phase",""),"RESULT="+json.dumps(s.get("result"),separators=(",",":")))'
+        retry: 30
+        delay: 2
+        info: "lane-ok → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - 'result.systemout ShouldContainSubstring RESULT={"slept":500}'
+      - type: exec
+        script: |
+          {{.vmsh}} '{{.ctr}} containers ls -q | grep -c "^lane-ok\.run$" || true'
+        retry: 10
+        delay: 1
+        info: "containers named lane-ok.run → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldEqual 0
+
+  - name: job-cancel-stops-run — a cancel stops the run's container within the grace and ends it Cancelled
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl job run sleeper lane-cancel --input @/opt/lane/job-input-long.json'
+        info: "job run lane-cancel → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl get jobrun lane-cancel -n default -o json | python3 -c "import sys,json;print(\"PHASE=\"+json.load(sys.stdin).get(\"status\",{}).get(\"phase\",\"\"))"; {{.ctr}} containers ls -q | grep -c "^lane-cancel\.run$" || true'
+        retry: 60
+        delay: 1
+        info: "lane-cancel before the cancel → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Running
+          - result.systemout ShouldEndWith 1
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl job cancel lane-cancel'
+        info: "job cancel lane-cancel → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl get jobrun lane-cancel -n default -o json | python3 -c "import sys,json;print(\"PHASE=\"+json.load(sys.stdin).get(\"status\",{}).get(\"phase\",\"\"))"; {{.ctr}} containers ls -q | grep -c "^lane-cancel\.run$" || true'
+        retry: 20
+        delay: 1
+        info: "lane-cancel after the cancel → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Cancelled
+          - result.systemout ShouldEndWith 0
+
+  - name: job-restart-interrupts — funcd killed during a run leaves it Failed with Interrupted and no container
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl job run sleeper lane-crash --input @/opt/lane/job-input-long.json'
+        info: "job run lane-crash → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl get jobrun lane-crash -n default -o json | python3 -c "import sys,json;print(\"PHASE=\"+json.load(sys.stdin).get(\"status\",{}).get(\"phase\",\"\"))"; {{.ctr}} containers ls -q | grep -c "^lane-crash\.run$" || true'
+        retry: 60
+        delay: 1
+        info: "lane-crash before the kill → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Running
+          - result.systemout ShouldEndWith 1
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            kill -s KILL "$(systemctl show -p MainPID --value funcd-demo)"
+            for i in $(seq 60); do s=$(systemctl show -p ActiveState --value funcd-demo); [ "$s" = inactive ] || [ "$s" = failed ] && break; sleep 0.5; done
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            for i in $(seq 30); do systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml && break; sleep 1; done
+            for i in $(seq 90); do funcdctl get job sleeper -n default >/dev/null 2>&1 && break; sleep 1; done
+            funcdctl get job sleeper -n default >/dev/null 2>&1 || { journalctl -u funcd-demo --no-pager -n 120; exit 1; }
+            echo RESTARTED'
+        info: "the kill and funcd's next start → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: exec
+        script: |
+          {{.vmsh}} 'systemctl is-active --quiet funcd-demo || journalctl -u funcd-demo --no-pager -n 120; funcdctl get jobrun lane-crash -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin).get(\"status\",{});r=[c.get(\"reason\",\"\") for c in s.get(\"conditions\",[]) if c.get(\"type\")==\"Ready\"];print(\"PHASE=\"+s.get(\"phase\",\"\"),\"REASON=\"+(r[0] if r else \"\"))"; {{.ctr}} containers ls -q | grep -c "^lane-crash\.run$" || true'
+        retry: 30
+        delay: 2
+        info: "lane-crash after the restart → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Failed
+          - result.systemout ShouldContainSubstring REASON=Interrupted
+          - result.systemout ShouldEndWith 0
