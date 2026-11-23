@@ -23,13 +23,21 @@ pre-commit:
       run: env -u GIT_DIR -u GIT_INDEX_FILE scripts/agent/d go run ./scripts/behavior -check
 
 # CI does not run the design specs (ADR-0272, amended 2026-11-23): before a push, each spec that the pushed commits add
-# or change must pass. A spec the push deletes is left out.
+# or change must pass. A spec the push deletes is left out. The pushed commits are read from the refs git gives the hook:
+# since the remote's head, or, on a branch's first push, those on no remote-tracking ref, since lefthook's push_files
+# then lists every file of the branch.
 pre-push:
   commands:
     specs:
       glob: "docs/design/**/*.fizz"
-      run: >-
-        set -- $(for f in {push_files}; do [ -f "$f" ] && echo "$f"; done);
+      use_stdin: true
+      run: |
+        zero=0000000000000000000000000000000000000000
+        set -- $(while read -r _ local _ remote; do
+          [ "$local" = "$zero" ] && continue
+          if [ "$remote" = "$zero" ]; then range="$local --not --remotes"; else range="$remote..$local"; fi
+          git log --name-only --format= $range -- 'docs/design/*.fizz'
+        done | sort -u | while read -r f; do [ -f "$f" ] && echo "$f"; done)
         [ "$#" -eq 0 ] || env -u GIT_DIR -u GIT_INDEX_FILE scripts/agent/d python3 scripts/specs.py check "$@"
 
 commit-msg:
