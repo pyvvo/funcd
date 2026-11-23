@@ -28,7 +28,6 @@ import (
 
 	"github.com/gofrs/flock"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"golang.org/x/sync/singleflight"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/oci"
@@ -611,13 +610,32 @@ type OrasMaterializer struct {
 
 	mu        sync.Mutex
 	platforms map[string][]v1.OCIPlatform // per digest; an artifact digest is immutable
-	fills     singleflight.Group          // per cache dir: one fill at a time (#1538)
+	fills     map[string]chan struct{}    // per cache dir, a lock held while one call fills it (#1538)
 }
 
 // NewOrasMaterializer builds the OCI-backed Materializer caching under artifactDir, for a node running
 // node ("" ⇒ the daemon's own platform).
 func NewOrasMaterializer(artifactDir string, node v1.OCIPlatform) *OrasMaterializer {
-	return &OrasMaterializer{artifactDir: artifactDir, node: nodeOrHost(node), platforms: map[string][]v1.OCIPlatform{}}
+	return &OrasMaterializer{artifactDir: artifactDir, node: nodeOrHost(node), platforms: map[string][]v1.OCIPlatform{},
+		fills: map[string]chan struct{}{}}
+}
+
+// lockFill takes cacheDir's fill lock, or returns when ctx ends first. Two fills of one cache dir remove, rename over
+// or read the dir the other just moved into place (#1538), so one call fills it at a time, each with its own context.
+func (m *OrasMaterializer) lockFill(ctx context.Context, cacheDir string) (unlock func(), err error) {
+	m.mu.Lock()
+	lock, ok := m.fills[cacheDir]
+	if !ok {
+		lock = make(chan struct{}, 1)
+		m.fills[cacheDir] = lock
+	}
+	m.mu.Unlock()
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // Platforms implements function.PlatformResolver (ADR-0145): the platforms the artifact at digest provides,
@@ -667,11 +685,15 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 	if path, ok, err := cachedArtifact(op, cacheDir); ok {
 		return path, err
 	}
-	// Concurrent first uses of one artifact join one fill: two fills of one cache dir remove, rename over or read the
-	// dir the other just moved into place (#1538).
-	if _, err, _ := m.fills.Do(cacheDir, func() (interface{}, error) {
-		return nil, m.fillCache(ctx, op, ref, digest, cacheDir)
-	}); err != nil {
+	unlock, err := m.lockFill(ctx, cacheDir)
+	if err != nil {
+		return "", fault.Wrapf(err, fault.Unavailable, op, "wait for the artifact cache of %s/%s", fn.Namespace, fn.Name)
+	}
+	defer unlock()
+	if path, ok, err := cachedArtifact(op, cacheDir); ok {
+		return path, err // filled while this call waited
+	}
+	if err := m.fillCache(ctx, op, ref, digest, cacheDir); err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", fn.Namespace, fn.Name)
 	}
 	path, ok, err := cachedArtifact(op, cacheDir)
