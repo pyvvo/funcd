@@ -23,8 +23,8 @@ func (denyAll) Authorize(context.Context, authz.Request) (authz.Decision, error)
 }
 
 // TestIssue583_RunReturnsWhenCloseLandsBeforeServe: versitygw fires its OnListen hook after the bind and before
-// fasthttp's Serve registers the listener, so a Close in that window finds no listener to shut down. Run must still
-// return after cancel instead of waiting forever on the Serve that starts after the Close.
+// fasthttp's Serve registers the listener. A Close in that window must still stop Run, as a clean stop: since v1.11,
+// versitygw's ShutDown closes that listener itself, so Serve ends with "listener closed", which is no failure.
 func TestIssue583_RunReturnsWhenCloseLandsBeforeServe(t *testing.T) {
 	master := []byte("master")
 	srv, err := New(Deps{
@@ -45,16 +45,16 @@ func TestIssue583_RunReturnsWhenCloseLandsBeforeServe(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	ran := make(chan error, 1)
 	go func() { ran <- srv.Run(ctx) }()
 	require.NoError(t, srv.Wait(context.Background()))
-	cancel()
 	select {
 	case err = <-ran:
-		require.ErrorIs(t, err, context.Canceled)
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		_ = srv.api.ShutDown()
+		cancel()
 		<-ran
-		t.Fatal("Run did not return after cancel: Close shut the gateway down before Serve registered its listener")
+		t.Fatal("Run did not return after a Close that landed before Serve registered its listener")
 	}
 }

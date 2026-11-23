@@ -47,7 +47,7 @@ func newKeySet(client *http.Client, url string, c clock.Clock) *keySet {
 // VerifySignature checks raw's signature with the provider's keys and returns its payload; go-oidc checks the rest.
 func (k *keySet) VerifySignature(ctx context.Context, raw string) ([]byte, error) {
 	const op = "oidc.keySet.VerifySignature"
-	jws, err := jose.ParseSigned(raw, asymmetricAlgs())
+	jws, err := jose.ParseSignedCompact(raw, asymmetricAlgs())
 	if err != nil {
 		return nil, fault.Unauthorizedf(op, "the token is not a JWS signed with an asymmetric algorithm")
 	}

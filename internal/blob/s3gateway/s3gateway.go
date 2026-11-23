@@ -202,7 +202,8 @@ func (s *Server) Run(ctx context.Context) (err error) {
 	s.mu.Unlock()
 
 	go func() {
-		// ServeMultiPort blocks until the app is shut down; it then returns nil.
+		// ServeMultiPort blocks until the app is shut down; it then returns nil, or "listener closed" when the
+		// ShutDown came before Serve registered its listener.
 		s.serveCh <- s.api.ServeMultiPort([]string{s.listen})
 	}()
 
@@ -212,17 +213,24 @@ func (s *Server) Run(ctx context.Context) (err error) {
 		s.awaitServe()
 		return ctx.Err()
 	case err := <-s.serveCh:
-		if err != nil {
+		if err != nil && !s.isClosed() {
 			return fault.Wrapf(err, fault.Internal, op, "serve s3 gateway")
 		}
 		return nil
 	}
 }
 
+// isClosed reports whether Close ran, so that the end of a Serve it stopped is no failure.
+func (s *Server) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 // awaitServe waits for ServeMultiPort to return after Close, repeating ShutDown until it does. fasthttp's ShutDown
-// closes only the listeners Serve has registered, and versitygw binds the address and fires the OnListen hook before
-// Serve registers its listener: a ShutDown before that finds none and returns, and Serve then serves until a later
-// ShutDown closes it (#583).
+// closes only the listeners Serve has registered, and versitygw fires the OnListen hook before Serve registers its
+// listener: before v1.11, a ShutDown in that window found none, and Serve served until a later ShutDown (#583).
+// v1.11's ShutDown closes that listener itself.
 func (s *Server) awaitServe() {
 	tick := time.NewTicker(shutdownRetry)
 	defer tick.Stop()
