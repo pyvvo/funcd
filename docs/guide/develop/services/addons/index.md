@@ -164,7 +164,11 @@ with 403. An alias the Function does not bind, and a proxy request with no token
 ```sh
 funcdctl get identityproviders login -n default -o json
 funcdctl get rauthypasswordpolicys strict -n default -o json
+funcdctl logs identityprovider/login -n default
 ```
+
+`funcdctl logs` prints what the object's engine wrote, both streams at INFO, to whoever may read the object. Under
+`funcdctl dev`, the lines also go to the log file that dev prints as the container starts, and never to its terminal.
 
 | Object | Reason | Meaning |
 | --- | --- | --- |

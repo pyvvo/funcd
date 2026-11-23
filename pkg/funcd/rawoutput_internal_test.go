@@ -51,9 +51,9 @@ func (b *logKeysBucket) stored(prefix string) bool {
 	return slices.ContainsFunc(b.keys, func(k string) bool { return strings.HasPrefix(k, prefix) })
 }
 
-// Only a Function worker's raw stdout and stderr are stored in its logs; an engine's worker keeps its tail only
-// (ADR-0168).
-func TestEngineWorkerRawOutputIsNotStored(t *testing.T) {
+// A worker's raw stdout and stderr are stored under its owner: a Function's under its name, a Lake engine's under
+// lakes.<name> (ADR-0342 Decision 2); another kind's worker keeps its tail and the daemon's log only (ADR-0168).
+func TestWorkerRawOutputIsStoredUnderItsOwner(t *testing.T) {
 	mem, err := gocloud.Open(context.Background(), "mem://")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mem.Close() })
@@ -73,10 +73,14 @@ func TestEngineWorkerRawOutputIsNotStored(t *testing.T) {
 	}
 	engine := run(v1.KindLake, "engine")
 	run(v1.KindFunction, "fn")
+	run(v1.KindKVStore, "other")
 	runThenCancel(t, p)
 
 	require.True(t, bucket.stored("logs/default/fn/"), "a Function worker's raw output is stored")
-	require.False(t, bucket.stored("logs/default/engine/"), "an engine's raw output must not be stored")
+	require.True(t, bucket.stored("logs/default/lakes.engine/"), "a Lake engine's raw output is stored under lakes.engine")
+	require.False(t, bucket.stored("logs/default/engine/"), "an engine's segment is never a Function's")
+	require.False(t, bucket.stored("logs/default/other/") || bucket.stored("logs/default/kvstores.other/"),
+		"another kind's worker output is not stored")
 	tail, err := io.ReadAll(engine.Tail())
 	require.NoError(t, err)
 	require.Equal(t, "out\nerr\n", string(tail), "an engine keeps its tail")

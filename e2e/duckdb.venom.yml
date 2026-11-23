@@ -613,6 +613,17 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl logs lake/lake -n default -o json | grep "catalog checkpoint failed" | head -1'
+        retry: 15
+        delay: 2
+        info: "the same line in funcdctl logs lake/lake (ADR-0342) → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring '"kind":"Lake"'
+          - result.systemout ShouldContainSubstring '"name":"lake"'
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
             sudo chattr -R -i /var/lib/funcd/data/blob/lake-catalogs/default/lakehouse/gold/_ducklake && echo WRITABLE'
         assertions:
           - result.code ShouldEqual 0

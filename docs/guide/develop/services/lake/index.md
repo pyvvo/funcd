@@ -132,7 +132,8 @@ copies a Lake, files and catalog together; a BackupSchedule names it under
 
 `funcdctl get lake lake -n default -o json` and `funcdctl get function lake-reader -n default -o json` print the
 status; with `funcdctl dev`, add the `--server` and `--token` flags of its banner. While `Ready`, `status.endpoint`
-holds the gateway's address.
+holds the gateway's address. `funcdctl logs lake/lake -n default` prints what its engine wrote, an `EngineNotReady`'s
+cause among it.
 
 | Phase or condition | Reason | Meaning |
 | --- | --- | --- |

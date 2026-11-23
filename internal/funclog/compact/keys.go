@@ -5,7 +5,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
+
+// EngineSegment is the <fn> part of an engine's keys, <plural>.<name> (ADR-0342 Decision 2). An object name is a DNS
+// label with no dot, so no Function's segment, its name, is ever one.
+func EngineSegment(kind, name string) string { return v1.AddonPlural(kind) + "." + name }
+
+// IsEngineSegment reports whether the <fn> part of a key is an engine's.
+func IsEngineSegment(segment string) bool { return strings.Contains(segment, ".") }
 
 // Raw/compacted object naming under the shared logs/ prefix (ADR-0081 sink + ADR-0083 compaction):
 //

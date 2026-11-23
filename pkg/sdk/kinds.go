@@ -115,6 +115,16 @@ func KindFromToken(token string) (v1.Kind, bool) {
 	return "", false
 }
 
+// EngineKind reports whether the objects of kind run an engine whose lines funcd keeps (ADR-0342 Decision 1): a Lake,
+// a SQLDatabase, or a kind funcd does not define, an add-on's, whose server answers 404 when no Addon's engines serve it.
+func EngineKind(kind v1.Kind) bool {
+	if kind == v1.KindLake || kind == v1.KindSQLDatabase {
+		return true
+	}
+	_, funcds := kindDescriptors[kind]
+	return !funcds
+}
+
 // addonToken is an add-on's kind typed in lower case, its singular or its plural.
 var addonToken = regexp.MustCompile(`^[a-z][a-z0-9]{1,63}$`)
 

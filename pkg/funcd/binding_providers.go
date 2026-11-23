@@ -416,6 +416,8 @@ type sqlDeps struct {
 	ctrl   *controller.Controller
 	fanout *eventing.Fanout
 	events *eventstore.Store // holds the feed's watermarks
+	// engineLine keeps a line that a runtime reading its engines' output itself hands over (ADR-0343).
+	engineLine func(spec provider.ProviderSpec, stream, line string)
 }
 
 func (s *sqlProvider) Name() string { return "sql" }
@@ -482,6 +484,7 @@ func (s *sqlProvider) build(d sqlDeps) error {
 			return fault.Wrapf(err, fault.KindOf(err), op, "build the SQL provider runtime")
 		}
 	}
+	followDevLines(engineRuntime, v1.KindSQLDatabase, d.engineLine)
 	watermarks := d.events.ChangeWatermarks()
 	if s.feed, err = sqlsvc.NewFeed(sqlsvc.FeedDeps{Store: c.store, Publisher: d.fanout, Watermarks: watermarks, Master: d.master,
 		Hold: c.gate(), NamespaceHold: c.nsGate(), Logger: c.logger}); err != nil {
@@ -615,6 +618,8 @@ type lakeDeps struct {
 	// (ADR-0085, ADR-0175).
 	s3   function.S3GatewayInjection
 	ctrl *controller.Controller
+	// engineLine keeps a line that a runtime reading its engines' output itself hands over (ADR-0343).
+	engineLine func(spec provider.ProviderSpec, stream, line string)
 }
 
 func (s *lakeProvider) Name() string { return "lake" }
@@ -651,6 +656,7 @@ func (s *lakeProvider) build(d lakeDeps) error {
 			return fault.Wrapf(err, fault.KindOf(err), op, "build provider runtime")
 		}
 	}
+	followDevLines(engineRuntime, v1.KindLake, d.engineLine)
 	rd := lakesvc.ReconcilerDeps{
 		Store:      c.store,
 		Provider:   engineRuntime,

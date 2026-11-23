@@ -177,3 +177,4 @@ The table lists each described operation of these kinds, with its method and pat
 | `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases/{name}` | [Read a SQLDatabase](../../../api/services/sqldatabase/get.md) |
 | `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases/{name}` | [Replace a SQLDatabase](../../../api/services/sqldatabase/replace.md) |
 | `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases/{name}` | [Delete a SQLDatabase](../../../api/services/sqldatabase/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases/{name}/logs` | [Read the logs of a SQLDatabase's engine](../../../api/services/sqldatabase/get-logs.md) |

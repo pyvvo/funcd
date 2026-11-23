@@ -68,6 +68,8 @@ type Runtime struct {
 	extract func(dir string) (string, error)
 	// pickPort chooses each port the engine binds; a test swaps it to hand out a taken one.
 	pickPort func() (int, error)
+	// LineHook keeps each line an engine writes (ADR-0343): the runtime is a provider.LineFollower.
+	provider.LineHook
 }
 
 // Option configures the runtime.
@@ -363,6 +365,7 @@ func (r *Runtime) start(ctx context.Context, spec provider.ProviderSpec, id, dir
 	}
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), bin, args.Argv()...) //nolint:gosec // our own embedded engine
 	out := newEngineOutput(r.logger, string(spec.Ref.Name), addr)
+	out.keep = r.LinesOf(spec, "stderr") // the engine writes both streams to one writer
 	cmd.Stdout = out
 	cmd.Stderr = out
 	// Its own process group, so a stop and the reap after a crash reach everything it started (ADR-0167).
@@ -476,6 +479,7 @@ func freePort() (int, error) {
 type engineOutput struct {
 	logger    *slog.Logger
 	database  string
+	keep      func(line string) // gets each line too, when set (ADR-0343)
 	listen    string
 	listening chan struct{} // closed at the listen line
 	taken     bool          // read once the engine has exited
@@ -507,6 +511,9 @@ func (o *engineOutput) line(line string) {
 		return
 	}
 	o.logger.Debug("sql engine", "database", o.database, "line", line)
+	if o.keep != nil {
+		o.keep(line)
+	}
 	switch {
 	case strings.HasPrefix(line, "[http] ") && strings.HasSuffix(strings.TrimSpace(line), o.listen):
 		select {

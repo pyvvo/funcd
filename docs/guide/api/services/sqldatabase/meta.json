@@ -5,6 +5,7 @@
     "create",
     "get",
     "replace",
-    "delete"
+    "delete",
+    "get-logs"
   ]
 }

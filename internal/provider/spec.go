@@ -83,13 +83,16 @@ type ScratchSpec struct {
 // reconciler. The Env is caller-assembled (the ADR-0085 keypair, the engine token, config) — the
 // runtime puts it verbatim on the worker; it owns no engine-specific logic.
 type ProviderSpec struct {
-	Ref       ProviderRef       // (namespace, name) — identity of the provider instance
-	Image     string            // the curated engine image ref (ADR-0054 embedded set), e.g. funcd/runtime-duckdb
-	Port      int               // the serving port the engine binds in its netns (e.g. 8080)
-	Env       map[string]string // injected env (the ADR-0085 keypair, the engine token, config) — caller-assembled
-	Readiness ReadinessProbe    // the engine's HTTP readiness probe
-	Replicas  int               // pinned count (1 for a stateful single-writer engine); 0 is invalid here
-	Resources ResourceSpec      // cpu/mem sizing (forward-compat, mirrors ADR-0086)
+	Ref ProviderRef // (namespace, name) — identity of the provider instance
+	// ServedKind is the kind the object is served as, when the runtime's owner kind is not it (an add-on object's kind),
+	// copied to each engine's WorkerSpec: its lines are kept under it (ADR-0342 Decision 2).
+	ServedKind v1.Kind
+	Image      string            // the curated engine image ref (ADR-0054 embedded set), e.g. funcd/runtime-duckdb
+	Port       int               // the serving port the engine binds in its netns (e.g. 8080)
+	Env        map[string]string // injected env (the ADR-0085 keypair, the engine token, config) — caller-assembled
+	Readiness  ReadinessProbe    // the engine's HTTP readiness probe
+	Replicas   int               // pinned count (1 for a stateful single-writer engine); 0 is invalid here
+	Resources  ResourceSpec      // cpu/mem sizing (forward-compat, mirrors ADR-0086)
 	// Route is OPTIONAL ingress exposure. Non-nil ⇒ program a gateway route once Ready (behind the
 	// gateway's auth; eventually externally reachable). nil ⇒ INTERNAL-ONLY: no route is programmed;
 	// the engine is reachable by in-platform clients via the published netns endpoint

@@ -231,7 +231,7 @@ when funcd stops. The process runtime starts no engine. A
 
 `funcdctl get sqldatabase notes-db -n default -o json` and `funcdctl get function notes -n default -o json` print the
 status; with `funcdctl dev`, add the `--server` and `--token` flags of its banner. `status.bindings` counts the
-Functions that bind the database.
+Functions that bind the database. `funcdctl logs sqldatabase/notes-db -n default` prints what its engine wrote.
 
 | Phase or condition | Reason | Meaning |
 | --- | --- | --- |

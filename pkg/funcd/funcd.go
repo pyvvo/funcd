@@ -840,15 +840,15 @@ func (p *Platform) buildControlPlane() error {
 		return err
 	}
 	if err := p.sql.build(sqlDeps{authz: cedarPDP, quota: p.checker, master: master, ctrl: ctrl, fanout: fanout,
-		events: es}); err != nil {
+		events: es, engineLine: p.exec.keepDevEngineLine}); err != nil {
 		return err
 	}
 	if err := p.lake.build(lakeDeps{authz: cedarPDP, master: master, floor: p.floor, secrets: p.secrets.resolver,
-		routes: edgeAgg, s3: p.blob.injection, ctrl: ctrl}); err != nil {
+		routes: edgeAgg, s3: p.blob.injection, ctrl: ctrl, engineLine: p.exec.keepDevEngineLine}); err != nil {
 		return err
 	}
 	if err := p.addon.build(addonDeps{secrets: p.secrets.resolver, routes: edgeAgg, ctrl: ctrl,
-		indexEngines: p.exec.indexAddonEngines, authz: cedarPDP, master: master}); err != nil {
+		indexEngines: p.exec.indexAddonEngines, authz: cedarPDP, master: master, engineLine: p.exec.keepDevEngineLine}); err != nil {
 		return err
 	}
 	p.exec.addonNamespaces = p.addon.engineNamespaces

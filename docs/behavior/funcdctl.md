@@ -31,6 +31,7 @@ New words: Parsing, Command, Plugin.
 | A developer's `app deploy` of a template with an Addon | Only checks that the kind is served in the namespace, and applies nothing when it is not | none | exit 1 `Addon <name> is not registered` | decided | ADR-0337 Decision 2, `TestScenarioAddonTemplateDeveloperUnregistered` |
 | `app deploy --dry-run` of a template with an Addon | Sends the Addon's write as a dry run, and the App's only once the kind is served | none | `the App's dry run needs Addon/<name> registered`, exit 0 | decided | ADR-0337 Decision 2, `TestScenarioAddonTemplateDryRun` |
 | `app render` of a template with an Addon | Prints the App alone: `addon.yaml` is never evaluated, so its `${{ }}` reach the Addon's admission as written | none | the App's YAML | decided | ADR-0337 Decision 1, `TestScenarioAddonYAMLAsWritten` |
+| `funcdctl logs <kind>/<name>` | Reads a Lake's, a SQLDatabase's or an add-on object's engine; a bare name or `function/<name>` is a Function; another kind of funcd's is refused before any call, and a plural of no engine kind, a settings kind's included, is 404 | none | `a Bucket runs no engine`; 404 | decided | ADR-0342 Decisions 3 and 4, `TestLogsTargetForms`, `TestScenarioEngineLogsNoEngine` |
 
 <!-- generated values, do not edit: just behavior-values -->
 <details>

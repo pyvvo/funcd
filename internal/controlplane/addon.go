@@ -17,6 +17,7 @@ import (
 	"github.com/pyvvo/funcd/internal/contract"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	addonsvc "github.com/pyvvo/funcd/internal/services/addon"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // ===== Addon (cluster-scoped, admins only) — ADR-0332 Decision 1 =====
@@ -560,6 +561,20 @@ func (h *storeHandlers) kindFor(ctx context.Context, plural string) (servedKind,
 func (h *storeHandlers) addonFor(ctx context.Context, plural string) (*v1.Addon, error) {
 	k, err := h.kindFor(ctx, plural)
 	return k.addon, err
+}
+
+// storeEngineKinds is the EngineKinds of the stored Addons, resolved as the add-on objects' routes resolve a plural.
+type storeEngineKinds struct{ store store.Store }
+
+func (k storeEngineKinds) EngineKind(ctx context.Context, plural string) (string, error) {
+	sk, err := (&storeHandlers{store: k.store}).kindFor(ctx, plural)
+	if err != nil {
+		return "", err
+	}
+	if sk.settings != nil {
+		return "", fault.NotFoundf("controlplane.logs", "the plural %q is a settings kind's, whose objects run no engine", plural)
+	}
+	return sk.addon.Spec.Kind, nil
 }
 
 // ofPlural reports whether a stored object is of the add-on kind whose plural the path names.

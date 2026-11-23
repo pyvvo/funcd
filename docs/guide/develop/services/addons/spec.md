@@ -271,5 +271,6 @@ The table lists each described operation of these kinds, with its method and pat
 | `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/{plural}/{name}` | [Read an object of an add-on's kind](../../../api/services/addonobject/get.md) |
 | `PUT` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/{plural}/{name}` | [Replace an object of an add-on's kind](../../../api/services/addonobject/replace.md) |
 | `DELETE` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/{plural}/{name}` | [Delete an object of an add-on's kind](../../../api/services/addonobject/delete.md) |
+| `GET` | `/apis/funcd.io/v1alpha1/namespaces/{namespace}/{plural}/{name}/logs` | [Read the logs of an add-on object's engine](../../../api/services/addonobject/get-logs.md) |
 | `GET` | `/apis/funcd.io/v1alpha1/addonrevisions` | [List the AddonRevisions](../../../api/services/addonrevision/list.md) |
 | `GET` | `/apis/funcd.io/v1alpha1/addonrevisions/{name}` | [Read an AddonRevision](../../../api/services/addonrevision/get.md) |

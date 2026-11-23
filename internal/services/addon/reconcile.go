@@ -265,6 +265,7 @@ func (r *Reconciler) engineSpec(a *v1.Addon, o *v1.AddonObject, env map[string]s
 	fence, _ := provider.EgressTo("")
 	spec := provider.ProviderSpec{
 		Ref:        provider.ProviderRef{Namespace: o.Namespace, Name: o.Name},
+		ServedKind: v1.Kind(a.Spec.Kind),
 		Image:      a.Spec.Image,
 		Port:       a.Spec.Port,
 		Env:        env,
