@@ -14953,5 +14953,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1538-fix-claude-opus-5-5-3.md",
     "notes": "round 3: round 2's Major and Minor 1 fixed, Minor 2 moot; Major (model): a fill that panics leaves its record, so a recovered panic on the data plane makes every later call, the boot on the controller's only worker included, wait on it; mutants 8/8"
+  },
+  {
+    "date": "2026-11-23",
+    "issue": "1542",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1542-fix-claude-opus-5-5.md",
+    "notes": "pass; with rauthy's snapshot folder emptied before the kill case, main fails it as the issue says (KILLED while, export NoSnapshot, Restore ExportFailed) and the fix passes it (its wait took about 15 s, KILLED while Loading); the wait holds when provider.Newest finds a quiet file; no finding"
   }
 ]
