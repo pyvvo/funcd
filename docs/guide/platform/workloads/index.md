@@ -1,14 +1,15 @@
 ---
 title: Workloads
-description: The Functions, Apps, Sites and Workflows that run on funcd, and what they need to run.
+description: The Functions, Apps, Sites, Workflows and Jobs that run on funcd, and what they need to run.
 ---
 
 ![An App, a Function, a Workflow and a Site take their code and files from bundles in an OCI registry, pinned by digest, and rely on their configuration: ConfigMaps and Secrets, or only ConfigMaps for a Site](../../assets/workloads.drawio.svg)
 
-funcd runs four kinds of workload. A Function is code, an App is a whole app in one resource, a Site is a static web
-app, and a Workflow runs Functions as steps. Their code and files come from bundles in an OCI registry, pinned by
-digest: a Function's code, a Site's static files, and the bundles of an App's parts and of a Workflow's steps. All of
-them rely on configuration: ConfigMaps for their settings and, except for a Site, Secrets. The pages of this section
+funcd runs five kinds of workload. A Function is code, an App is a whole app in one resource, a Site is a static web
+app, a Workflow runs Functions as steps, and a Job runs code once for each of its runs. Their code and files come from
+bundles in an OCI registry, pinned by digest: a Function's code, a Site's static files, and the bundles of an App's
+parts, of a Workflow's steps and of a Job's code. All of them rely on configuration: ConfigMaps for their settings and,
+except for a Site, Secrets. The pages of this section
 cover each kind, then what a workload needs to run: its artifact, its runtime and its configuration.
 
 ## Function
@@ -37,6 +38,12 @@ A [Workflow](workflow.md) runs Functions as steps, in order or as their dependen
 and child Workflows. Each execution is a WorkflowRun, which keeps the revisions of the step Functions that it started
 with. The workflow engine passes each step's output to the steps that follow, retries a failed step, and keeps the
 run's progress in the run state.
+
+## Job
+
+A [Job](job.md) is code that runs to its end. Each run is a JobRun, which pins the Job's current Revision when it
+starts and runs on a worker of its own. funcd calls the handler once with the run's input, keeps its answer as the
+run's result, and never runs a run again on its own.
 
 ## Artifacts
 
