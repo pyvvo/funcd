@@ -123,7 +123,9 @@ func TestIssue1538_EachCallKeepsItsOwnContextAndRef(t *testing.T) {
 	}
 	t.Run("its own deadline", func(t *testing.T) {
 		m, entered, release := heldFill(t)
-		go func() { _, _ = m.Materialize(ctx, mkFunction(t, ref, digest)) }()
+		first := make(chan error, 1)
+		go func() { _, err := m.Materialize(ctx, mkFunction(t, ref, digest)); first <- err }()
+		t.Cleanup(func() { release(); <-first }) // the first fill ends before the cache's temp dir goes
 		<-entered
 		time.AfterFunc(time.Second, release)
 		short, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
