@@ -28,6 +28,7 @@ import (
 
 	"github.com/gofrs/flock"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"golang.org/x/sync/singleflight"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/oci"
@@ -610,6 +611,7 @@ type OrasMaterializer struct {
 
 	mu        sync.Mutex
 	platforms map[string][]v1.OCIPlatform // per digest; an artifact digest is immutable
+	fills     singleflight.Group          // per cache dir: one fill at a time (#1538)
 }
 
 // NewOrasMaterializer builds the OCI-backed Materializer caching under artifactDir, for a node running
@@ -665,7 +667,11 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 	if path, ok, err := cachedArtifact(op, cacheDir); ok {
 		return path, err
 	}
-	if err := m.fillCache(ctx, op, ref, digest, cacheDir); err != nil {
+	// Concurrent first uses of one artifact join one fill: two fills of one cache dir remove, rename over or read the
+	// dir the other just moved into place (#1538).
+	if _, err, _ := m.fills.Do(cacheDir, func() (interface{}, error) {
+		return nil, m.fillCache(ctx, op, ref, digest, cacheDir)
+	}); err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", fn.Namespace, fn.Name)
 	}
 	path, ok, err := cachedArtifact(op, cacheDir)

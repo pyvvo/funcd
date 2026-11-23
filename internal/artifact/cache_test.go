@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -29,6 +31,40 @@ func traceDisk(m *artifact.OrasMaterializer) *[]diskStep {
 	var steps []diskStep
 	artifact.TraceDisk(m, func(op durable.Op, path string) { steps = append(steps, diskStep{op, path}) })
 	return &steps
+}
+
+// Issue #1538: concurrent first uses of one artifact, as a Function's boot and a hook's contract check after a restart,
+// share one fill: every call gets the cached handler, and the pull is moved into the cache once.
+func TestIssue1538_ConcurrentFirstUsesShareOneFill(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ref := layoutRef(t, "v1")
+	dir, entry := goodBundle(t)
+	digest, err := artifact.PushBundle(ctx, ref, dir, entry, "", "")
+	require.NoError(t, err)
+	const rounds, callers = 20, 8
+	for range rounds {
+		cache := t.TempDir()
+		m := artifact.NewOrasMaterializer(cache, "")
+		var moves atomic.Int32
+		artifact.TraceDisk(m, func(op durable.Op, path string) {
+			if op == durable.Rename && filepath.Dir(path) == cache && !strings.HasSuffix(path, ".pulled") {
+				moves.Add(1)
+			}
+		})
+		fn := mkFunction(t, ref, digest)
+		paths, errs := make([]string, callers), make([]error, callers)
+		var wg sync.WaitGroup
+		for i := range callers {
+			wg.Go(func() { paths[i], errs[i] = m.Materialize(ctx, fn) })
+		}
+		wg.Wait()
+		for i := range callers {
+			require.NoError(t, errs[i])
+			require.Equal(t, paths[0], paths[i])
+		}
+		require.Equal(t, int32(1), moves.Load(), "the pull is moved into the cache once")
+	}
 }
 
 // Issue #1244: a power loss soon after a pull must not leave the pulled marker beside a cache dir whose files never
