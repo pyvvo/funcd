@@ -999,9 +999,13 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0347 Decisions 4 to 8: the runs' one status writer, still under the platform's and the namespaces' holds, whose
 	// executors call through the chain; a Job's change reaches its runs, and a run that ends frees a slot for those that
 	// wait
-	p.jobRuns = fnReconciler.Runs(function.RunsConfig{MaxRunning: c.jobMaxRunning, PayloadLimit: c.jobPayloadLimit,
+	runsCfg := function.RunsConfig{MaxRunning: c.jobMaxRunning, PayloadLimit: c.jobPayloadLimit,
 		Retention: c.jobRetention, Enqueue: ctrl.Enqueue, Hold: c.gate(), NamespaceHold: c.nsGate(), Chain: callChain,
-		Client: workerClient(calls, 0)})
+		Client: workerClient(calls, 0)}
+	if p.exec.egressWorkers != nil {
+		runsCfg.Egress = p.exec.egressWorkers // a run's worker is indexed as its Job before its one call (ADR-0351 Decision 6)
+	}
+	p.jobRuns = fnReconciler.Runs(runsCfg)
 	ctrl.Register(v1.KindJobRun.GVK(), p.jobRuns)
 	ctrl.Watches(v1.KindJob.GVK(), p.jobRuns.MapJob)
 	ctrl.Watches(v1.KindJobRun.GVK(), p.jobRuns.MapRun)

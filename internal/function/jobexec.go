@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/invoke"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/platform/observability"
@@ -63,7 +65,13 @@ func (j *JobRunReconciler) execute(ctx context.Context, run *v1.JobRun, job *v1.
 		}
 		return startFailed(err)
 	}
-	defer j.removeWorker(ctx, id)
+	var unindex func()
+	defer func() {
+		j.removeWorker(ctx, id)
+		if unindex != nil {
+			unindex() // after the worker: an address reused later never acts as the Job
+		}
+	}()
 	if ctx.Err() != nil {
 		return runAnswer{phase: v1.JobRunCancelled, reason: v1.JobRunCancelledReason} // its worker goes at once
 	}
@@ -82,11 +90,27 @@ func (j *JobRunReconciler) execute(ctx context.Context, run *v1.JobRun, job *v1.
 	if err != nil {
 		return startFailed(err)
 	}
+	unindex = j.indexEgress(run, in)
 	a := j.call(callCtx, run, job, rev, in)
 	if t, over := timedOut(ctx, callCtx, job); over {
 		return t
 	}
 	return a
+}
+
+// indexEgress puts the run's worker in the egress index as the Job its run names, once the worker has its address and
+// before the call (ADR-0351 Decision 6), and returns what takes it out again; nil while egress is off or for a worker
+// with no address.
+func (j *JobRunReconciler) indexEgress(run *v1.JobRun, in runtime.Instance) func() {
+	if j.cfg.Egress == nil {
+		return nil
+	}
+	ip, err := netip.ParseAddr(in.IP)
+	if err != nil {
+		return nil
+	}
+	j.cfg.Egress.Add(ip, auth.EntityRef{Type: v1.KindJob, Namespace: run.Namespace, Name: run.Spec.Job})
+	return func() { j.cfg.Egress.Remove(ip) }
 }
 
 // timedOut is the end of a run whose call context passed the Job's timeout while the executor's own did not.

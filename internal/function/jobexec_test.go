@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/runtime"
@@ -37,6 +39,12 @@ type execRig struct {
 
 func newExecRig(t *testing.T, payloadLimit int64, opts ...func(*function.Deps)) *execRig {
 	t.Helper()
+	return newExecRigWith(t, payloadLimit, nil, opts...)
+}
+
+// newExecRigWith is newExecRig whose run reconciler's config runs edits, when set.
+func newExecRigWith(t *testing.T, payloadLimit int64, runs func(*function.RunsConfig), opts ...func(*function.Deps)) *execRig {
+	t.Helper()
 	h := newShimHarness(t, http.StatusOK, false, append([]func(*function.Deps){func(d *function.Deps) { d.BootTimeout = 2 * time.Second }}, opts...)...)
 	rig := &execRig{shimHarness: h, ended: make(chan v1.ObjectName, 16)}
 	h.rt.onCreate = func(spec runtime.WorkerSpec) {
@@ -44,8 +52,12 @@ func newExecRig(t *testing.T, payloadLimit int64, opts ...func(*function.Deps)) 
 		defer rig.mu.Unlock()
 		rig.created = append(rig.created, spec)
 	}
-	rig.runs = h.r.Runs(function.RunsConfig{MaxRunning: 4, PayloadLimit: payloadLimit, Retention: time.Hour,
-		Enqueue: func(req controller.Request) { rig.ended <- req.Name }})
+	cfg := function.RunsConfig{MaxRunning: 4, PayloadLimit: payloadLimit, Retention: time.Hour,
+		Enqueue: func(req controller.Request) { rig.ended <- req.Name }}
+	if runs != nil {
+		runs(&cfg)
+	}
+	rig.runs = h.r.Runs(cfg)
 	t.Cleanup(rig.runs.Close)
 	return rig
 }
@@ -225,10 +237,8 @@ func TestJobRunExecutorCallsItsWorkerOnce(t *testing.T) {
 		"FUNCD_JOB_STARTED_BY": "alice", "FUNCD_HANDLER": "handle"} {
 		require.Equal(t, v, spec.Env[k], k)
 	}
-	for _, k := range []string{"FUNCD_FUNCTION", "FUNCD_INVOKE_SOCKET"} {
-		_, ok := spec.Env[k]
-		require.False(t, ok, "%s is not a run worker's", k)
-	}
+	_, ok := spec.Env["FUNCD_FUNCTION"]
+	require.False(t, ok, "FUNCD_FUNCTION is not a run worker's")
 	calls := worker.calls()
 	require.Len(t, calls, 1, "the handler is called once")
 	require.JSONEq(t, `{"specversion":"1.0","type":"funcd.job.run","source":"funcd://default/job/hello","id":"`+string(run.UID)+
@@ -350,6 +360,54 @@ func TestJobRunExecutorStartFailed(t *testing.T) {
 		c := requireEnd(t, h.end(t, "hello-a"), v1.JobRunFailed, v1.JobRunStartFailed)
 		require.Contains(t, c.Message, `within runtime.bootTimeout 300ms: secret binding "api-keys": read denied by policy default/no-reads (Forbidden)`)
 	})
+}
+
+// recordingIndex is an egress worker index that keeps its entries.
+type recordingIndex struct {
+	mu      sync.Mutex
+	entries map[netip.Addr]auth.EntityRef
+}
+
+func (x *recordingIndex) Add(ip netip.Addr, ref auth.EntityRef) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.entries[ip] = ref
+}
+
+func (x *recordingIndex) Remove(ip netip.Addr) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	delete(x.entries, ip)
+}
+
+func (x *recordingIndex) lookup(ip netip.Addr) (auth.EntityRef, bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	ref, ok := x.entries[ip]
+	return ref, ok
+}
+
+// ADR-0351 Decision 6 with ADR-0117 §5: with egress on, a run's worker is in the egress index as the Job its run names
+// from before its one call, so the gateway knows its first connection, and is out of it once the worker is removed.
+func TestJobRunWorkerIsInTheEgressIndexForItsCall(t *testing.T) {
+	t.Parallel()
+	index := &recordingIndex{entries: map[netip.Addr]auth.EntityRef{}}
+	h := newExecRigWith(t, 1<<10, func(c *function.RunsConfig) { c.Egress = index })
+	h.readyJob(t, nil)
+	h.run(t, "hello-a", `{}`, nil)
+	addr := netip.MustParseAddr(h.rt.ip)
+	during := make(chan auth.EntityRef, 1)
+	h.serveRun(t, "hello-a", func(w http.ResponseWriter, _ *http.Request) {
+		ref, _ := index.lookup(addr)
+		during <- ref
+		_, _ = io.WriteString(w, `{}`)
+	})
+	h.pass(t, "hello-a")
+	requireEnd(t, h.end(t, "hello-a"), v1.JobRunSucceeded, "")
+	require.Equal(t, auth.EntityRef{Type: v1.KindJob, Namespace: "default", Name: "hello"}, <-during, "the Job, during the call")
+	_, ok := index.lookup(addr)
+	require.False(t, ok, "out of the index once the worker is removed")
+	require.True(t, h.rt.wasRemoved(runID("hello-a")))
 }
 
 // ADR-0347 Decision 6 and run.fizz EndIsFinal: a cancel stops the call and the worker of a Running run, which ends

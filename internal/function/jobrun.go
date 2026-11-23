@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"reflect"
 	"slices"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/contract"
 	"github.com/pyvvo/funcd/internal/contractcheck"
 	"github.com/pyvvo/funcd/internal/controller"
@@ -49,6 +51,16 @@ type RunsConfig struct {
 	NamespaceHold hold.NamespaceGate
 	Chain         *invoke.Chain
 	Client        *http.Client
+	// Egress is the egress gateway's worker index (ADR-0117 §5), nil while egress is off.
+	Egress EgressIndex
+}
+
+// EgressIndex is the part of the egress gateway's worker index that a run's executor writes, *egress.MemoryWorkerIndex:
+// a run's worker is in it as its Job from before the call to its removal, since the worker sync's poll would find it
+// only after a short run had ended (ADR-0117 §5, ADR-0351 Decision 6).
+type EgressIndex interface {
+	Add(ip netip.Addr, ref auth.EntityRef)
+	Remove(ip netip.Addr)
 }
 
 // JobRunReconciler is the reconciler of the JobRun kind and the runs' one status writer (ADR-0347 Decisions 4 to 8,
