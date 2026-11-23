@@ -39,6 +39,7 @@ type addonRuntime struct {
 	starts    map[provider.ProviderRef]int
 	teardowns map[provider.ProviderRef]int
 	paths     []string
+	held      chan struct{} // while open, a Teardown waits
 }
 
 func newAddonRuntime(t *testing.T) *addonRuntime {
@@ -67,12 +68,30 @@ func (r *addonRuntime) Converge(_ context.Context, spec provider.ProviderSpec) (
 
 func (r *addonRuntime) Teardown(_ context.Context, ref provider.ProviderRef) error {
 	r.mu.Lock()
+	held := r.held
+	r.mu.Unlock()
+	if held != nil {
+		<-held
+	}
+	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.running[ref] {
 		r.teardowns[ref]++
 	}
 	r.running[ref] = false
 	return nil
+}
+
+// holdTeardowns makes each Teardown wait until release, which the test's cleanup also runs.
+func (r *addonRuntime) holdTeardowns(t *testing.T) (release func()) {
+	t.Helper()
+	held := make(chan struct{})
+	r.mu.Lock()
+	r.held = held
+	r.mu.Unlock()
+	release = sync.OnceFunc(func() { close(held) })
+	t.Cleanup(release)
+	return release
 }
 
 // state is ref's last spec, whether its engine runs, and how many engines it started.
@@ -214,6 +233,16 @@ func (e *addonEnv) waitReason(t *testing.T, ns v1.NamespaceName, name v1.ObjectN
 		return c.Reason == reason && o.Status.ObservedGeneration == o.Generation
 	}, 5*time.Second, 10*time.Millisecond, "%s/%s is %s with reason %q", ns, name, phase, reason)
 	return last
+}
+
+// stopped waits until the engine of ns/name stops: a hold writes the object's status before it stops the engine, as a
+// Lake's does.
+func (e *addonEnv) stopped(t *testing.T, ns v1.NamespaceName, name v1.ObjectName) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		_, running, _ := e.rt.state(ref(ns, name))
+		return !running
+	}, 5*time.Second, 10*time.Millisecond, "the engine of %s/%s stops", ns, name)
 }
 
 func ref(ns v1.NamespaceName, name v1.ObjectName) provider.ProviderRef {
@@ -369,16 +398,35 @@ func TestScenarioAddonConfigInvalid(t *testing.T) {
 	e.apply(t, e.dev, identityProvider("default"))
 	e.waitReason(t, "default", "login", v1.PhaseReady, "")
 
-	stricter := rauthyAddon("rauthy")
-	stricter.Spec.Config = json.RawMessage(`{"type":"object","properties":{"issuer":{"type":"string"},"port":{"type":"integer"},` +
-		`"realm":{"type":"string"}},"required":["issuer","port","realm"],"additionalProperties":false}`)
-	e.apply(t, e.admin, stricter)
+	e.apply(t, e.admin, rauthyWithRealm())
 	o := e.waitReason(t, "default", "login", v1.PhasePending, "ConfigInvalid")
 	c, _ := o.Status.Conditions.Get("Ready")
 	require.Contains(t, c.Message, "realm")
 	require.Empty(t, o.Status.Address)
-	_, running, _ := e.rt.state(ref("default", "login"))
-	require.False(t, running, "no engine")
+	e.stopped(t, "default", "login")
+}
+
+// rauthyWithRealm is rauthy's Addon whose config schema also requires a realm, which login's config lacks.
+func rauthyWithRealm() *v1.Addon {
+	a := rauthyAddon("rauthy")
+	a.Spec.Config = json.RawMessage(`{"type":"object","properties":{"issuer":{"type":"string"},"port":{"type":"integer"},` +
+		`"realm":{"type":"string"}},"required":["issuer","port","realm"],"additionalProperties":false}`)
+	return a
+}
+
+// The hold writes ConfigInvalid before it stops the engine (#1535): with the stop held until after the check starts,
+// the check still sees the engine stop.
+func TestIssue1535_ConfigInvalidWaitsForTheHoldsStop(t *testing.T) {
+	t.Parallel()
+	e := startAddons(t, []string{"containerd"}, WithAddonsFollowingCurrent())
+	e.apply(t, e.admin, rauthyAddon("rauthy"))
+	e.apply(t, e.dev, identityProvider("default"))
+	e.waitReason(t, "default", "login", v1.PhaseReady, "")
+	release := e.rt.holdTeardowns(t)
+	e.apply(t, e.admin, rauthyWithRealm())
+	e.waitReason(t, "default", "login", v1.PhasePending, "ConfigInvalid")
+	time.AfterFunc(100*time.Millisecond, release)
+	e.stopped(t, "default", "login")
 }
 
 // scenario: addon-removed — a deleted Addon stops login's engine and holds it Pending, AddonNotFound, while get and
@@ -393,11 +441,7 @@ func TestScenarioAddonRemoved(t *testing.T) {
 
 	require.NoError(t, e.admin.Delete(e.ctx, v1.KindAddon, "", "rauthy"))
 	e.waitReason(t, "default", "login", v1.PhasePending, "AddonNotFound")
-	// The hold writes the status before it stops the engine, as a Lake's does.
-	require.Eventually(t, func() bool {
-		_, running, _ := e.rt.state(ref("default", "login"))
-		return !running
-	}, 5*time.Second, 10*time.Millisecond, "the engine stops")
+	e.stopped(t, "default", "login")
 	got, err := e.dev.Get(e.ctx, "identityproviders", "default", "login")
 	require.NoError(t, err, "get still serves it")
 	require.Equal(t, v1.ObjectName("login"), got.GetName())
