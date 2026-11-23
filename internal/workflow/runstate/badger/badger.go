@@ -35,6 +35,9 @@ const keyPrefix = "run/"
 type Config struct {
 	// InMemory runs Badger fully in memory (tests/dev) — no files, no disk.
 	InMemory bool
+	// Frugal gives an in-memory instance the memtables and caches of the on-disk profile instead of Badger's
+	// defaults, whose 64 MiB memtable is allocated at open. Only a test binary that keeps many platforms open sets it.
+	Frugal bool
 	// Dir is the on-disk data directory when InMemory is false (production).
 	Dir string
 }
@@ -48,17 +51,16 @@ type store struct {
 // New opens a run store on the configured backend and returns it as runstate.Store.
 func New(cfg Config) (runstate.Store, error) {
 	var bopts badger.Options
-	if cfg.InMemory {
+	switch {
+	case cfg.InMemory && cfg.Frugal:
+		bopts = frugal(badger.DefaultOptions("").WithInMemory(true))
+	case cfg.InMemory:
 		bopts = badger.DefaultOptions("").WithInMemory(true)
-	} else {
+	default:
 		// RAM-frugal profile matching the KV/metastore engines (ADR-0065/0066).
-		bopts = badger.DefaultOptions(cfg.Dir).
+		bopts = frugal(badger.DefaultOptions(cfg.Dir)).
 			WithSyncWrites(true).
-			WithNumMemtables(2).
-			WithMemTableSize(memTableSize).
 			WithValueLogFileSize(valueLogFileSize).
-			WithBlockCacheSize(blockCacheSize).
-			WithIndexCacheSize(indexCacheSize).
 			WithCompression(options.None)
 	}
 	bopts = bopts.WithLoggingLevel(badger.ERROR)
@@ -71,6 +73,14 @@ func New(cfg Config) (runstate.Store, error) {
 		maxValue = bopts.ValueThreshold // in-memory Badger keeps every value inline, capped at the threshold
 	}
 	return &store{db: db, maxValue: maxValue}, nil
+}
+
+// frugal sizes the memtables and the caches of the RAM-frugal profile.
+func frugal(o badger.Options) badger.Options {
+	return o.WithNumMemtables(2).
+		WithMemTableSize(memTableSize).
+		WithBlockCacheSize(blockCacheSize).
+		WithIndexCacheSize(indexCacheSize)
 }
 
 func recordKey(ns v1.NamespaceName, name v1.ObjectName) []byte {
