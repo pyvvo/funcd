@@ -5,6 +5,7 @@ package funcd_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,18 +22,30 @@ import (
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
+// The add-on matrix's call limits: the timeout row's, which its call reaches at once, and every other row's, the
+// default, which no round trip reaches, so that host load cannot turn a row's cause into a timeout (#1546).
+const (
+	addonTimeoutLimit = 300 * time.Millisecond
+	addonCallLimit    = local.DefaultAddonCallTimeout
+)
+
 // addonEngines is the engine runtime of the add-on matrix (ADR-0338 Decision 6): each object's engine is Ready at the
 // address its name gives, but starting's, which never is. echo and login answer every call, big past the matrix's
-// 1 KiB limit, slow never within its 300 ms timeout, and cut cuts each answer off.
+// 1 KiB limit, slow never, and cut cuts each answer off; big and cut answer after delay.
 type addonEngines struct{ addrs map[v1.ObjectName]string }
 
-func newAddonEngines(t *testing.T) addonEngines {
+func newAddonEngines(t *testing.T, delay time.Duration) addonEngines {
 	t.Helper()
 	release := make(chan struct{})
 	slow := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
 	t.Cleanup(slow.Close)
 	t.Cleanup(func() { close(release) }) // before slow's Close, which waits for the held calls
-	cut := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	late := func(answer http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) { time.Sleep(delay); answer(w, r) }
+	}
+	big := httptest.NewServer(late(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, strings.Repeat("a", 2048)) }))
+	t.Cleanup(big.Close)
+	cut := httptest.NewServer(late(func(w http.ResponseWriter, _ *http.Request) {
 		conn, buf, err := w.(http.Hijacker).Hijack()
 		if err != nil {
 			return
@@ -43,8 +56,7 @@ func newAddonEngines(t *testing.T) addonEngines {
 	}))
 	t.Cleanup(cut.Close)
 	ok := answering(t, http.StatusOK, "ok")
-	return addonEngines{addrs: map[v1.ObjectName]string{"echo": ok, "login": ok,
-		"big":  answering(t, http.StatusOK, strings.Repeat("a", 2048)),
+	return addonEngines{addrs: map[v1.ObjectName]string{"echo": ok, "login": ok, "big": strings.TrimPrefix(big.URL, "http://"),
 		"slow": strings.TrimPrefix(slow.URL, "http://"), "cut": strings.TrimPrefix(cut.URL, "http://")}}
 }
 
@@ -60,13 +72,13 @@ func (addonEngines) Teardown(context.Context, provider.ProviderRef) error { retu
 // addonCauseEnv runs a platform whose default namespace holds the add-on matrix's objects: the EchoService objects of
 // addonEngines, served at /, with /private private, and the IdentityProvider login, served under /auth/v1. binder binds
 // each by its name, and denied binds echo, which a Policy forbids it to call. With held, the namespace is held once
-// every engine but starting's is Ready.
-func addonCauseEnv(t *testing.T, held bool) *causeEnv {
+// every engine but starting's is Ready. Its calls of an engine end after timeout.
+func addonCauseEnv(t *testing.T, held bool, timeout, delay time.Duration) *causeEnv {
 	t.Helper()
 	hd, err := hold.Open(t.TempDir())
 	require.NoError(t, err)
-	p := answersPlatform(t, funcd.WithAddonRuntime(newAddonEngines(t), v1.AddonRuntimeContainerd),
-		funcd.WithAddonRegistries("ghcr.io"), funcd.WithAddonCallLimits(300*time.Millisecond, 1024), funcd.WithHold(hd))
+	p := answersPlatform(t, funcd.WithAddonRuntime(newAddonEngines(t, delay), v1.AddonRuntimeContainerd),
+		funcd.WithAddonRegistries("ghcr.io"), funcd.WithAddonCallLimits(timeout, 1024), funcd.WithHold(hd))
 	c, base := answersClient(), "http://"+p.Addr()
 	echo := addonFixture("echo", "EchoService")
 	echo.Spec.BasePath, echo.Spec.PrivatePaths = "", []string{"/private"}
@@ -134,12 +146,34 @@ func addonPhase(c *http.Client, base, plural string, name v1.ObjectName) v1.Phas
 // TestAddonCauseMatrix is the add-on facet's matrix: each cause that its two patterns declare, provoked by one request.
 func TestAddonCauseMatrix(t *testing.T) {
 	t.Parallel()
-	runCauseMatrix(t, addonCauseRows(addonEnvs{main: addonCauseEnv(t, false), held: addonCauseEnv(t, true)}))
+	runCauseMatrix(t, addonCauseRows(addonMatrixEnvs(t, 0)))
 }
 
-// addonEnvs are the platforms of the add-on matrix: main, and held, whose namespace is held.
+// Issue #1546: answers that come after the timeout row's call limit, as under host load, keep their causes, since only
+// the timeout row's calls end at that limit: a cut-off answer is cut off, and one past the payload limit too large.
+func TestIssue1546_LateAnswersKeepTheirCauses(t *testing.T) {
+	t.Parallel()
+	var rows []causeRow
+	for _, row := range addonCauseRows(addonMatrixEnvs(t, 2*addonTimeoutLimit)) {
+		if row.cause == local.ErrAddonReplyCutOff || row.cause == local.ErrAddonReplyTooLarge {
+			rows = append(rows, row)
+		}
+	}
+	require.Len(t, rows, 4, "a cut-off and a too-large row per pattern")
+	runCauseMatrix(t, rows)
+}
+
+// addonEnvs are the platforms of the add-on matrix: main, held, whose namespace is held, and slow, whose calls end at
+// the timeout row's short limit.
 type addonEnvs struct {
-	main, held *causeEnv
+	main, held, slow *causeEnv
+}
+
+// addonMatrixEnvs are the add-on matrix's platforms, whose big and cut engines answer after delay.
+func addonMatrixEnvs(t *testing.T, delay time.Duration) addonEnvs {
+	t.Helper()
+	return addonEnvs{main: addonCauseEnv(t, false, addonCallLimit, delay), held: addonCauseEnv(t, true, addonCallLimit, delay),
+		slow: addonCauseEnv(t, false, addonTimeoutLimit, delay)}
 }
 
 // addonCauseRows is the add-on matrix over envs: the same causes on the pattern with a path and on the alias alone,
@@ -164,7 +198,7 @@ func addonCauseRows(envs addonEnvs) []causeRow {
 			row(local.ErrAddonPathRefused, envs.main, "binder", causeRequest{method: http.MethodGet, path: e.refused}),
 			row(local.ErrAddonHeld, envs.held, "binder", get("echo")),
 			row(local.ErrAddonEngineUnavailable, envs.main, "binder", get("starting")),
-			row(local.ErrAddonTimeout, envs.main, "binder", get("slow")),
+			row(local.ErrAddonTimeout, envs.slow, "binder", get("slow")),
 			row(local.ErrBodyTooLarge, envs.main, "binder", causeRequest{method: http.MethodPost,
 				path: "/addon/echo" + e.suffix, body: strings.Repeat("b", 2048)}),
 			row(local.ErrBodyUnreadable, envs.main, "binder", causeRequest{
