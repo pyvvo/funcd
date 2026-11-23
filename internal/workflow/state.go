@@ -38,7 +38,7 @@ type stepNode struct {
 	startedAt int64  // unix nanos, stamped when the step goes Running
 	endedAt   int64  // unix nanos, stamped at Succeeded/Failed
 	attempts  int    // dispatch attempts (function steps); 0 for a single-shot builtin/sub-workflow
-	errMsg    string // the raw step-level cause (capped to maxStatusError), Failed steps only
+	errMsg    string // the raw step-level cause (capped to observability.MaxStatusError), Failed steps only
 }
 
 // runState is the in-memory scheduling state of one run: the step graph plus the

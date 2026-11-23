@@ -187,7 +187,7 @@ func TestIssue1207_CrashedWorkerKeepsItsEmptyDirSpace(t *testing.T) {
 	h.reconcile(t, "thumbs")
 	before := h.creates()
 	require.NotZero(t, before, "thumbs runs a worker")
-	waiting := volume.ID{Namespace: "default", Function: "big", Name: "state"}
+	waiting := volume.ID{Namespace: "default", Kind: v1.KindFunction, Workload: "big", Name: "state"}
 	require.ErrorIs(t, inner.Book(context.Background(), waiting, 2<<20), volume.ErrCapacity)
 	s.steal = func() { _ = inner.Book(context.Background(), waiting, 2<<20) }
 	h.rt.exit("thumbs", runtime.StateFailed, time.Hour)
@@ -220,7 +220,7 @@ func TestIssue1207_SwitchKeepsABootingWorkersEmptyDirSpace(t *testing.T) {
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "thumbs").Status.Phase)
 	h.apply(t, "thumbs", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
 	h.reconcile(t, "thumbs") // revision 2 boots beside revision 1, each worker with its emptyDir
-	waiting := volume.ID{Namespace: "default", Function: "big", Name: "state"}
+	waiting := volume.ID{Namespace: "default", Kind: v1.KindFunction, Workload: "big", Name: "state"}
 	require.ErrorIs(t, inner.Book(context.Background(), waiting, 2<<20), volume.ErrCapacity)
 	s.steal = func() { _ = inner.Book(context.Background(), waiting, 2<<20) }
 	h.rt.exitRevision("thumbs", "thumbs-2", 0, runtime.StateFailed, time.Minute)
@@ -273,7 +273,7 @@ func TestIssue1207_HeldRevisionLeavesTheCurrentWorkersEmptyDirSpace(t *testing.T
 		d.Volumes = s
 	})
 	heldBesideCurrent(t, h)
-	waiting := volume.ID{Namespace: "default", Function: "big", Name: "state"}
+	waiting := volume.ID{Namespace: "default", Kind: v1.KindFunction, Workload: "big", Name: "state"}
 	require.ErrorIs(t, inner.Book(context.Background(), waiting, 2<<20), volume.ErrCapacity)
 	s.steal = func() { _ = inner.Book(context.Background(), waiting, 2<<20) }
 	h.rt.exitRevision("echo", "echo-2", 0, runtime.StateFailed, time.Minute)
@@ -301,7 +301,7 @@ func TestIssue1207_FailedHeldStepSweepsNothing(t *testing.T) {
 	fs.on.Store(true)
 	_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "echo"})
 	require.ErrorContains(t, err, "Revision", "the held revisions' step fails")
-	waiting := volume.ID{Namespace: "default", Function: "big", Name: "state"}
+	waiting := volume.ID{Namespace: "default", Kind: v1.KindFunction, Workload: "big", Name: "state"}
 	require.ErrorIs(t, inner.Book(context.Background(), waiting, 1<<20), volume.ErrCapacity,
 		"the held revision's crashed worker keeps its emptyDir")
 	fs.on.Store(false)
@@ -329,7 +329,7 @@ func TestIssue1207_DrainedRevisionReleasesItsEmptyDir(t *testing.T) {
 	h.reconcile(t, "echo")
 	h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
 	h.reconcile(t, "echo")
-	waiting := volume.ID{Namespace: "default", Function: "big", Name: "state"}
+	waiting := volume.ID{Namespace: "default", Kind: v1.KindFunction, Workload: "big", Name: "state"}
 	require.ErrorIs(t, inner.Book(context.Background(), waiting, 1<<20), volume.ErrCapacity, "both revisions hold a worker")
 	require.Eventually(t, func() bool {
 		settle()
@@ -360,7 +360,7 @@ func TestIssue1207_BackedOffReplacementKeepsItsEmptyDirSpace(t *testing.T) {
 	h.reconcile(t, "thumbs")
 	h.reconcile(t, "thumbs")
 	require.Equal(t, before, h.creates(), "the replacement waits out its backoff")
-	waiting := volume.ID{Namespace: "default", Function: "big", Name: "state"}
+	waiting := volume.ID{Namespace: "default", Kind: v1.KindFunction, Workload: "big", Name: "state"}
 	require.ErrorIs(t, inner.Book(context.Background(), waiting, 2<<20), volume.ErrCapacity,
 		"the crashed worker's emptyDir stays booked for its replacement")
 }

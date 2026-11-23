@@ -4550,7 +4550,7 @@ components:
           patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
           type: string
         volumes:
-          description: The directories each run's worker mounts. A local volume belongs to the Job, never to a Function of the same name, and allows a concurrency of at most 1.
+          description: The directories each run's worker mounts. Apply refuses a Job with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A local volume is the Job's own, never a same-named Function's, and allows a concurrency of at most 1.
           items:
             $ref: "#/components/schemas/VolumeEntry"
           type:
@@ -13429,13 +13429,13 @@ paths:
                 $ref: "#/components/schemas/FaultError"
           description: |-
             - `urn:funcd:problem:conflict`: The Function has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Function again, apply the change to it, and send it with its new resourceVersion.
-            - `urn:funcd:problem:conflict`: Another Function's spec.bindings.links names the Function. Remove that link first.
+            - `urn:funcd:problem:conflict`: Another Function's or a Job's spec.bindings.links names the Function. Remove that link first.
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
               when: The Function has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
               fix: Read the Function again, apply the change to it, and send it with its new resourceVersion.
             - type: urn:funcd:problem:conflict
-              when: Another Function's spec.bindings.links names the Function.
+              when: Another Function's or a Job's spec.bindings.links names the Function.
               fix: Remove that link first.
         "422":
           content:
@@ -15758,6 +15758,10 @@ paths:
             - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
             - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
             - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: A link in spec.bindings.links names a Function that does not exist in the namespace. Apply the target Function first.
+            - `urn:funcd:problem:invalid`: A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not declare, such as a KVStore missing from spec.kv. Declare it in the spec, or bind one that it declares.
+            - `urn:funcd:problem:invalid`: The spec sets spec.volumes, and volumes are off on this daemon. Remove spec.volumes, or ask the operator to turn volumes on.
+            - `urn:funcd:problem:invalid`: A local volume's size differs from the size it was applied with: a volume is not resized. Keep the volume's size. A new size needs a new volume, under another name.
           x-funcd-cases:
             - type: urn:funcd:problem:invalid
               when: A field breaks a rule that the schema cannot hold, which the detail names.
@@ -15768,6 +15772,18 @@ paths:
             - type: about:blank
               when: The body is missing or is not JSON.
               fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: A link in spec.bindings.links names a Function that does not exist in the namespace.
+              fix: Apply the target Function first.
+            - type: urn:funcd:problem:invalid
+              when: A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not declare, such as a KVStore missing from spec.kv.
+              fix: Declare it in the spec, or bind one that it declares.
+            - type: urn:funcd:problem:invalid
+              when: The spec sets spec.volumes, and volumes are off on this daemon.
+              fix: Remove spec.volumes, or ask the operator to turn volumes on.
+            - type: urn:funcd:problem:invalid
+              when: "A local volume's size differs from the size it was applied with: a volume is not resized."
+              fix: Keep the volume's size. A new size needs a new volume, under another name.
         "401":
           content:
             application/problem+json:
@@ -15793,11 +15809,20 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:conflict`: A Job of that name already exists in the namespace. Choose another name, or replace the existing Job."
+          description: |-
+            - `urn:funcd:problem:conflict`: A Job of that name already exists in the namespace. Choose another name, or replace the existing Job.
+            - `urn:funcd:problem:conflict`: A local volume does not fit in the capacity that volumes.capacity sets, with the volumes reserved already. Delete the volumes that are no longer needed, or ask the operator to raise volumes.capacity.
+            - `urn:funcd:problem:conflict`: A local volume does not fit in the namespace's spec.volumeBudget, with the namespace's other volumes. Delete the namespace's volumes that are no longer needed, or ask an admin to raise its spec.volumeBudget.
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
               when: A Job of that name already exists in the namespace.
               fix: Choose another name, or replace the existing Job.
+            - type: urn:funcd:problem:conflict
+              when: A local volume does not fit in the capacity that volumes.capacity sets, with the volumes reserved already.
+              fix: Delete the volumes that are no longer needed, or ask the operator to raise volumes.capacity.
+            - type: urn:funcd:problem:conflict
+              when: A local volume does not fit in the namespace's spec.volumeBudget, with the namespace's other volumes.
+              fix: Delete the namespace's volumes that are no longer needed, or ask an admin to raise its spec.volumeBudget.
         "413":
           content:
             application/problem+json:
@@ -16086,6 +16111,10 @@ paths:
             - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
             - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
             - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: A link in spec.bindings.links names a Function that does not exist in the namespace. Apply the target Function first.
+            - `urn:funcd:problem:invalid`: A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not declare, such as a KVStore missing from spec.kv. Declare it in the spec, or bind one that it declares.
+            - `urn:funcd:problem:invalid`: The spec sets spec.volumes, and volumes are off on this daemon. Remove spec.volumes, or ask the operator to turn volumes on.
+            - `urn:funcd:problem:invalid`: A local volume's size differs from the size it was applied with: a volume is not resized. Keep the volume's size. A new size needs a new volume, under another name.
           x-funcd-cases:
             - type: urn:funcd:problem:invalid
               when: The If-Match header is not one strong entity-tag, such as "42", or *.
@@ -16099,6 +16128,18 @@ paths:
             - type: about:blank
               when: The body is missing or is not JSON.
               fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: A link in spec.bindings.links names a Function that does not exist in the namespace.
+              fix: Apply the target Function first.
+            - type: urn:funcd:problem:invalid
+              when: A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not declare, such as a KVStore missing from spec.kv.
+              fix: Declare it in the spec, or bind one that it declares.
+            - type: urn:funcd:problem:invalid
+              when: The spec sets spec.volumes, and volumes are off on this daemon.
+              fix: Remove spec.volumes, or ask the operator to turn volumes on.
+            - type: urn:funcd:problem:invalid
+              when: "A local volume's size differs from the size it was applied with: a volume is not resized."
+              fix: Keep the volume's size. A new size needs a new volume, under another name.
         "401":
           content:
             application/problem+json:
@@ -16134,11 +16175,20 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:conflict`: The Job has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Job again, apply the change to it, and send it with its new resourceVersion."
+          description: |-
+            - `urn:funcd:problem:conflict`: The Job has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Job again, apply the change to it, and send it with its new resourceVersion.
+            - `urn:funcd:problem:conflict`: A local volume does not fit in the capacity that volumes.capacity sets, with the volumes reserved already. Delete the volumes that are no longer needed, or ask the operator to raise volumes.capacity.
+            - `urn:funcd:problem:conflict`: A local volume does not fit in the namespace's spec.volumeBudget, with the namespace's other volumes. Delete the namespace's volumes that are no longer needed, or ask an admin to raise its spec.volumeBudget.
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
               when: The Job has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
               fix: Read the Job again, apply the change to it, and send it with its new resourceVersion.
+            - type: urn:funcd:problem:conflict
+              when: A local volume does not fit in the capacity that volumes.capacity sets, with the volumes reserved already.
+              fix: Delete the volumes that are no longer needed, or ask the operator to raise volumes.capacity.
+            - type: urn:funcd:problem:conflict
+              when: A local volume does not fit in the namespace's spec.volumeBudget, with the namespace's other volumes.
+              fix: Delete the namespace's volumes that are no longer needed, or ask an admin to raise its spec.volumeBudget.
         "413":
           content:
             application/problem+json:

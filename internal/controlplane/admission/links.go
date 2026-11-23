@@ -15,13 +15,14 @@ type StoreReader interface {
 	List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error)
 }
 
-// --- link-validity (ADR-0064): Create/Update on Function -------------------------------------
+// --- link-validity (ADR-0064, ADR-0347 Decision 1): Create/Update on Function and Job --------------
 
 type linkValidity struct{ r StoreReader }
 
 // NewLinkValidityAdmission returns the Validating admission that enforces ADR-0064's cross-resource
 // link rules on Create/Update: every link target exists in the namespace, and the namespace link
-// graph stays acyclic with the applied function (a self-link is a degenerate cycle).
+// graph stays acyclic with the applied function (a self-link is a degenerate cycle). A Job's links name
+// Functions too; no link names a Job, so a Job closes no cycle.
 func NewLinkValidityAdmission(r StoreReader) Admission { return linkValidity{r: r} }
 
 func (linkValidity) Name() string { return "link-validity" }
@@ -31,11 +32,14 @@ func (linkValidity) Phase() Phase { return Validating }
 func (linkValidity) ReadsNamespace() bool { return true }
 
 func (linkValidity) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return gvk == v1.KindFunction.GVK() && (op == Create || op == Update)
+	return (gvk == v1.KindFunction.GVK() || gvk == v1.KindJob.GVK()) && (op == Create || op == Update)
 }
 
 func (a linkValidity) Admit(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.link-validity"
+	if job, ok := req.Object.(*v1.Job); ok {
+		return a.jobLinks(ctx, job)
+	}
 	fn, ok := req.Object.(*v1.Function)
 	if !ok || len(fn.Spec.Bindings.Links) == 0 {
 		return req.Object, nil
@@ -76,6 +80,28 @@ func (a linkValidity) Admit(ctx context.Context, req Request) (v1.Object, error)
 	return req.Object, nil
 }
 
+// jobLinks refuses a Job's link to a Function the namespace does not hold.
+func (a linkValidity) jobLinks(ctx context.Context, job *v1.Job) (v1.Object, error) {
+	const op = "admission.link-validity"
+	if len(job.Spec.Bindings.Links) == 0 {
+		return job, nil
+	}
+	fns, err := a.r.List(ctx, v1.KindFunction.GVK(), job.Namespace)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "list functions in %q", job.Namespace)
+	}
+	exists := map[v1.ObjectName]bool{}
+	for _, o := range fns {
+		exists[o.GetObjectMeta().Name] = true
+	}
+	for _, l := range job.Spec.Bindings.Links {
+		if !exists[l.Target] {
+			return nil, fault.Invalidf(op, "spec.bindings.links[%s].target %q does not exist in namespace %q", l.Alias, l.Target, job.Namespace)
+		}
+	}
+	return job, nil
+}
+
 // FindCycle runs a coloured DFS from start over adj and returns the cycle path (or "" if none reachable).
 // A self-edge (start → start) is detected as a degenerate cycle. link-validity and app-requires (ADR-0219) use it.
 func FindCycle(start string, adj map[string][]string) string {
@@ -112,7 +138,7 @@ func FindCycle(start string, adj map[string][]string) string {
 type linkDeletionProtection struct{ r StoreReader }
 
 // NewLinkDeletionProtectionAdmission returns the Validating admission that rejects deleting a
-// Function that is another Function's link target (ADR-0064). It reads Request.Old.
+// Function that is another Function's or a Job's link target (ADR-0064, ADR-0347 Decision 1). It reads Request.Old.
 func NewLinkDeletionProtectionAdmission(r StoreReader) Admission { return linkDeletionProtection{r: r} }
 
 func (linkDeletionProtection) Name() string { return "link-deletion-protection" }
@@ -144,6 +170,21 @@ func (a linkDeletionProtection) Admit(ctx context.Context, req Request) (v1.Obje
 		for _, l := range f.Spec.Bindings.Links {
 			if l.Target == target {
 				return nil, fault.Conflictf(op, "function %q is linked by %q (alias %q); remove the link first", target, f.Name, l.Alias)
+			}
+		}
+	}
+	jobs, err := a.r.List(ctx, v1.KindJob.GVK(), ns)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "list jobs in %q", ns)
+	}
+	for _, o := range jobs {
+		j, ok := o.(*v1.Job)
+		if !ok {
+			continue
+		}
+		for _, l := range j.Spec.Bindings.Links {
+			if l.Target == target {
+				return nil, fault.Conflictf(op, "function %q is linked by Job %q (alias %q); remove the link first", target, j.Name, l.Alias)
 			}
 		}
 	}

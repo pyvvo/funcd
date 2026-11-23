@@ -17,8 +17,8 @@ stateDiagram-v2
 
 A Job is built as a Function is, from the fields it shares with one, and each of its executions is a JobRun, created
 through the API as a WorkflowRun is (ADR-0347). This chapter holds what the API does with them: their checks, a run's
-admission and who may act. A run's start, its worker and its end are ADR-0347 Decisions 4 to 8. The job.* keys are in
-[Limits](limits.md). New words: Admitted, Refused, Kept.
+admission and who may act, then the Job's pass, its revisions and its contract. A run's start, its worker and its end
+are ADR-0347 Decisions 4 to 8. The job.* keys are in [Limits](limits.md). New words: Admitted, Refused, Kept.
 
 | Where | What happens | Time | You see | Status | Source |
 |---|---|---|---|---|---|
@@ -29,6 +29,10 @@ admission and who may act. A run's start, its worker and its end are ADR-0347 De
 | A JobRun's update | spec.job and spec.input are fixed, and spec.cancel may only turn true; any other change of the spec is refused | none | 400 `spec.job and spec.input are fixed once it is created`, `spec.cancel may only turn true` | decided | ADR-0347 Decision 3, `TestJobRunSpecAdmission` |
 | A JobRun's create | The API server sets status.startedBy to the caller's identity subject, a record that grants nothing, and status.jobUID to its Job's UID when the Job exists. A body's status is dropped, and a replace keeps both | none | the run's status.startedBy | decided | ADR-0347 Decision 3, `TestJobRunCreateRecordsWhoStartedIt`, `TestCLIApplyJobAndJobRun` |
 | Who may act on Jobs | The built-in roles treat a Job as a Workflow and a JobRun as a WorkflowRun: a developer of the namespace writes both, a viewer only reads them | none | 403 `create JobRun in "team-a" denied: viewer is read-only (verb "create")` | decided | ADR-0347 Decision 10, `TestJobKindsActAsWorkflowKinds` |
+| A Job's apply | Its links, bindings and local volumes pass a Function's admissions. A Function a Job links to is not deleted while the link stays, and a local volume is the Job's own, apart from a same-named Function's | none | 400 `does not declare`; 409 `is linked by Job` | decided | ADR-0347 Decision 1, `TestJobAnswersMatrix`, `TestJobLinks`, `TestJobVolumesLiveApartFromAFunctions` |
+| A Job's pass | It stamps its generation's Revision with the digest resolved once, then is Ready once the shape gate, the runtime gate and the workload hooks pass, with a Function's reasons; what it defines at its root is its own | none | `ShapeInvalid`, `StoreNotOwned`, `SecretNotFound` | decided | ADR-0347 Decision 2, `TestJobStampsARevisionPerGeneration`, `TestJobGatesOnTheFunctionsChecks` |
+| A Job's contract | Read by the revision's digest into status.contract. An image with none leaves a run's input unchecked, and one that does not compile holds the Job | none | `ContractInvalid` | decided | ADR-0347 Decision 2, `TestJobReadsItsContractByDigest` |
+| A Job's old revisions | Deleted once neither the current spec nor a run that has not ended pins them; a run's change brings its Job's pass | none | the Revision gone from funcdctl get revisions | decided | ADR-0347 Decision 2, `TestJobKeepsTheRevisionsItsOpenRunsPin` |
 
 <!-- generated values, do not edit: just behavior-values -->
 <details>

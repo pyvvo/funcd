@@ -122,6 +122,7 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `expectContinueTimeout` | 1s | `internal/platform/httpx/httpx.go` |
 | `idleConnTimeout` | 1m30s | `internal/platform/httpx/httpx.go` |
 | `tlsHandshakeTimeout` | 10s | `internal/platform/httpx/httpx.go` |
+| `MaxStatusError` | 512 | `internal/platform/observability/runtrace.go` |
 | `gibi` | 1GiB | `internal/platform/units/units.go` |
 | `kibi` | 1KiB | `internal/platform/units/units.go` |
 | `mebi` | 1MiB | `internal/platform/units/units.go` |

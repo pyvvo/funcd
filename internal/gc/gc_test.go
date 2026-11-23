@@ -396,7 +396,7 @@ func writers() map[string][]gc.Pair {
 		"internal/workflow/reconcile_workflow.go": {{Owner: v1.KindWorkflow, Child: v1.KindFunction}, {Owner: v1.KindWorkflow, Child: v1.KindKVStore}},
 		"internal/services/identity/reconcile.go": {{Owner: v1.KindIdentity, Child: v1.KindSecret}},
 		"internal/route/owned/owned.go":           {{Owner: v1.KindSite, Child: v1.KindRoute}, {Owner: v1.KindFunction, Child: v1.KindRoute}},
-		"internal/function/function.go":           {{Owner: v1.KindFunction, Child: v1.KindRevision}},
+		"internal/function/function.go":           {{Owner: v1.KindFunction, Child: v1.KindRevision}, {Owner: v1.KindJob, Child: v1.KindRevision}},
 		"internal/controlplane/kvhandover.go":     nil, // writes only the non-controller KVStore marker (ADR-0178)
 		"internal/app/revision.go":                {{Owner: v1.KindApp, Child: v1.KindAppRevision}},
 		"internal/app/hooks.go":                   {{Owner: v1.KindAppRevision, Child: v1.KindInvocation}},
@@ -417,15 +417,18 @@ func appPairs() []gc.Pair {
 	return out
 }
 
-// rootEntryPairs is the pairs ownedstore.Refs stamps under deletion: delete for what a Function, Site or Workflow
-// declares at its root (ADR-0248 Decision 8), a standalone Lake (ADR-0251 Decision 6), the rest of a Workflow's (ADR-0250
-// Decision 6), and an OIDCProvider's client Secret (ADR-0336 Decision 2).
+// rootEntryPairs is the pairs ownedstore.Refs stamps under deletion: delete for what a Function, Job, Site or Workflow
+// declares at its root (ADR-0248 Decision 8, ADR-0347 Decision 1), a standalone Lake (ADR-0251 Decision 6), the rest of
+// a Workflow's (ADR-0250 Decision 6), and an OIDCProvider's client Secret (ADR-0336 Decision 2).
 func rootEntryPairs() []gc.Pair {
 	return []gc.Pair{
 		{Owner: v1.KindOIDCProvider, Child: v1.KindSecret},
 		{Owner: v1.KindFunction, Child: v1.KindLake}, {Owner: v1.KindFunction, Child: v1.KindKVStore},
 		{Owner: v1.KindFunction, Child: v1.KindSQLDatabase}, {Owner: v1.KindFunction, Child: v1.KindBucket},
 		{Owner: v1.KindFunction, Child: v1.KindConfigMap}, {Owner: v1.KindSite, Child: v1.KindBucket},
+		{Owner: v1.KindJob, Child: v1.KindLake}, {Owner: v1.KindJob, Child: v1.KindKVStore},
+		{Owner: v1.KindJob, Child: v1.KindSQLDatabase}, {Owner: v1.KindJob, Child: v1.KindBucket},
+		{Owner: v1.KindJob, Child: v1.KindConfigMap},
 		{Owner: v1.KindWorkflow, Child: v1.KindBucket},
 		{Owner: v1.KindLake, Child: v1.KindBucket}, {Owner: v1.KindLake, Child: v1.KindConfigMap},
 		{Owner: v1.KindWorkflow, Child: v1.KindSQLDatabase}, {Owner: v1.KindWorkflow, Child: v1.KindLake},
@@ -776,6 +779,23 @@ func TestInUse(t *testing.T) {
 			c.Spec.Bindings.Config = []v1.ObjectName{"settings"}
 			return c
 		}()},
+		{"a Job's spec.links", object(t, v1.KindFunction, "callee"), func() v1.Object {
+			return &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob},
+				ObjectMeta: v1.ObjectMeta{Name: "callee", Namespace: ns, ResourceGroup: "rg1"},
+				Spec:       v1.JobSpec{Bindings: v1.FunctionBindings{Links: []v1.FunctionLink{{Alias: "callee", Target: "callee"}}}}}
+		}()},
+		{"a Job's spec.kv", object(t, v1.KindKVStore, "cache"), &v1.Job{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob},
+			ObjectMeta: v1.ObjectMeta{Name: "migrate", Namespace: ns, ResourceGroup: "rg1"},
+			Spec:       v1.JobSpec{Bindings: v1.FunctionBindings{KV: []v1.FunctionKV{{Alias: "cache", Store: "cache", Table: "entries"}}}}}},
+		{"a Job's spec.blob", object(t, v1.KindBucket, "lake"), &v1.Job{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob},
+			ObjectMeta: v1.ObjectMeta{Name: "backfill", Namespace: ns, ResourceGroup: "rg1"},
+			Spec:       v1.JobSpec{Bindings: v1.FunctionBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "lake", Prefix: "raw"}}}}}},
+		{"a Job's spec.config", object(t, v1.KindConfigMap, "settings"), &v1.Job{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob},
+			ObjectMeta: v1.ObjectMeta{Name: "backfill", Namespace: ns, ResourceGroup: "rg1"},
+			Spec:       v1.JobSpec{Bindings: v1.FunctionBindings{Config: []v1.ObjectName{"settings"}}}}},
 		{"a Site's spec.runtimeConfig.configMap", object(t, v1.KindConfigMap, "settings"), func() v1.Object {
 			s := object(t, v1.KindSite, "web").(*v1.Site)
 			s.Spec.RuntimeConfig = &v1.SiteRuntimeConfig{ConfigMap: "settings"}

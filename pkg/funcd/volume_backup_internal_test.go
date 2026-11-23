@@ -32,7 +32,7 @@ func TestScenarioVolumeBackupRestore(t *testing.T) {
 	})
 	stored, err := r.st.Get(r.ctx, v1.KindFunction.GVK(), "orders", "cart")
 	require.NoError(t, err)
-	id := volume.ID{Namespace: "orders", Function: "cart", Name: "state"}
+	id := volume.ID{Namespace: "orders", Kind: v1.KindFunction, Workload: "cart", Name: "state"}
 	reserve := func() string {
 		dir, err := r.p.exec.volumes.Reserve(r.ctx, id, stored.GetObjectMeta().UID, 1<<20, v1.DeletionRetain)
 		require.NoError(t, err)
@@ -74,7 +74,7 @@ func TestRefusedVolumeRestoreKeepsItsData(t *testing.T) {
 	})
 	stored, err := r.st.Get(r.ctx, v1.KindFunction.GVK(), "orders", "cart")
 	require.NoError(t, err)
-	dir, err := r.p.exec.volumes.Reserve(r.ctx, volume.ID{Namespace: "orders", Function: "cart", Name: "state"}, stored.GetObjectMeta().UID, 1<<20, v1.DeletionRetain)
+	dir, err := r.p.exec.volumes.Reserve(r.ctx, volume.ID{Namespace: "orders", Kind: v1.KindFunction, Workload: "cart", Name: "state"}, stored.GetObjectMeta().UID, 1<<20, v1.DeletionRetain)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "orders.sqlite"), []byte("rows"), 0o600))
 	r.create(r.dev, r.schedule("orders-vol", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
@@ -170,7 +170,7 @@ func TestIssue1206_RestoreReplacesWhatALostVolumeGot(t *testing.T) {
 	}, 10*time.Second, 10*time.Millisecond, "cart runs a worker")
 	stored, err := r.st.Get(r.ctx, v1.KindFunction.GVK(), "orders", "cart")
 	require.NoError(t, err)
-	id := volume.ID{Namespace: "orders", Function: "cart", Name: "state"}
+	id := volume.ID{Namespace: "orders", Kind: v1.KindFunction, Workload: "cart", Name: "state"}
 	reserve := func() string {
 		dir, err := r.p.exec.volumes.Reserve(r.ctx, id, stored.GetObjectMeta().UID, 1<<20, v1.DeletionRetain)
 		require.NoError(t, err)

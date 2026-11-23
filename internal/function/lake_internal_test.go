@@ -44,7 +44,7 @@ func seedLakeIn(t *testing.T, r *Reconciler, name, endpoint string, phase v1.Pha
 // lakeOwn is the Lake hook's own env for fn, its lake token per alias.
 func lakeOwn(t *testing.T, r *Reconciler, fn *v1.Function) map[string]string {
 	t.Helper()
-	own, issue, gate := lakeHook{r}.own(fn)
+	own, issue, gate := lakeHook{r}.own(functionWorkload(fn))
 	require.Nil(t, gate)
 	require.Nil(t, issue, "a lake token is stable across workers, never issued")
 	return own
@@ -127,7 +127,7 @@ func TestScenarioRequeueUntilLakeReadyNotOnEngineAddress(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, requeue, "a Pending lake requeues even though it publishes an endpoint")
 	require.NotContains(t, env, "FUNCD_LAKE_LAKE_URL", "the raw engine address is never injected")
-	be, err := r.bindings(context.Background(), lakeConsumerFn("lake", "lake"))
+	be, err := r.bindings(context.Background(), functionWorkload(lakeConsumerFn("lake", "lake")))
 	require.NoError(t, err)
 	require.Equal(t, "LakeNotReady", be.gate.reason)
 	require.Empty(t, be.worker.own, "a held consumer gets no worker env")

@@ -61,18 +61,23 @@ func registerFunction(api huma.API, h Handlers) {
 		list: h.ListFunctions, create: h.CreateFunction, get: h.GetFunction,
 		replace: h.ReplaceFunction, remove: h.DeleteFunction,
 		cases: &kindCases{create: writes, replace: writes, remove: []ErrorCase{problem(fault.Conflict,
-			"Another Function's spec.bindings.links names the Function.", "Remove that link first.")}},
+			"Another Function's or a Job's spec.bindings.links names the Function.", "Remove that link first.")}},
 	})
 }
 
 // functionWrites are the cases a Function's create and replace add to their verb's: the admissions of its links
 // (ADR-0064), its bindings (ADR-0248) and its local volumes (ADR-0262).
 func functionWrites() []ErrorCase {
+	return slices.Insert(workloadWrites(), 1, problem(fault.Invalid, "The links would close a cycle among the "+
+		"namespace's Functions, such as a Function that links to itself.", "Remove a link of the cycle."))
+}
+
+// workloadWrites are the cases that a Function's and a Job's create and replace share (ADR-0347 Decision 1): no link
+// names a Job, so a Job's links close no cycle.
+func workloadWrites() []ErrorCase {
 	return []ErrorCase{
 		problem(fault.Invalid, "A link in spec.bindings.links names a Function that does not exist in the namespace.",
 			"Apply the target Function first."),
-		problem(fault.Invalid, "The links would close a cycle among the namespace's Functions, such as a Function "+
-			"that links to itself.", "Remove a link of the cycle."),
 		problem(fault.Invalid, "A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not "+
 			"declare, such as a KVStore missing from spec.kv.", "Declare it in the spec, or bind one that it declares."),
 		problem(fault.Invalid, "The spec sets spec.volumes, and volumes are off on this daemon.",
@@ -452,10 +457,11 @@ func registerSensor(api huma.API, h Handlers) {
 // ===== Job (namespaced) — ADR-0347 =====
 
 func registerJob(api huma.API, h Handlers) {
+	writes := workloadWrites()
 	registerNamespacedCRUD(api, crudRoutes[v1.Job]{
 		kind: "Job", kinds: "Jobs", path: "jobs",
 		list: h.ListJobs, create: h.CreateJob, get: h.GetJob, replace: h.ReplaceJob, remove: h.DeleteJob,
-		cases: &kindCases{},
+		cases: &kindCases{create: writes, replace: writes},
 	})
 }
 

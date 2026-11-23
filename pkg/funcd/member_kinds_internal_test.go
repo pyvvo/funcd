@@ -92,7 +92,7 @@ func newKindsRig(t *testing.T, shared blob.Bucket, fns, dbs []v1.ObjectName, set
 	addons.Engine(loginEngine()).Snapshot(fakeSnapshots)
 	k := &kindsRig{wbRig: r, engines: engines, addons: addons, leaves: map[string]string{}}
 	for _, name := range fns {
-		dir, err := r.p.exec.volumes.Reserve(r.ctx, volume.ID{Namespace: "orders", Function: name, Name: "state"},
+		dir, err := r.p.exec.volumes.Reserve(r.ctx, volume.ID{Namespace: "orders", Kind: v1.KindFunction, Workload: name, Name: "state"},
 			r.getFunctionUID(name), 1<<20, v1.DeletionRetain)
 		require.NoError(t, err)
 		k.leaves[string(name)+"/state"] = dir
@@ -185,7 +185,7 @@ func TestKinds_RoundTripLeavesTheStoresAsTheyWere(t *testing.T) {
 			rs.Spec.Members = append(rs.Spec.Members, m)
 		}
 		if slices.ContainsFunc(ms, func(m v1.RestoreMember) bool { return m.Kind == v1.KindFunction }) {
-			require.NoError(t, k.p.exec.volumes.Clear(k.ctx, volume.ID{Namespace: "orders", Function: "cart", Name: "state"}))
+			require.NoError(t, k.p.exec.volumes.Clear(k.ctx, volume.ID{Namespace: "orders", Kind: v1.KindFunction, Workload: "cart", Name: "state"}))
 		}
 		k.create(k.admin, rs)
 		k.waitRestore(v1.ObjectName(name), v1.RunSucceeded)

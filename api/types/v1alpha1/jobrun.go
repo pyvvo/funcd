@@ -50,6 +50,11 @@ const (
 	JobRunCancelled JobRunPhase = "Cancelled"
 )
 
+// Ended reports whether p is final: Succeeded, Failed or Cancelled.
+func (p JobRunPhase) Ended() bool {
+	return p == JobRunSucceeded || p == JobRunFailed || p == JobRunCancelled
+}
+
 // Schema carries JobRunPhase's enum into the generated OpenAPI (ADR-0048).
 func (JobRunPhase) Schema(huma.Registry) *huma.Schema {
 	return enumSchema(string(JobRunPending), string(JobRunRunning), string(JobRunSucceeded), string(JobRunFailed),

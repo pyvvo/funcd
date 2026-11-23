@@ -203,7 +203,7 @@ func TestRestoreReason_VolumeWithoutLeafIsFailed(t *testing.T) {
 		opts:  []Option{WithFunctionVolumes(volume.Options{Root: t.TempDir(), CapacityBytes: 2 << 20}, false)},
 		setup: func(r *wbRig) { r.seed(fn("cart", 1<<20), fn("big", 4<<20)) },
 	})
-	dir, err := r.p.exec.volumes.Reserve(r.ctx, volume.ID{Namespace: "orders", Function: "cart", Name: "state"}, r.getFunctionUID("cart"),
+	dir, err := r.p.exec.volumes.Reserve(r.ctx, volume.ID{Namespace: "orders", Kind: v1.KindFunction, Workload: "cart", Name: "state"}, r.getFunctionUID("cart"),
 		1<<20, v1.DeletionRetain)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "orders.sqlite"), []byte("rows"), 0o600))

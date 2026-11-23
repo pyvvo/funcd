@@ -21,7 +21,7 @@ func ReadOnlyKind(k v1.Kind) bool { return ReadOnlyWriter(k) != "" }
 func ReadOnlyWriter(k v1.Kind) string {
 	switch k {
 	case v1.KindRevision:
-		return "the Function reconciler"
+		return "the Function or Job reconciler"
 	case v1.KindAppRevision:
 		return "the App reconciler"
 	case v1.KindAddonRevision:

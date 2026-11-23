@@ -30,7 +30,7 @@ This page lists the spec and status fields of Job and JobRun, each with its type
 | `secrets` | array of [`Job.spec.secrets[]`](#jobspecsecrets) | The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Job waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key. |
 | `sql` | array of [`Job.spec.sql[]`](#jobspecsql) | The SQLDatabases the Job declares: by name it creates and owns one, and a database of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.sql binds only a declared database. |
 | `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The bound on each call of a run's handler, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops. |
-| `volumes` | array of [`Job.spec.volumes[]`](#jobspecvolumes) | The directories each run's worker mounts. A local volume belongs to the Job, never to a Function of the same name, and allows a concurrency of at most 1. |
+| `volumes` | array of [`Job.spec.volumes[]`](#jobspecvolumes) | The directories each run's worker mounts. Apply refuses a Job with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A local volume is the Job's own, never a same-named Function's, and allows a concurrency of at most 1. |
 
 ### `Job.spec.bindings`
 

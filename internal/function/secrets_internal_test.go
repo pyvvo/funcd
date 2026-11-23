@@ -62,11 +62,11 @@ func sampleFn() *v1.Function {
 // config hook shares it, and what the S3 and Lake hooks give fn's workers.
 func mustWorkerSpec(t *testing.T, r *Reconciler, fn *v1.Function, artifactPath string, bindEnv envresolve.Resolved) runtime.WorkerSpec {
 	t.Helper()
-	shared, gate, err := checkAll(t.Context(), fn, []workloadHook{s3Hook{r}, lakeHook{r}, addonHook{r}})
+	shared, gate, err := checkAll(t.Context(), functionWorkload(fn), []workloadHook{s3Hook{r}, lakeHook{r}, addonHook{r}})
 	require.NoError(t, err)
 	require.Nil(t, gate, "the S3, Lake and add-on hooks hold nothing")
 	r.addBindingEnv(shared, bindEnv) // the config hook comes before them, so its keys win
-	own, issue, gate := r.ownWorkerEnv(fn)
+	own, issue, gate := r.ownWorkerEnv(functionWorkload(fn))
 	require.Nil(t, gate)
 	spec, err := r.workerSpec(t.Context(), fn, "", 0, artifactPath, workerEnv{shared: shared, own: own, issue: issue})
 	require.NoError(t, err)

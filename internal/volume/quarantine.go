@@ -58,7 +58,7 @@ type volumeQuarantine struct{ m *manager }
 func (m *manager) Quarantine() Quarantine { return volumeQuarantine{m} }
 
 func (q volumeQuarantine) idDir(id ID) string {
-	return filepath.Join(q.m.o.Root, quarantineDir, "volume", string(id.Namespace), string(id.Function), string(id.Name))
+	return filepath.Join(q.m.o.Root, quarantineDir, "volume", string(id.Namespace), workloadDir(id.Kind, id.Workload), string(id.Name))
 }
 
 func (q volumeQuarantine) entryDir(id ID, since time.Time) string {
@@ -165,12 +165,16 @@ func (q volumeQuarantine) List(context.Context) ([]Quarantined, error) {
 			return nil, fault.Wrapf(err, fault.Internal, op, "list the quarantine of namespace %s", ns.Name())
 		}
 		for _, fn := range fns {
+			kind, workload, ok := workloadOf(fn.Name())
+			if !ok {
+				continue
+			}
 			vols, err := os.ReadDir(filepath.Join(base, ns.Name(), fn.Name()))
 			if err != nil {
 				return nil, fault.Wrapf(err, fault.Internal, op, "list the quarantine of %s/%s", ns.Name(), fn.Name())
 			}
 			for _, vol := range vols {
-				id := ID{Namespace: v1.NamespaceName(ns.Name()), Function: v1.ObjectName(fn.Name()), Name: v1.ObjectName(vol.Name())}
+				id := ID{Namespace: v1.NamespaceName(ns.Name()), Kind: kind, Workload: workload, Name: v1.ObjectName(vol.Name())}
 				es, err := q.scanID(id)
 				if err != nil {
 					return nil, err

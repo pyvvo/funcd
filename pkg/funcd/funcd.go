@@ -316,6 +316,11 @@ type config struct {
 	workflowRetention    time.Duration
 	workflowDefaultRetry int
 	workflowPayloadLimit int64
+	// The job.* keys (ADR-0347, WithJobs): the runs holding a worker at once on this node, a run's input and result
+	// bytes, and how long an ended run is kept.
+	jobMaxRunning   int
+	jobPayloadLimit int64
+	jobRetention    time.Duration
 	// workflowMaxStepsInFlight bounds the function-step calls in flight across all runs (ADR-0146); 0 ⇒ no cap.
 	workflowMaxStepsInFlight int
 	// workflowContracts overrides the F65 typed-edge ContractResolver (ADR-0098). Empty ⇒ the production
@@ -586,6 +591,9 @@ func New(opts ...Option) (_ *Platform, err error) {
 		workflowRetention:    defaultWorkflowRetention,
 		workflowDefaultRetry: defaultWorkflowRetry,
 		workflowPayloadLimit: defaultWorkflowPayloadLimit,
+		jobMaxRunning:        platformconfig.DefaultJobMaxRunning,
+		jobPayloadLimit:      platformconfig.DefaultJobPayloadLimit,
+		jobRetention:         platformconfig.DefaultJobRetention,
 		deadletterRetention:  defaultDeadletterRetention,
 		deadletterMaxEntries: defaultDeadletterMaxEntries,
 		invokeDefaultTimeout: v1.DefaultInvokeTimeout,
@@ -897,6 +905,7 @@ func (p *Platform) buildControlPlane() error {
 		ImageFor:             c.imageFor,
 		Resolver:             resolver,
 		Platforms:            platforms,
+		Inspector:            contractInspector{},
 		BootBackoffInitial:   c.bootBackoffInitial,
 		BootBackoffMax:       c.bootBackoffMax,
 		SupervisionPeriod:    c.pacing.SupervisionPeriod,
@@ -952,6 +961,11 @@ func (p *Platform) buildControlPlane() error {
 	}
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	p.fnReconciler = fnReconciler
+	// ADR-0347 Decision 2: a Job is reconciled on the Function's deps; a run that ends lets its Job collect the revision
+	// it pinned, and a change to what a Job defines at its root re-runs the Job, which writes it back
+	jobs := fnReconciler.Jobs()
+	ctrl.Register(v1.KindJob.GVK(), jobs)
+	ctrl.Watches(v1.KindJobRun.GVK(), jobs.MapRun)
 	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
 	ctrl.Watches(v1.KindRevision.GVK(), fnReconciler.MapRevision)
 	ctrl.Watches(v1.KindRestore.GVK(), fnReconciler.MapRestore) // a Restore into a volume clears DataMissing (ADR-0262)
@@ -963,6 +977,7 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0248 Decision 3: a change to what a Function defines at its root re-runs that Function, which writes it back
 	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindLake, v1.KindConfigMap} {
 		ctrl.Watches(k.GVK(), ownedstore.MapOwner(c.store, v1.KindFunction))
+		ctrl.Watches(k.GVK(), ownedstore.MapOwner(c.store, v1.KindJob))
 	}
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	// ADR-0302: one invokePlugin chain, which every call to a worker runs: the data plane's, the workflow
@@ -1152,6 +1167,11 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewWorkflowRunContractAdmission(storeReader{c.store}),
 			// ADR-0094: a run's workflow/input/replay are fixed at creation — a second run under a taken name is a Conflict.
 			admission.NewWorkflowRunSpecImmutableAdmission(),
+			// ADR-0347 Decision 3: a JobRun's input within job.payloadLimit and its Job's contract, its spec fixed but a
+			// one-way cancel.
+			admission.NewJobRunPayloadAdmission(c.jobPayloadLimit),
+			admission.NewJobRunContractAdmission(storeReader{c.store}),
+			admission.NewJobRunSpecAdmission(),
 			// ADR-0170: a ResourceGroup is deleted only when it has no member (or with force, members first).
 			admission.NewResourceGroupDeletionProtectionAdmission(r),
 			// ADR-0222: a schedule's recipients and target, a Backup's ttl, immutable records, and update on the
@@ -1556,6 +1576,14 @@ func (contractResolver) Contract(ctx context.Context, image string) (v1.Workflow
 		return v1.WorkflowContract{}, "", uerr
 	}
 	return c, digest, nil
+}
+
+// contractInspector is the production function.ContractInspector (ADR-0347 Decision 2): a Job's image contract read
+// by its digest from registry metadata, never the bundle.
+type contractInspector struct{}
+
+func (contractInspector) Inspect(ctx context.Context, image, digest string) ([]byte, error) {
+	return artifact.Inspect(ctx, image, digest)
 }
 
 // childResolver is the production workflow.ChildResolver (ADR-0099): it reads a child Workflow's pinned
@@ -2338,31 +2366,36 @@ func (e *executor) openVolumes() error {
 		}
 		return 0, nil
 	}
-	o.Holder = func(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (v1.UID, bool, error) {
-		obj, err := c.store.Get(ctx, v1.KindFunction.GVK(), ns, fn)
+	o.Holder = func(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) (v1.UID, bool, error) {
+		obj, err := c.store.Get(ctx, kind.GVK(), ns, name)
 		if fault.KindOf(err) == fault.NotFound {
 			return "", false, nil
 		}
 		if err != nil {
-			return "", false, fault.Wrapf(err, fault.KindOf(err), "funcd.volumeHolder", "get function %s/%s", ns, fn)
+			return "", false, fault.Wrapf(err, fault.KindOf(err), "funcd.volumeHolder", "get %s %s/%s", kind, ns, name)
 		}
 		return obj.GetObjectMeta().UID, true, nil
 	}
-	// a stored Function declares the volume, or a stored App's part the App has not written that way yet (#1208)
+	// a stored Function or Job declares the volume, or a stored App's part the App has not written that way yet (#1208)
 	o.Declared = func(ctx context.Context, id volume.ID) (bool, error) {
 		const op = "funcd.volumeDeclared"
 		declares := func(obj v1.Object) bool {
-			f, _ := obj.(*v1.Function)
-			return f != nil && f.Name == id.Function && slices.ContainsFunc(f.Spec.Volumes, func(v v1.VolumeEntry) bool {
-				return v.Type == v1.VolumeLocal && v.VolumeName() == id.Name
-			})
+			var vols []v1.VolumeEntry
+			switch w := obj.(type) {
+			case *v1.Function:
+				vols = w.Spec.Volumes
+			case *v1.Job:
+				vols = w.Spec.Volumes
+			}
+			return obj.GroupVersionKind().Kind == id.Kind && obj.GetName() == id.Workload &&
+				slices.ContainsFunc(vols, func(v v1.VolumeEntry) bool { return v.Type == v1.VolumeLocal && v.VolumeName() == id.Name })
 		}
-		obj, err := c.store.Get(ctx, v1.KindFunction.GVK(), id.Namespace, id.Function)
+		obj, err := c.store.Get(ctx, id.Kind.GVK(), id.Namespace, id.Workload)
 		switch {
 		case err == nil && declares(obj):
 			return true, nil
 		case err != nil && fault.KindOf(err) != fault.NotFound:
-			return false, fault.Wrapf(err, fault.KindOf(err), op, "get function %s/%s", id.Namespace, id.Function)
+			return false, fault.Wrapf(err, fault.KindOf(err), op, "get %s %s/%s", id.Kind, id.Namespace, id.Workload)
 		}
 		apps, err := c.store.List(ctx, v1.KindApp.GVK(), store.ListOptions{Namespace: id.Namespace})
 		if err != nil {
@@ -2393,12 +2426,12 @@ func (p *Platform) volumeBooker() admission.VolumeBooker {
 
 type volumeBooker struct{ m volume.Manager }
 
-func (b volumeBooker) Book(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, sizeBytes int64) error {
-	return b.m.Book(ctx, volume.ID{Namespace: ns, Function: fn, Name: name}, sizeBytes)
+func (b volumeBooker) Book(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, workload, name v1.ObjectName, sizeBytes int64) error {
+	return b.m.Book(ctx, volume.ID{Namespace: ns, Kind: kind, Workload: workload, Name: name}, sizeBytes)
 }
 
-func (b volumeBooker) Fits(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, sizeBytes int64) error {
-	return b.m.Fits(ctx, volume.ID{Namespace: ns, Function: fn, Name: name}, sizeBytes)
+func (b volumeBooker) Fits(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, workload, name v1.ObjectName, sizeBytes int64) error {
+	return b.m.Fits(ctx, volume.ID{Namespace: ns, Kind: kind, Workload: workload, Name: name}, sizeBytes)
 }
 
 // volumeLoader adapts the volume manager to the workload backups (ADR-0262 Decision 11), and the Function reconciler's
@@ -2410,7 +2443,7 @@ type volumeLoader struct {
 }
 
 func vid(ns v1.NamespaceName, fn, name v1.ObjectName) volume.ID {
-	return volume.ID{Namespace: ns, Function: fn, Name: name}
+	return volume.ID{Namespace: ns, Kind: v1.KindFunction, Workload: fn, Name: name}
 }
 
 func (l volumeLoader) Source(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (io.ReadCloser, error) {

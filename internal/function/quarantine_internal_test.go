@@ -43,7 +43,7 @@ func cartRef() quarantine.Ref {
 // stored left it.
 func reserveOrphan(t *testing.T, r *Reconciler, fn v1.ObjectName, deletion v1.DeletionPolicy, body string) volume.ID {
 	t.Helper()
-	id := volume.ID{Namespace: "shop", Function: fn, Name: "state"}
+	id := volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: fn, Name: "state"}
 	dir, err := r.volumes.Reserve(t.Context(), id, "uid-gone", 1<<20, deletion)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "orders.db"), []byte(body), 0o600))
@@ -160,7 +160,7 @@ func TestVolumeQuarantineExpire(t *testing.T) {
 		e, err := r.Quarantine().Move(ctx, ref, at)
 		require.NoError(t, err)
 		if fn == "busy" {
-			require.NoError(t, r.volumes.Quarantine().Mark(ctx, volume.ID{Namespace: "shop", Function: fn, Name: "state"}, e.Since, quarantine.Returning))
+			require.NoError(t, r.volumes.Quarantine().Mark(ctx, volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: fn, Name: "state"}, e.Since, quarantine.Returning))
 		}
 	}
 	husk := filepath.Join(root, ".quarantine", "volume", "shop", "husk", "state", quarantine.Stamp(t0))

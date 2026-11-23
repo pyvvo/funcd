@@ -49,8 +49,8 @@ type jobRunContract struct{ r objectGetter }
 // NewJobRunContractAdmission returns the Validating admission that checks a new JobRun's spec.input against the input
 // schema in its Job's status.contract, with the rules and bounds of a call's contract check (ADR-0303), and refuses
 // one that breaks it with 422, naming each value under body.spec.input. A Job that is missing, unreadable or has no
-// contract leaves the input unchecked: the run waits for its Job, and its start checks the input against the revision
-// it pins (ADR-0347 Decision 4).
+// contract, or whose contract is an earlier generation's, leaves the input unchecked: the run waits for its Job, and
+// its start checks the input against the revision it pins (ADR-0347 Decision 4).
 func NewJobRunContractAdmission(r objectGetter) Admission { return jobRunContract{r: r} }
 
 func (jobRunContract) Name() string { return "jobrun-contract" }
@@ -73,6 +73,9 @@ func (a jobRunContract) Admit(ctx context.Context, req Request) (v1.Object, erro
 	job, ok := obj.(*v1.Job)
 	if !ok || job.Status.Contract == nil || len(job.Status.Contract.Input) == 0 {
 		return req.Object, nil
+	}
+	if c, found := job.Status.Conditions.Get("Ready"); found && c.ObservedGeneration != job.Generation {
+		return req.Object, nil // an edited Job keeps an earlier generation's contract until its pass, as a Workflow does (#756)
 	}
 	v, err := contract.Compile(job.Status.Contract.Input, contract.WithCallBounds(contractcheck.CallBudget, contractcheck.MaxDigits))
 	if err != nil {

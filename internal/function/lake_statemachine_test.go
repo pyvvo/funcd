@@ -210,7 +210,7 @@ func (w *lakeWorld) provision(rt *rapid.T, i int) (requeued bool) {
 	env, requeue, err := w.fn.resolveLakeEnv(context.Background(), fn)
 	require.NoError(rt, err)
 	if !requeue {
-		own, _, gate := lakeHook{w.fn}.own(fn)
+		own, _, gate := lakeHook{w.fn}.own(functionWorkload(fn))
 		require.Nil(rt, gate)
 		maps.Copy(env, own)
 		w.consumers[i] = env

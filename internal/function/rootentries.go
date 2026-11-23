@@ -17,22 +17,22 @@ import (
 // Secret stops it with ownedstore's reasons (Decision 6).
 const reasonStoreNotOwned = "StoreNotOwned"
 
-// rootObject is one object a Function defines by name at its root, with the deletion policy it is written under.
+// rootObject is one object a workload defines by name at its root, with the deletion policy it is written under.
 type rootObject struct {
 	field    string
 	obj      v1.Object
 	deletion v1.DeletionPolicy
 }
 
-// rootObjects are the stores, lakes and ConfigMaps fn defines by name (ADR-0248 Decision 1). A lake and a
-// ConfigMap go with the Function, as an App's do (ADR-0213 Decision 2); a defined ConfigMap is stored under
-// v1.AppConfigMapName (Decision 5). A ref entry names an object the Function never writes.
-func rootObjects(fn *v1.Function) []rootObject {
+// rootObjects are the stores, lakes and ConfigMaps w defines by name (ADR-0248 Decision 1, ADR-0347 Decision 1). A
+// lake and a ConfigMap go with the workload, as an App's do (ADR-0213 Decision 2); a defined ConfigMap is stored under
+// v1.AppConfigMapName (Decision 5). A ref entry names an object the workload never writes.
+func rootObjects(w workload) []rootObject {
 	meta := func(name v1.ObjectName) v1.ObjectMeta {
-		return v1.ObjectMeta{Name: name, Namespace: fn.Namespace, ResourceGroup: fn.ResourceGroup}
+		return v1.ObjectMeta{Name: name, Namespace: w.meta().Namespace, ResourceGroup: w.meta().ResourceGroup}
 	}
 	tm := func(k v1.Kind) v1.TypeMeta { return v1.TypeMeta{APIVersion: k.GVK().APIVersion(), Kind: k} }
-	s := &fn.Spec
+	s := w.spec
 	var out []rootObject
 	for i, e := range s.KVStores {
 		if e.Name != "" {
@@ -67,12 +67,12 @@ func rootObjects(fn *v1.Function) []rootObject {
 	return out
 }
 
-// ensureRootEntries checks the Secrets fn declares, then writes what it defines at its root, before any binding
-// resolves (ADR-0248 Decisions 3, 5 and 6). It returns the gate of the first entry that stops fn: a declared Secret
+// ensureRootEntries checks the Secrets w declares, then writes what it defines at its root, before any binding
+// resolves (ADR-0248 Decisions 3, 5 and 6). It returns the gate of the first entry that stops w: a declared Secret
 // that is missing or lacks a key, which no value of enters the message, so nothing is written while one is
-// incomplete; or an object of that name without fn's marker (StoreNotOwned, never written).
-func (r *Reconciler) ensureRootEntries(ctx context.Context, fn *v1.Function) (*gateFailure, error) {
-	gap, err := ownedstore.CheckSecrets(ctx, r.store, fn.Namespace, fn.Spec.SecretDeclarations)
+// incomplete; or an object of that name without w's marker (StoreNotOwned, never written).
+func (r *Reconciler) ensureRootEntries(ctx context.Context, w workload) (*gateFailure, error) {
+	gap, err := ownedstore.CheckSecrets(ctx, r.store, w.meta().Namespace, w.spec.SecretDeclarations)
 	if err != nil {
 		return nil, err
 	}
@@ -80,11 +80,11 @@ func (r *Reconciler) ensureRootEntries(ctx context.Context, fn *v1.Function) (*g
 		msg := gap.Message()
 		return &gateFailure{reason: gap.Reason(), message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}, nil
 	}
-	for _, o := range rootObjects(fn) {
-		_, err := ownedstore.Ensure(ctx, r.store, fn, o.obj, o.deletion)
+	for _, o := range rootObjects(w) {
+		_, err := ownedstore.Ensure(ctx, r.store, w.owner, o.obj, o.deletion)
 		if errors.Is(err, ownedstore.ErrNotOwned) {
 			m, k := o.obj.GetObjectMeta(), o.obj.GroupVersionKind().Kind
-			msg := fmt.Sprintf("%s: %s %q exists and is not this Function's; bind it with ref", o.field, k, m.Name)
+			msg := fmt.Sprintf("%s: %s %q exists and is not this %s's; bind it with ref", o.field, k, m.Name, w.kind())
 			return &gateFailure{reason: reasonStoreNotOwned, message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}, nil
 		}
 		if err != nil {
@@ -94,33 +94,37 @@ func (r *Reconciler) ensureRootEntries(ctx context.Context, fn *v1.Function) (*g
 	return nil, nil
 }
 
-// pruneConfigMaps deletes the ConfigMaps fn controls that its spec no longer defines, once fn serves its current
-// spec, unless another object still names one or an open run holds fn (ADR-0213 Decision 5, ADR-0248 Decision 5).
-func (r *Reconciler) pruneConfigMaps(ctx context.Context, fn *v1.Function) error {
+// pruneConfigMaps deletes the ConfigMaps w controls that its spec no longer defines, once w serves its current spec,
+// unless another object still names one or, for a Function, an open workflow run holds it (ADR-0213 Decision 5,
+// ADR-0248 Decision 5). A Job's run reads the Job's current spec, so none holds a Job's (ADR-0347 Decision 1).
+func (r *Reconciler) pruneConfigMaps(ctx context.Context, w workload) error {
 	const op = "function.pruneConfigMaps"
+	m := w.meta()
 	keep := map[v1.ObjectName]bool{}
-	for _, o := range rootObjects(fn) {
+	for _, o := range rootObjects(w) {
 		if o.obj.GroupVersionKind().Kind == v1.KindConfigMap {
 			keep[o.obj.GetObjectMeta().Name] = true
 		}
 	}
-	list, err := r.store.List(ctx, v1.KindConfigMap.GVK(), store.ListOptions{Namespace: fn.Namespace})
+	list, err := r.store.List(ctx, v1.KindConfigMap.GVK(), store.ListOptions{Namespace: m.Namespace})
 	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "list configmaps in %q", fn.Namespace)
+		return fault.Wrapf(err, fault.KindOf(err), op, "list configmaps in %q", m.Namespace)
 	}
 	var stale []v1.Object
 	for _, o := range list.Items {
-		m := o.GetObjectMeta()
-		if !keep[m.Name] && v1.ControlledBy(m.OwnerReferences, v1.KindFunction, fn.UID) {
+		om := o.GetObjectMeta()
+		if !keep[om.Name] && v1.ControlledBy(om.OwnerReferences, w.kind(), m.UID) {
 			stale = append(stale, o)
 		}
 	}
 	if len(stale) == 0 {
 		return nil
 	}
-	holds, err := revhold.Held(ctx, r.store, fn.Namespace)
-	if err != nil || holds.Function(fn.Name, fn.UID) {
-		return err
+	if w.kind() == v1.KindFunction {
+		holds, err := revhold.Held(ctx, r.store, m.Namespace)
+		if err != nil || holds.Function(m.Name, m.UID) {
+			return err
+		}
 	}
 	for _, o := range stale {
 		if _, used, uerr := gc.InUse(ctx, r.store, o, nil); uerr != nil || used {
@@ -129,9 +133,9 @@ func (r *Reconciler) pruneConfigMaps(ctx context.Context, fn *v1.Function) error
 			}
 			continue
 		}
-		m := o.GetObjectMeta()
-		if derr := r.store.Delete(ctx, v1.KindConfigMap.GVK(), m.Namespace, m.Name, m.ResourceVersion); derr != nil && fault.KindOf(derr) != fault.NotFound {
-			return fault.Wrapf(derr, fault.KindOf(derr), op, "delete configmap %q", m.Name)
+		om := o.GetObjectMeta()
+		if derr := r.store.Delete(ctx, v1.KindConfigMap.GVK(), om.Namespace, om.Name, om.ResourceVersion); derr != nil && fault.KindOf(derr) != fault.NotFound {
+			return fault.Wrapf(derr, fault.KindOf(derr), op, "delete configmap %q", om.Name)
 		}
 	}
 	return nil

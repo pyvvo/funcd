@@ -748,7 +748,7 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 			}
 			path = p
 		}
-		own, issue, g := r.ownWorkerEnv(m)
+		own, issue, g := r.ownWorkerEnv(functionWorkload(m))
 		if g != nil {
 			if m.Name == self.Name {
 				return nil, 0, fault.Internalf(op, "build the env of %s/%s: %s", m.Namespace, m.Name, g.message)

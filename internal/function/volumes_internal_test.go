@@ -21,7 +21,7 @@ import (
 func withVolumes(t *testing.T, r *Reconciler) string {
 	t.Helper()
 	root := t.TempDir()
-	m, err := volume.New(volume.Options{Root: root, Holder: r.FunctionUID})
+	m, err := volume.New(volume.Options{Root: root, Holder: r.WorkloadUID})
 	require.NoError(t, err)
 	r.volumes, r.volumesDurable = m, true
 	return root
@@ -167,22 +167,22 @@ func TestEnsureVolumesRefOwnership(t *testing.T) {
 	r := newShimReconciler(t, nil)
 	withVolumes(t, r)
 	old := volumeFn("cart", stateVolume())
-	g, err := r.ensureVolumes(t.Context(), old)
+	g, err := r.ensureVolumes(t.Context(), functionWorkload(old))
 	require.NoError(t, err)
 	require.Nil(t, g)
 	obj, err := r.store.Create(t.Context(), volumeFn("cart", stateVolume())) // cart deleted and applied again: a new UID
 	require.NoError(t, err)
 	again := obj.(*v1.Function)
-	g, err = r.ensureVolumes(t.Context(), again)
+	g, err = r.ensureVolumes(t.Context(), functionWorkload(again))
 	require.NoError(t, err)
 	require.Equal(t, reasonStoreNotOwned, g.reason)
 	again.Spec.Volumes = []v1.VolumeEntry{{Ref: "state", Type: v1.VolumeLocal, SizeBytes: 1 << 20}}
-	g, err = r.ensureVolumes(t.Context(), again)
+	g, err = r.ensureVolumes(t.Context(), functionWorkload(again))
 	require.NoError(t, err)
 	require.Nil(t, g, "ref adopts the retained volume")
 
 	off := newShimReconciler(t, nil)
-	g, err = off.ensureVolumes(t.Context(), volumeFn("cart", stateVolume()))
+	g, err = off.ensureVolumes(t.Context(), functionWorkload(volumeFn("cart", stateVolume())))
 	require.NoError(t, err)
 	require.Equal(t, reasonVolumesOff, g.reason)
 }
@@ -232,7 +232,7 @@ func TestDeleteVolume(t *testing.T) {
 	obj, err := r.store.Create(t.Context(), volumeFn("cart", stateVolume()))
 	require.NoError(t, err)
 	fn := obj.(*v1.Function)
-	g, err := r.ensureVolumes(t.Context(), fn)
+	g, err := r.ensureVolumes(t.Context(), functionWorkload(fn))
 	require.NoError(t, err)
 	require.Nil(t, g)
 	require.Equal(t, fault.Conflict, fault.KindOf(r.DeleteVolume(t.Context(), "shop", "cart", "state")))
@@ -256,7 +256,7 @@ func TestIssue1200_AddedVolumeIsNotDataMissing(t *testing.T) {
 	}
 	pass := func(t *testing.T, r *Reconciler, fn *v1.Function) (v1.Condition, bool) {
 		t.Helper()
-		_, err := r.ensureVolumes(t.Context(), fn)
+		_, err := r.ensureVolumes(t.Context(), functionWorkload(fn))
 		require.NoError(t, err)
 		return fn.Status.Conditions.Get(condDataMissing)
 	}
@@ -292,10 +292,10 @@ func TestIssue1203_DamagedMetaIsNotDataMissing(t *testing.T) {
 	before, err := volume.New(volume.Options{Root: root})
 	require.NoError(t, err)
 	fn := volumeFn("cart", stateVolume())
-	_, err = before.Reserve(t.Context(), localID(fn, "state"), fn.UID, 1<<20, v1.DeletionRetain)
+	_, err = before.Reserve(t.Context(), localID(functionWorkload(fn), "state"), fn.UID, 1<<20, v1.DeletionRetain)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "shop", "cart", "state.meta"), nil, 0o600))
-	m, err := volume.New(volume.Options{Root: root, Holder: r.FunctionUID})
+	m, err := volume.New(volume.Options{Root: root, Holder: r.WorkloadUID})
 	require.NoError(t, err, "a damaged meta stops the volume manager from opening")
 	r.volumes, r.volumesDurable = m, true
 	fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
@@ -323,9 +323,9 @@ func (s *stealing) Release(ctx context.Context, id volume.ID) error {
 func TestIssue1207_ReplacedWorkerKeepsItsEmptyDirSpace(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	inner, err := volume.New(volume.Options{Root: t.TempDir(), CapacityBytes: 2 << 20, Holder: r.FunctionUID})
+	inner, err := volume.New(volume.Options{Root: t.TempDir(), CapacityBytes: 2 << 20, Holder: r.WorkloadUID})
 	require.NoError(t, err)
-	waiting := volume.ID{Namespace: "shop", Function: "big", Name: "state"}
+	waiting := volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "big", Name: "state"}
 	s := &stealing{Manager: inner}
 	r.volumes, r.volumesDurable = s, true
 	fn := volumeFn("thumbs", cacheVolume()) // a 1 MiB emptyDir

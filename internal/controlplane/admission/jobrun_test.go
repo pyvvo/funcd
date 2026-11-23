@@ -97,6 +97,12 @@ func TestJobRunContractAdmission(t *testing.T) {
 	unprocessable(t, admit(withContract, ""), "body.spec.input")
 	require.NoError(t, admit(withContract, `{"name":"Ada"}`))
 
+	edited := jobWithContract(schema)
+	edited.Generation = 2
+	edited.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionTrue, ObservedGeneration: 1})
+	require.NoError(t, admit(jobGetter{job: edited}, `{}`), "an edited Job's contract is an earlier generation's (#756)")
+	edited.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionTrue, ObservedGeneration: 2})
+	unprocessable(t, admit(jobGetter{job: edited}, `{}`), "body.spec.input.name")
 	require.NoError(t, admit(jobGetter{}, `{}`), "a missing Job leaves the input to the run's start")
 	require.NoError(t, admit(jobGetter{job: jobWithContract("")}, `{}`), "an image with no contract leaves the input unchecked")
 

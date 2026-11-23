@@ -145,7 +145,7 @@ func TestReadOnlyWriter(t *testing.T) {
 	t.Parallel()
 	for _, k := range v1.AllKinds() {
 		want := map[v1.Kind]string{
-			v1.KindRevision:      "the Function reconciler",
+			v1.KindRevision:      "the Function or Job reconciler",
 			v1.KindAppRevision:   "the App reconciler",
 			v1.KindAddonRevision: "the Addon reconciler",
 		}[k]
@@ -213,7 +213,7 @@ func TestSDKRevisionWritesRefusedBeforeRequest(t *testing.T) {
 		"Create": createErr,
 		"Delete": c.Delete(ctx, v1.KindRevision, "team-a", "greeter-1"),
 	} {
-		if fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "Revision is read-only: the Function reconciler writes it") {
+		if fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "Revision is read-only: the Function or Job reconciler writes it") {
 			t.Errorf("%s: err = %v, want fault.Invalid with the read-only message", op, err)
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/testkit/doctag"
 )
 
@@ -14,7 +15,7 @@ import (
 // Decision 4).
 func TestDocNamesTheConstant(t *testing.T) {
 	step := reflect.TypeFor[v1.RunStepStatus]()
-	doctag.Names(t, step, "Error", strconv.Itoa(maxStatusError)+" bytes")
+	doctag.Names(t, step, "Error", strconv.Itoa(observability.MaxStatusError)+" bytes")
 	doctag.Names(t, step, "Attempts", attemptHeader)
 	doctag.Names(t, reflect.TypeFor[v1.FunctionStep](), "Image", materializedHandler+" export")
 	doctag.Names(t, reflect.TypeFor[v1.WorkflowPooling](), "MinReplicas", strconv.Itoa(int(stepIdleTimeout/time.Minute))+" minutes")

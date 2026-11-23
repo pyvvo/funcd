@@ -25,14 +25,14 @@ func (r *Reconciler) Quarantine() quarantine.Store {
 }
 
 func volumeRef(id volume.ID) quarantine.Ref {
-	return quarantine.Ref{ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Namespace: id.Namespace, Name: id.Function}, Volume: id.Name}
+	return quarantine.Ref{ObjectRef: v1.ObjectRef{Kind: id.Kind, Namespace: id.Namespace, Name: id.Workload}, Volume: id.Name}
 }
 
 func refVolume(op string, ref quarantine.Ref) (volume.ID, error) {
-	if ref.Kind != v1.KindFunction || ref.Volume == "" {
-		return volume.ID{}, fault.Invalidf(op, "%s: want a Function and its volume", ref)
+	if (ref.Kind != v1.KindFunction && ref.Kind != v1.KindJob) || ref.Volume == "" {
+		return volume.ID{}, fault.Invalidf(op, "%s: want a Function or a Job and its volume", ref)
 	}
-	return volume.ID{Namespace: ref.Namespace, Function: ref.Name, Name: ref.Volume}, nil
+	return volume.ID{Namespace: ref.Namespace, Kind: ref.Kind, Workload: ref.Name, Name: ref.Volume}, nil
 }
 
 func (q volumeStore) Move(ctx context.Context, ref quarantine.Ref, now time.Time) (quarantine.Entry, error) {
@@ -179,6 +179,6 @@ func (r *Reconciler) reclaimOrphanVolume(ctx context.Context, in volume.Info) er
 		return err
 	}
 	r.logger.WarnContext(ctx, "moved the data of a Function with no object into the quarantine", "namespace", in.ID.Namespace,
-		"name", in.ID.Function, "volume", in.ID.Name, "until", e.Until(r.quarantinePeriod))
+		"name", in.ID.Workload, "volume", in.ID.Name, "until", e.Until(r.quarantinePeriod))
 	return nil
 }

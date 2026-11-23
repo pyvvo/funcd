@@ -120,6 +120,9 @@ type Deps struct {
 	Resolver ArtifactResolver
 	// Platforms (ADR-0145) lists an artifact digest's platforms for the placement gate. nil → no gate.
 	Platforms PlatformResolver
+	// Inspector reads a Job's image contract by digest into its status.contract (ADR-0347 Decision 2). nil → none is
+	// read, so a run's input is left unchecked.
+	Inspector ContractInspector
 
 	// EndpointMode + ImageFor select container execution (ADR-0032). EndpointLoopback
 	// (default) is the process driver: ShimCommand launches the shim, loopback+portfile.
@@ -295,8 +298,9 @@ type Reconciler struct {
 	shimByFamily      map[string][]string // runtime-family prefix → shim command (ADR-0049)
 	endpointMode      EndpointMode
 	imageFor          func(string) string
-	resolver          ArtifactResolver // nil → no digest resolution (ADR-0035)
-	platformsOf       PlatformResolver // nil → no platform gate (ADR-0145)
+	resolver          ArtifactResolver  // nil → no digest resolution (ADR-0035)
+	platformsOf       PlatformResolver  // nil → no platform gate (ADR-0145)
+	inspector         ContractInspector // nil → a Job's contract is not read (ADR-0347 Decision 2)
 	httpClient        *http.Client
 	contracts         contracts // each artifact's compiled contract (ADR-0303)
 
@@ -523,7 +527,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
 		logMaxRecordBytes: d.LogMaxRecordBytes, defaultResources: d.DefaultResources,
 		materializer: d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
-		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms,
+		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms, inspector: d.Inspector,
 		httpClient:        httpx.NodeClient(cmp.Or(d.ProbeTimeout, probeTimeout)),
 		probeTimeout:      cmp.Or(d.ProbeTimeout, probeTimeout),
 		secrets:           d.Secrets,
@@ -587,7 +591,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			if derr := r.teardown(ctx, req.Namespace, req.Name); derr != nil {
 				return controller.Result{}, derr
 			}
-			if derr := r.volumesGone(ctx, req.Namespace, req.Name); derr != nil {
+			if derr := r.volumesGone(ctx, v1.KindFunction, req.Namespace, req.Name); derr != nil {
 				return controller.Result{}, derr
 			}
 			gone := &v1.Function{ObjectMeta: v1.ObjectMeta{Namespace: req.Namespace, Name: req.Name}}
@@ -744,7 +748,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 
 	// 3c-3d. binding gates: fn's current bindings resolve before any worker boots, a held revision's too (ADR-0190
 	// Decision 9).
-	env, err := r.bindings(ctx, fn)
+	env, err := r.bindings(ctx, functionWorkload(fn))
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -802,7 +806,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	}
 	res, err := r.finish(ctx, fn, v, drainAfter)
 	if err == nil && fn.Status.Phase == v1.PhaseReady {
-		err = r.pruneConfigMaps(ctx, fn)
+		err = r.pruneConfigMaps(ctx, functionWorkload(fn))
 	}
 	return afterHeld(res, err, herr)
 }
@@ -2272,7 +2276,7 @@ func (r *Reconciler) convergeHeld(ctx context.Context, fn *v1.Function, env *bou
 		return 0, err
 	}
 	if env == nil {
-		e, err := r.bindings(ctx, fn)
+		e, err := r.bindings(ctx, functionWorkload(fn))
 		if err != nil {
 			return 0, err
 		}
@@ -2495,14 +2499,40 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 // (errRevisionMissing). The create path first retires every worker labelled with the Revision's name: the owner
 // garbage collector may already have deleted a deleted namesake's Revision (ADR-0170).
 func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (string, error) {
+	return r.stamp(ctx, stampSubject{
+		w:          functionWorkload(fn),
+		revision:   v1.ObjectName(revisionName(fn)),
+		current:    v1.ObjectName(fn.Status.CurrentRevision),
+		setCurrent: func(rev v1.ObjectName) { fn.Status.CurrentRevision = string(rev) },
+		judge:      func(rev *v1.Revision) revisionOwner { return revisionOf(rev, fn) },
+		retire:     func(ctx context.Context, rev v1.ObjectName) error { return r.retireStale(ctx, fn, rev) },
+	})
+}
+
+// stampSubject is what a Revision snapshots (ADR-0347 Decision 2): a Function's spec, or a Job's through the fields it
+// shares with a Function's. judge is ADR-0172 Decision 5's table for its kind, and retire, when set, runs before the
+// create.
+type stampSubject struct {
+	w          workload
+	revision   v1.ObjectName
+	current    v1.ObjectName
+	setCurrent func(v1.ObjectName)
+	judge      func(*v1.Revision) revisionOwner
+	retire     func(ctx context.Context, rev v1.ObjectName) error
+}
+
+// stamp is ensureRevision for any subject: it adopts the subject's own stored Revision, drops a deleted namesake's,
+// refuses another's, and otherwise creates it with the digest pinned once (ADR-0035), naming the subject in spec.function
+// or spec.job and in its controller reference; it returns the Revision's digest.
+func (r *Reconciler) stamp(ctx context.Context, s stampSubject) (string, error) {
 	const op = "function.ensureRevision"
-	revName := revisionName(fn)
-	existing, err := r.getRevision(ctx, fn.Namespace, v1.ObjectName(revName))
+	m := s.w.meta()
+	existing, err := r.getRevision(ctx, m.Namespace, s.revision)
 	switch {
 	case err == nil:
-		switch revisionOf(existing, fn) {
+		switch s.judge(existing) {
 		case revSelf:
-			return r.adoptRevision(ctx, fn, existing)
+			return r.adoptRevision(ctx, s, existing)
 		case revOther:
 			return "", stampTaken(existing)
 		}
@@ -2511,13 +2541,13 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 		}
 	case fault.KindOf(err) != fault.NotFound:
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "get revision")
-	case fn.Status.CurrentRevision == revName:
-		return "", fmt.Errorf("%w: %s", errRevisionMissing, revName)
+	case s.current == s.revision:
+		return "", fmt.Errorf("%w: %s", errRevisionMissing, s.revision)
 	}
 	// create path: pin the digest — explicit if set, else resolve the ref (ADR-0035).
-	pinned := fn.Spec.ImageDigest
+	pinned := s.w.spec.ImageDigest
 	if pinned == "" {
-		d, rerr := r.pinDigest(ctx, fn.Spec.Image)
+		d, rerr := r.pinDigest(ctx, s.w.spec.Image)
 		if rerr != nil {
 			return "", rerr
 		}
@@ -2525,61 +2555,67 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 	}
 	obj, _ := v1.NewObject(v1.KindRevision)
 	rev := obj.(*v1.Revision)
-	rev.Name = v1.ObjectName(revName)
-	rev.Namespace = fn.Namespace
-	rev.ResourceGroup = fn.ResourceGroup
-	owner := controllerRef(fn)
+	rev.Name = s.revision
+	rev.Namespace = m.Namespace
+	rev.ResourceGroup = m.ResourceGroup
+	owner := s.w.controllerRef()
 	rev.OwnerReferences = []v1.OwnerReference{owner}
 	rev.Spec = v1.RevisionSpec{
-		Function: owner.ObjectRef,
-		Number:   fn.Generation,
-		Runtime:  fn.Spec.Runtime,
-		Handler:  fn.Spec.Handler,
-		Image:    fn.Spec.Image, ImageDigest: pinned,
+		Number:  m.Generation,
+		Runtime: s.w.spec.Runtime,
+		Handler: s.w.spec.Handler,
+		Image:   s.w.spec.Image, ImageDigest: pinned,
 	}
-	if err := r.retireStale(ctx, fn, rev.Name); err != nil {
-		return "", err
+	if owner.Kind == v1.KindJob {
+		rev.Spec.Job = owner.Name
+	} else {
+		rev.Spec.Function = owner.ObjectRef
+	}
+	if s.retire != nil {
+		if err := s.retire(ctx, rev.Name); err != nil {
+			return "", err
+		}
 	}
 	if _, cerr := r.store.Create(ctx, rev); cerr != nil {
 		switch fault.KindOf(cerr) {
 		case fault.Conflict:
-			return r.settleCreateConflict(ctx, fn, cerr)
+			return r.settleCreateConflict(ctx, s, cerr)
 		case fault.Invalid:
 			return "", fmt.Errorf("%w: %w", errRevisionStampFailed, cerr)
 		}
 		return "", fault.Wrapf(cerr, fault.KindOf(cerr), op, "create revision")
 	}
-	fn.Status.CurrentRevision = revName
+	s.setCurrent(s.revision)
 	return pinned, nil
 }
 
-// settleCreateConflict reads the Revision a concurrent create stored under fn's name: fn's own is adopted, another
-// Function's fails the stamp, and a deleted namesake's returns the Conflict, so the next pass drops it (ADR-0172).
-func (r *Reconciler) settleCreateConflict(ctx context.Context, fn *v1.Function, conflict error) (string, error) {
+// settleCreateConflict reads the Revision a concurrent create stored under the subject's name: its own is adopted,
+// another's fails the stamp, and a deleted namesake's returns the Conflict, so the next pass drops it (ADR-0172).
+func (r *Reconciler) settleCreateConflict(ctx context.Context, s stampSubject, conflict error) (string, error) {
 	const op = "function.ensureRevision"
-	cur, err := r.getRevision(ctx, fn.Namespace, v1.ObjectName(revisionName(fn)))
+	cur, err := r.getRevision(ctx, s.w.meta().Namespace, s.revision)
 	if err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "get revision after a create conflict")
 	}
-	switch revisionOf(cur, fn) {
+	switch s.judge(cur) {
 	case revSelf:
-		return r.adoptRevision(ctx, fn, cur)
+		return r.adoptRevision(ctx, s, cur)
 	case revOther:
 		return "", stampTaken(cur)
 	}
 	return "", fault.Wrapf(conflict, fault.Conflict, op, "create revision")
 }
 
-// adoptRevision makes rev, fn's own, the current revision. A ref-less one (stamped before 2dc9d26) first gets fn as
-// its controller: the reconciler's one metadata write to a Revision (ADR-0172 Decision 5).
-func (r *Reconciler) adoptRevision(ctx context.Context, fn *v1.Function, rev *v1.Revision) (string, error) {
+// adoptRevision makes rev, the subject's own, its current revision. A ref-less one (stamped before 2dc9d26) first gets
+// the subject as its controller: the reconciler's one metadata write to a Revision (ADR-0172 Decision 5).
+func (r *Reconciler) adoptRevision(ctx context.Context, s stampSubject, rev *v1.Revision) (string, error) {
 	if _, owned := v1.ControllerOf(rev.OwnerReferences); !owned {
-		rev.OwnerReferences = append(rev.OwnerReferences, controllerRef(fn))
+		rev.OwnerReferences = append(rev.OwnerReferences, s.w.controllerRef())
 		if _, err := r.store.Update(ctx, rev); err != nil {
 			return "", fault.Wrapf(err, fault.KindOf(err), "function.adoptRevision", "adopt revision %q", rev.Name)
 		}
 	}
-	fn.Status.CurrentRevision = string(rev.Name)
+	s.setCurrent(rev.Name)
 	return rev.Spec.ImageDigest, nil
 }
 
@@ -2594,11 +2630,6 @@ func (r *Reconciler) getRevision(ctx context.Context, ns v1.NamespaceName, name 
 		return nil, fault.Internalf("function.getRevision", "object %q is not a Revision", name)
 	}
 	return rev, nil
-}
-
-func controllerRef(fn *v1.Function) v1.OwnerReference {
-	ref := v1.ObjectRef{Kind: v1.KindFunction, Namespace: fn.Namespace, Name: fn.Name}
-	return v1.OwnerReference{ObjectRef: ref, UID: fn.UID, Controller: true}
 }
 
 const (
@@ -2628,10 +2659,13 @@ const (
 	revOther                         // another Function's
 )
 
-// revisionOf follows ADR-0172 Decision 5: a controller ref decides first (this UID revSelf, another UID of this name
-// revNamesake, another Function revOther); ref-less, spec.function naming another Function is revOther, then
-// revSelf if the status names it, else revNamesake.
+// revisionOf follows ADR-0172 Decision 5: a Job's Revision is never a Function's (ADR-0347 Decision 2); a controller
+// ref decides first (this UID revSelf, another UID of this name revNamesake, another Function revOther); ref-less,
+// spec.function naming another Function is revOther, then revSelf if the status names it, else revNamesake.
 func revisionOf(rev *v1.Revision, fn *v1.Function) revisionOwner {
+	if rev.Spec.Job != "" {
+		return revOther
+	}
 	if o, ok := v1.ControllerOf(rev.OwnerReferences); ok {
 		switch {
 		case o.Kind != v1.KindFunction || o.Name != fn.Name:
@@ -2650,9 +2684,12 @@ func revisionOf(rev *v1.Revision, fn *v1.Function) revisionOwner {
 	return revNamesake
 }
 
-// stampTaken is the error of a Revision name another Function's Revision holds.
+// stampTaken is the error of a Revision name another Function's or Job's Revision holds.
 func stampTaken(rev *v1.Revision) error {
 	ref := rev.Spec.Function
+	if rev.Spec.Job != "" {
+		ref = v1.ObjectRef{Kind: v1.KindJob, Namespace: rev.Namespace, Name: rev.Spec.Job}
+	}
 	if o, ok := v1.ControllerOf(rev.OwnerReferences); ok {
 		ref = o.ObjectRef
 	}

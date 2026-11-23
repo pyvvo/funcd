@@ -37,7 +37,7 @@ type JobSpec struct {
 	Lakes              []LakeEntry         `json:"lakes,omitempty" doc:"The Lakes the Job declares: by name it creates one that goes with the Job, by ref it uses an existing one. spec.bindings.lake binds only a declared Lake, and a Lake declared by name declares nothing at its own root: it binds the Job's buckets, configMaps and secrets."`
 	ConfigMaps         []ConfigMapEntry    `json:"configMaps,omitempty" doc:"The ConfigMaps the Job declares: by name it defines one from its data, which goes with the Job, by ref it uses an existing one. spec.bindings.config binds only a declared ConfigMap."`
 	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty" doc:"The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Job waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key."`
-	Volumes            []VolumeEntry       `json:"volumes,omitempty" doc:"The directories each run's worker mounts. A local volume belongs to the Job, never to a Function of the same name, and allows a concurrency of at most 1."`
+	Volumes            []VolumeEntry       `json:"volumes,omitempty" doc:"The directories each run's worker mounts. Apply refuses a Job with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A local volume is the Job's own, never a same-named Function's, and allows a concurrency of at most 1."`
 	Bindings           FunctionBindings    `json:"bindings,omitzero" doc:"What the code may use: KV tables, Bucket prefixes, SQL databases, Lakes and Functions, each under an alias, and ConfigMaps and Secrets. A binding is the grant: a call on an alias with no binding is refused with 403. Each store, Lake, ConfigMap and Secret it names must be declared at the root, in this spec's kv, buckets, sql, lakes, configMaps or secrets."`
 	Timeout            Duration            `json:"timeout,omitempty" doc:"The bound on each call of a run's handler, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops."`
 	Concurrency        int                 `json:"concurrency,omitempty" minimum:"1" maximum:"15" doc:"How many of the Job's runs may hold a worker at once: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued."`
@@ -63,7 +63,7 @@ func (j *Job) Validate() error {
 	if err := validateMeta(j.TypeMeta, &j.ObjectMeta, KindJob); err != nil {
 		return err
 	}
-	shared := j.Spec.functionSpec()
+	shared := j.Spec.FunctionSpec()
 	if err := validateNestedLakes(op, "spec.lakes", "a Job", shared.Lakes); err != nil {
 		return err
 	}
@@ -88,9 +88,9 @@ func (j *Job) Validate() error {
 	return nil
 }
 
-// functionSpec is the Job's fields that a Function shares, as a FunctionSpec, so that the Function's checks run over
-// them unchanged; the Function's own fields stay zero.
-func (s *JobSpec) functionSpec() FunctionSpec {
+// FunctionSpec is the Job's fields that a Function shares, as a FunctionSpec, so that the Function's checks and hooks
+// run over them unchanged; the Function's own fields stay zero (ADR-0347 Decisions 1 and 5).
+func (s *JobSpec) FunctionSpec() FunctionSpec {
 	return FunctionSpec{Runtime: s.Runtime, Handler: s.Handler, Image: s.Image, ImageDigest: s.ImageDigest,
 		Resources: s.Resources, KVStores: s.KVStores, Buckets: s.Buckets, SQLDatabases: s.SQLDatabases, Lakes: s.Lakes,
 		ConfigMaps: s.ConfigMaps, SecretDeclarations: s.SecretDeclarations, Volumes: s.Volumes, Bindings: s.Bindings}

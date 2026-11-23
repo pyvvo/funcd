@@ -107,6 +107,11 @@ func TestRevisionOf(t *testing.T) {
 		f.Status.CurrentRevision, f.Status.ServingRevision = c.current, c.served
 		require.Equal(t, c.want, revisionOf(rev, &f), c.what)
 	}
+	job := &v1.Revision{}
+	job.Name, job.Spec.Job = "greeter-1", "greeter"
+	f := *fn
+	f.Status.CurrentRevision = "greeter-1"
+	require.Equal(t, revOther, revisionOf(job, &f), "a Job's Revision is never a Function's (ADR-0347 Decision 2)")
 }
 
 // refLessRevision stores greeter-1 as a stamp before 2dc9d26 left it: no ownerRef.

@@ -79,8 +79,8 @@ func AppDeclared(s *v1.AppSpec) *Declared {
 	return d
 }
 
-// --- binding-declared (ADR-0248 Decision 2, ADR-0251 Decision 2, ADR-0337 Decision 3): Create/Update on Function,
-// Workflow, Lake and an App's add-on object
+// --- binding-declared (ADR-0248 Decision 2, ADR-0251 Decision 2, ADR-0337 Decision 3, ADR-0347 Decision 1):
+// Create/Update on Function, Job, Workflow, Lake and an App's add-on object
 
 type bindingDeclared struct{ r StoreReader }
 
@@ -101,8 +101,8 @@ func (bindingDeclared) Phase() Phase { return Validating }
 func (bindingDeclared) ReadsNamespace() bool { return true }
 
 func (bindingDeclared) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return (gvk == v1.KindFunction.GVK() || gvk == v1.KindWorkflow.GVK() || gvk == v1.KindLake.GVK() ||
-		gvk == v1.KindAddonObject.GVK()) && (op == Create || op == Update)
+	return (gvk == v1.KindFunction.GVK() || gvk == v1.KindJob.GVK() || gvk == v1.KindWorkflow.GVK() ||
+		gvk == v1.KindLake.GVK() || gvk == v1.KindAddonObject.GVK()) && (op == Create || op == Update)
 }
 
 func (a bindingDeclared) Admit(ctx context.Context, req Request) (v1.Object, error) {
@@ -121,6 +121,9 @@ func (a bindingDeclared) Admit(ctx context.Context, req Request) (v1.Object, err
 		} else {
 			err = functionUndeclared(&o.Spec, app)
 		}
+	case *v1.Job:
+		spec := o.Spec.FunctionSpec() // a Job binds what it declares as a Function does (ADR-0347 Decision 1)
+		err = functionUndeclared(&spec, app)
 	case *v1.Workflow:
 		err = workflowUndeclared(&o.Spec, app)
 	case *v1.Lake:
