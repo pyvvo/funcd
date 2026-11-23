@@ -905,7 +905,7 @@ func (p *Platform) buildControlPlane() error {
 		ImageFor:             c.imageFor,
 		Resolver:             resolver,
 		Platforms:            platforms,
-		Inspector:            contractInspector{},
+		Inspector:            jobContracts(c.workflowContracts),
 		BootBackoffInitial:   c.bootBackoffInitial,
 		BootBackoffMax:       c.bootBackoffMax,
 		SupervisionPeriod:    c.pacing.SupervisionPeriod,
@@ -1579,11 +1579,39 @@ func (contractResolver) Contract(ctx context.Context, image string) (v1.Workflow
 }
 
 // contractInspector is the production function.ContractInspector (ADR-0347 Decision 2): a Job's image contract read
-// by its digest from registry metadata, never the bundle.
+// by its digest from registry metadata, never the bundle. An image pinned by no digest, a file artifact, has none to
+// read that way.
 type contractInspector struct{}
 
 func (contractInspector) Inspect(ctx context.Context, image, digest string) ([]byte, error) {
+	if digest == "" {
+		return nil, fault.NotFoundf("funcd.contractInspector", "%s is pinned by no digest", image)
+	}
 	return artifact.Inspect(ctx, image, digest)
+}
+
+// jobContracts is the Jobs' ContractInspector: dev's contract resolver when it sets one, else the registry metadata.
+func jobContracts(dev workflow.ContractResolver) function.ContractInspector {
+	if dev != nil {
+		return resolverInspector{dev}
+	}
+	return contractInspector{}
+}
+
+// resolverInspector reads a Job's contract through the workflow contract resolver that funcdctl dev sets
+// (WithWorkflowContractResolver), which knows an image built from source by its reference, so a JobRun's admission under
+// dev checks its input as a server's does.
+type resolverInspector struct{ r workflow.ContractResolver }
+
+func (i resolverInspector) Inspect(ctx context.Context, image, _ string) ([]byte, error) {
+	c, _, err := i.r.Contract(ctx, image)
+	if err != nil {
+		return nil, err
+	}
+	if len(c.Input) == 0 && len(c.Output) == 0 {
+		return nil, fault.NotFoundf("funcd.resolverInspector", "%s carries no contract", image)
+	}
+	return json.Marshal(c)
 }
 
 // childResolver is the production workflow.ChildResolver (ADR-0099): it reads a child Workflow's pinned

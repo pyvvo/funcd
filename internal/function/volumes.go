@@ -43,24 +43,19 @@ func localID(w workload, name v1.ObjectName) volume.ID {
 }
 
 // ensureVolumes reserves w's local volumes before any worker boots (ADR-0262 Decisions 5 and 7), adopting a ref'd
-// retained volume first, and records a Function's DataMissing loss (Decision 12). It returns the gate of the first
-// volume that stops w.
+// retained volume first, and records a DataMissing loss (Decision 12). It returns the gate of the first volume that
+// stops w.
 func (r *Reconciler) ensureVolumes(ctx context.Context, w workload) (*gateFailure, error) {
-	fn, isFunction := w.owner.(*v1.Function)
 	if len(w.spec.Volumes) == 0 {
-		if isFunction {
-			r.markVolumesSeen(fn) // a volume a later generation adds is new, not lost (#1200)
-		}
+		r.markVolumesSeen(w) // a volume a later generation adds is new, not lost (#1200)
 		return nil, nil
 	}
 	if r.volumes == nil {
 		msg := "spec.volumes: volumes are off on this daemon"
 		return &gateFailure{reason: reasonVolumesOff, message: msg, readyMessage: msg, phase: v1.PhaseFailed}, nil
 	}
-	if isFunction {
-		if err := r.dataMissing(ctx, fn); err != nil {
-			return nil, err
-		}
+	if err := r.dataMissing(ctx, w); err != nil {
+		return nil, err
 	}
 	if w.observedGeneration() < w.meta().Generation {
 		if err := r.dropRemovedVolumes(ctx, w); err != nil {
@@ -520,23 +515,35 @@ func (r *Reconciler) VolumeLost(ctx context.Context, ns v1.NamespaceName, fn, na
 	return ok && c.Status == v1.ConditionTrue && slices.Contains(lostVolumes(c.Message), string(name)), nil
 }
 
-// markVolumesSeen records this process's first pass over fn, the only pass that may find a lost volume.
-func (r *Reconciler) markVolumesSeen(fn *v1.Function) {
+// volumeOwner keys the volume state of a workload by its kind too: a Job and a Function of one name hold their volumes
+// apart (ADR-0347 Decision 1).
+type volumeOwner struct {
+	kind v1.Kind
+	ns   v1.NamespaceName
+	name v1.ObjectName
+}
+
+func volumeOwnerOf(w workload) volumeOwner {
+	return volumeOwner{w.kind(), w.meta().Namespace, w.meta().Name}
+}
+
+// markVolumesSeen records this process's first pass over w, the only pass that may find a lost volume.
+func (r *Reconciler) markVolumesSeen(w workload) {
 	r.volMu.Lock()
-	r.volumesSeen[fnKey{fn.Namespace, fn.Name}] = true
+	r.volumesSeen[volumeOwnerOf(w)] = true
 	r.volMu.Unlock()
 }
 
-// dataMissing sets DataMissing on fn (ADR-0262 Decision 12, as ADR-0234 Decision 6): on this process's first pass,
-// with durable volumes, a Function whose stored Ready is True for its current generation and whose local volume has no
+// dataMissing sets DataMissing on w (ADR-0262 Decision 12, as ADR-0234 Decision 6): on this process's first pass,
+// with durable volumes, a workload whose stored Ready is True for its current generation and whose local volume has no
 // leaf lost its data; a Succeeded Restore into that volume since then clears it.
-func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
-	key := fnKey{fn.Namespace, fn.Name}
+func (r *Reconciler) dataMissing(ctx context.Context, w workload) error {
+	key, st, m := volumeOwnerOf(w), w.owner.(v1.StatusObject).GetStatus(), w.meta()
 	r.volMu.Lock()
 	first, lost := !r.volumesSeen[key], r.volumesMissing[key]
 	pending := len(lost) > 0
 	r.volMu.Unlock()
-	cur, has := fn.Status.Conditions.Get(condDataMissing)
+	cur, has := st.Conditions.Get(condDataMissing)
 	if pending && has && cur.Status == v1.ConditionTrue {
 		r.volMu.Lock()
 		delete(r.volumesMissing, key)
@@ -544,34 +551,34 @@ func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 		pending = false
 	}
 	if pending {
-		r.setDataMissing(fn, lost)
+		r.setDataMissing(w, lost)
 		return nil
 	}
 	if has && cur.Status == v1.ConditionTrue {
-		restored, err := r.volumesRestoredSince(ctx, fn, lostVolumes(cur.Message), time.Time(cur.LastTransitionTime))
+		restored, err := r.volumesRestoredSince(ctx, w, lostVolumes(cur.Message), time.Time(cur.LastTransitionTime))
 		if err != nil || !restored {
 			return err
 		}
-		fn.Status.Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionFalse, Reason: reasonVolumesRestored, ObservedGeneration: fn.Generation})
+		st.Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionFalse, Reason: reasonVolumesRestored, ObservedGeneration: m.Generation})
 		return nil
 	}
 	if !first {
 		return nil
 	}
-	r.markVolumesSeen(fn)
-	ready, ok := fn.Status.Conditions.Get(condReady)
+	r.markVolumesSeen(w)
+	ready, ok := st.Conditions.Get(condReady)
 	// The stored Ready vouches only for the volumes its pass reserved: those of the current generation when no pass
 	// was left to run on an update (#1200).
-	if !r.volumesDurable || !ok || ready.Status != v1.ConditionTrue || fn.Status.ObservedGeneration != fn.Generation || !fn.Spec.HasLocalVolume() {
+	if !r.volumesDurable || !ok || ready.Status != v1.ConditionTrue || st.ObservedGeneration != m.Generation || !w.spec.HasLocalVolume() {
 		return nil
 	}
 	var gone []string
-	for _, v := range fn.Spec.Volumes {
+	for _, v := range w.spec.Volumes {
 		if v.Type != v1.VolumeLocal {
 			continue
 		}
 		// the leaf holds the data, not the meta beside it: a meta a crash damaged is no loss (#1203)
-		_, err := r.volumes.Empty(ctx, localID(functionWorkload(fn), v.VolumeName()))
+		_, err := r.volumes.Empty(ctx, localID(w, v.VolumeName()))
 		if fault.KindOf(err) != fault.NotFound {
 			if err != nil {
 				return err
@@ -579,13 +586,13 @@ func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 			continue
 		}
 		gone = append(gone, string(v.VolumeName()))
-		r.logger.WarnContext(ctx, "function volume lost its data", "namespace", fn.Namespace, "function", fn.Name, "volume", v.VolumeName())
+		r.logger.WarnContext(ctx, "workload volume lost its data", "namespace", m.Namespace, "kind", w.kind(), "name", m.Name, "volume", v.VolumeName())
 	}
 	if len(gone) > 0 {
 		r.volMu.Lock()
 		r.volumesMissing[key] = gone
 		r.volMu.Unlock()
-		r.setDataMissing(fn, gone)
+		r.setDataMissing(w, gone)
 	}
 	return nil
 }
@@ -603,16 +610,19 @@ func lostVolumes(msg string) []string {
 	return strings.Split(names, ",")
 }
 
-func (r *Reconciler) setDataMissing(fn *v1.Function, lost []string) {
-	fn.Status.Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionTrue, Reason: reasonNoVolume, ObservedGeneration: fn.Generation,
-		Message: dataMissingVolumes + strings.Join(lost, ",") + "; the Function was Ready before and these local volumes are gone, so they start empty: run a workload Restore into each"})
+func (r *Reconciler) setDataMissing(w workload, lost []string) {
+	w.owner.(v1.StatusObject).GetStatus().Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionTrue,
+		Reason: reasonNoVolume, ObservedGeneration: w.meta().Generation,
+		Message: dataMissingVolumes + strings.Join(lost, ",") + "; the " + string(w.kind()) +
+			" was Ready before and these local volumes are gone, so they start empty: run a workload Restore into each"})
 }
 
-// volumesRestoredSince reports that Succeeded Restores created at or after since loaded every lost volume into fn.
-func (r *Reconciler) volumesRestoredSince(ctx context.Context, fn *v1.Function, lost []string, since time.Time) (bool, error) {
-	l, err := r.store.List(ctx, v1.KindRestore.GVK(), store.ListOptions{Namespace: fn.Namespace})
+// volumesRestoredSince reports that Succeeded Restores created at or after since loaded every lost volume into w.
+func (r *Reconciler) volumesRestoredSince(ctx context.Context, w workload, lost []string, since time.Time) (bool, error) {
+	ns, name := w.meta().Namespace, w.meta().Name
+	l, err := r.store.List(ctx, v1.KindRestore.GVK(), store.ListOptions{Namespace: ns})
 	if err != nil {
-		return false, fault.Wrapf(err, fault.KindOf(err), "function.dataMissing", "list restores in %q", fn.Namespace)
+		return false, fault.Wrapf(err, fault.KindOf(err), "function.dataMissing", "list restores in %q", ns)
 	}
 	restored := map[string]bool{}
 	for _, o := range l.Items {
@@ -621,7 +631,7 @@ func (r *Reconciler) volumesRestoredSince(ctx context.Context, fn *v1.Function, 
 			continue
 		}
 		for _, m := range rs.Spec.Members {
-			if m.Kind == v1.KindFunction && m.Volume != "" && cmp.Or(m.As, m.Name) == fn.Name {
+			if m.Kind == w.kind() && m.Volume != "" && cmp.Or(m.As, m.Name) == name {
 				restored[string(m.Volume)] = true
 			}
 		}

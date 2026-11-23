@@ -13,11 +13,12 @@ import (
 	"github.com/pyvvo/funcd/internal/contract"
 	"github.com/pyvvo/funcd/internal/contractcheck"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/scheduler"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
 // ContractInspector reads the contract an image delivers, by its digest and from its registry metadata, without its
-// bundle (ADR-0347 Decision 2): fault.NotFound when the image carries none.
+// bundle (ADR-0347 Decision 2): fault.NotFound when the image carries none, or when it cannot be read with no digest.
 type ContractInspector interface {
 	Inspect(ctx context.Context, image, digest string) ([]byte, error)
 }
@@ -94,11 +95,21 @@ func (j *JobReconciler) pass(ctx context.Context, job *v1.Job) (time.Duration, e
 	if err := j.collectRevisions(ctx, job); err != nil {
 		return 0, err
 	}
+	// the checks a Function passes before its first worker, in its order (ADR-0347 Decision 2)
+	if perr := r.placeable(ctx, w.fn(), job.Spec.Image, pinned); perr != nil {
+		if !errors.Is(perr, scheduler.ErrNoMatchingPlatform) {
+			return 0, perr
+		}
+		return notReady(job, gateFailure{reason: "NoMatchingPlatform", message: placementMessage(perr), phase: v1.PhaseFailed}), nil
+	}
 	if verr := r.validator.Validate(ctx, w.fn()); verr != nil {
 		return notReady(job, gateFailure{reason: "ShapeInvalid", message: verr.Error(), phase: v1.PhaseFailed}), nil
 	}
 	if msg, missing := r.runtimeUnavailable(w.fn()); missing {
 		return notReady(job, gateFailure{reason: reasonRuntimeUnavailable, message: msg, phase: v1.PhaseFailed}), nil
+	}
+	if g := resourcesGate(w.fn()); g != nil {
+		return notReady(job, *g), nil
 	}
 	env, err := r.bindings(ctx, w)
 	if err != nil {
@@ -133,10 +144,10 @@ func notReady(job *v1.Job, g gateFailure) time.Duration {
 
 // contract reads the contract that job's image at digest delivers into the shape of status.contract, and holds job with
 // ContractInvalid when it does not compile, as a Function's revision is held (ADR-0303 Decision 3). An image with no
-// digest, as a file artifact, or with no contract leaves it nil.
+// contract leaves it nil.
 func (j *JobReconciler) contract(ctx context.Context, job *v1.Job, digest string) (*v1.WorkflowContract, *gateFailure, error) {
 	r := j.r
-	if digest == "" || r.inspector == nil {
+	if r.inspector == nil {
 		return nil, nil, nil
 	}
 	blob, err := r.inspector.Inspect(ctx, job.Spec.Image, digest)

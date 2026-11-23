@@ -195,7 +195,7 @@ func TestDataMissingAfterLoss(t *testing.T) {
 	withVolumes(t, r)
 	fn := volumeFn("cart", stateVolume())
 	fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
-	require.NoError(t, r.dataMissing(t.Context(), fn))
+	require.NoError(t, r.dataMissing(t.Context(), functionWorkload(fn)))
 	c, ok := fn.Status.Conditions.Get(condDataMissing)
 	require.True(t, ok)
 	require.Equal(t, v1.ConditionTrue, c.Status)
@@ -210,7 +210,7 @@ func TestDataMissingAfterLoss(t *testing.T) {
 	other.Spec.Members = []v1.RestoreMember{{Kind: v1.KindFunction, Name: "cart", Volume: "cache", InPlace: true}}
 	_, err := r.store.Create(t.Context(), &other)
 	require.NoError(t, err)
-	require.NoError(t, r.dataMissing(t.Context(), fn))
+	require.NoError(t, r.dataMissing(t.Context(), functionWorkload(fn)))
 	c, _ = fn.Status.Conditions.Get(condDataMissing)
 	require.Equal(t, v1.ConditionTrue, c.Status, "a Restore of another volume leaves DataMissing")
 	_, err = r.store.Create(t.Context(), rs)
@@ -218,7 +218,7 @@ func TestDataMissingAfterLoss(t *testing.T) {
 	reqs := r.MapRestore(t.Context(), rs)
 	require.Len(t, reqs, 1)
 	require.Equal(t, v1.ObjectName("cart"), reqs[0].Name)
-	require.NoError(t, r.dataMissing(t.Context(), fn))
+	require.NoError(t, r.dataMissing(t.Context(), functionWorkload(fn)))
 	c, _ = fn.Status.Conditions.Get(condDataMissing)
 	require.Equal(t, v1.ConditionFalse, c.Status, "the Restore clears DataMissing")
 }
@@ -299,7 +299,7 @@ func TestIssue1203_DamagedMetaIsNotDataMissing(t *testing.T) {
 	require.NoError(t, err, "a damaged meta stops the volume manager from opening")
 	r.volumes, r.volumesDurable = m, true
 	fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
-	require.NoError(t, r.dataMissing(t.Context(), fn))
+	require.NoError(t, r.dataMissing(t.Context(), functionWorkload(fn)))
 	_, missing := fn.Status.Conditions.Get(condDataMissing)
 	require.False(t, missing, "the leaf holds the data")
 }
@@ -335,4 +335,26 @@ func TestIssue1207_ReplacedWorkerKeepsItsEmptyDirSpace(t *testing.T) {
 	_, err = r.workerSpec(t.Context(), fn, "", 0, "/art/app.mjs", workerEnv{})
 	require.NoError(t, err, "the replacement worker gets its emptyDir")
 	require.ErrorIs(t, inner.Book(t.Context(), waiting, 2<<20), volume.ErrCapacity, "the waiting volume took no space of the replaced worker")
+}
+
+// ADR-0347 Decision 1 and ADR-0262 Decision 12: a Job records a lost local volume as a Function does, under its own
+// kind, so a same-named Function's state is its own.
+func TestJobDataMissingAfterLoss(t *testing.T) {
+	t.Parallel()
+	r := newShimReconciler(t, nil)
+	withVolumes(t, r)
+	job := &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob}}
+	job.Name, job.Namespace, job.ResourceGroup = "cart", "shop", "rg"
+	job.Spec.Volumes = []v1.VolumeEntry{stateVolume()}
+	job.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
+	require.NoError(t, r.dataMissing(t.Context(), jobWorkload(job)))
+	c, ok := job.Status.Conditions.Get(condDataMissing)
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionTrue, c.Status)
+	require.Contains(t, c.Message, "lost volumes: state; the Job was Ready before")
+
+	fn := volumeFn("cart", stateVolume())
+	require.NoError(t, r.dataMissing(t.Context(), functionWorkload(fn)))
+	_, ok = fn.Status.Conditions.Get(condDataMissing)
+	require.False(t, ok, "the Job's loss is not the same-named Function's, whose stored Ready vouches for nothing")
 }

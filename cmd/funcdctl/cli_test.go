@@ -702,7 +702,7 @@ func TestScenarioForceOnlyOnResourceGroup(t *testing.T) {
 func TestCLIRevisionIsReadOnly(t *testing.T) {
 	t.Parallel()
 	c := newClient(t)
-	const readOnly = "Revision is read-only: the Function or Job reconciler writes it"
+	const readOnly = "Revision is read-only: the Function reconciler writes it"
 	manifest := `{"apiVersion":"funcd.io/v1alpha1","kind":"ConfigMap",` +
 		`"metadata":{"name":"cm1","namespace":"team-a","resourceGroup":"rg1"}}` + "\n---\n" +
 		`{"apiVersion":"funcd.io/v1alpha1","kind":"Revision",` +

@@ -304,3 +304,26 @@ func TestJobPrunesTheConfigMapsItNoLongerDefines(t *testing.T) {
 	_, err = h.st.Get(context.Background(), v1.KindConfigMap.GVK(), "default", stored)
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "a ConfigMap the Job no longer defines goes")
 }
+
+// fixedPlatforms says every artifact is built for one platform.
+type fixedPlatforms struct{ p v1.OCIPlatform }
+
+func (f fixedPlatforms) Platforms(context.Context, string, string) ([]v1.OCIPlatform, error) {
+	return []v1.OCIPlatform{f.p}, nil
+}
+
+// ADR-0347 Decision 2 and ADR-0145: an artifact built for no platform the node runs holds the Job, as it holds a
+// Function, before any other gate.
+func TestJobPlatformGate(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, func(d *function.Deps) {
+		d.Resolver = &fakeResolver{digest: jobDigest}
+		d.Platforms = fixedPlatforms{p: "plan9/sparc"}
+	})
+	jh := &jobHarness{harness: h, inspector: &fakeInspector{}}
+	jh.createJob(t, "elsewhere", nil)
+	jh.reconcileJob(t, "elsewhere")
+	got := jh.getJob(t, "elsewhere")
+	require.Equal(t, "NoMatchingPlatform", readyOf(t, got).Reason)
+	require.Equal(t, v1.PhaseFailed, got.Status.Phase)
+}

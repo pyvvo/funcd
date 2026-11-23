@@ -391,8 +391,8 @@ type Reconciler struct {
 	// Revision watch, guarded by sparedMu; the store's Revision.status stays the truth.
 	held map[fnKey]bool
 
-	// volumes keeps the Functions' volumes (ADR-0262); emptyDirs names each worker's emptyDirs, volumesSeen the
-	// Functions this process passed over, volumesMissing those whose DataMissing awaits a status write,
+	// volumes keeps the Functions' and Jobs' volumes (ADR-0262); emptyDirs names each worker's emptyDirs, volumesSeen the
+	// workloads this process passed over, volumesMissing those whose DataMissing awaits a status write,
 	// heldLeftovers the last run's emptyDirs a held boot kept (#1204), restoring the Functions a Restore keeps
 	// workerless and launching the passes creating their workers (#1206), and passSlots the replica slots the steps of
 	// a pass keep for its sweep (#1207); volMu guards the seven, and launched tells StopWorkers that a pass is done
@@ -403,8 +403,8 @@ type Reconciler struct {
 	quarantinePeriod time.Duration
 	volMu            sync.Mutex
 	emptyDirs        map[runtime.InstanceID][]volume.ID
-	volumesSeen      map[fnKey]bool
-	volumesMissing   map[fnKey][]string
+	volumesSeen      map[volumeOwner]bool
+	volumesMissing   map[volumeOwner][]string
 	heldLeftovers    []volume.ID
 	restoring        map[fnKey]int
 	launching        map[fnKey]int
@@ -570,8 +570,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		hold:              d.Hold,
 		quarantinePeriod:  d.QuarantinePeriod,
 		emptyDirs:         map[runtime.InstanceID][]volume.ID{},
-		volumesSeen:       map[fnKey]bool{},
-		volumesMissing:    map[fnKey][]string{},
+		volumesSeen:       map[volumeOwner]bool{},
+		volumesMissing:    map[volumeOwner][]string{},
 		restoring:         map[fnKey]int{},
 		launching:         map[fnKey]int{},
 		passSlots:         map[fnKey]map[runtime.InstanceID]bool{},
