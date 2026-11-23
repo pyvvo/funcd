@@ -1,7 +1,7 @@
 # ADR-0346: Under funcdctl dev, a worker on an Addon's runtime runs on dev's container engine
 
-- **Status**: Proposed (2026-11-23), judged twice: round 1's Blocker (with the decider's option A), round 2's Blocker
-  and Major, and the Minors folded
+- **Status**: Proposed (2026-11-23), judged three times, nothing open: round 1's Blocker (with the decider's option
+  A), round 2's Blocker and Major, and every Minor folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: dev, runtime, addons, functions, jobs, local-api
@@ -89,9 +89,10 @@ Desktop's gateway.
    (`function.go:3305-3316`): no `Command`, the artifact under `/var/funcd/artifact` in the bundle volume, mounted
    read-only, and `Image` the image its Revision recorded (ADR-0344 Decision 8). On an engine that shares the host's
    network (Decision 5) it takes no `FUNCD_PORT`, so the shim binds the loopback, and writes its port to
-   `FUNCD_PORTFILE` in a second, writable volume at `/run/funcd`; on an engine in a VM it takes `FUNCD_PORT` 8080 and
-   no port file. No other Function or Job worker in process mode sets `Image`. Engine workers keep theirs
-   (`internal/provider/runtime.go:380-391`) and never run over `Pair`: dev gives them runtimes of their own.
+   `FUNCD_PORTFILE` in a second, writable volume at `/run/funcd`, which the helper makes the image user's; on an
+   engine in a VM it takes `FUNCD_PORT` 8080 and no port file. No other Function or Job worker in process mode sets
+   `Image`. Engine workers keep theirs (`internal/provider/runtime.go:380-391`) and never run over `Pair`: dev gives
+   them runtimes of their own.
 3. **The pair.** `runtime.Pair(process, images)` creates a Function's or Job's worker whose spec has an `Image` on
    `images` and any other on `process`, and records which driver holds each instance. Both drivers reap at start, so
    the record starts empty, and on a miss `Pair` asks each driver's `Status`, since instance IDs are deterministic.
@@ -104,18 +105,19 @@ Desktop's gateway.
    answers with any status, checked within `Status` with no timer of its own; reads stdout and stderr through the
    engine's log follow, as the containerd driver reads a task's FIFOs (ADR-0168); records the exit code, and the
    signal when the code is above 128; and sets `resources` as the engine's CPU and memory limits. A container worker
-   has no structured-log channel, so the shims print each record to stdout when none is set (plan step 5), and its
-   records reach funcd as lines. It pulls as ADR-0334 does.
+   has no structured-log channel, so the driver sets `FUNCD_LOG_STDOUT`, which no other worker gets, and the shims
+   then print each record to stdout (plan step 5), and its records reach funcd as lines. It pulls as ADR-0334 does.
 5. **The network.** funcd's listeners stay on the host's `127.0.0.1`, and `ImageRunner.EndpointHost` names the host a
    container worker reaches them by.
-   - An engine whose info gives the host's own kernel shares the host's network: the worker runs with it, its
-     endpoints stay `127.0.0.1`, and `RunSpec.Port` is unused. A rootless engine has no host network, so `RunsImages`
-     is false, naming it.
+   - An engine whose host-network helper reads the host's own boot ID (`/proc/sys/kernel/random/boot_id`) shares the
+     host's network: the worker runs with it, its endpoints stay `127.0.0.1`, and `RunSpec.Port` is unused. A rootless
+     engine has no host network, so `RunsImages` is false, naming it.
    - An engine in a VM, always on macOS and also Docker Desktop, colima or Lima on Linux: the worker binds 8080 in its
      own network, published on `127.0.0.1` at a free port, and resolves `funcd.host` to the engine's host gateway. The
      reconciler writes `funcd.host` for `127.0.0.1` in exactly the env keys its workload hooks mark as funcd's
-     endpoints (`s3Hook`, `lakeHook`, `addonHook`; ADR-0306 Decision 1) and in `FUNCD_INVOKE_URL`, so the driver's
-     spec stays as the worker port has it.
+     endpoints, in their shared or own part (`s3Hook`, `lakeHook`, `addonHook`; ADR-0306 Decision 1), and in
+     `FUNCD_INVOKE_URL`, so the driver's spec stays as the worker port has it. Dev sets no other endpoint: egress is off
+     under dev (ADR-0117).
 6. **The local API.** Each such worker gets a listener of its own on the host's `127.0.0.1`, named in
    `FUNCD_INVOKE_URL`, which fixes its caller as a socket does, so ADR-0064's connection-scoped identity holds. A
    request proves it comes from that worker with the token funcd issued it at `Create`, in `FUNCD_INVOKE_TOKEN`, sent
@@ -179,8 +181,8 @@ type Mount struct {
 }
 
 type RunSpec struct {
-	// … today's fields; Port is unused with HostNetwork
-	Mounts      []Mount  // the bundle, read-only, and /run/funcd
+	// … today's fields but Volume and Target, which Mounts replaces (an engine passes one); Port is unused with HostNetwork
+	Mounts      []Mount  // a worker's bundle, read-only, and /run/funcd
 	HostNetwork bool
 	ExtraHosts  []string // "funcd.host:host-gateway"
 	NanoCPUs    int64
@@ -209,8 +211,9 @@ ReleaseListener(id runtime.InstanceID)
    stripped before a pass-through; `internal/function`'s `InvokeSocketProvider` gains both.
 4. `internal/provider/docker`: `NewWorkers`, `Container.ExitCode`, `RunSpec`'s new fields; `internal/provider/nerdctl`
    the same; `runtimecontract` runs on `NewWorkers` over a fake `Engine`.
-5. The shims: `FUNCD_INVOKE_URL`, `FUNCD_INVOKE_TOKEN` and the header, and a record printed to stdout when no log
-   channel is set, in pyvvo/funcd-typescript and pyvvo/funcd-python, released, their pins bumped here (ADR-0141).
+5. The shims: `FUNCD_INVOKE_URL`, `FUNCD_INVOKE_TOKEN` and the header, and a record printed to stdout when
+   `FUNCD_LOG_STDOUT` is set, in pyvvo/funcd-typescript and pyvvo/funcd-python, released, their pins bumped here
+   (ADR-0141).
 6. `cmd/funcdctl/dev.go`: `Pair(process, workers)`, or `Pair(process, NoImages(why))`, in both option lists.
 7. Docs: the guide's dev page and the behavior rows; tests: one `TestScenario…` per scenario, the real-engine ones
    skipped with no engine, as ADR-0334's are.
