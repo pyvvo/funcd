@@ -82,13 +82,14 @@ type ShapeValidator interface {
 // reconciler sets it as FUNCD_INVOKE_SOCKET in the worker env so the shim can dial context.invoke.
 // nil ⇒ fn-to-fn links are off (the env var is unset; invoke fails closed in the shim).
 type InvokeSocketProvider interface {
-	SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, error)
+	// SocketFor provisions the local API socket of ref: a Function's, or one run's of a Job (ADR-0351 Decision 2).
+	SocketFor(ref local.Ref) (string, error)
 	// PoolSocketFor provisions the one local API socket of pool worker `pool`, on which each call names its member;
 	// members is the set it serves, replaced on every call.
 	PoolSocketFor(ns v1.NamespaceName, pool v1.ObjectName, members []v1.ObjectName) (string, error)
-	// Remove stops + deletes the function's local API listener (called from teardown on delete, so
-	// the socket lifecycle tracks the Function resource — controller-driven, not leaked).
-	Remove(ns v1.NamespaceName, name v1.ObjectName)
+	// Remove stops + deletes ref's local API listener (called from teardown on delete, and as a run's worker is
+	// removed, so the socket lifecycle tracks its resource — controller-driven, not leaked).
+	Remove(ref local.Ref)
 }
 
 // Deps configures the Function lifecycle reconciler (internal component, ADR-0002 §1).
@@ -2481,10 +2482,8 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 			return fault.Wrapf(err, fault.KindOf(err), "function.teardown", "retire worker")
 		}
 	}
-	r.boot.forget(backoffPrefix(ns, name)) // replicas with no instance too: a namesake starts at zero (ADR-0169)
-	if r.invokeSockets != nil {
-		r.invokeSockets.Remove(ns, name) // the local API socket dies with the Function (ADR-0064)
-	}
+	r.boot.forget(backoffPrefix(ns, name))      // replicas with no instance too: a namesake starts at zero (ADR-0169)
+	r.removeSocket(local.FunctionRef(ns, name)) // the local API socket dies with the Function (ADR-0064)
 	return nil
 }
 
@@ -3196,15 +3195,32 @@ func unavailablePrefix(rt v1.RuntimeName) string {
 // context.kv (ADR-0069) and the rest, and returns its host path. EVERY function gets one (KV is available to all; the
 // link-as-grant check for invoke stays at resolve time, so a linkless function's invoke still fails closed). "" when
 // the local API is off; a socket that cannot be provisioned is an error, so no worker starts without it (issue #358).
-func (r *Reconciler) invokeSocket(fn *v1.Function) (string, error) {
+func (r *Reconciler) invokeSocket(ref local.Ref) (string, error) {
 	if r.invokeSockets == nil {
 		return "", nil
 	}
-	sock, err := r.invokeSockets.SocketFor(fn.Namespace, fn.Name)
+	sock, err := r.invokeSockets.SocketFor(ref)
 	if err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), "function.invokeSocket", "provision the local API socket")
 	}
 	return sock, nil
+}
+
+// removeSocket stops ref's local API socket, if the local API is on.
+func (r *Reconciler) removeSocket(ref local.Ref) {
+	if r.invokeSockets != nil {
+		r.invokeSockets.Remove(ref)
+	}
+}
+
+// callerRef is the local API caller worker wo of w acts as: its Function, or its Job with the run it serves (ADR-0351
+// Decision 2).
+func callerRef(w workload, wo workerOf) local.Ref {
+	m := w.meta()
+	if wo.kind == v1.KindJobRun {
+		return local.Ref{Namespace: m.Namespace, Kind: v1.KindJob, Name: m.Name, Run: wo.name}
+	}
+	return local.FunctionRef(m.Namespace, m.Name)
 }
 
 // isPythonFamily reports whether rt is a python-family runtime (e.g. "python314") — the family
@@ -3336,8 +3352,8 @@ func (r *Reconciler) addRecordBound(env map[string]string) {
 
 // workerSpec builds the runtime spec of worker wo of w's revision rev. In shim mode (a Materializer is configured,
 // ADR-0030) it launches the runtime shim with the materialized artifact and handler in the env; otherwise it runs the
-// legacy long-lived placeholder (ADR-0020). we is what the providers w binds give its workers (bindings). Only a
-// Function's worker gets the local API socket: a run's waits for its Job's principal (ADR-0347 Decision 5, F140).
+// legacy long-lived placeholder (ADR-0020). we is what the providers w binds give its workers (bindings). A run's
+// worker gets a local API socket of its own, on which it acts as its Job (ADR-0351 Decision 2).
 func (r *Reconciler) workerSpec(ctx context.Context, w workload, rev v1.ObjectName, wo workerOf, artifactPath string, we workerEnv) (runtime.WorkerSpec, error) {
 	m := w.meta()
 	spec := runtime.WorkerSpec{Namespace: m.Namespace, Name: wo.name, OwnerKind: wo.kind, Replica: wo.replica, Image: string(w.spec.Runtime)}
@@ -3350,11 +3366,9 @@ func (r *Reconciler) workerSpec(ctx context.Context, w workload, rev v1.ObjectNa
 	if err != nil {
 		return runtime.WorkerSpec{}, err
 	}
-	sock := ""
-	if wo.kind == v1.KindFunction {
-		if sock, err = r.invokeSocket(w.fn()); err != nil {
-			return runtime.WorkerSpec{}, err
-		}
+	sock, err := r.invokeSocket(callerRef(w, wo))
+	if err != nil {
+		return runtime.WorkerSpec{}, err
 	}
 	spec.Limits = r.limitsOf(ctx, w.fn())
 	if r.endpointMode != EndpointNetnsFixedPort {

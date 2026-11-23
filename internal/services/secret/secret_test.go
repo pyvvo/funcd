@@ -141,12 +141,44 @@ func TestFacadeAsksAsTheCallingFunction(t *testing.T) {
 	res := &recordingResolver{}
 	f := facade(t, st, res)
 
-	keys, err := f.List(ctx, "team-a", "reports")
+	keys, err := f.List(ctx, "team-a", v1.FunctionOwner("reports"))
 	require.NoError(t, err)
 	require.Equal(t, []string{"api-keys"}, keys)
-	require.NoError(t, f.CheckRead(ctx, "team-a", "reports", "api-keys"))
+	require.NoError(t, f.CheckRead(ctx, "team-a", v1.FunctionOwner("reports"), "api-keys"))
 	want := &auth.EntityRef{Type: v1.KindFunction, Namespace: "team-a", Name: "reports"}
 	require.Equal(t, []*auth.EntityRef{want, want}, res.principals)
+}
+
+// ADR-0351 Decision 2: a Job's worker reads and writes the Secrets the Job binds, asked as the Job, never those of the
+// Function of its name nor as it; a caller of another kind is refused.
+func TestFacadeAsksAsTheCallingJob(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := writeStore(t)
+	obj, _ := v1.NewObject(v1.KindJob)
+	job := obj.(*v1.Job)
+	job.Name, job.Namespace, job.ResourceGroup = "refresher", "team-a", "rg1"
+	job.Spec.Runtime, job.Spec.Handler, job.Spec.Image = "nodejs22", "handle", "file:///unused.mjs"
+	job.Spec.Bindings.Secret = []v1.ObjectName{"job-keys"}
+	_, err := st.Create(ctx, job)
+	require.NoError(t, err)
+	res := &recordingResolver{}
+	f := facade(t, st, res)
+
+	keys, err := f.List(ctx, "team-a", v1.JobOwner("refresher"))
+	require.NoError(t, err)
+	require.Equal(t, []string{"job-keys"}, keys)
+	keys, err = f.List(ctx, "team-a", v1.FunctionOwner("refresher"))
+	require.NoError(t, err)
+	require.Equal(t, []string{"oauth"}, keys)
+	err = f.Put(ctx, "team-a", v1.JobOwner("refresher"), "oauth", "TOKEN", "x")
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "the Function's Secret is not the Job's: %v", err)
+	require.Equal(t, map[string][]byte{"TOKEN": []byte("t1")}, data(t, st))
+	require.Equal(t, []*auth.EntityRef{{Type: v1.KindJob, Namespace: "team-a", Name: "refresher"},
+		{Type: v1.KindFunction, Namespace: "team-a", Name: "refresher"}}, res.principals)
+
+	_, err = f.List(ctx, "team-a", v1.LakeOwner("refresher"))
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a caller of another kind: %v", err)
 }
 
 // A write sets or removes one key of a Secret the caller binds, asked as the calling Function (ADR-0327 Decision 4); a
@@ -158,15 +190,15 @@ func TestFacadeWritesOneKeyAsTheCallingFunction(t *testing.T) {
 	res := &recordingResolver{}
 	f := facade(t, st, res)
 
-	require.NoError(t, f.Put(ctx, "team-a", "refresher", "oauth", "REFRESH", "r1"))
+	require.NoError(t, f.Put(ctx, "team-a", v1.FunctionOwner("refresher"), "oauth", "REFRESH", "r1"))
 	require.Equal(t, map[string][]byte{"TOKEN": []byte("t1"), "REFRESH": []byte("r1")}, data(t, st))
-	require.NoError(t, f.Delete(ctx, "team-a", "refresher", "oauth", "TOKEN"))
-	require.NoError(t, f.Delete(ctx, "team-a", "refresher", "oauth", "TOKEN"), "a missing key's delete")
+	require.NoError(t, f.Delete(ctx, "team-a", v1.FunctionOwner("refresher"), "oauth", "TOKEN"))
+	require.NoError(t, f.Delete(ctx, "team-a", v1.FunctionOwner("refresher"), "oauth", "TOKEN"), "a missing key's delete")
 	require.Equal(t, map[string][]byte{"REFRESH": []byte("r1")}, data(t, st))
 	want := &auth.EntityRef{Type: v1.KindFunction, Namespace: "team-a", Name: "refresher"}
 	require.Equal(t, []*auth.EntityRef{want, want, want}, res.principals)
 
-	err := f.Put(ctx, "team-a", "stranger", "oauth", "TOKEN", "x")
+	err := f.Put(ctx, "team-a", v1.FunctionOwner("stranger"), "oauth", "TOKEN", "x")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a Secret the caller does not bind: %v", err)
 	require.Len(t, res.principals, 3, "an unbound Secret is refused before any decision")
 }
@@ -182,15 +214,15 @@ func TestScenarioSecretConcurrentWrites(t *testing.T) {
 	st := writeStore(t)
 	other := facade(t, st, &recordingResolver{})
 	res := &ownerResolver{st: st}
-	res.after = func() { require.NoError(t, other.Put(ctx, "team-a", "api", "oauth", "OTHER", "o1")) }
-	require.NoError(t, facade(t, st, res).Put(ctx, "team-a", "refresher", "oauth", "TOKEN", "t2"))
+	res.after = func() { require.NoError(t, other.Put(ctx, "team-a", v1.FunctionOwner("api"), "oauth", "OTHER", "o1")) }
+	require.NoError(t, facade(t, st, res).Put(ctx, "team-a", v1.FunctionOwner("refresher"), "oauth", "TOKEN", "t2"))
 	require.Equal(t, map[string][]byte{"TOKEN": []byte("t2"), "OTHER": []byte("o1")}, data(t, st), "both writes stay")
 
 	f := facade(t, st, &recordingResolver{})
 	errs := make([]error, 8)
 	var wg sync.WaitGroup
 	for i := range errs {
-		wg.Go(func() { errs[i] = f.Put(ctx, "team-a", "api", "oauth", fmt.Sprintf("K%d", i), "v") })
+		wg.Go(func() { errs[i] = f.Put(ctx, "team-a", v1.FunctionOwner("api"), "oauth", fmt.Sprintf("K%d", i), "v") })
 	}
 	wg.Wait()
 	got := data(t, st)
@@ -223,7 +255,7 @@ func TestSecretWriteDecidesAfterItsRead(t *testing.T) {
 		_, err = st.Update(ctx, sec)
 		require.NoError(t, err)
 	}
-	err := facade(t, st, res).Put(ctx, "team-a", "refresher", "oauth", "TOKEN", "t2")
+	err := facade(t, st, res).Put(ctx, "team-a", v1.FunctionOwner("refresher"), "oauth", "TOKEN", "t2")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "%v", err)
 	require.Equal(t, map[string][]byte{"TOKEN": []byte("applied")}, data(t, st), "the former owner wrote nothing")
 }
@@ -236,7 +268,7 @@ func TestSecretWriteGivesUpAfterItsAttempts(t *testing.T) {
 	t.Parallel()
 	inner := writeStore(t)
 	cs := &conflictStore{Store: inner}
-	err := facade(t, cs, &recordingResolver{}).Put(context.Background(), "team-a", "refresher", "oauth", "TOKEN", "t2")
+	err := facade(t, cs, &recordingResolver{}).Put(context.Background(), "team-a", v1.FunctionOwner("refresher"), "oauth", "TOKEN", "t2")
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "%v", err)
 	require.Equal(t, int32(5), cs.updates.Load(), "the ADR's 5 attempts in all")
 	require.Equal(t, map[string][]byte{"TOKEN": []byte("t1")}, data(t, inner))

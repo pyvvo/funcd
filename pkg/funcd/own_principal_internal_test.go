@@ -100,6 +100,44 @@ func egressPlatform(t *testing.T, st store.Store, rt runtime.Runtime) (*executor
 	return p, pdp
 }
 
+// ADR-0351 Decision 6: a run's worker is indexed as the Job its stored run names in spec.job, so a policy that names
+// the Job lets it out and the Function of the Job's name stays in; a whole-namespace policy reaches no Job, and the
+// worker of a run no longer stored is not indexed.
+func TestJobRunEgressIsItsJob(t *testing.T) {
+	t.Parallel()
+	meta := func(ns v1.NamespaceName, name v1.ObjectName) v1.ObjectMeta {
+		return v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"}
+	}
+	job := func(ns v1.NamespaceName) *v1.Job {
+		return &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob}, ObjectMeta: meta(ns, "tofu"),
+			Spec: v1.JobSpec{Runtime: "nodejs22", Handler: "handle", Image: "oci://x/tofu:1"}}
+	}
+	run := func(ns v1.NamespaceName, name v1.ObjectName) *v1.JobRun {
+		return &v1.JobRun{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJobRun.GVK().APIVersion(), Kind: v1.KindJobRun}, ObjectMeta: meta(ns, name),
+			Spec: v1.JobRunSpec{Job: "tofu"}}
+	}
+	fn := lakeFunction("acme")
+	fn.Name = "tofu"
+	st := store.New(memory.New())
+	seedObjects(t, st, fn, job("acme"), run("acme", "tofu-1"), egressToExample("acme", v1.JobOwner("tofu")),
+		job("solo"), run("solo", "tofu-2"), egressToExample("solo"))
+	rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
+	runningWorker(rt, "acme", "tofu-1", v1.KindJobRun, "10.63.0.6")
+	runningWorker(rt, "acme", "tofu", v1.KindFunction, "10.63.0.7")
+	runningWorker(rt, "acme", "gone-1", v1.KindJobRun, "10.63.0.8")
+	runningWorker(rt, "solo", "tofu-2", v1.KindJobRun, "10.63.0.9")
+	p, pdp := egressPlatform(t, st, rt)
+
+	ref, ok := p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.6"))
+	require.True(t, ok)
+	require.Equal(t, auth.EntityRef{Type: v1.KindJob, Namespace: "acme", Name: "tofu"}, ref)
+	require.True(t, egressConnect(t, p, pdp, "10.63.0.6").Allowed, "the policy names the Job")
+	require.False(t, egressConnect(t, p, pdp, "10.63.0.7").Allowed, "the Function of the Job's name is not named")
+	_, ok = p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.8"))
+	require.False(t, ok, "the worker of a run no longer stored is not indexed")
+	require.False(t, egressConnect(t, p, pdp, "10.63.0.9").Allowed, "a whole-namespace policy reaches no Job")
+}
+
 // The forwarder listens on the bridge address, or on loopback with none, and on no other (ADR-0315): from another of the
 // host's addresses its port is closed, where a bind to all addresses would answer.
 func TestBuildEgressBindsTheBridgeAddress(t *testing.T) {

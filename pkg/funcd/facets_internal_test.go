@@ -120,7 +120,7 @@ func TestFacet_ANilFacadeServesNothing(t *testing.T) {
 
 // facetHandler is a worker's local API that serves facets and nothing it would need a port for.
 func facetHandler(facets ...local.Facet) http.Handler {
-	return local.NewHandler(local.Ref{Namespace: "default", Function: "fn"}, nil, nil, nil, nil, slog.New(slog.DiscardHandler),
+	return local.NewHandler(local.FunctionRef("default", "fn"), nil, nil, nil, nil, slog.New(slog.DiscardHandler),
 		local.WithFacets(facets...))
 }
 

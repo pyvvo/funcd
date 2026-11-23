@@ -38,12 +38,12 @@ func TestScenarioAddonBindingStandalone(t *testing.T) {
 	var target local.AddonTarget
 	require.Eventually(t, func() bool {
 		var err error
-		target, err = e.p.addon.calls.Target(e.ctx, "default", "rauthy-settings", "idp", "/auth/v1/password_policy")
+		target, err = e.p.addon.calls.Target(e.ctx, "default", v1.FunctionOwner("rauthy-settings"), "idp", "/auth/v1/password_policy")
 		return err == nil
 	}, 5*time.Second, 20*time.Millisecond, "the bound object's engine is reached")
 	o, _ := e.object(t, "default", "login")
 	require.Equal(t, local.AddonTarget{Address: o.Status.Address, Path: "/auth/v1/password_policy"}, target)
-	_, err := e.p.addon.calls.Target(e.ctx, "default", "rauthy-settings", "idp", "/auth/v1/clients_dyn")
+	_, err := e.p.addon.calls.Target(e.ctx, "default", v1.FunctionOwner("rauthy-settings"), "idp", "/auth/v1/clients_dyn")
 	require.True(t, errors.Is(err, local.ErrAddonPathRefused), "the object's private path: %v", err)
 }
 
@@ -61,7 +61,7 @@ func TestAddonCallForbiddenByAPolicy(t *testing.T) {
 	pol.Spec.Cedar = `forbid(principal == Function::"default/rauthy-settings", action == Action::"addon::call", resource == AddonObject::"default/login");`
 	e.apply(t, e.dev, pol)
 	require.Eventually(t, func() bool {
-		_, err := e.p.addon.calls.Target(e.ctx, "default", "rauthy-settings", "idp", "/auth/v1/x")
+		_, err := e.p.addon.calls.Target(e.ctx, "default", v1.FunctionOwner("rauthy-settings"), "idp", "/auth/v1/x")
 		return errors.Is(err, local.ErrAddonForbidden)
 	}, 5*time.Second, 20*time.Millisecond, "the forbid refuses the call")
 }

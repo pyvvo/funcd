@@ -25,7 +25,7 @@ func TestIssue41_MaxLengthNamesGetALocalAPISocket(t *testing.T) {
 	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, nil)
 	t.Cleanup(m.Close)
 
-	sock, err := m.SocketFor(v1.NamespaceName(strings.Repeat("n", 63)), v1.ObjectName(strings.Repeat("f", 63)))
+	sock, err := m.SocketFor(local.FunctionRef(v1.NamespaceName(strings.Repeat("n", 63)), v1.ObjectName(strings.Repeat("f", 63))))
 	require.NoError(t, err)
 	conn, err := net.Dial("unix", sock)
 	require.NoError(t, err)
@@ -42,7 +42,7 @@ func TestIssue433_SocketForAfterCloseFailsAndCreatesNothing(t *testing.T) {
 	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, nil)
 	t.Cleanup(m.Close)
 
-	sock, err := m.SocketFor("team-a", "a")
+	sock, err := m.SocketFor(local.FunctionRef("team-a", "a"))
 	require.NoError(t, err)
 	m.Close()
 	if conn, err := net.Dial("unix", sock); err == nil {
@@ -51,7 +51,7 @@ func TestIssue433_SocketForAfterCloseFailsAndCreatesNothing(t *testing.T) {
 	}
 
 	require.NoError(t, os.RemoveAll(dir))
-	_, err = m.SocketFor("team-a", "b")
+	_, err = m.SocketFor(local.FunctionRef("team-a", "b"))
 	require.Error(t, err, "SocketFor must fail after Close")
 	require.Equal(t, fault.Unavailable, fault.KindOf(err))
 	require.NoDirExists(t, dir, "SocketFor after Close must not re-create the socket dir")
@@ -71,16 +71,16 @@ func TestIssue491_RecreatedFunctionSocketSurvivesTheOldListener(t *testing.T) {
 	t.Cleanup(m.Close)
 
 	for range 10 {
-		_, err := m.SocketFor("team-a", "f")
+		_, err := m.SocketFor(local.FunctionRef("team-a", "f"))
 		require.NoError(t, err)
 		time.Sleep(time.Millisecond)
-		m.Remove("team-a", "f")
-		sock, err := m.SocketFor("team-a", "f")
+		m.Remove(local.FunctionRef("team-a", "f"))
+		sock, err := m.SocketFor(local.FunctionRef("team-a", "f"))
 		require.NoError(t, err)
 		time.Sleep(time.Millisecond)
 		conn, err := net.Dial("unix", sock)
 		require.NoError(t, err, "the re-created Function's local API socket must stay dialable")
 		require.NoError(t, conn.Close())
-		m.Remove("team-a", "f")
+		m.Remove(local.FunctionRef("team-a", "f"))
 	}
 }

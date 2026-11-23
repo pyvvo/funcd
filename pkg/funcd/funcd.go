@@ -1962,15 +1962,15 @@ func (e *executor) syncEgressWorkers(ctx context.Context) {
 }
 
 // reconcileEgressWorkers computes the current running-worker IP→Ref set from the runtime (over the
-// namespaces that have a Function or a Lake) and applies the diff against prev to the WorkerIndex,
+// namespaces that have a Function, a Lake or a Job) and applies the diff against prev to the WorkerIndex,
 // returning the new snapshot. Each worker is indexed as the principal of its owner kind (ADR-0175): a Function
-// worker as its Function, an engine as its Lake; a worker of any other kind is not indexed (an
-// unknown source, denied). A worker's funcd0 IP is the source IP the F80 REDIRECT preserves, so it keys both
-// the gateway lookup and the DNS-forwarder correlation. A transient store error keeps the current index
-// (returns prev).
+// worker as its Function, an engine as its Lake, a run's worker as its run's Job (ADR-0351 Decision 6); a worker of
+// any other kind, or of a run no longer stored, is not indexed (an unknown source, denied). A worker's funcd0 IP is
+// the source IP the F80 REDIRECT preserves, so it keys both the gateway lookup and the DNS-forwarder correlation. A
+// transient store error keeps the current index (returns prev).
 func (e *executor) reconcileEgressWorkers(ctx context.Context, prev map[netip.Addr]auth.EntityRef) map[netip.Addr]auth.EntityRef {
 	namespaces := map[v1.NamespaceName]struct{}{}
-	for _, kind := range []v1.Kind{v1.KindFunction, v1.KindLake} {
+	for _, kind := range []v1.Kind{v1.KindFunction, v1.KindLake, v1.KindJob} {
 		res, err := e.cfg.store.List(ctx, kind.GVK(), store.ListOptions{})
 		if err != nil {
 			return prev
@@ -1989,14 +1989,17 @@ func (e *executor) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 			if in.State != runtime.StateRunning || in.IP == "" {
 				continue
 			}
-			if in.OwnerKind != v1.KindFunction && in.OwnerKind != v1.KindLake {
-				continue
-			}
 			ip, perr := netip.ParseAddr(in.IP)
 			if perr != nil {
 				continue
 			}
-			live[ip] = auth.EntityRef{Type: in.OwnerKind, Namespace: in.Namespace, Name: in.Name}
+			ref, ok, err := e.egressPrincipal(ctx, in)
+			if err != nil {
+				return prev
+			}
+			if ok {
+				live[ip] = ref
+			}
 		}
 	}
 	for ip, ref := range live {
@@ -2011,6 +2014,30 @@ func (e *executor) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 	}
 	_ = e.indexAddonEngines(ctx) // a failed run keeps the index; the next sync runs again
 	return live
+}
+
+// egressPrincipal is the principal worker in acts as at the egress gateway: its Function or its Lake, or the Job its run
+// names in spec.job, read by the worker's name (ADR-0351 Decision 6). ok is false for a worker of any other kind and
+// for a run no longer stored.
+func (e *executor) egressPrincipal(ctx context.Context, in runtime.Instance) (auth.EntityRef, bool, error) {
+	switch in.OwnerKind {
+	case v1.KindFunction, v1.KindLake:
+		return auth.EntityRef{Type: in.OwnerKind, Namespace: in.Namespace, Name: in.Name}, true, nil
+	case v1.KindJobRun:
+		obj, err := e.cfg.store.Get(ctx, v1.KindJobRun.GVK(), in.Namespace, in.Name)
+		if fault.KindOf(err) == fault.NotFound {
+			return auth.EntityRef{}, false, nil
+		}
+		if err != nil {
+			return auth.EntityRef{}, false, err
+		}
+		run, ok := obj.(*v1.JobRun)
+		if !ok {
+			return auth.EntityRef{}, false, nil
+		}
+		return auth.EntityRef{Type: v1.KindJob, Namespace: in.Namespace, Name: run.Spec.Job}, true, nil
+	}
+	return auth.EntityRef{}, false, nil
 }
 
 // indexAddonEngines puts the address of every add-on engine, from its worker's creation on, in the gateway's engine

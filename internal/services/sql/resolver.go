@@ -13,7 +13,7 @@ import (
 // Resolver maps a caller's alias to the database its spec.bindings.sql binds (ADR-0233 Decision 4). The binding is the read
 // grant, so a missing alias is Forbidden.
 type Resolver interface {
-	Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) (v1.ObjectName, error)
+	Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string) (v1.ObjectName, error)
 }
 
 // MetaReader is the read-only metastore view the resolver needs.
@@ -37,27 +37,23 @@ func NewResolver(r MetaReader) (Resolver, error) {
 	return &metaResolver{r: r, cache: services.NewBindingCache[v1.ObjectName](resolverTTL)}, nil
 }
 
-func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) (v1.ObjectName, error) {
+func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string) (v1.ObjectName, error) {
 	const op = "sql.Resolver.Resolve"
 	if db, ok := m.cache.Get(ns, fn, alias); ok {
 		return db, nil
 	}
-	obj, err := m.r.Get(ctx, v1.KindFunction.GVK(), ns, fn)
+	bindings, err := services.CallerBindings(ctx, m.r, ns, fn)
 	switch {
 	case fault.KindOf(err) == fault.NotFound:
-		return "", local.ErrSQLCallerMissing.Errorf(op, "function %q in %q not found; no SQL binding for alias %q", fn, ns, alias)
+		return "", local.ErrSQLCallerMissing.Errorf(op, "%s in %q not found; no SQL binding for alias %q", fn, ns, alias)
 	case err != nil:
-		return "", fault.Wrapf(err, fault.Internal, op, "get function %q", fn)
+		return "", fault.Wrapf(err, fault.KindOf(err), op, "get %s", fn)
 	}
-	caller, ok := obj.(*v1.Function)
-	if !ok {
-		return "", fault.Internalf(op, "object %q is not a Function", fn)
-	}
-	for _, b := range caller.Spec.Bindings.SQL {
+	for _, b := range bindings.SQL {
 		if b.Alias == alias {
 			m.cache.Put(ns, fn, alias, b.Database)
 			return b.Database, nil
 		}
 	}
-	return "", local.ErrSQLNoBinding.Errorf(op, "function %q in %q has no SQL binding for alias %q", fn, ns, alias)
+	return "", local.ErrSQLNoBinding.Errorf(op, "%s in %q has no SQL binding for alias %q", fn, ns, alias)
 }

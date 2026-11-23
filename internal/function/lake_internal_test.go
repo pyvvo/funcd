@@ -84,7 +84,7 @@ func TestScenarioBindingInjectsEndpointAndToken(t *testing.T) {
 	injected := lakeOwn(t, r, fn)["FUNCD_LAKE_LAKE_TOKEN"]
 	require.NotEmpty(t, injected, "token must survive non-empty")
 	require.NotEqual(t, "t0ken-abc", injected, "the shared QUACK_TOKEN is NOT handed to the function")
-	want, derr := lakegw.DeriveLakeToken(master, fn.Namespace, fn.Name)
+	want, derr := lakegw.DeriveLakeToken(master, fn.Namespace, v1.KindFunction, fn.Name)
 	require.NoError(t, derr)
 	require.Equal(t, want, injected, "the per-function token is derived over the node master")
 	ref, ok := lakegw.NewLakeKeys(master, r.store).PrincipalFor(injected)
@@ -148,7 +148,7 @@ func TestScenarioTokenDecoupledFromLakeSecret(t *testing.T) {
 	_, requeue, err := r.resolveLakeEnv(context.Background(), fn)
 	require.NoError(t, err)
 	require.False(t, requeue, "a Ready lake injects even when its Secret lacks QUACK_TOKEN (token is derived, not read)")
-	want2, derr2 := lakegw.DeriveLakeToken(master, fn.Namespace, fn.Name)
+	want2, derr2 := lakegw.DeriveLakeToken(master, fn.Namespace, v1.KindFunction, fn.Name)
 	require.NoError(t, derr2)
 	require.Equal(t, want2, lakeOwn(t, r, fn)["FUNCD_LAKE_LAKE_TOKEN"],
 		"the per-function token is derived over the node master, independent of the lake Secret")

@@ -25,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // scenario: providers-boot-in-order
@@ -327,7 +328,7 @@ func TestShutdown_KeepsTheLocalAPIUntilTheWorkersStop(t *testing.T) {
 			Bindings: bindings}
 		create(t, p.cfg.store, fn)
 	}
-	rt.sock, err = p.exec.sockets.SocketFor("default", "leaving")
+	rt.sock, err = p.exec.sockets.SocketFor(local.FunctionRef("default", "leaving"))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

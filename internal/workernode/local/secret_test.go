@@ -63,7 +63,7 @@ func secretFacade(t *testing.T, st store.Store, allow bool) *secretsvc.Facade {
 
 func secretHandler(t *testing.T, allow bool) http.Handler {
 	t.Helper()
-	return local.NewHandler(local.Ref{Namespace: "team-a", Function: "fn"}, nil, nil, nil, nil, nil,
+	return local.NewHandler(local.FunctionRef("team-a", "fn"), nil, nil, nil, nil, nil,
 		local.WithFacets(local.SecretFacet(secretFacade(t, secretStore(t, "fn"), allow))))
 }
 
@@ -95,7 +95,7 @@ func TestSecretListWithNoBindingIsEmpty(t *testing.T) {
 	fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "handle", "file:///unused.mjs"
 	_, err := st.Create(context.Background(), fn)
 	require.NoError(t, err)
-	h := local.NewHandler(local.Ref{Namespace: "team-a", Function: "plain"}, nil, nil, nil, nil, nil,
+	h := local.NewHandler(local.FunctionRef("team-a", "plain"), nil, nil, nil, nil, nil,
 		local.WithFacets(local.SecretFacet(secretFacade(t, st, true))))
 
 	rec := do(t, h, http.MethodGet, "/secret", "")
@@ -152,7 +152,7 @@ func TestScenarioSecretWriteChecksTheValue(t *testing.T) {
 	_, err := st.Create(context.Background(), gone)
 	require.NoError(t, err)
 	f := secretFacade(t, st, true)
-	h := local.NewHandler(local.Ref{Namespace: "team-a", Function: "fn"}, nil, nil, nil, nil, nil, local.WithFacets(local.SecretFacet(f)))
+	h := local.NewHandler(local.FunctionRef("team-a", "fn"), nil, nil, nil, nil, nil, local.WithFacets(local.SecretFacet(f)))
 
 	for _, tc := range []struct{ path, body string }{
 		{"/secret/api-keys/bad-key", `{"value":"v"}`},
@@ -166,7 +166,7 @@ func TestScenarioSecretWriteChecksTheValue(t *testing.T) {
 	require.Equal(t, http.StatusRequestEntityTooLarge, do(t, h, http.MethodPut, "/secret/api-keys/TOKEN", big).Code)
 	require.JSONEq(t, `{"keys":["MODE","STRIPE_KEY"]}`, do(t, h, http.MethodGet, "/secret", "").Body.String(), "nothing written")
 
-	missing := local.NewHandler(local.Ref{Namespace: "team-a", Function: "gone"}, nil, nil, nil, nil, nil, local.WithFacets(local.SecretFacet(f)))
+	missing := local.NewHandler(local.FunctionRef("team-a", "gone"), nil, nil, nil, nil, nil, local.WithFacets(local.SecretFacet(f)))
 	rec := do(t, missing, http.MethodPut, "/secret/missing/TOKEN", `{"value":"v"}`)
 	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 }

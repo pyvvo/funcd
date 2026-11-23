@@ -6,6 +6,7 @@ import (
 	"time"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // FreeLoopbackAddr hands the S3 gateway's port reservation to the external tests.
@@ -59,5 +60,5 @@ func SetFrugalStoresForTest(on bool) { frugalStores.Store(on) }
 // LocalAPISocketForTest hands the external tests the socket of the local API that serves the Function ns/fn, the
 // path the reconciler sets as its FUNCD_INVOKE_SOCKET; the cause matrices of ADR-0330 dial it.
 func LocalAPISocketForTest(p *Platform, ns v1.NamespaceName, fn v1.ObjectName) (string, error) {
-	return p.exec.sockets.SocketFor(ns, fn)
+	return p.exec.sockets.SocketFor(local.FunctionRef(ns, fn))
 }

@@ -69,7 +69,7 @@ func (r *Reconciler) workloadHooks() []workloadHook {
 // Address binds the proxy at its first use and returns its host and port; nil when funcd runs no proxy.
 type AddonProxy struct {
 	Address func() (string, error)
-	Token   func(ns v1.NamespaceName, fn v1.ObjectName) string
+	Token   func(ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) string
 }
 
 // addonHook gives a Function that binds add-on objects, for each alias, the proxy's base URL for it, shared, and the
@@ -97,7 +97,7 @@ func (h addonHook) own(w workload) (map[string]string, func() map[string]string,
 	if len(w.spec.Bindings.Addon) == 0 || p.Address == nil || p.Token == nil {
 		return nil, nil, nil
 	}
-	token := p.Token(w.meta().Namespace, w.meta().Name)
+	token := p.Token(w.meta().Namespace, w.kind(), w.meta().Name)
 	env := make(map[string]string, len(w.spec.Bindings.Addon))
 	for _, b := range w.spec.Bindings.Addon {
 		env["FUNCD_ADDON_"+strings.ToUpper(b.Alias)+"_TOKEN"] = token
@@ -278,15 +278,15 @@ func (h lakeHook) check(ctx context.Context, w workload) (map[string]string, *ga
 	return urls, nil, nil
 }
 
-// own derives fn's lake token, the one place it is derived (ADR-0306 Decision 7). It is keyed by (ns, fn), so it is the
-// same for every Lake fn binds: the proxy of each resolves it to this Function principal, then PEPs lake::query on that
-// Lake (ADR-0137).
+// own derives w's lake token, the one place it is derived (ADR-0306 Decision 7). It is keyed by (ns, kind, name), so it
+// is the same for every Lake w binds: the proxy of each resolves it to this Function or Job principal, then PEPs
+// lake::query on that Lake (ADR-0137, ADR-0351 Decision 4).
 func (h lakeHook) own(w workload) (map[string]string, func() map[string]string, *gateFailure) {
 	if len(w.spec.Bindings.Lake) == 0 {
 		return nil, nil, nil
 	}
 	ns, name := w.meta().Namespace, w.meta().Name
-	token, err := lakegw.DeriveLakeToken(h.r.lakeMaster, ns, name)
+	token, err := lakegw.DeriveLakeToken(h.r.lakeMaster, ns, w.kind(), name)
 	if err != nil {
 		return nil, nil, lakeResolveFailed(fault.Wrapf(err, fault.KindOf(err), "function.lakeHook.own", "derive lake token for %s/%s", ns, name))
 	}

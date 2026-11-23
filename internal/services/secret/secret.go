@@ -13,6 +13,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/secrets"
+	"github.com/pyvvo/funcd/internal/services"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -50,7 +51,7 @@ func NewFacade(d Deps) (*Facade, error) {
 
 // List returns the sorted keys of the Secrets fn binds, an empty list when none (never nil, so the route answers
 // {"keys": []}).
-func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) ([]string, error) {
+func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef) ([]string, error) {
 	values, err := f.values(ctx, ns, fn)
 	if err != nil {
 		return nil, err
@@ -59,7 +60,7 @@ func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName
 }
 
 // Get returns key's value among the Secrets fn binds, or found false when none holds it.
-func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, key string) (string, bool, error) {
+func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, key string) (string, bool, error) {
 	values, err := f.values(ctx, ns, fn)
 	if err != nil {
 		return "", false, err
@@ -71,17 +72,17 @@ func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 // values resolves the Secrets fn's current spec binds (ADR-0249 Decision 2), each asked secret::read as fn (ADR-0321
 // Decision 3), so a forbid on one fails the whole read; a later Secret's key wins and FUNCD_ keys are dropped, as in a
 // worker's env (ADR-0092).
-func (f *Facade) values(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (map[string]string, error) {
-	function, err := f.function(ctx, ns, fn)
+func (f *Facade) values(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef) (map[string]string, error) {
+	bindings, err := f.bindings(ctx, ns, fn)
 	if err != nil {
 		return nil, err
 	}
-	names := function.Spec.Bindings.Secret
+	names := bindings.Secret
 	out := map[string]string{}
 	if len(names) == 0 {
 		return out, nil
 	}
-	resolved, err := f.resolver.ResolveEnv(ctx, secrets.WorkloadIdentity(v1.KindFunction, ns, fn), ns, objectNames(names))
+	resolved, err := f.resolver.ResolveEnv(ctx, secrets.WorkloadIdentity(fn.Kind, ns, fn.Name), ns, objectNames(names))
 	if err != nil {
 		return nil, err
 	}
@@ -90,12 +91,12 @@ func (f *Facade) values(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNa
 }
 
 // CheckRead answers the readiness check for Secret name, which fn binds (ADR-0321 Decision 4): may fn read it.
-func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, name string) error {
-	return f.resolver.CheckRead(ctx, secrets.WorkloadIdentity(v1.KindFunction, ns, fn), ns, name)
+func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, name string) error {
+	return f.resolver.CheckRead(ctx, secrets.WorkloadIdentity(fn.Kind, ns, fn.Name), ns, name)
 }
 
 // Put sets key to value in Secret binding, which fn binds and may write (ADR-0327 Decision 4).
-func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key, value string) error {
+func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key, value string) error {
 	return f.write(ctx, ns, fn, binding, func(data map[string][]byte) error {
 		if k, p := secrets.EnvDataProblem(map[string][]byte{key: []byte(value)}); p != "" {
 			return secrets.ErrValueNotText.Errorf("secret.Put", "secret %q key %q %s", binding, k, p)
@@ -106,7 +107,7 @@ func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 }
 
 // Delete removes key from Secret binding, which fn binds and may write; a key the Secret lacks is no error.
-func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string) error {
+func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string) error {
 	return f.write(ctx, ns, fn, binding, func(data map[string][]byte) error {
 		delete(data, key)
 		return nil
@@ -117,16 +118,16 @@ func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNa
 // secret::write, whose decision reads the stored owner after that read, and updates on the read's resourceVersion: a
 // write lands only at a version the decision saw (docs/design/secret/key-write.fizz). A Conflict starts over, writeAttempts
 // in all; the store's Update checks the keys as the API does.
-func (f *Facade) write(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string, change func(map[string][]byte) error) error {
+func (f *Facade) write(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding string, change func(map[string][]byte) error) error {
 	const op = "secret.write"
-	function, err := f.function(ctx, ns, fn)
+	bindings, err := f.bindings(ctx, ns, fn)
 	if err != nil {
 		return err
 	}
-	if !slices.Contains(function.Spec.Bindings.Secret, v1.ObjectName(binding)) {
-		return secrets.ErrNoBinding.Errorf(op, "function %q in %q does not bind Secret %q", fn, ns, binding)
+	if !slices.Contains(bindings.Secret, v1.ObjectName(binding)) {
+		return secrets.ErrNoBinding.Errorf(op, "%s in %q does not bind Secret %q", fn, ns, binding)
 	}
-	id := secrets.WorkloadIdentity(v1.KindFunction, ns, fn)
+	id := secrets.WorkloadIdentity(fn.Kind, ns, fn.Name)
 	for range writeAttempts {
 		obj, err := f.store.Get(ctx, v1.KindSecret.GVK(), ns, v1.ObjectName(binding))
 		if fault.KindOf(err) == fault.NotFound {
@@ -165,21 +166,18 @@ func (f *Facade) write(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNam
 	return secrets.ErrWriteContended.Errorf(op, "secret %q changed under each of %d attempts to write it", binding, writeAttempts)
 }
 
-// function reads fn's current spec, whose bindings name what it may read and write (ADR-0249 Decision 2).
-func (f *Facade) function(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (*v1.Function, error) {
-	const op = "secret.function"
-	obj, err := f.store.Get(ctx, v1.KindFunction.GVK(), ns, fn)
+// bindings reads the current bindings of fn, a Function or a Job, which name what it may read and write (ADR-0249
+// Decision 2, ADR-0351 Decision 2).
+func (f *Facade) bindings(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef) (*v1.FunctionBindings, error) {
+	const op = "secret.bindings"
+	b, err := services.CallerBindings(ctx, f.store, ns, fn)
 	if fault.KindOf(err) == fault.NotFound {
-		return nil, secrets.ErrCallerMissing.Wrapf(err, op, "get function %s/%s", ns, fn)
+		return nil, secrets.ErrCallerMissing.Wrapf(err, op, "get %s in %s", fn, ns)
 	}
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.KindOf(err), op, "get function %s/%s", ns, fn)
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "get %s in %s", fn, ns)
 	}
-	function, ok := obj.(*v1.Function)
-	if !ok {
-		return nil, fault.Internalf(op, "object %s/%s is not a Function", ns, fn)
-	}
-	return function, nil
+	return b, nil
 }
 
 func objectNames(names []v1.ObjectName) []string {

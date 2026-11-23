@@ -28,7 +28,7 @@ func TestIssue163_LocalAPIReapsIdleKeepAliveConns(t *testing.T) {
 
 	m := NewManager(dir, nil, nil, nil, nil, nil)
 	t.Cleanup(m.Close)
-	_, err = m.SocketFor("team-a", "a")
+	_, err = m.SocketFor(FunctionRef("team-a", "a"))
 	require.NoError(t, err)
 
 	m.mu.Lock()
@@ -48,7 +48,7 @@ func TestIssue454_LocalAPIServerErrorsUseTheManagerLogger(t *testing.T) {
 	var logs bytes.Buffer
 	m := NewManager(dir, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(m.Close)
-	_, err = m.SocketFor("team-a", "a")
+	_, err = m.SocketFor(FunctionRef("team-a", "a"))
 	require.NoError(t, err)
 
 	m.mu.Lock()
@@ -82,7 +82,7 @@ func TestIssue546_ServeFailureIsLoggedAndRebinds(t *testing.T) {
 	require.Contains(t, logs.String(), `"function":"team-a/a","socket":"`+path+`"`)
 	require.Contains(t, logs.String(), "issue-546 accept failure")
 
-	got, err := m.SocketFor("team-a", "a")
+	got, err := m.SocketFor(FunctionRef("team-a", "a"))
 	require.NoError(t, err)
 	require.Equal(t, path, got)
 	m.mu.Lock()
@@ -94,8 +94,8 @@ func TestIssue546_ServeFailureIsLoggedAndRebinds(t *testing.T) {
 	_ = conn.Close()
 
 	logs.Reset()
-	m.Remove("team-a", "a")
-	_, err = m.SocketFor("team-a", "b")
+	m.Remove(FunctionRef("team-a", "a"))
+	_, err = m.SocketFor(FunctionRef("team-a", "b"))
 	require.NoError(t, err)
 	m.Close()
 	require.NotContains(t, logs.String(), "stopped serving", "Remove and Close must not log")

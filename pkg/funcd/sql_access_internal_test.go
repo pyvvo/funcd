@@ -98,7 +98,7 @@ func (e *accessEnv) call(t *testing.T, fn, verb, alias, statements string) (int,
 
 func (e *accessEnv) do(t *testing.T, fn, method, path, body string) (int, string) {
 	t.Helper()
-	sock, err := e.p.exec.sockets.SocketFor("default", v1.ObjectName(fn))
+	sock, err := e.p.exec.sockets.SocketFor(local.FunctionRef("default", v1.ObjectName(fn)))
 	require.NoError(t, err)
 	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", sock)

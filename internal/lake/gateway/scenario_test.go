@@ -204,9 +204,9 @@ func TestScenarioForgedFunctionTokenDenied(t *testing.T) {
 	master := []byte("the-real-node-master-secret")
 	wrong := []byte("an-attacker-guessed-master")
 
-	forged, forgedErr := DeriveLakeToken(wrong, "data", "analytics")
+	forged, forgedErr := DeriveLakeToken(wrong, "data", v1.KindFunction, "analytics")
 	require.NoError(t, forgedErr)
-	honest, honestErr := DeriveLakeToken(master, "data", "analytics")
+	honest, honestErr := DeriveLakeToken(master, "data", v1.KindFunction, "analytics")
 	require.NoError(t, honestErr)
 
 	keys := NewLakeKeys(master, nil) // no store: Function path only

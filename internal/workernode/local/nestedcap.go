@@ -62,7 +62,7 @@ func (n *nestedCapInvoker) take(ctx context.Context, target Ref) error {
 	if n.inFlight[target] >= n.max {
 		n.refused.Add(ctx, 1, metric.WithAttributes(
 			attribute.String("namespace", string(target.Namespace)),
-			attribute.String("function", string(target.Function))))
+			attribute.String("function", string(target.Name))))
 		return ErrNestedCapReached.Errorf(NestedCapOp,
 			"%s has %d nested calls in flight, the cap set by invoke.maxNestedInFlight", target, n.max)
 	}

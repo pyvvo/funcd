@@ -994,9 +994,7 @@ func (r *Reconciler) reclaimOrphanPools(ctx context.Context, ns v1.NamespaceName
 			return err
 		}
 		r.forgetPool(ns, in.Name)
-		if r.invokeSockets != nil {
-			r.invokeSockets.Remove(ns, in.Name)
-		}
+		r.removeSocket(local.FunctionRef(ns, in.Name))
 		_ = os.Remove(poolManifestPath(r.poolManifestDir, ns, in.Name))
 	}
 	return nil

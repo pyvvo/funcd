@@ -49,7 +49,9 @@ func (j *JobRunReconciler) execute(ctx context.Context, run *v1.JobRun, job *v1.
 	if err != nil {
 		return startFailed(err)
 	}
-	spec, err := r.workerSpec(ctx, w, rev.Name, runWorker(run, rev), path, env.worker)
+	wo := runWorker(run, rev)
+	defer r.removeSocket(callerRef(w, wo)) // after the worker: its socket goes with the run (ADR-0351 Decision 2)
+	spec, err := r.workerSpec(ctx, w, rev.Name, wo, path, env.worker)
 	if err != nil {
 		return startFailed(err)
 	}

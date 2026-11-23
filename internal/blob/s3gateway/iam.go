@@ -40,10 +40,12 @@ var accessEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 // Keypair is a principal's deterministic S3 credentials (ADR-0085). Pure value; no I/O.
 type Keypair struct{ AccessKey, SecretKey string }
 
-// Owner-kind codes an in-platform access key carries (ADR-0175).
+// Owner-kind codes an in-platform access key carries (ADR-0175); a Job's is its own, so its key is never a same-named
+// Function's (ADR-0351 Decision 4).
 const (
 	kindCodeFunction = "F"
 	kindCodeLake     = "L"
+	kindCodeJob      = "J"
 )
 
 // kindCode returns the access-key code of kind; "" for a kind that holds no in-platform key, which
@@ -54,14 +56,16 @@ func kindCode(kind v1.Kind) string {
 		return kindCodeFunction
 	case v1.KindLake:
 		return kindCodeLake
+	case v1.KindJob:
+		return kindCodeJob
 	default:
 		return ""
 	}
 }
 
 // DeriveKeypair returns the stable per-(kind, namespace, name) keypair (ADR-0085, ADR-0175):
-//   - AccessKey = "FUNCD" + base32-noPad-upper(code + "\x00" + ns + "\x00" + name), code "F" for a Function and
-//     "L" for a Lake — decodable via decodeAccess; not secret (knowing it grants nothing).
+//   - AccessKey = "FUNCD" + base32-noPad-upper(code + "\x00" + ns + "\x00" + name), code "F" for a Function, "L"
+//     for a Lake and "J" for a Job — decodable via decodeAccess; not secret (knowing it grants nothing).
 //   - SecretKey = base64( HMAC-SHA256(master, "s3:" + kind + ":" + ns + "/" + name) ) — the full kind is in the
 //     MAC input, so a Function cannot compute the secret of a same-named Lake.
 //
@@ -139,6 +143,8 @@ func decodeParts(access string) (kind v1.Kind, ns, name, window string, ok bool)
 		return v1.KindFunction, parts[1], parts[2], window, true
 	case kindCodeLake:
 		return v1.KindLake, parts[1], parts[2], window, true
+	case kindCodeJob:
+		return v1.KindJob, parts[1], parts[2], window, true
 	default:
 		return "", "", "", "", false
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/quota"
+	"github.com/pyvvo/funcd/internal/services"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
@@ -79,7 +80,7 @@ func NewFacade(d FacadeDeps) (*Facade, error) {
 }
 
 // Query runs read-only statements on /db/query (ADR-0233): sql::read, and a write is refused by the engine.
-func (f *Facade) Query(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string, stmts []json.RawMessage) ([]local.QueryResult, error) {
+func (f *Facade) Query(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding string, stmts []json.RawMessage) ([]local.QueryResult, error) {
 	res, err := f.run(ctx, ns, fn, binding, stmts, "/db/query", url.Values{}, false, auth.ActionSQLRead)
 	if err != nil {
 		return nil, err
@@ -93,7 +94,7 @@ func (f *Facade) Query(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNam
 
 // Execute runs statements in one transaction on /db/execute (ADR-0233): sql::read and sql::write, since RETURNING
 // reads; one failed statement applies none. Its database's quota decides it first (ADR-0292).
-func (f *Facade) Execute(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string, stmts []json.RawMessage) ([]local.ExecResult, error) {
+func (f *Facade) Execute(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding string, stmts []json.RawMessage) ([]local.ExecResult, error) {
 	res, err := f.run(ctx, ns, fn, binding, stmts, "/db/execute", url.Values{"transaction": {""}}, true, auth.ActionSQLRead, auth.ActionSQLWrite)
 	if err != nil {
 		return nil, err
@@ -107,7 +108,7 @@ func (f *Facade) Execute(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectN
 
 // CheckRead resolves the alias, asks sql::read and checks that the engine is Ready, with no engine call: the
 // dependency check of a binding (ADR-0233 Decision 8). A missing engine is raised from local.ErrEngineNotReady.
-func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) error {
+func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string) error {
 	db, err := f.authorize(ctx, ns, fn, alias, auth.ActionSQLRead)
 	if err != nil {
 		return err
@@ -118,7 +119,7 @@ func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.Objec
 	return nil
 }
 
-func (f *Facade) run(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string, stmts []json.RawMessage,
+func (f *Facade) run(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding string, stmts []json.RawMessage,
 	path string, query url.Values, writes bool, actions ...auth.Action) ([]engineResult, error) {
 	const op = "sql.call"
 	if err := validateStatements(stmts); err != nil {
@@ -195,7 +196,7 @@ func (f *Facade) Usage(ctx context.Context, ns v1.NamespaceName, db v1.ObjectNam
 
 // authorize resolves the alias, then asks Cedar every action on the database; any deny is Forbidden, raised from the
 // read or the write deny's known cause (ADR-0330).
-func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string, actions ...auth.Action) (v1.ObjectName, error) {
+func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string, actions ...auth.Action) (v1.ObjectName, error) {
 	const op = "sql.authorize"
 	db, err := f.d.Resolver.Resolve(ctx, ns, fn, alias)
 	if err != nil {
@@ -203,7 +204,7 @@ func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.Objec
 	}
 	for _, a := range actions {
 		dec, aerr := f.d.Authorizer.Authorize(ctx, auth.Request{
-			Identity: auth.Identity{Subject: string(ns) + "/" + string(fn), Principal: &auth.EntityRef{Type: v1.KindFunction, Namespace: ns, Name: fn}},
+			Identity: auth.Identity{Subject: string(ns) + "/" + string(fn.Name), Principal: services.Principal(ns, fn)},
 			Action:   a,
 			Resource: &auth.EntityRef{Type: v1.KindSQLDatabase, Namespace: ns, Name: db},
 		})
@@ -215,7 +216,7 @@ func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.Objec
 			if a == auth.ActionSQLRead {
 				deny = local.ErrSQLReadDenied
 			}
-			return "", deny.Errorf(op, "function %q is not authorized to %s SQLDatabase %q: %s", fn, a, db, dec.Reason)
+			return "", deny.Errorf(op, "%s is not authorized to %s SQLDatabase %q: %s", fn, a, db, dec.Reason)
 		}
 	}
 	return db, nil

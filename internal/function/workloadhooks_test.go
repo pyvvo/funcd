@@ -118,7 +118,7 @@ func TestWorkloadHooks_ASoloWorkerGetsEachProvidersEnv(t *testing.T) {
 	require.True(t, ok)
 	url, ok := proxies.ProxyURL("default", "lake")
 	require.True(t, ok)
-	token, err := lakegw.DeriveLakeToken(master, "default", "s")
+	token, err := lakegw.DeriveLakeToken(master, "default", v1.KindFunction, "s")
 	require.NoError(t, err)
 	for k, want := range map[string]string{
 		"APP_MODE":              "test",

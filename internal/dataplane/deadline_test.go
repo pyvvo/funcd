@@ -227,7 +227,7 @@ func TestScenarioLinkKeepsOwnLimit(t *testing.T) {
 	h, st := deadlineDataPlane(t, fakeEndpoints{upstream: slow.URL}, noScaler{}, nil, time.Second)
 	seedTimed(t, st, "b", 0)
 	inv := local.NewInvoker(h)
-	out, err := inv.Invoke(context.Background(), local.Ref{Namespace: "default", Function: "b"}, []byte(`{}`), 5*time.Second)
+	out, err := inv.Invoke(context.Background(), local.FunctionRef("default", "b"), []byte(`{}`), 5*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, "output", string(out))
 	ms, err := strconv.Atoi(header.Load().(string))
@@ -238,7 +238,7 @@ func TestScenarioLinkKeepsOwnLimit(t *testing.T) {
 	h, st = deadlineDataPlane(t, fakeEndpoints{upstream: hung.URL}, noScaler{}, nil, time.Minute)
 	seedTimed(t, st, "b", 0)
 	start := time.Now()
-	_, err = local.NewInvoker(h).Invoke(context.Background(), local.Ref{Namespace: "default", Function: "b"}, []byte(`{}`), time.Second)
+	_, err = local.NewInvoker(h).Invoke(context.Background(), local.FunctionRef("default", "b"), []byte(`{}`), time.Second)
 	elapsed := time.Since(start)
 	var ue *local.UpstreamError
 	require.True(t, errors.As(err, &ue), "%v", err)

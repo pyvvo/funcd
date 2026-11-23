@@ -16,6 +16,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // scenario: a-lake-engine-signs-with-blobs-keys
@@ -55,7 +56,7 @@ func TestShutdown_ClosesTheLocalAPIListeners(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	p, err := New(InMemory(), WithoutLogCompaction(), WithInvokeSocketDir(dir))
 	require.NoError(t, err)
-	sock, err := p.exec.sockets.SocketFor("default", "fn")
+	sock, err := p.exec.sockets.SocketFor(local.FunctionRef("default", "fn"))
 	require.NoError(t, err)
 	require.NoError(t, p.Shutdown(context.Background()))
 	conn, err := net.Dial("unix", sock)

@@ -596,7 +596,7 @@ func TestScenarioHealthShimCompat(t *testing.T) {
 	h, _, _ := healthHarness(t)
 	m := local.NewManager(dir, h.st, nil, nil, nil, slog.New(slog.DiscardHandler))
 	t.Cleanup(m.Close)
-	sock, err := m.SocketFor("default", "todo-api")
+	sock, err := m.SocketFor(local.FunctionRef("default", "todo-api"))
 	require.NoError(t, err)
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", sock)

@@ -113,9 +113,9 @@ func TestIssue1411_ContextBlobKeepsAFailedBucketLookup(t *testing.T) {
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
 	seedLakeWriter(t, st)
 
-	require.NoError(t, p.blob.facade.CheckRead(ctx, "default", "writer", "raw"))
+	require.NoError(t, p.blob.facade.CheckRead(ctx, "default", v1.FunctionOwner("writer"), "raw"))
 	on.Store(true)
-	cerr := p.blob.facade.CheckRead(ctx, "default", "writer", "raw")
+	cerr := p.blob.facade.CheckRead(ctx, "default", v1.FunctionOwner("writer"), "raw")
 	on.Store(false)
 	require.Equal(t, fault.Unavailable, fault.KindOf(cerr), "a failed lookup is no missing Bucket: %v", cerr)
 }

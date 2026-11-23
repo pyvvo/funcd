@@ -68,8 +68,8 @@ func (b *mapBucket) Close() error { return nil }
 // default-deny (Forbidden), mirroring the ADR-0073 bind-as-grant BindingResolver.
 type fakeResolver struct{}
 
-func (fakeResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.ObjectName, alias string) (svcblob.Binding, error) {
-	if fn == "fn" && alias == "files" {
+func (fakeResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.WorkloadRef, alias string) (svcblob.Binding, error) {
+	if fn == v1.FunctionOwner("fn") && alias == "files" {
 		return svcblob.Binding{Bucket: "bkt", Prefix: "p"}, nil
 	}
 	return svcblob.Binding{}, fault.Forbiddenf("fakeResolver", "no blob binding for %s/%s", fn, alias)
@@ -113,20 +113,20 @@ func TestScenarioBlobReadWrite(t *testing.T) {
 	bkt := newMapBucket()
 	f := newFacade(t, bkt, s3PDP{readOK: true, writeOK: true})
 
-	require.NoError(t, f.Put(ctx, "default", "fn", "files", "report.txt", []byte("hello")))
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "files", "report.txt", []byte("hello")))
 	require.Equal(t, []byte("hello"), bkt.m["p/report.txt"], "keyed at the shared s3gateway keyspace prefix/key")
 
-	got, found, err := f.Get(ctx, "default", "fn", "files", "report.txt")
+	got, found, err := f.Get(ctx, "default", v1.FunctionOwner("fn"), "files", "report.txt")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, []byte("hello"), got)
 
-	_, found, err = f.Get(ctx, "default", "fn", "files", "absent")
+	_, found, err = f.Get(ctx, "default", v1.FunctionOwner("fn"), "files", "absent")
 	require.NoError(t, err)
 	require.False(t, found, "a missing object is found=false, not an error")
 
-	require.NoError(t, f.Delete(ctx, "default", "fn", "files", "report.txt"))
-	_, found, err = f.Get(ctx, "default", "fn", "files", "report.txt")
+	require.NoError(t, f.Delete(ctx, "default", v1.FunctionOwner("fn"), "files", "report.txt"))
+	_, found, err = f.Get(ctx, "default", v1.FunctionOwner("fn"), "files", "report.txt")
 	require.NoError(t, err)
 	require.False(t, found)
 }
@@ -140,11 +140,11 @@ func TestScenarioBlobList(t *testing.T) {
 	f := newFacade(t, bkt, s3PDP{readOK: true, writeOK: true})
 
 	for _, k := range []string{"bronze/a", "bronze/b", "silver/x"} {
-		require.NoError(t, f.Put(ctx, "default", "fn", "files", k, []byte("v")))
+		require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "files", k, []byte("v")))
 	}
 	require.Equal(t, []string{"p/bronze/a", "p/bronze/b", "p/silver/x"}, sortedKeys(bkt), "substrate keys share the prefix")
 
-	keys, err := f.List(ctx, "default", "fn", "files", "bronze/")
+	keys, err := f.List(ctx, "default", v1.FunctionOwner("fn"), "files", "bronze/")
 	require.NoError(t, err)
 	require.Equal(t, []string{"bronze/a", "bronze/b"}, keys)
 }
@@ -159,7 +159,7 @@ func TestListExcludesSiblingPrefixSharingName(t *testing.T) {
 	bkt.m["pq/secret"] = []byte("v")
 	f := newFacade(t, bkt, s3PDP{readOK: true})
 
-	keys, err := f.List(ctx, "default", "fn", "files", "")
+	keys, err := f.List(ctx, "default", v1.FunctionOwner("fn"), "files", "")
 	require.NoError(t, err)
 	require.Equal(t, []string{"a"}, keys)
 }
@@ -176,14 +176,14 @@ func TestIssue709_EmptyKeyIsTheFolderMarker(t *testing.T) {
 		bkt := newMapBucket()
 		bkt.m["p"] = []byte("OBJECT")
 		f := newFacade(t, bkt, s3PDP{readOK: true, writeOK: true})
-		require.NoError(t, f.Put(ctx, "default", "fn", "files", "", []byte("MARKER")))
+		require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "files", "", []byte("MARKER")))
 		require.Equal(t, []string{"p", "p/"}, sortedKeys(bkt))
 		require.Equal(t, []byte("OBJECT"), bkt.m["p"])
-		got, found, err := f.Get(ctx, "default", "fn", "files", "")
+		got, found, err := f.Get(ctx, "default", v1.FunctionOwner("fn"), "files", "")
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, []byte("MARKER"), got)
-		require.NoError(t, f.Delete(ctx, "default", "fn", "files", ""))
+		require.NoError(t, f.Delete(ctx, "default", v1.FunctionOwner("fn"), "files", ""))
 		require.Equal(t, []string{"p"}, sortedKeys(bkt))
 	})
 
@@ -193,9 +193,9 @@ func TestIssue709_EmptyKeyIsTheFolderMarker(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = file.Close() })
 		f := newFacade(t, file, s3PDP{readOK: true, writeOK: true})
-		require.NoError(t, f.Put(ctx, "default", "fn", "files", "", nil))
-		require.NoError(t, f.Put(ctx, "default", "fn", "files", "x.parquet", []byte("rows")), "a write under the marker")
-		keys, err := f.List(ctx, "default", "fn", "files", "")
+		require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "files", "", nil))
+		require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "files", "x.parquet", []byte("rows")), "a write under the marker")
+		keys, err := f.List(ctx, "default", v1.FunctionOwner("fn"), "files", "")
 		require.NoError(t, err)
 		require.Equal(t, []string{"", "x.parquet"}, keys)
 	})
@@ -208,11 +208,11 @@ func TestScenarioBlobUnboundForbidden(t *testing.T) {
 	ctx := context.Background()
 
 	f := newFacade(t, newMapBucket(), s3PDP{readOK: true, writeOK: true})
-	_, _, err := f.Get(ctx, "default", "fn", "nope", "k")
+	_, _, err := f.Get(ctx, "default", v1.FunctionOwner("fn"), "nope", "k")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "an unbound alias is Forbidden (resolver default-deny)")
 
 	fDeny := newFacade(t, newMapBucket(), s3PDP{readOK: false, writeOK: false})
-	_, _, err = fDeny.Get(ctx, "default", "fn", "files", "k")
+	_, _, err = fDeny.Get(ctx, "default", v1.FunctionOwner("fn"), "files", "k")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a bound alias with no permitting Policy is Forbidden (PDP deny)")
 }
 
@@ -223,11 +223,11 @@ func TestScenarioBlobSignedURL(t *testing.T) {
 	ctx := context.Background()
 	f := newFacade(t, newMapBucket(), s3PDP{readOK: true, writeOK: false})
 
-	url, err := f.SignedURL(ctx, "default", "fn", "files", "report.txt", iblob.SignOptions{})
+	url, err := f.SignedURL(ctx, "default", v1.FunctionOwner("fn"), "files", "report.txt", iblob.SignOptions{})
 	require.NoError(t, err)
 	require.Contains(t, url, "p/report.txt", "keyed at the shared keyspace")
 
-	_, err = f.SignedURL(ctx, "default", "fn", "files", "report.txt", iblob.SignOptions{Method: iblob.SignPut})
+	_, err = f.SignedURL(ctx, "default", v1.FunctionOwner("fn"), "files", "report.txt", iblob.SignOptions{Method: iblob.SignPut})
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a PUT-sign needs s3::write — no read→write escalation")
 }
 
@@ -239,11 +239,11 @@ func TestIssue374_PresignedPutRefusedOnCappedBucket(t *testing.T) {
 	ctx := context.Background()
 	f := newFacade(t, iblob.Capped(newMapBucket(), 16), s3PDP{readOK: true, writeOK: true})
 
-	_, err := f.SignedURL(ctx, "default", "fn", "files", "report.txt", iblob.SignOptions{Method: iblob.SignPut})
+	_, err := f.SignedURL(ctx, "default", v1.FunctionOwner("fn"), "files", "report.txt", iblob.SignOptions{Method: iblob.SignPut})
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a presigned PUT cannot enforce maxObjectBytes, so it is Forbidden: %v", err)
 
 	for _, m := range []iblob.SignMethod{"", iblob.SignGet, iblob.SignDelete} {
-		_, err := f.SignedURL(ctx, "default", "fn", "files", "report.txt", iblob.SignOptions{Method: m})
+		_, err := f.SignedURL(ctx, "default", v1.FunctionOwner("fn"), "files", "report.txt", iblob.SignOptions{Method: m})
 		require.NoError(t, err, "sign %q", m)
 	}
 }

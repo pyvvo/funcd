@@ -11,6 +11,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/platform/pathx"
+	"github.com/pyvvo/funcd/internal/services"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
@@ -39,7 +40,7 @@ var _ local.Addon = (*Calls)(nil)
 // entry does, under its pinned revision's basePath and privatePaths, then, just before the dial, refuses a held
 // namespace and an object that is not Ready or has no address: a held object has no engine, so the hold answers first,
 // with its Retry-After. No error names the engine's address.
-func (c *Calls) Target(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, path string) (local.AddonTarget, error) {
+func (c *Calls) Target(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, path string) (local.AddonTarget, error) {
 	const op = "services.addon.call"
 	o, err := c.bound(ctx, ns, fn, alias)
 	if err != nil {
@@ -64,7 +65,7 @@ func (c *Calls) Target(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNam
 
 // CheckRead is the dependency check of a binding (ADR-0338 Decision 1): the binding, Cedar's addon::call and a Ready
 // engine, with no engine call.
-func (c *Calls) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) error {
+func (c *Calls) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string) error {
 	o, err := c.bound(ctx, ns, fn, alias)
 	if err != nil {
 		return err
@@ -73,25 +74,24 @@ func (c *Calls) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.Object
 }
 
 // bound is the object that the caller binds under alias, once Cedar permits addon::call on it.
-func (c *Calls) bound(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) (*v1.AddonObject, error) {
+func (c *Calls) bound(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string) (*v1.AddonObject, error) {
 	const op = "services.addon.call"
-	obj, err := c.store.Get(ctx, v1.KindFunction.GVK(), ns, fn)
+	bindings, err := services.CallerBindings(ctx, c.store, ns, fn)
 	if err != nil {
-		return nil, local.ErrAddonNoBinding.Errorf(op, "the Function %s/%s is not stored", ns, fn)
+		return nil, local.ErrAddonNoBinding.Errorf(op, "the %s %s/%s is not stored", fn.Kind, ns, fn.Name)
 	}
-	f, _ := obj.(*v1.Function)
 	var name v1.ObjectName
-	for _, b := range f.Spec.Bindings.Addon {
+	for _, b := range bindings.Addon {
 		if b.Alias == alias {
 			name = b.Object
 		}
 	}
 	if name == "" {
-		return nil, local.ErrAddonNoBinding.Errorf(op, "the Function binds no add-on object as %q", alias)
+		return nil, local.ErrAddonNoBinding.Errorf(op, "the %s binds no add-on object as %q", fn.Kind, alias)
 	}
 	if c.authz != nil {
 		dec, err := c.authz.Authorize(ctx, auth.Request{
-			Identity: auth.Identity{Subject: string(ns) + "/" + string(fn), Principal: &auth.EntityRef{Type: v1.KindFunction, Namespace: ns, Name: fn}},
+			Identity: auth.Identity{Subject: string(ns) + "/" + string(fn.Name), Principal: services.Principal(ns, fn)},
 			Action:   auth.ActionAddonCall,
 			Resource: &auth.EntityRef{Type: v1.KindAddonObject, Namespace: ns, Name: name},
 		})
@@ -158,18 +158,20 @@ func tokenKey(master []byte) []byte {
 	return m.Sum(nil)
 }
 
-// Token is the Function's token at the add-on proxy, FUNCD_ADDON_<ALIAS>_TOKEN: its namespace and name, and an HMAC of
-// them under a key derived from the node master. It is deterministic, as the lake token is, so it is the same across
+// Token is a workload's token at the add-on proxy, FUNCD_ADDON_<ALIAS>_TOKEN: its kind, namespace and name,
+// "<kind>/<ns>/<name>", so a Job's token is never a same-named Function's (ADR-0351 Decision 4), and an HMAC of them
+// under a key derived from the node master. It is deterministic, as the lake token is, so it is the same across
 // restarts; rotating the master rotates it.
-func Token(master []byte, ns v1.NamespaceName, fn v1.ObjectName) string {
-	subject := string(ns) + "/" + string(fn)
+func Token(master []byte, ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) string {
+	subject := string(kind) + "/" + string(ns) + "/" + string(name)
 	m := hmac.New(sha256.New, tokenKey(master))
 	m.Write([]byte(subject))
 	enc := base64.RawURLEncoding
 	return enc.EncodeToString([]byte(subject)) + "." + enc.EncodeToString(m.Sum(nil))
 }
 
-// TokenCaller is the Function a proxy token names, ok false for any other value.
+// TokenCaller is the Function or the Job a proxy token names, read back by its kind, ok false for any other value; a
+// Job's ref carries no run, which the proxy does not need.
 func TokenCaller(master []byte, token string) (local.Ref, bool) {
 	enc := base64.RawURLEncoding
 	head, sig, found := strings.Cut(token, ".")
@@ -189,9 +191,13 @@ func TokenCaller(master []byte, token string) (local.Ref, bool) {
 	if !hmac.Equal(got, m.Sum(nil)) {
 		return local.Ref{}, false
 	}
-	ns, fn, ok := strings.Cut(string(subject), "/")
-	if !ok || v1.NamespaceName(ns).Validate() != nil || v1.ObjectName(fn).Validate() != nil {
+	parts := strings.Split(string(subject), "/")
+	if len(parts) != 3 || v1.NamespaceName(parts[1]).Validate() != nil || v1.ObjectName(parts[2]).Validate() != nil {
 		return local.Ref{}, false
 	}
-	return local.Ref{Namespace: v1.NamespaceName(ns), Function: v1.ObjectName(fn)}, true
+	kind := v1.Kind(parts[0])
+	if kind != v1.KindFunction && kind != v1.KindJob {
+		return local.Ref{}, false
+	}
+	return local.Ref{Namespace: v1.NamespaceName(parts[1]), Kind: kind, Name: v1.ObjectName(parts[2])}, true
 }

@@ -24,7 +24,7 @@ import (
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
-func ref(fn v1.ObjectName) local.Ref { return local.Ref{Namespace: "default", Function: fn} }
+func ref(fn v1.ObjectName) local.Ref { return local.FunctionRef("default", fn) }
 
 // loopInvoker stands in for a stored A↔B link cycle: each call into one Function makes a nested call to the
 // other through the capped Invoker, so only the cap ends the recursion.

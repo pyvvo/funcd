@@ -85,12 +85,12 @@ func blobKey(prefix, object string) string {
 // sub-resource Path). The principal is the connection-scoped caller Function, whose spec.bindings.blob the
 // capability materializes as its blobBindings — so an unbound alias (or a non-owner write) is denied. A
 // deny maps to fault.Forbidden, raised from the read or the write deny's known cause (ADR-0330).
-func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, action auth.Action, b Binding) error {
+func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, action auth.Action, b Binding) error {
 	const op = "services.blob.authorize"
-	principal := &auth.EntityRef{Type: v1.KindFunction, Namespace: ns, Name: fn}
+	principal := services.Principal(ns, fn)
 	resource := &auth.EntityRef{Type: v1.KindBucket, Namespace: ns, Name: b.Bucket, Path: b.Prefix}
 	dec, err := f.authorizer.Authorize(ctx, auth.Request{
-		Identity: auth.Identity{Subject: string(ns) + "/" + string(fn), Principal: principal},
+		Identity: auth.Identity{Subject: string(ns) + "/" + string(fn.Name), Principal: principal},
 		Action:   action,
 		Resource: resource,
 	})
@@ -102,14 +102,14 @@ func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.Objec
 		if action == auth.ActionS3Read {
 			deny = blob.ErrReadDenied
 		}
-		return deny.Errorf(op, "function %q is not authorized to %s prefix %q (bucket %q): %s", fn, action, b.Prefix, b.Bucket, dec.Reason)
+		return deny.Errorf(op, "%s is not authorized to %s prefix %q (bucket %q): %s", fn, action, b.Prefix, b.Bucket, dec.Reason)
 	}
 	return nil
 }
 
 // resolveAuth resolves a binding (naming, default-deny) then authorizes the action against its
 // BlobPrefix via the PDP, returning the binding + its substrate bucket view on allow.
-func (f *Facade) resolveAuth(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string, action auth.Action) (Binding, blob.Bucket, error) {
+func (f *Facade) resolveAuth(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string, action auth.Action) (Binding, blob.Bucket, error) {
 	const op = "services.blob.resolveAuth"
 	b, err := f.resolver.Resolve(ctx, ns, fn, alias)
 	if err != nil {
@@ -130,14 +130,14 @@ func (f *Facade) resolveAuth(ctx context.Context, ns v1.NamespaceName, fn v1.Obj
 
 // CheckRead resolves the alias, asks the PDP s3::read on its prefix and resolves its bucket, as Get does, with no
 // storage call: the dependency check of a caller's binding (ADR-0215 Decision 3).
-func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) error {
+func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string) error {
 	_, _, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionS3Read)
 	return err
 }
 
 // Get returns the object's bytes for the alias's key (found=false on a missing object). The PDP
 // authorizes s3::read on the bound prefix (ADR-0127).
-func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string) ([]byte, bool, error) {
+func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key string) ([]byte, bool, error) {
 	b, sub, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionS3Read)
 	if err != nil {
 		return nil, false, err
@@ -154,7 +154,7 @@ func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 
 // Put stores data under the alias's key. The PDP authorizes s3::write — the built-in prefix-owner rule
 // makes writes owner-only (ADR-0080/0127).
-func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string, data []byte) error {
+func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key string, data []byte) error {
 	b, sub, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionS3Write)
 	if err != nil {
 		return err
@@ -163,7 +163,7 @@ func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 }
 
 // Delete removes the alias's key. The PDP authorizes s3::write (owner-only).
-func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string) error {
+func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key string) error {
 	b, sub, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionS3Write)
 	if err != nil {
 		return err
@@ -174,7 +174,7 @@ func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNa
 // List returns the alias's keys under prefix. Like Get, it authorizes s3::read (ADR-0127). Keys are
 // returned relative to the bound prefix (the prefix sub-domain is stripped) so the caller sees only its
 // own key space.
-func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, prefix string) ([]string, error) {
+func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, prefix string) ([]string, error) {
 	b, sub, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionS3Read)
 	if err != nil {
 		return nil, err
@@ -194,7 +194,7 @@ func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName
 // SignedURL returns a substrate-driver presigned URL for the object. It authorizes the CAPABILITY the URL
 // grants (derived from opts.Method): a presigned PUT/DELETE bypasses the facade to write/delete, so it
 // requires s3::write (no read→write escalation); a GET requires s3::read (ADR-0127).
-func (f *Facade) SignedURL(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string, opts blob.SignOptions) (string, error) {
+func (f *Facade) SignedURL(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key string, opts blob.SignOptions) (string, error) {
 	b, sub, err := f.resolveAuth(ctx, ns, fn, alias, actionForSign(opts.Method))
 	if err != nil {
 		return "", err

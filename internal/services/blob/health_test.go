@@ -40,10 +40,10 @@ func (b noStorage) Exists(context.Context, string) (bool, error) {
 func TestFacadeCheckRead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	require.NoError(t, newFacade(t, noStorage{t: t}, s3PDP{readOK: true}).CheckRead(ctx, "default", "fn", "files"))
-	require.Equal(t, fault.Forbidden, fault.KindOf(newFacade(t, noStorage{t: t}, s3PDP{}).CheckRead(ctx, "default", "fn", "files")),
+	require.NoError(t, newFacade(t, noStorage{t: t}, s3PDP{readOK: true}).CheckRead(ctx, "default", v1.FunctionOwner("fn"), "files"))
+	require.Equal(t, fault.Forbidden, fault.KindOf(newFacade(t, noStorage{t: t}, s3PDP{}).CheckRead(ctx, "default", v1.FunctionOwner("fn"), "files")),
 		"no s3::read")
-	require.Equal(t, fault.Forbidden, fault.KindOf(newFacade(t, noStorage{t: t}, s3PDP{readOK: true}).CheckRead(ctx, "default", "fn", "other")),
+	require.Equal(t, fault.Forbidden, fault.KindOf(newFacade(t, noStorage{t: t}, s3PDP{readOK: true}).CheckRead(ctx, "default", v1.FunctionOwner("fn"), "other")),
 		"an unbound alias")
 
 	gone, err := svcblob.NewFacade(svcblob.FacadeDeps{
@@ -52,7 +52,7 @@ func TestFacadeCheckRead(t *testing.T) {
 		Authorizer: s3PDP{readOK: true},
 	})
 	require.NoError(t, err)
-	require.Error(t, gone.CheckRead(ctx, "default", "fn", "files"), "the bound Bucket does not exist")
+	require.Error(t, gone.CheckRead(ctx, "default", v1.FunctionOwner("fn"), "files"), "the bound Bucket does not exist")
 }
 
 type probe struct{ err atomic.Pointer[error] }

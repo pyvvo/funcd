@@ -7,7 +7,7 @@
 // A Quack token is a BARE BEARER credential (unlike an S3 access key, which is inert without the SigV4
 // secret), so the internal per-function token must be unforgeable on its own. It is a standard HS256 JWT
 // (go-jose) signed with the node master: DeriveLakeToken signs it, PrincipalFor verifies the signature
-// (alg pinned to HS256) before trusting its {ns, fn} claims. The external Identity gets a minted token: its
+// (alg pinned to HS256) before trusting its {ns, kind, name} claims. The external Identity gets a minted token: its
 // public access key id (ADR-0135), ".", and a random, rotatable part. The prefix names the owner, so the
 // lookup is two store reads (ADR-0153), the shape of the Identity's S3 credential lookup.
 package gateway
@@ -72,26 +72,28 @@ func decodeIdentityLakeToken(token string) (v1.NamespaceName, v1.ObjectName, boo
 	return v1.NamespaceName(ns), v1.ObjectName(name), true
 }
 
-// fnClaims is the per-function lake token's payload — the Function principal. NO iat/exp: the token is
-// deterministic (re-derived each reconcile, stable across daemon restarts; rotation = master rotation),
-// mirroring the derived, non-expiring S3 keypair (ADR-0085).
-type fnClaims struct {
-	NS string `json:"ns"`
-	Fn string `json:"fn"`
+// workloadClaims is the per-workload lake token's payload — the Function or the Job principal, by its kind, so a Job's
+// token is never a same-named Function's (ADR-0351 Decision 4). NO iat/exp: the token is deterministic (re-derived
+// each reconcile, stable across daemon restarts; rotation = master rotation), mirroring the derived, non-expiring S3
+// keypair (ADR-0085).
+type workloadClaims struct {
+	NS   string `json:"ns"`
+	Kind string `json:"kind"`
+	Name string `json:"name"`
 }
 
-// DeriveLakeToken mints the per-(namespace, function) lake token as an HS256 JWT signed with the
-// node master (ADR-0137). A Quack token is a bare bearer credential, so it must be unforgeable on its own:
-// only the master holder can produce the signature, so a function cannot forge a peer's token. Deterministic
-// — the same (master, ns, fn) always yields the same compact JWT (no time claims), so injection re-derives
-// it without stored state.
-func DeriveLakeToken(master []byte, ns v1.NamespaceName, fn v1.ObjectName) (string, error) {
+// DeriveLakeToken mints the per-(namespace, kind, name) lake token of a Function or a Job as an HS256 JWT signed with
+// the node master (ADR-0137). A Quack token is a bare bearer credential, so it must be unforgeable on its own: only the
+// master holder can produce the signature, so a workload cannot forge a peer's token. Deterministic — the same
+// (master, ns, kind, name) always yields the same compact JWT (no time claims), so injection re-derives it without
+// stored state.
+func DeriveLakeToken(master []byte, ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) (string, error) {
 	const op = "gateway.DeriveLakeToken"
 	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: tokenAlg, Key: hs256Key(master)}, (&jose.SignerOptions{}).WithType("JWT"))
 	if err != nil {
 		return "", fault.Wrapf(err, fault.Internal, op, "new HS256 signer")
 	}
-	token, err := jwt.Signed(sig).Claims(fnClaims{NS: string(ns), Fn: string(fn)}).Serialize()
+	token, err := jwt.Signed(sig).Claims(workloadClaims{NS: string(ns), Kind: string(kind), Name: string(name)}).Serialize()
 	if err != nil {
 		return "", fault.Wrapf(err, fault.Internal, op, "sign lake token")
 	}
@@ -102,7 +104,7 @@ func DeriveLakeToken(master []byte, ns v1.NamespaceName, fn v1.ObjectName) (stri
 // s3gateway.principalFor, with the JWT signature standing in for SigV4's per-request possession proof.
 type LakeKeys interface {
 	// PrincipalFor resolves token to its principal. First: verify it as an HS256 JWT signed with the node
-	// master (a forged {ns, fn} fails the signature) ⇒ a Function principal. Else: decode the owner an
+	// master (a forged {ns, kind, name} fails the signature) ⇒ a Function or a Job principal. Else: decode the owner an
 	// Identity token's prefix names and read that Identity and its Secret (two Gets) ⇒ an Identity
 	// principal. Else: default-deny (ok=false).
 	PrincipalFor(token string) (auth.EntityRef, bool)
@@ -122,9 +124,9 @@ func NewLakeKeys(master []byte, s store.Store) LakeKeys {
 	return &macKeys{master: master, store: s}
 }
 
-// PrincipalFor implements LakeKeys. Verify-JWT ⇒ Function; else owner lookup ⇒ Identity; else deny.
+// PrincipalFor implements LakeKeys. Verify-JWT ⇒ Function or Job; else owner lookup ⇒ Identity; else deny.
 func (k *macKeys) PrincipalFor(token string) (auth.EntityRef, bool) {
-	if ref, ok := k.functionFor(token); ok {
+	if ref, ok := k.workloadFor(token); ok {
 		return ref, true
 	}
 	if k.store != nil {
@@ -135,23 +137,24 @@ func (k *macKeys) PrincipalFor(token string) (auth.EntityRef, bool) {
 	return auth.EntityRef{}, false
 }
 
-// functionFor verifies a per-function token as an HS256 JWT signed with the node master and returns the
-// Function principal from its verified {ns, fn} claims. An unparseable token, a wrong/other algorithm, a
-// bad signature (a forged token under the wrong key), or empty claims all fail closed (ok=false). The
-// alg allow-list ([HS256]) is what makes go-jose reject an alg-confusion attack.
-func (k *macKeys) functionFor(token string) (auth.EntityRef, bool) {
+// workloadFor verifies a per-workload token as an HS256 JWT signed with the node master and returns the Function or
+// the Job principal from its verified {ns, kind, name} claims. An unparseable token, a wrong/other algorithm, a bad
+// signature (a forged token under the wrong key), empty claims or another kind all fail closed (ok=false). The alg
+// allow-list ([HS256]) is what makes go-jose reject an alg-confusion attack.
+func (k *macKeys) workloadFor(token string) (auth.EntityRef, bool) {
 	parsed, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{tokenAlg})
 	if err != nil {
 		return auth.EntityRef{}, false
 	}
-	var c fnClaims
+	var c workloadClaims
 	if err := parsed.Claims(hs256Key(k.master), &c); err != nil { // verifies the HMAC signature with the master
 		return auth.EntityRef{}, false
 	}
-	if c.NS == "" || c.Fn == "" {
+	kind := v1.Kind(c.Kind)
+	if c.NS == "" || c.Name == "" || (kind != v1.KindFunction && kind != v1.KindJob) {
 		return auth.EntityRef{}, false
 	}
-	return auth.EntityRef{Type: v1.KindFunction, Namespace: v1.NamespaceName(c.NS), Name: v1.ObjectName(c.Fn)}, true
+	return auth.EntityRef{Type: kind, Namespace: v1.NamespaceName(c.NS), Name: v1.ObjectName(c.Name)}, true
 }
 
 // identityFor resolves an Identity lake token in two store reads (ADR-0153): it decodes the owner the

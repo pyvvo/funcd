@@ -15,8 +15,8 @@ import (
 func TestAddonBindingGivesTheProxyEnv(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, fakeResolver{})
-	r.addonProxy = AddonProxy{Address: func() (string, error) { return "10.63.0.1:40123", nil }, Token: func(ns v1.NamespaceName, fn v1.ObjectName) string {
-		return "token-of-" + string(ns) + "-" + string(fn)
+	r.addonProxy = AddonProxy{Address: func() (string, error) { return "10.63.0.1:40123", nil }, Token: func(ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) string {
+		return "token-of-" + string(kind) + "-" + string(ns) + "-" + string(name)
 	}}
 	fn := sampleFn()
 	fn.Name = "rauthy-settings"
@@ -33,11 +33,11 @@ func TestAddonBindingGivesTheProxyEnv(t *testing.T) {
 	own, issue, g := addonHook{r}.own(functionWorkload(fn))
 	require.Nil(t, g)
 	require.Nil(t, issue, "the token is stable across workers")
-	require.Equal(t, map[string]string{"FUNCD_ADDON_IDP_TOKEN": "token-of-default-rauthy-settings"}, own)
+	require.Equal(t, map[string]string{"FUNCD_ADDON_IDP_TOKEN": "token-of-Function-default-rauthy-settings"}, own)
 
 	spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 	require.Equal(t, "http://10.63.0.1:40123/addon/idp", spec.Env["FUNCD_ADDON_IDP_URL"])
-	require.Equal(t, "token-of-default-rauthy-settings", spec.Env["FUNCD_ADDON_IDP_TOKEN"])
+	require.Equal(t, "token-of-Function-default-rauthy-settings", spec.Env["FUNCD_ADDON_IDP_TOKEN"])
 }
 
 // scenario: addon-binding-missing — a Function that binds an object that does not exist waits Pending,

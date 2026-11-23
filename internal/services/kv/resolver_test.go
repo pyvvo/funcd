@@ -43,7 +43,7 @@ func TestScenarioResolverResolvesBinding(t *testing.T) {
 		mkKVStore("orders", v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("customers-svc")}),
 	)
 
-	b, err := r.Resolve(ctx, "default", "customers-svc", "customers")
+	b, err := r.Resolve(ctx, "default", v1.FunctionOwner("customers-svc"), "customers")
 	require.NoError(t, err)
 	require.Equal(t, v1.ObjectName("orders"), b.Store)
 	require.Equal(t, "customers", b.Table)
@@ -60,11 +60,11 @@ func TestScenarioResolverDefaultDeny(t *testing.T) {
 		mkKVStore("orders", v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("customers-svc")}),
 	)
 
-	_, err := r.Resolve(ctx, "default", "customers-svc", "nope")
+	_, err := r.Resolve(ctx, "default", v1.FunctionOwner("customers-svc"), "nope")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "no spec.kv entry ⇒ Forbidden")
 
 	// an unknown caller function is Forbidden too (no bindings exist).
-	_, err = r.Resolve(ctx, "default", "ghost", "customers")
+	_, err = r.Resolve(ctx, "default", v1.FunctionOwner("ghost"), "customers")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err))
 }
 
@@ -77,7 +77,7 @@ func TestResolverDanglingBindingForbidden(t *testing.T) {
 	r := newResolver(t,
 		mkFunctionWithKV("svc", v1.FunctionKV{Alias: "a", Store: "gone", Table: "t"}),
 	)
-	_, err := r.Resolve(ctx, "default", "svc", "a")
+	_, err := r.Resolve(ctx, "default", v1.FunctionOwner("svc"), "a")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err))
 
 	// store present but missing table
@@ -85,7 +85,7 @@ func TestResolverDanglingBindingForbidden(t *testing.T) {
 		mkFunctionWithKV("svc", v1.FunctionKV{Alias: "a", Store: "orders", Table: "gone"}),
 		mkKVStore("orders", v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("svc")}),
 	)
-	_, err = r2.Resolve(ctx, "default", "svc", "a")
+	_, err = r2.Resolve(ctx, "default", v1.FunctionOwner("svc"), "a")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err))
 }
 
@@ -103,13 +103,13 @@ func TestIssue170_ResolverCacheEvictsExpiredEntries(t *testing.T) {
 	churn := func(name string) {
 		_, err := st.Create(ctx, mkFunctionWithKV(name, v1.FunctionKV{Alias: "a", Store: "orders", Table: "customers"}))
 		require.NoError(t, err)
-		_, err = r.Resolve(ctx, "default", v1.ObjectName(name), "a")
+		_, err = r.Resolve(ctx, "default", v1.FunctionOwner(v1.ObjectName(name)), "a")
 		require.NoError(t, err)
 		require.NoError(t, st.Delete(ctx, v1.KindFunction.GVK(), "default", v1.ObjectName(name), ""))
 	}
 
 	churn("svc")
-	_, err = r.Resolve(ctx, "default", "svc", "a")
+	_, err = r.Resolve(ctx, "default", v1.FunctionOwner("svc"), "a")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err))
 	require.Zero(t, kvsvc.CacheLen(r), "a Forbidden re-resolve must drop the deleted function's expired entry")
 

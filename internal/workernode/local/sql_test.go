@@ -20,16 +20,16 @@ type fakeSQL struct {
 	err   error
 }
 
-func (f *fakeSQL) Query(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string, stmts []json.RawMessage) ([]local.QueryResult, error) {
-	f.calls = append(f.calls, "query "+string(ns)+"/"+string(fn)+" "+binding)
+func (f *fakeSQL) Query(_ context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding string, stmts []json.RawMessage) ([]local.QueryResult, error) {
+	f.calls = append(f.calls, "query "+string(ns)+"/"+string(fn.Name)+" "+binding)
 	if f.err != nil {
 		return nil, f.err
 	}
 	return []local.QueryResult{{Columns: []string{"id"}, Values: [][]json.RawMessage{{json.RawMessage("1")}}}}, nil
 }
 
-func (f *fakeSQL) Execute(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string, stmts []json.RawMessage) ([]local.ExecResult, error) {
-	f.calls = append(f.calls, "execute "+string(ns)+"/"+string(fn)+" "+binding)
+func (f *fakeSQL) Execute(_ context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding string, stmts []json.RawMessage) ([]local.ExecResult, error) {
+	f.calls = append(f.calls, "execute "+string(ns)+"/"+string(fn.Name)+" "+binding)
 	return []local.ExecResult{{RowsAffected: int64(len(stmts)), LastInsertID: 7}}, nil
 }
 
@@ -38,7 +38,7 @@ func sqlHandler(s local.SQL) http.Handler {
 	if s != nil {
 		opts = append(opts, local.WithFacets(local.SQLFacet(s)))
 	}
-	return local.NewHandler(local.Ref{Namespace: "default", Function: "todo-api"}, nil, nil, nil, nil, nil, opts...)
+	return local.NewHandler(local.FunctionRef("default", "todo-api"), nil, nil, nil, nil, nil, opts...)
 }
 
 func TestSQLRoutes(t *testing.T) {

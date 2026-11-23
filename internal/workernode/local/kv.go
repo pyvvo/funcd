@@ -29,12 +29,12 @@ const maxTTLSeconds = math.MaxInt64 / int64(time.Second)
 // the sandbox's fixed Ref), NEVER read from the request: a function can only reach its own namespace's
 // KV, and its binding resolution is keyed by its trustworthy fixed function identity (ADR-0073).
 type KV interface {
-	GetEntry(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string) (kvstore.Entry, bool, error)
-	Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string, value []byte) error
-	PutIf(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string, value []byte, w kvstore.Write) (kvstore.Result, error)
-	Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string) error
-	DeleteIf(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key, version string) (kvstore.Result, error)
-	List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, prefix string) ([]string, error)
+	GetEntry(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string) (kvstore.Entry, bool, error)
+	Put(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string, value []byte) error
+	PutIf(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string, value []byte, w kvstore.Write) (kvstore.Result, error)
+	Delete(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string) error
+	DeleteIf(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key, version string) (kvstore.Result, error)
+	List(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, prefix string) ([]string, error)
 }
 
 // KVFacet serves the KV verbs under /kv over kv (ADR-0069).
@@ -53,7 +53,7 @@ func KVFacet(kv KV) Facet {
 // endpoint with the known causes it declares (ADR-0330).
 func registerKV(mux facetMux, caller Ref, kv KV, logger *slog.Logger) {
 	ns := caller.Namespace
-	fn := caller.Function
+	fn := caller.Workload()
 	denied := func(verb string, r *http.Request, err error) {
 		logger.Warn("kv "+verb+" denied/failed", "caller", caller.String(), "binding", r.PathValue("binding"), "err", err.Error())
 	}
