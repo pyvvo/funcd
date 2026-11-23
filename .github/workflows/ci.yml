@@ -117,7 +117,20 @@ jobs:
 
       - name: Run CI (fmt check + lint + fast tests + build)
         if: needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.generated == 'true' || github.event_name == 'push'
-        run: nix develop --command just ci
+        run: |
+          python3 .github/diag/memmax.py &
+          sampler=$!
+          rc=0
+          nix develop --command just ci || rc=$?
+          kill -INT "$sampler"
+          wait "$sampler" || true
+          exit "$rc"
+
+      - name: Report memory kills (diagnostic)
+        if: always()
+        run: |
+          free -m
+          sudo dmesg -T | grep -i -E 'out of memory|oom|killed process' | tail -20 || true
 
       - name: Check the behavior registry and the repository hygiene (docs only)
         if: needs.changes.outputs.nondocs != 'true' && needs.changes.outputs.generated != 'true' && github.event_name != 'push'
