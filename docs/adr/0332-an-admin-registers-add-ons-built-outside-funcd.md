@@ -10,6 +10,7 @@
 - **Superseded in part by**: [ADR-0340](0340-an-addon-declares-settings-kinds.md) (2026-11-22) — Decisions 1, 2 and 3 (an Addon adds settings kinds, an update takes the cluster-scoped lock; a settings object runs no engine, outside the engines' cap, with a pass of its own).
 - **Superseded in part by**: [ADR-0341](0341-a-function-applies-a-targets-settings.md) (2026-11-22) — Decisions 2 and 3 (an add-on object gains `spec.functions`; the pass of a Ready object gains the settings step).
 - **Superseded in part by**: [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md) (2026-11-23) — Decisions 1, 3 and 6 (the spec is a list of runtimes, the kind and its fields in the engine's entry; an engine on a process server waits naming the process driver; the image rule covers every runtime).
+- **Superseded in part by**: [ADR-0345](0345-a-function-reconciles-an-engineless-kind-and-a-deletion-waits-for-its-destroy.md) (2026-11-23) — Decision 2 (an engineless object's `deletion: delete` holds its deletion until its Function has destroyed what it holds).
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, provider, api, edge, cedar

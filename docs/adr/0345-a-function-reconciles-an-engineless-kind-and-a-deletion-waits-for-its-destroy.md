@@ -1,6 +1,7 @@
 # ADR-0345: A Function reconciles an engineless kind's objects, and a deletion waits for its destroy
 
-- **Status**: Proposed (2026-11-23), judged five times: no Blocker or Major open; round 5's Minors folded
+- **Status**: Accepted (2026-11-23), by the decider, after five rounds of an independent judge, every Blocker and
+  Major folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, reconcile, functions, deletion, apps
@@ -274,10 +275,8 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
 - **(−)** An engineless object's first pass writes its status before its first call. The Function must apply each list
   idempotently, and tell an object sent with `deleting: true`, to destroy, from one that left the list, to forget.
 - **(−)** Under `funcdctl dev` a hold lasts while dev runs and, with `--persist`, across its restarts; without it, the
-  object goes with dev's store and what it manages stays, as `retain` would. Dev runs add-on engines on Docker
-  (ADR-0334) but workers only on the process driver, so a destroy Job on an Addon's runtime is `RuntimeUnavailable`
-  there (ADR-0344) and its stack stays held until `retain`, until F139's dev-workers ADR, after the Jobs ADRs, runs
-  such workers on that Docker driver.
+  object goes with dev's store and what it manages stays, as `retain` would. A destroy Job on an Addon's runtime runs
+  on dev's container engine (ADR-0344 Decision 13).
 - **(−)** Restores stay as FEAT-0009 decided them, and app-todo's D cases run them: an App's backup copies no
   engineless object, which has no snapshot (`scope.app`, ADR-0337 Decision 7), but copies the stores its Function
   keeps state in; one cannot be restored in place (no `restore`, ADR-0333); after a host loss, `funcd restore run`
