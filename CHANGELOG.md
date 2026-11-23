@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.47.0](https://github.com/pyvvo/funcd/compare/v0.46.0...v0.47.0) (2026-11-23)
+
+
+### Features
+
+* **addons:** a Function calls an add-on object's engine through funcd, on its local API or through the add-on proxy (ADR-0338) ([4870472](https://github.com/pyvvo/funcd/commit/487047230362cdc107eafe35486ceafc1bf009be))
+* **addons:** a settings kind's Function applies a target's settings, called from the target's pass (ADR-0341) ([4870472](https://github.com/pyvvo/funcd/commit/487047230362cdc107eafe35486ceafc1bf009be))
+* **addons:** an add-on's versions are revisions, and each object pins the one it runs (ADR-0339) ([4870472](https://github.com/pyvvo/funcd/commit/487047230362cdc107eafe35486ceafc1bf009be))
+* **addons:** an Addon declares settings kinds, which funcd checks at admission (ADR-0340) ([4870472](https://github.com/pyvvo/funcd/commit/487047230362cdc107eafe35486ceafc1bf009be))
+* **app:** an App template carries its add-on, and an App holds the add-on's objects (ADR-0337) ([4870472](https://github.com/pyvvo/funcd/commit/487047230362cdc107eafe35486ceafc1bf009be))
+* **edge:** the sign-in's names and refusals follow funcd's own (ADR-0335, ADR-0336 amended) ([d5bef54](https://github.com/pyvvo/funcd/commit/d5bef5400d2665cc49df9b54a0baeb8f1ad398d8))
+* **funclog:** an engine's output is kept and read as a Function's logs, with funcdctl logs &lt;kind&gt;/&lt;name&gt; (ADR-0342) ([58e3a4c](https://github.com/pyvvo/funcd/commit/58e3a4c270e64016572a1dc38e725252b430db15))
+* **funclog:** under funcdctl dev, a Lake's and a SQLDatabase's engines keep their lines too (ADR-0343) ([58e3a4c](https://github.com/pyvvo/funcd/commit/58e3a4c270e64016572a1dc38e725252b430db15))
+
+
+### Bug Fixes
+
+* **addon:** an add-on object deleted right after a restart follows its deletion policy ([d5bef54](https://github.com/pyvvo/funcd/commit/d5bef5400d2665cc49df9b54a0baeb8f1ad398d8))
+
 ## [0.46.0](https://github.com/pyvvo/funcd/compare/v0.45.0...v0.46.0) (2026-11-19)
 
 
