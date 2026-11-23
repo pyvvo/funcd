@@ -5,6 +5,8 @@
   commits: the prefix test, the local API's facets, the providers' facets); Accepted (2026-11-03, by the decider,
   after refining it with them; judged twice in an independent session, every finding folded)
 - **Superseded in part by**: [ADR-0321](0321-cedar-decides-each-secret-a-workload-reads.md) (2026-11-11) — Decision 6's "over the config alone": the secrets provider is built over the policy decision point too, once it exists, still before every other provider.
+- **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md)
+  (2026-11-23) — Decision 1: a facet's caller names its kind and, for a Job's worker, its run (Decision 2).
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, local-api, architecture, refactor

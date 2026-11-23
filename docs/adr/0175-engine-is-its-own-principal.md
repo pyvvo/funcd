@@ -7,6 +7,8 @@
 - **Superseded in part by**: [ADR-0281](0281-ai-gateways.md) (2026-10-25) — Decision 1 (the owner kinds the egress
   index covers), Decision 2's sentence that an engine's external egress is denied, and Decision 5 (principal
   sources).
+- **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md)
+  (2026-11-23) — Decisions 1 and 3: the egress index and the S3 key's kind code know a Job (Decisions 4 and 6).
 - **Date**: 2026-10-05 (judged twice by three lenses; held from publication)
 - **Deciders**: green-0-rabbit
 - **Tags**: authorization, cedar, s3, egress, catalog, identity

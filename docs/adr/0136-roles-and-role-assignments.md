@@ -1,6 +1,8 @@
 # ADR-0136: Roles & role assignments — a uniform grant surface over Cedar
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md)
+  (2026-11-23) — a role may be assigned to a Job (Decision 5).
 - **Date**: 2026-07-14 (**Implemented 2026-07-14** — review pass (claude-opus-4-8): `Role` +
   `RolesAssignment` CRDs + the built-in role catalog + `CompileRolesAssignment` (read/query/invoke →
   injection-safe EST permits) + `WriterGrants` + the store-backed `WriterLister` + the **generalized

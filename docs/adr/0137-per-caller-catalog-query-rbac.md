@@ -2,6 +2,8 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0153](0153-catalog-token-carries-its-owner.md) (2026-10-05) — Decision 2: the per-Identity catalog token gains a public owner prefix; its lookup decodes the owner, two Gets.
+- **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md)
+  (2026-11-23) — the Lake token's claims name the caller's kind (Decision 4).
 - **Implemented**: 2026-07-14 — review **pass** ([scorecard](../reviews/adr-0137-implementation-claude-opus-4-8.md)):
   the INTERNAL per-caller `catalog::query` PEP is live + green + security-reviewed — a node-private catalog proxy
   (`internal/catalog/gateway`) fronts each engine, resolves a per-function **HS256 JWT** token (go-jose, alg-pinned;

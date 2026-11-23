@@ -3,6 +3,8 @@
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0315](0315-what-a-domain-rule-allows.md) (2026-11-05) — §1's domains at a restricted address, §2's forwarding of each query and what it records, and *Contracts*' `WildcardPatterns` and `NewForwarder`.
 - **Superseded in part by**: [ADR-0175](0175-engine-is-its-own-principal.md) (2026-10-05) — §4(b) namespace permit gains principal is Function; the §5 Ref and the WorkerIndex carry the owner kind.
+- **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md)
+  (2026-11-23) — `appliesTo` items name their kind, Function or Job (Decision 6).
 - **Date**: 2026-07-09
 - **Accepted**: 2026-07-09
 - **Implemented**: 2026-07-10

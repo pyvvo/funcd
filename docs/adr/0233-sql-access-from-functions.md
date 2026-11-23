@@ -4,6 +4,8 @@
   made `execute` also ask `sql::read`, since `RETURNING` reads, added `sql.callTimeout`, and fixed the Cedar entity
   shape and the Namespace-scope roles; the second found no Blocker or Major)
 - **Superseded in part by**: [ADR-0246](0246-bindings-under-spec.md) (2026-10-19) — where the binding lives: `spec.sql` moves to `spec.bindings.sql`; what it grants is unchanged.
+- **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md)
+  (2026-11-23) — a SQL database's owner names its kind, as a `WorkloadRef`, a Lake's included (Decision 3).
 - **Date**: 2026-10-12
 - **Deciders**: green-0-rabbit
 - **Tags**: sql, authorization, local-api, shim

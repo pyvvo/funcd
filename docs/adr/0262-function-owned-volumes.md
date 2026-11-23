@@ -7,6 +7,8 @@
   and 5: `size`, `volumeBudget` and `volumes.capacity` beside their byte forms.
 - **Superseded in part by**: [ADR-0311](0311-each-provider-backs-up-and-restores-its-own-member-kind.md) (2026-11-03) —
   `workload.Sources` in its Contracts' I/O table; Decision 11 stands.
+- **Superseded in part by**: [ADR-0347](0347-a-job-runs-its-handler-once-per-jobrun-in-a-worker-of-its-own.md)
+  (2026-11-23) — the volume `ID`: it names its owner's kind, and one with none is refused (Decision 1).
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
 - **Tags**: function, storage, volume, runtime, quota, backup

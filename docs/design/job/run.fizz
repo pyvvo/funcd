@@ -1,0 +1,194 @@
+---
+# The runs of a Job (ADR-0347 Decisions 4 to 7), for two runs of one Job whose concurrency is 1. A pass of the run
+# reconciler starts a waiting run once no run of the Job is stored Running: one write stores it Running with the
+# revision it pins, and only then does the run's executor create its worker and call the handler, once. The answer ends
+# the run only while it is stored Running, and the worker stops with it. A person may cancel a run, which stops its
+# worker and its executor; the Job's timeout may end a Running run. The Job may change once, which stamps revision 2,
+# and funcd deletes a revision that is not current and that no Running run pins. funcd may stop once and start again: a
+# stop loses every call in flight and every executor, which live in memory, while the store and the workers outlive it.
+# At boot the drivers' sweep removes every worker, and a run stored Running ends Failed (Interrupted). Environment: the
+# controller runs one worker, so a pass is one step, and an executor runs beside it; the driver's stop (SIGTERM, the
+# grace, SIGKILL) is one step. Left out: job.maxRunning (the same count over the node's runs), runtime.bootTimeout,
+# job.payloadLimit, the retention sweep and a deleted Job; tests hold those.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 16
+  crash_on_yield: false
+---
+# diagram: Run.phase
+# mutant no-slot-check: AtMostOneRunning
+# mutant call-before-running: NeverCalledTwice
+# mutant pending-after-restart: NeverCalledTwice
+# mutant late-answer-wins: EndIsFinal
+# mutant cancel-keeps-worker: NoWorkerAfterEnd
+# mutant gc-ignores-pins: PinnedRevisionKept
+# mutant running-after-restart: liveness
+
+# no-slot-check: a pass starts a run without counting the Running ones.
+# call-before-running: the executor calls the handler before the pass has stored the run Running.
+# pending-after-restart: at boot a run stored Running goes back to Pending.
+# late-answer-wins: an answer that arrives after the run ended is recorded.
+# cancel-keeps-worker: a cancel ends the run but leaves its worker running.
+# gc-ignores-pins: funcd deletes the old revision while a Running run pins it.
+# running-after-restart: at boot a run stored Running stays Running.
+MUTANT = ""
+
+role Run:
+    action Init:
+        self.phase = "pending"
+        self.pin = 0
+        self.executor = False
+        self.worker = False
+        self.inflight = False
+        self.calls = 0
+        self.cancel = False
+
+    # A pass starts a waiting run once a slot is free: one write stores it Running with its pin.
+    atomic fair action Start:
+        require up
+        require self.phase == "pending"
+        require not self.cancel
+        if MUTANT == "call-before-running":
+            require self.inflight
+        else:
+            n = 0
+            for r in runs:
+                if r.phase == "running":
+                    n += 1
+            if MUTANT != "no-slot-check":
+                require n < 1
+        self.phase = "running"
+        self.pin = current
+        if MUTANT != "call-before-running":
+            self.executor = True
+
+    # The run's executor creates the worker and calls the handler, once.
+    atomic fair action Launch:
+        require up
+        if MUTANT == "call-before-running":
+            require self.phase == "pending" and not self.cancel and not self.worker and self.calls < 2
+        else:
+            require self.executor and self.phase == "running"
+        self.executor = False
+        self.worker = True
+        self.calls += 1
+        self.inflight = True
+
+    # The handler answers, ok or with an error; the answer ends the run only while it is stored Running.
+    atomic fair action Answer:
+        require up
+        require self.inflight
+        outcome = oneof ["succeeded", "failed"]
+        self.inflight = False
+        if MUTANT == "late-answer-wins" or self.phase == "running":
+            self.phase = outcome
+            self.worker = False
+
+    # A person cancels a run that has not ended.
+    atomic action Cancel:
+        require self.phase in ["pending", "running"]
+        require not self.cancel
+        self.cancel = True
+
+    # A pass ends a cancelled run: it stops the executor and the worker of a Running one.
+    atomic fair action EndCancelled:
+        require up
+        require self.cancel
+        require self.phase in ["pending", "running"]
+        self.executor = False
+        if MUTANT != "cancel-keeps-worker":
+            self.worker = False
+        self.phase = "cancelled"
+
+    # The Job's timeout ends a Running run.
+    atomic action TimeOut:
+        require up
+        require self.phase == "running"
+        self.executor = False
+        self.worker = False
+        self.phase = "failed"
+
+action Init:
+    up = True
+    stops = 0
+    current = 1
+    live = {1: True, 2: False}
+    runs = []
+    for i in range(2):
+        runs.append(Run(id=i))
+
+# funcd stops: every call in flight and every executor is lost; the store and the workers outlive it.
+atomic action Stop:
+    require up
+    require stops < 1
+    up = False
+    stops += 1
+    for r in runs:
+        r.inflight = False
+        r.executor = False
+
+# funcd starts again: the boot sweep removes every worker, and a run stored Running ends Failed.
+atomic fair action Boot:
+    require not up
+    for r in runs:
+        r.worker = False
+        if r.phase == "running":
+            if MUTANT == "pending-after-restart":
+                r.phase = "pending"
+            elif MUTANT != "running-after-restart":
+                r.phase = "failed"
+    up = True
+
+# The Job changes once: funcd stamps revision 2.
+atomic action Edit:
+    require current == 1
+    current = 2
+    live[2] = True
+
+# funcd deletes the old revision once it is not current and no Running run pins it.
+atomic fair action CollectRevision:
+    require current == 2
+    require live[1]
+    if MUTANT != "gc-ignores-pins":
+        for r in runs:
+            if r.phase == "running":
+                require r.pin != 1
+    live[1] = False
+
+always assertion AtMostOneRunning:
+    n = 0
+    for r in runs:
+        if r.phase == "running":
+            n += 1
+    return n <= 1
+
+always assertion NeverCalledTwice:
+    for r in runs:
+        if r.calls > 1:
+            return False
+    return True
+
+transition assertion EndIsFinal(before, after):
+    for i in range(2):
+        if before.runs[i].phase in ["succeeded", "failed", "cancelled"] and after.runs[i].phase != before.runs[i].phase:
+            return False
+    return True
+
+always assertion NoWorkerAfterEnd:
+    for r in runs:
+        if r.phase in ["succeeded", "failed", "cancelled"] and r.worker:
+            return False
+    return True
+
+always assertion PinnedRevisionKept:
+    for r in runs:
+        if r.phase == "running" and not live[r.pin]:
+            return False
+    return True
+
+eventually always assertion EveryRunEnds:
+    for r in runs:
+        if r.phase not in ["succeeded", "failed", "cancelled"]:
+            return False
+    return True
