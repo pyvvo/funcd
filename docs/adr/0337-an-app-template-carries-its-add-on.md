@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-11-22), review passed and its lane case passed on containerd (`addon-rauthy` at d46b7c03, 99 s;
   [report](../reviews/adr-0337-implementation-claude-opus-5-5.md)); Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider ("I accept all ADR"), after four rounds of an independent judge, every Blocker and Major
   folded
+- **Superseded in part by**: [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md) (2026-11-23) — Decision 2 (a template's `addon.yaml` must add a kind; funcdctl refuses one that adds none).
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, app, templates, funcdctl

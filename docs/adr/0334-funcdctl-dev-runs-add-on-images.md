@@ -5,6 +5,7 @@
   (2026-11-19), by the decider's standing go-ahead for FEAT-0018 ("go ahead, don't wait for
   me", "until we ship entirely the new feature"), after two rounds of an independent judge (a subagent), every
   Blocker and Major folded
+- **Superseded in part by**: [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md) (2026-11-23) — Decision 1 (`WithAddonRuntime` takes no modes).
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, funcdctl, dev, docker, auth

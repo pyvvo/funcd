@@ -1,6 +1,7 @@
 # ADR-0344: An add-on ships runtimes, and its kind runs on one of them
 
-- **Status**: Proposed (2026-11-23), judged three times: no Blocker or Major open; round 3's Minor and nits folded
+- **Status**: Accepted (2026-11-23), by the decider ("accept"), after three rounds of an independent judge, every
+  Blocker and Major folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, runtime, api, functions, jobs
