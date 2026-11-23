@@ -86,7 +86,9 @@ scripts/agent/d python3 scripts/specs.py check docs/design/lake/stop.fizz   # on
 ```
 
 A check reuses a spec's pass from `.cache/specs` while its text, the fizz command and the state budget stay the same,
-and prints `reused` in place of the time; `SPECS_CACHE= just check-specs` runs FizzBee on every spec.
+and prints `reused` in place of the time; `SPECS_CACHE= just check-specs` runs FizzBee on every spec. CI runs no spec
+(ADR-0272, amended 2026-11-23): lefthook's pre-push hook checks each spec that a push adds or changes, so run
+`just check-specs` yourself after a FizzBee upgrade or a change of `scripts/specs.py`.
 
 For a trace by hand, copy the spec to a scratch directory (`fizz` writes `<spec>.json` beside it) and run
 `fizz --output-dir out <spec>.fizz`, with `--preinit-hook 'MUTANT = "<name>"'` for a mutant. A failure prints the

@@ -556,7 +556,8 @@ check-hygiene:
     exit "$fail"
 
 # check the design specs under docs/design (ADR-0272): each passes within its bounds and 20 s, each mutant fails the
-# assertion it names, each diagram is current. FizzBee comes from the dev shell (flake.nix, pinned by digest).
+# assertion it names, each diagram is current. FizzBee comes from the dev shell (flake.nix, pinned by digest). CI does
+# not run it: lefthook's pre-push hook checks the specs a push adds or changes (ADR-0272, amended 2026-11-23).
 [group('design')]
 check-specs:
     python3 scripts/specs.py check
@@ -583,7 +584,7 @@ spec-diagrams:
 ci-full: ci test-e2e
 
 [group('go')]
-ci: tidy generate check-hygiene check-specs check-behavior
+ci: tidy generate check-hygiene check-behavior
     go fmt ./...
     @if [ -n "$(git diff --name-only -- '*.go')" ]; then echo "Run just fmt and commit the result" && exit 1; fi
     scripts/check-generated.sh

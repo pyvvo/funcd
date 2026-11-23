@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 // The design-spec checker (ADR-0272) runs the pinned FizzBee of the dev shell on a copy of testdata/specs/gate.fizz:
@@ -313,4 +314,58 @@ func TestSpecOracleMarkers(t *testing.T) {
 	require.Contains(t, out, "gate_test.go:4: oracle marker names no assertion docs/design/demo/gate.fizz#Missing")
 	require.NotContains(t, out, "gate.fizz#AtMostOneOpen: no oracle test yet")
 	require.Contains(t, out, "1 specs, 1 failing: oracle markers")
+}
+
+// scenario: pushed-spec-checked
+func TestScenarioPushedSpecChecked(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("..", "lefthook.yml"))
+	require.NoError(t, err)
+	var hooks struct {
+		PrePush struct {
+			Commands map[string]struct {
+				Glob string `yaml:"glob"`
+				Run  string `yaml:"run"`
+			} `yaml:"commands"`
+		} `yaml:"pre-push"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &hooks))
+	hook := hooks.PrePush.Commands["specs"]
+	require.Equal(t, "docs/design/**/*.fizz", hook.Glob, "the hook runs only when a push carries a spec")
+
+	// push runs the hook's command as lefthook does, in a root holding the present files, with a stand-in for
+	// scripts/agent/d that logs its arguments and exits with code; it returns the exit code and the logged call.
+	push := func(pushed, present []string, code string) (int, string) {
+		root := t.TempDir()
+		for _, f := range present {
+			require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.Dir(f)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, f), nil, 0o644))
+		}
+		log := filepath.Join(root, "d.log")
+		d := filepath.Join(root, "scripts", "agent", "d")
+		require.NoError(t, os.MkdirAll(filepath.Dir(d), 0o755))
+		require.NoError(t, os.WriteFile(d, []byte("#!/bin/sh\necho \"$*\" >> '"+log+"'\nexit "+code+"\n"), 0o755))
+		cmd := exec.Command("sh", "-c", strings.ReplaceAll(hook.Run, "{push_files}", strings.Join(pushed, " ")))
+		cmd.Dir = root
+		status, _ := exitCode(t, cmd)
+		called, err := os.ReadFile(log)
+		if os.IsNotExist(err) {
+			return status, ""
+		}
+		require.NoError(t, err)
+		return status, strings.TrimSpace(string(called))
+	}
+
+	kept, gone := "docs/design/demo/gate.fizz", "docs/design/demo/old.fizz"
+	status, called := push([]string{kept, gone}, []string{kept}, "0")
+	require.Equal(t, 0, status)
+	require.Equal(t, "python3 scripts/specs.py check "+kept, called, "the pushed spec is checked, the deleted one left out")
+
+	status, called = push([]string{kept}, []string{kept}, "1")
+	require.NotEqual(t, 0, status, "a failing spec stops the push")
+	require.Equal(t, "python3 scripts/specs.py check "+kept, called)
+
+	status, called = push([]string{gone}, nil, "0")
+	require.Equal(t, 0, status)
+	require.Empty(t, called, "a push that only deletes a spec checks none")
 }

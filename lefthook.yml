@@ -22,6 +22,16 @@ pre-commit:
       # A hook's GIT_DIR would make the wrapper read this directory as the repo root in a worktree.
       run: env -u GIT_DIR -u GIT_INDEX_FILE scripts/agent/d go run ./scripts/behavior -check
 
+# CI does not run the design specs (ADR-0272, amended 2026-11-23): before a push, each spec that the pushed commits add
+# or change must pass. A spec the push deletes is left out.
+pre-push:
+  commands:
+    specs:
+      glob: "docs/design/**/*.fizz"
+      run: >-
+        set -- $(for f in {push_files}; do [ -f "$f" ] && echo "$f"; done);
+        [ "$#" -eq 0 ] || env -u GIT_DIR -u GIT_INDEX_FILE scripts/agent/d python3 scripts/specs.py check "$@"
+
 commit-msg:
   commands:
     conventional:
