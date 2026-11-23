@@ -2,6 +2,7 @@ package function
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -52,4 +53,21 @@ func PoolLiveLen(r *Reconciler) int {
 func BootCount(r *Reconciler, id runtime.InstanceID) int {
 	c, _ := r.boot.crash(id)
 	return c.count
+}
+
+// RunAnswer is how a run's executor ended (ADR-0347 Decision 5).
+type RunAnswer = runAnswer
+
+// NewRunAnswer is an executor's end with phase, reason, message and the handler's result.
+func NewRunAnswer(phase v1.JobRunPhase, reason, message string, result json.RawMessage) RunAnswer {
+	return runAnswer{phase: phase, reason: reason, message: message, result: result}
+}
+
+// RunsWith is r's run reconciler with launch as the executor of its runs.
+func RunsWith(r *Reconciler, cfg RunsConfig, launch func(ctx context.Context, run *v1.JobRun, rev *v1.Revision) RunAnswer) *JobRunReconciler {
+	j := r.Runs(cfg)
+	j.launch = func(ctx context.Context, run *v1.JobRun, _ *v1.Job, rev *v1.Revision) runAnswer {
+		return launch(ctx, run, rev)
+	}
+	return j
 }

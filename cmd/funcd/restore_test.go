@@ -411,6 +411,41 @@ func TestRestoreRun_MarksBackupSchedules(t *testing.T) {
 	require.Equal(t, v1.ReasonPlatformRestored, c.Reason)
 }
 
+// TestRestoreRun_EndsOpenJobRuns (ADR-0347 Decision 7): restore run ends every restored JobRun that has not ended
+// Cancelled with Restored, since the backup cannot say whether it ran since, and leaves an ended one as it was.
+//
+// Serial: it reopens the Badger directory the restore closed, which a parallel test's forked child can hold locked
+// (#1149).
+func TestRestoreRun_EndsOpenJobRuns(t *testing.T) {
+	ctx := context.Background()
+	s := newGSource(t, nil)
+	run := func(name string, phase v1.JobRunPhase) *v1.JobRun {
+		return &v1.JobRun{TypeMeta: tmeta(v1.KindJobRun), ObjectMeta: om(name), Spec: v1.JobRunSpec{Job: "hello"},
+			Status: v1.JobRunStatus{Phase: phase}}
+	}
+	s.create(t, run("hello-running", v1.JobRunRunning), run("hello-pending", v1.JobRunPending), run("hello-done", v1.JobRunSucceeded))
+	s.cut(t)
+	n := newNode(t, nil, "")
+	_, err := n.restore("run", "latest", "--from", s.target)
+	require.NoError(t, err)
+	eng, err := badgerstore.Open(filepath.Join(n.dataDir, "store"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = eng.Close() })
+	for name, want := range map[v1.ObjectName]v1.JobRunPhase{"hello-running": v1.JobRunCancelled, "hello-pending": v1.JobRunCancelled,
+		"hello-done": v1.JobRunSucceeded} {
+		obj, err := store.New(eng).Get(ctx, v1.KindJobRun.GVK(), "team", name)
+		require.NoError(t, err)
+		got := obj.(*v1.JobRun)
+		require.Equal(t, want, got.Status.Phase, name)
+		if want == v1.JobRunCancelled {
+			c, ok := got.Status.Conditions.Get("Ready")
+			require.True(t, ok)
+			require.Equal(t, v1.JobRunRestored, c.Reason, name)
+			require.False(t, got.Status.EndedAt.IsZero(), name)
+		}
+	}
+}
+
 // A restore gives every directory it creates the data directory's owner (ADR-0206 Decision 2 step 5): the escrowed
 // master's, the namespace markers' and a store directory's parent. Run as root, the master's and the parent were root's,
 // so a daemon running as the data directory's owner could not read its master or reach its store.

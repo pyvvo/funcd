@@ -559,6 +559,8 @@ type Platform struct {
 	workflowEngine    *workflow.Engine        // owns the run goroutines; drained on shutdown (ADR-0146)
 	workflowRetention time.Duration           // terminal-run retention horizon (0 ⇒ no sweep)
 
+	jobRuns *function.JobRunReconciler // the JobRun reconciler (ADR-0347): Boot, the retention sweep, the executors
+
 	eventStore *eventstore.Store // eventing's durable store (ADR-0201): dead letters + seen lists; closed on shutdown
 	phases     *lifecycle.Phases // the providers in boot order, the Executor first
 	exec       *executor         // the Executor provider
@@ -966,6 +968,13 @@ func (p *Platform) buildControlPlane() error {
 	jobs := fnReconciler.Jobs()
 	ctrl.Register(v1.KindJob.GVK(), jobs)
 	ctrl.Watches(v1.KindJobRun.GVK(), jobs.MapRun)
+	// ADR-0347 Decisions 4 to 8: the runs' one status writer, still under the platform's and the namespaces' holds; a
+	// Job's change reaches its runs, and a run that ends frees a slot for those that wait
+	p.jobRuns = fnReconciler.Runs(function.RunsConfig{MaxRunning: c.jobMaxRunning, Retention: c.jobRetention,
+		Enqueue: ctrl.Enqueue, Hold: c.gate(), NamespaceHold: c.nsGate()})
+	ctrl.Register(v1.KindJobRun.GVK(), p.jobRuns)
+	ctrl.Watches(v1.KindJob.GVK(), p.jobRuns.MapJob)
+	ctrl.Watches(v1.KindJobRun.GVK(), p.jobRuns.MapRun)
 	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
 	ctrl.Watches(v1.KindRevision.GVK(), fnReconciler.MapRevision)
 	ctrl.Watches(v1.KindRestore.GVK(), fnReconciler.MapRestore) // a Restore into a volume clears DataMissing (ADR-0262)
@@ -1363,6 +1372,13 @@ func (p *Platform) Run(ctx context.Context) error {
 	if err := p.phases.Start(ctx); err != nil && ctx.Err() == nil {
 		return abort(err)
 	}
+	// ADR-0347 Decision 7: the drivers swept every worker an earlier run left when they were built, and the controller
+	// has not started, so a run stored Running was cut by the stop; held or not, it ends Interrupted and never restarts.
+	if p.jobRuns != nil {
+		if err := p.jobRuns.Boot(ctx); err != nil && ctx.Err() == nil {
+			return abort(err)
+		}
+	}
 
 	if m, held := p.heldMarker(); held {
 		// ADR-0206 Decision 6: KV or blob data newer than a restored metastore may have no object yet, so the boot
@@ -1412,6 +1428,9 @@ func (p *Platform) Run(ctx context.Context) error {
 	}
 	if p.workflowSweeper != nil && p.workflowRetention > 0 { // ADR-0094: periodic terminal-run retention sweep
 		loops = append(loops, p.runWorkflowRetention)
+	}
+	if p.jobRuns != nil { // ADR-0347 Decision 8: the ended JobRuns' retention sweep
+		loops = append(loops, p.runJobRetention)
 	}
 	if p.workflowEngine != nil { // ADR-0146: the run goroutines, drained within the shutdown bound before Shutdown
 		loops = append(loops, func(ctx context.Context) { p.workflowEngine.Run(ctx, p.drainTimeout) })
@@ -1503,6 +1522,11 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		}
 		if p.tlsProvider != nil {
 			_ = p.tlsProvider.Close(ctx) // stop certmagic's renewal goroutine (ADR-0111)
+		}
+		if p.jobRuns != nil {
+			// the controller has stopped, so no pass writes a stopped executor's answer: the next boot ends its run
+			// Interrupted (ADR-0347 Decision 7); each executor stops its worker while the runtime is still open
+			p.jobRuns.Close()
 		}
 		// Every provider gets ready to close, in reverse order: the Lake closes its PEP proxies, then the Executor closes
 		// the runtime, which stops every worker, and the workers' local API listeners.
@@ -1713,6 +1737,29 @@ func (p *Platform) runWorkflowRetention(ctx context.Context) {
 			}
 			if n > 0 {
 				p.logger.InfoContext(ctx, "workflow retention sweep reclaimed runs", "count", n)
+			}
+		}
+	}
+}
+
+// runJobRetention sweeps the ended JobRuns past job.retention (ADR-0347 Decision 8) at most hourly, sooner when the
+// retention is short, until ctx is cancelled. The sweep itself skips held runs; a failure is logged and the next tick
+// retries.
+func (p *Platform) runJobRetention(ctx context.Context) {
+	ticker := time.NewTicker(min(p.cfg.jobRetention, maxRetentionSweep))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := p.jobRuns.SweepExpired(ctx)
+			if err != nil {
+				p.logger.WarnContext(ctx, "job run retention sweep failed", "error", err)
+				continue
+			}
+			if n > 0 {
+				p.logger.InfoContext(ctx, "job run retention sweep deleted runs", "count", n)
 			}
 		}
 	}

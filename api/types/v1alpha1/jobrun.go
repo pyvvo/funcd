@@ -50,6 +50,33 @@ const (
 	JobRunCancelled JobRunPhase = "Cancelled"
 )
 
+// The reasons of a JobRun's Ready condition (ADR-0347 Contracts): Pending's, then Failed's, then Cancelled's.
+const (
+	JobRunJobNotFound          = "JobNotFound"
+	JobRunJobNotReady          = "JobNotReady"
+	JobRunQueued               = "Queued"
+	JobRunStartFailed          = "StartFailed"
+	JobRunInputSchemaMismatch  = "InputSchemaMismatch"
+	JobRunHandlerFailed        = "HandlerFailed"
+	JobRunPayloadLimitExceeded = "PayloadLimitExceeded"
+	JobRunTimedOut             = "RunTimedOut"
+	JobRunInterrupted          = "Interrupted"
+	JobRunCancelledReason      = "Cancelled"
+	JobRunJobDeleted           = "JobDeleted"
+	JobRunRestored             = "Restored"
+)
+
+// End ends the run in phase, a final one, at at: its Ready condition is True for Succeeded, else False with reason and
+// message.
+func (s *JobRunStatus) End(phase JobRunPhase, reason, message string, at Timestamp) {
+	s.Phase, s.EndedAt = phase, at
+	ready := ConditionFalse
+	if phase == JobRunSucceeded {
+		ready = ConditionTrue
+	}
+	s.Conditions.Set(Condition{Type: "Ready", Status: ready, Reason: reason, Message: message})
+}
+
 // Ended reports whether p is final: Succeeded, Failed or Cancelled.
 func (p JobRunPhase) Ended() bool {
 	return p == JobRunSucceeded || p == JobRunFailed || p == JobRunCancelled

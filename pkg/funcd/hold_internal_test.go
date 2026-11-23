@@ -97,7 +97,7 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 	p, err := New(InMemory(), WithLogger(quiet), WithHold(h),
 		WithWorkflow("", defaultWorkflowStepTimeout, 50*time.Millisecond, defaultWorkflowRetry, defaultWorkflowPayloadLimit),
 		WithDeadLetterQueue("", 2, 50*time.Millisecond, 0), WithBlobPollInterval(50*time.Millisecond),
-		WithPacing(Pacing{ReferentPollInterval: 50 * time.Millisecond}), WithPlatformBackup(backups))
+		WithPacing(Pacing{ReferentPollInterval: 50 * time.Millisecond}), WithPlatformBackup(backups), WithJobs(4, 1<<10, 50*time.Millisecond))
 	require.NoError(t, err)
 	st := p.cfg.store
 	runsIn := func(t *testing.T) []string {
@@ -114,7 +114,7 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 			require.False(t, strings.HasPrefix(name, "s-"), "the Sensor started run %s", name)
 		}
 	}
-	var r1Version string
+	var r1Version, j1Version string
 	cases := []runnerCase{
 		{name: "timers", seed: func(t *testing.T, p *Platform) {
 			seedObjects(t, st, &v1.EventSource{TypeMeta: tmeta(v1.KindEventSource), ObjectMeta: teamMeta("tick"), Spec: v1.EventSourceSpec{
@@ -158,6 +158,27 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 			obj, err := st.Get(ctx, v1.KindWorkflowRun.GVK(), "team", "r1")
 			require.NoError(t, err)
 			require.Equal(t, r1Version, obj.GetObjectMeta().ResourceVersion, "a held run moved")
+		}},
+		{name: "job runs", seed: func(t *testing.T, p *Platform) {
+			running := &v1.JobRun{TypeMeta: tmeta(v1.KindJobRun), ObjectMeta: teamMeta("j-running"), Spec: v1.JobRunSpec{Job: "hello"},
+				Status: v1.JobRunStatus{Phase: v1.JobRunRunning}}
+			seedObjects(t, st, &v1.JobRun{TypeMeta: tmeta(v1.KindJobRun), ObjectMeta: teamMeta("j1"), Spec: v1.JobRunSpec{Job: "hello"}}, running)
+			obj, err := st.Get(ctx, v1.KindJobRun.GVK(), "team", "j1")
+			require.NoError(t, err)
+			j1Version = obj.GetObjectMeta().ResourceVersion
+		}, still: func(t *testing.T, p *Platform) {
+			obj, err := st.Get(ctx, v1.KindJobRun.GVK(), "team", "j1")
+			require.NoError(t, err)
+			require.Equal(t, j1Version, obj.GetObjectMeta().ResourceVersion, "a held JobRun moved")
+			obj, err = st.Get(ctx, v1.KindJobRun.GVK(), "team", "j-running")
+			require.NoError(t, err)
+			require.Equal(t, v1.JobRunFailed, obj.(*v1.JobRun).Status.Phase, "the boot ends a Running run, held or not (ADR-0347 Decision 7)")
+		}},
+		{name: "job run retention", seed: func(t *testing.T, p *Platform) {
+			seedObjects(t, st, endedJobRun("team"))
+		}, still: func(t *testing.T, p *Platform) {
+			_, err := st.Get(ctx, v1.KindJobRun.GVK(), "team", "j-old")
+			require.NoError(t, err, "the retention sweep deleted a held JobRun")
 		}},
 		{name: "workflow retention", seed: func(t *testing.T, p *Platform) {
 			require.NoError(t, p.workflowRuns.Put(ctx, &runstate.Record{Namespace: "team", Name: "no-run", Workflow: "wf", Phase: v1.RunRunning}))
@@ -330,6 +351,13 @@ func nsMeta(ns v1.NamespaceName, name string) v1.ObjectMeta {
 	return v1.ObjectMeta{Namespace: ns, ResourceGroup: "rg1", Name: v1.ObjectName(name)}
 }
 
+// endedJobRun is JobRun j-old of ns, which ended an hour ago: past the tests' 50 ms job.retention.
+func endedJobRun(ns v1.NamespaceName) *v1.JobRun {
+	run := &v1.JobRun{TypeMeta: tmeta(v1.KindJobRun), ObjectMeta: nsMeta(ns, "j-old"), Spec: v1.JobRunSpec{Job: "hello"}}
+	run.Status.End(v1.JobRunSucceeded, "", "", v1.NewTimestamp(time.Now().Add(-time.Hour)))
+	return run
+}
+
 // TestEveryRunnerConsultsHoldInNamespace (ADR-0222 Decision 8): with team held by a restore's data marker and web
 // free, every per-namespace runner acts in web only: timers and Sensors start runs, a run moves, a blob source polls,
 // an App writes its part, a schedule's slot creates a Backup, and a dead-letter replay is not refused; in team none
@@ -347,10 +375,11 @@ func TestEveryRunnerConsultsHoldInNamespace(t *testing.T) {
 	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithHold(h),
 		WithWorkflow("", defaultWorkflowStepTimeout, 50*time.Millisecond, defaultWorkflowRetry, defaultWorkflowPayloadLimit),
 		WithDeadLetterQueue("", 2, 50*time.Millisecond, 0), WithBlobPollInterval(50*time.Millisecond),
-		WithPacing(Pacing{ReferentPollInterval: 50 * time.Millisecond, SupervisionPeriod: 50 * time.Millisecond}), withBackupClock(clk, nil))
+		WithPacing(Pacing{ReferentPollInterval: 50 * time.Millisecond, SupervisionPeriod: 50 * time.Millisecond}), withBackupClock(clk, nil),
+		WithJobs(4, 1<<10, 50*time.Millisecond))
 	require.NoError(t, err)
 	st := p.cfg.store
-	versions := map[v1.NamespaceName]string{}
+	versions, jobRunVersions := map[v1.NamespaceName]string{}, map[v1.NamespaceName]string{}
 	for _, ns := range []v1.NamespaceName{"team", "web"} {
 		seedObjects(t, st,
 			&v1.EventSource{TypeMeta: tmeta(v1.KindEventSource), ObjectMeta: nsMeta(ns, "tick"), Spec: v1.EventSourceSpec{
@@ -365,11 +394,16 @@ func TestEveryRunnerConsultsHoldInNamespace(t *testing.T) {
 			&v1.BackupSchedule{TypeMeta: tmeta(v1.KindBackupSchedule), ObjectMeta: nsMeta(ns, "every-minute"), Spec: v1.BackupScheduleSpec{
 				Schedule: "* * * * *", Scope: v1.BackupScope{KVStores: []v1.ObjectName{"appstore"}},
 				Target: v1.BackupTarget{URL: "s3://unreachable", CredentialsSecret: "none"}, Encryption: v1.BackupEncryption{Recipients: []string{"a", "b"}}}},
+			&v1.JobRun{TypeMeta: tmeta(v1.KindJobRun), ObjectMeta: nsMeta(ns, "j1"), Spec: v1.JobRunSpec{Job: "hello"}},
+			endedJobRun(ns),
 		)
 		require.NoError(t, p.cfg.blob.Put(ctx, bucketPrefix(ns, "inbox")+"a", []byte("a"), blob.PutOptions{}))
 		obj, err := st.Get(ctx, v1.KindWorkflowRun.GVK(), ns, "r1")
 		require.NoError(t, err)
 		versions[ns] = obj.GetObjectMeta().ResourceVersion
+		obj, err = st.Get(ctx, v1.KindJobRun.GVK(), ns, "j1")
+		require.NoError(t, err)
+		jobRunVersions[ns] = obj.GetObjectMeta().ResourceVersion
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -403,10 +437,15 @@ func TestEveryRunnerConsultsHoldInNamespace(t *testing.T) {
 		require.NoError(t, err)
 		out["schedule slots"] = len(l.Items) > 0
 		out["dead-letter replay"] = fault.KindOf(p.eventing.sensorReconciler.Replay(ctx, ns, "01JA0000000000000000000001")) != fault.Unavailable
+		obj, err = st.Get(ctx, v1.KindJobRun.GVK(), ns, "j1")
+		require.NoError(t, err)
+		out["job runs"] = obj.GetObjectMeta().ResourceVersion != jobRunVersions[ns]
+		_, err = st.Get(ctx, v1.KindJobRun.GVK(), ns, "j-old")
+		out["job run retention"] = fault.KindOf(err) == fault.NotFound
 		return out
 	}
 	all := map[string]bool{"timers and Sensors": true, "runs": true, "blob sources": true, "App": true, "schedule slots": true,
-		"dead-letter replay": true}
+		"dead-letter replay": true, "job runs": true, "job run retention": true}
 	require.Eventually(t, func() bool { return reflect.DeepEqual(all, acted("web")) }, 10*time.Second, 20*time.Millisecond,
 		"every per-namespace runner acts in web")
 	require.Eventually(t, func() bool {
