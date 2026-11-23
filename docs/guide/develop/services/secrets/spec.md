@@ -19,8 +19,15 @@ This page lists the spec fields of Secret, each with its type, its limits and it
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `data` | map of string to string | The Secret's values by key, each in base64. Each key is an environment-variable name: a letter or an underscore, then letters, digits and underscores; a key that starts with FUNCD\_ never reaches a workload. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a Secret holding another value does not start. |
-| `owner` | string, a DNS-1123 label | The one Function that may write the Secret's keys through ctx.secret, in its namespace, besides the writers that a RolesAssignment names, such as the Secret Data Writer role. The Function writes only while it binds the Secret. With no owner, only those writers can write it. An apply of the Secret replaces its data, keys a Function wrote included. |
+| `owner` | object, [`Secret.spec.owner`](#secretspecowner) | The one Function or Job that may write the Secret's keys through ctx.secret, in its namespace, named with its kind, besides the writers that a RolesAssignment names, such as the Secret Data Writer role. The owner writes only while it binds the Secret. With no owner, only those writers can write it. An apply of the Secret replaces its data, keys a workload wrote included. |
 | `type` | string, one of `Opaque` | funcd does not read it. |
+
+### `Secret.spec.owner`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `kind` | string, required, one of `Function`, `Lake`, `Job` | The workload's kind. A Function, a Lake and a Job may share a name, so the kind says which one it is; each field names the kinds it accepts. |
+| `name` | string, required, a DNS-1123 label | The workload's name, in the object's namespace. |
 
 ## Handler API
 

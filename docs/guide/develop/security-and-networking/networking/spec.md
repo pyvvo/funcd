@@ -79,8 +79,15 @@ This page lists the spec and status fields of Route and EgressPolicy, each with 
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `appliesTo` | array of string values, each a DNS-1123 label | The Functions of the namespace, by name, that the rules apply to; empty applies them to every Function of the namespace. |
+| `appliesTo` | array of [`EgressPolicy.spec.appliesTo[]`](#egresspolicyspecappliesto) | The Functions and Jobs of the namespace that the rules apply to, each named with its kind; empty applies them to every Function of the namespace and to no Job. |
 | `rules` | array of [`EgressPolicy.spec.rules[]`](#egresspolicyspecrules), required | One to 64 rules, each allowing outbound TCP connections; the rules of every EgressPolicy of the namespace add up. With server.network.egress on, on Linux with containerd, a connection that nothing allows is refused; otherwise the rules change nothing. |
+
+### `EgressPolicy.spec.appliesTo[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `kind` | string, required, one of `Function`, `Lake`, `Job` | The workload's kind. A Function, a Lake and a Job may share a name, so the kind says which one it is; each field names the kinds it accepts. |
+| `name` | string, required, a DNS-1123 label | The workload's name, in the object's namespace. |
 
 ### `EgressPolicy.spec.rules[]`
 

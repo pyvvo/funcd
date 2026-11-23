@@ -61,7 +61,7 @@ func lakeResource(ns v1.NamespaceName) *v1.Lake {
 	return cs
 }
 
-func egressToExample(ns v1.NamespaceName, appliesTo ...v1.ObjectName) *v1.EgressPolicy {
+func egressToExample(ns v1.NamespaceName, appliesTo ...v1.WorkloadRef) *v1.EgressPolicy {
 	ep := &v1.EgressPolicy{TypeMeta: v1.TypeMeta{APIVersion: v1.KindEgressPolicy.GVK().APIVersion(), Kind: v1.KindEgressPolicy}}
 	ep.Name, ep.Namespace, ep.ResourceGroup = "egress", ns, "rg1"
 	ep.Spec = v1.EgressPolicySpec{
@@ -162,7 +162,7 @@ func TestStoreDomainRules(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(memory.New())
 	whole := egressToExample("acme")
-	named := egressToExample("acme", "etl")
+	named := egressToExample("acme", v1.FunctionOwner("etl"))
 	named.Name, named.Spec.Rules[0].To.Domains = "named", []string{"*.named.example"}
 	other := egressToExample("beta")
 	other.Spec.Rules[0].To.Domains = []string{"beta.example"}
@@ -196,8 +196,8 @@ func TestScenarioEngineEgressIsLake(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name      string
-		appliesTo []v1.ObjectName
-	}{{"whole namespace", nil}, {"appliesTo lake", []v1.ObjectName{"lake"}}} {
+		appliesTo []v1.WorkloadRef
+	}{{"whole namespace", nil}, {"appliesTo lake", []v1.WorkloadRef{v1.FunctionOwner("lake")}}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			st := store.New(memory.New())

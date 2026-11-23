@@ -558,8 +558,8 @@ func buildKVStore(wf *v1.Workflow, kv *v1.KVStoreEntry) *v1.KVStore {
 	tables := make([]v1.KVTable, len(kv.Tables))
 	for i, t := range kv.Tables {
 		tables[i] = t
-		if t.Owner != "" { // owner is a step name → the materialized Function name
-			tables[i].Owner = materializedName(wf, t.Owner)
+		if t.Owner.Kind == v1.KindFunction { // a Function owner names a step → the Function funcd creates for it
+			tables[i].Owner = v1.FunctionOwner(materializedName(wf, t.Owner.Name))
 		}
 	}
 	meta := v1.ObjectMeta{Name: kv.Name, Namespace: wf.Namespace, ResourceGroup: wf.ResourceGroup}

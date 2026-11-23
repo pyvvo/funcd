@@ -100,9 +100,13 @@ spec:
     name: todo-store
     tables:
     - name: todos
-      owner: todo-api
+      owner:
+        kind: Function
+        name: todo-api
     - name: runs
-      owner: todo-planner
+      owner:
+        kind: Function
+        name: todo-planner
   lakes:
   - bindings:
       blob:

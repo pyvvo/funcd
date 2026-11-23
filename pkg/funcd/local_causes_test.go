@@ -157,7 +157,7 @@ func kvCauseEnv(t *testing.T, opts ...funcd.Option) *causeEnv {
 // ownedStore is a KVStore of default whose table t the Function owner owns.
 func ownedStore(name v1.ObjectName) *v1.KVStore {
 	ks := kvStore(name)
-	ks.Spec.Tables = []v1.KVTable{{Name: "t", Owner: "owner"}}
+	ks.Spec.Tables = []v1.KVTable{{Name: "t", Owner: v1.FunctionOwner("owner")}}
 	return ks
 }
 

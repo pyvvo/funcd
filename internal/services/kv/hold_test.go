@@ -24,7 +24,7 @@ func (held) ReleasedAt() time.Time { return time.Time{} }
 func TestOrphans(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
-	_, err := st.Create(ctx, mkKVStore("orders", v1.KVTable{Name: "customers", Owner: "c"}))
+	_, err := st.Create(ctx, mkKVStore("orders", v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("c")}))
 	require.NoError(t, err)
 	pm := &recPrefixManager{keys: []string{
 		"default/orders/customers/1", "default/orders/archive/1", "default/orders/archive/2",

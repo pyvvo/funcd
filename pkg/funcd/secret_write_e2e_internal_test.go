@@ -54,7 +54,7 @@ func (r *secretRig) applyOAuth(t *testing.T, owner v1.ObjectName, data map[strin
 	obj, _ := v1.NewObject(v1.KindSecret)
 	s := obj.(*v1.Secret)
 	s.Name, s.Namespace, s.ResourceGroup = "oauth", "default", "rg1"
-	s.Spec.Owner, s.Spec.Data = owner, data
+	s.Spec.Owner, s.Spec.Data = v1.FunctionOwner(owner), data
 	r.apply(t, s)
 }
 

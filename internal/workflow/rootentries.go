@@ -12,18 +12,13 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// ownerFor maps a database's owner as ADR-0250 Decision 1 does: a lake the root declares by name is kept as written, a
-// step becomes its Function, <workflow>-<step>. A prefix's owner names its kind, so buildBucket maps it (ADR-0275).
-func ownerFor(wf *v1.Workflow, owner v1.ObjectName) v1.ObjectName {
-	if owner == "" {
-		return ""
+// ownerFor maps a Workflow database's owner to the workload it names (ADR-0351 Decision 3): a Lake owner is a lake the
+// Workflow declares, kept as is, and a Function owner a step, mapped to the Function funcd creates for it.
+func ownerFor(wf *v1.Workflow, owner v1.WorkloadRef) v1.WorkloadRef {
+	if owner.Kind != v1.KindFunction {
+		return owner
 	}
-	for _, c := range wf.Spec.Lakes {
-		if c.Name == owner {
-			return owner
-		}
-	}
-	return materializedName(wf, owner)
+	return v1.FunctionOwner(materializedName(wf, owner.Name))
 }
 
 // rootObject is one object a Workflow defines by name at its root (ADR-0250), with the deletion policy it is written

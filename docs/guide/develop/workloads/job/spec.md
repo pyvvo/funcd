@@ -105,15 +105,15 @@ This page lists the spec and status fields of Job and JobRun, each with its type
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `name` | string, required, a DNS-1123 label | The prefix's name, unique within the Bucket. Over S3, it is the first segment of each object's key. |
-| `owner` | object, [`Job.spec.buckets[].prefixes[].owner`](#jobspecbucketsprefixesowner) | The one Function or Lake that may write the prefix, besides the writers that a RolesAssignment names. In a Bucket that a Function or a Lake declares by name, an omitted owner is that Function or Lake. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one. |
+| `owner` | object, [`Job.spec.buckets[].prefixes[].owner`](#jobspecbucketsprefixesowner) | The one Function, Lake or Job that may write the prefix, named with its kind, besides the writers that a RolesAssignment names. In a Bucket that a Function, a Lake or a Job declares by name, an omitted owner is that workload. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one. |
 | `quota` | object, [`Job.spec.buckets[].prefixes[].quota`](#jobspecbucketsprefixesquota) | A cap on the prefix's total size: a write into the prefix must fit both this cap and the Bucket's, and while it is set funcd refuses to sign a presigned PUT URL into the prefix, with 403. It also caps a Lake's files under the prefix, though not the Lake's catalog. |
 
 ### `Job.spec.buckets[].prefixes[].owner`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `kind` | string, required, one of `Function`, `Lake` | The writer's kind. A Function and a Lake may share a name, so the kind says which one writes. |
-| `name` | string, required, a DNS-1123 label | The writer's name, in the Bucket's namespace. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares. |
+| `kind` | string, required, one of `Function`, `Lake`, `Job` | The workload's kind. A Function, a Lake and a Job may share a name, so the kind says which one it is; each field names the kinds it accepts. |
+| `name` | string, required, a DNS-1123 label | The workload's name, in the object's namespace. |
 
 ### `Job.spec.buckets[].prefixes[].quota`
 
@@ -162,7 +162,7 @@ This page lists the spec and status fields of Job and JobRun, each with its type
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `name` | string, required, a DNS-1123 label | The table's name, unique within the store. |
-| `owner` | string, a DNS-1123 label | The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in one that a Workflow declares, it names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv. |
+| `owner` | object, [`Job.spec.buckets[].prefixes[].owner`](#jobspecbucketsprefixesowner) | The Function or Job that owns the table, in the store's namespace, named with its kind. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function or a Job declares, the owner defaults to that workload; in one that a Workflow declares, a Function owner names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every workload, the owner included, reaches the table through an entry of its spec.bindings.kv. |
 
 ### `Job.spec.lakes[]`
 
@@ -257,7 +257,7 @@ This page lists the spec and status fields of Job and JobRun, each with its type
 | --- | --- | --- |
 | `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
-| `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it. |
+| `owner` | object, [`Job.spec.buckets[].prefixes[].owner`](#jobspecbucketsprefixesowner) | The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it. |
 | `quota` | object, [`Job.spec.buckets[].prefixes[].quota`](#jobspecbucketsprefixesquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 | `resources` | object, [`Job.spec.resources`](#jobspecresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |

@@ -369,7 +369,9 @@ spec:
       deletion: delete
       tables:
         - name: todos
-          owner: todo-api
+          owner:
+            kind: Function
+            name: todo-api
   functions:
     - ref: mailer
 `))
@@ -377,7 +379,7 @@ spec:
 	app, ok := obj.(*v1.App)
 	require.True(t, ok)
 	require.Equal(t, v1.DeletionDelete, app.Spec.KV[0].Deletion)
-	require.Equal(t, []v1.KVTable{{Name: "todos", Owner: "todo-api"}}, app.Spec.KV[0].Tables)
+	require.Equal(t, []v1.KVTable{{Name: "todos", Owner: v1.FunctionOwner("todo-api")}}, app.Spec.KV[0].Tables)
 	require.Equal(t, v1.ObjectName("mailer"), app.Spec.Functions[0].Ref)
 	require.NoError(t, app.Validate())
 

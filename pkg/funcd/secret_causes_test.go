@@ -36,7 +36,7 @@ func secretCauseEnv(t *testing.T, opts ...funcd.Option) *causeEnv {
 		create(t, c, base, fn)
 	}
 	s := secretWithData("s", map[string][]byte{"K": []byte("v")})
-	s.Spec.Owner = "writer"
+	s.Spec.Owner = v1.FunctionOwner("writer")
 	for _, sec := range []*v1.Secret{s, secretWithData("binary", map[string][]byte{"B": {0xff}})} {
 		create(t, c, base, sec)
 	}

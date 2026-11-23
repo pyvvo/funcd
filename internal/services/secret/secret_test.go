@@ -62,7 +62,7 @@ func (r *ownerResolver) CheckWrite(ctx context.Context, id auth.Identity, ns v1.
 	if err != nil {
 		return err
 	}
-	if obj.(*v1.Secret).Spec.Owner != id.Principal.Name {
+	if o := obj.(*v1.Secret).Spec.Owner; o.Kind != id.Principal.Type || o.Name != id.Principal.Name {
 		return fault.Forbiddenf("ownerResolver", "write secret %q denied: not its owner", name)
 	}
 	if r.after != nil {
@@ -94,7 +94,7 @@ func writeStore(t *testing.T) store.Store {
 	obj, _ := v1.NewObject(v1.KindSecret)
 	sec := obj.(*v1.Secret)
 	sec.Name, sec.Namespace, sec.ResourceGroup = "oauth", "team-a", "rg1"
-	sec.Spec.Owner = "refresher"
+	sec.Spec.Owner = v1.FunctionOwner("refresher")
 	sec.Spec.Data = map[string][]byte{"TOKEN": []byte("t1")}
 	_, err := st.Create(ctx, sec)
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestSecretWriteDecidesAfterItsRead(t *testing.T) {
 		obj, err := st.Get(ctx, v1.KindSecret.GVK(), "team-a", "oauth")
 		require.NoError(t, err)
 		sec := obj.(*v1.Secret)
-		sec.Spec.Owner = ""
+		sec.Spec.Owner = v1.WorkloadRef{}
 		sec.Spec.Data = map[string][]byte{"TOKEN": []byte("applied")}
 		_, err = st.Update(ctx, sec)
 		require.NoError(t, err)

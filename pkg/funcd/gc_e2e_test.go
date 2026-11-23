@@ -207,7 +207,7 @@ func TestScenarioWorkflowDeleteCollectsStepsAndStores(t *testing.T) {
 func TestScenarioWorkflowDeleteKeepsRetainStore(t *testing.T) {
 	e := startGC(t)
 	keep := kvStore("gcwf-keep", v1.DeletionRetain)
-	keep.Tables[0].Owner = "s1"
+	keep.Tables[0].Owner = v1.FunctionOwner("s1")
 	e.workflow(t, "gcwf", "rg1", []string{"s1"}, keep)
 	e.waitExists(t, v1.KindKVStore, "gcwf-keep")
 	e.putKey(t, "gcwf-keep")
@@ -216,7 +216,7 @@ func TestScenarioWorkflowDeleteKeepsRetainStore(t *testing.T) {
 	require.True(t, poll.Never(func() bool { return !e.exists(t, v1.KindKVStore, "gcwf-keep") || !e.hasKey(t, "gcwf-keep") }, time.Second, 50*time.Millisecond))
 	obj, err := e.c.Get(e.ctx, v1.KindKVStore, "default", "gcwf-keep")
 	require.NoError(t, err)
-	require.Equal(t, v1.ObjectName("gcwf-s1"), obj.(*v1.KVStore).Spec.Tables[0].Owner, "its table owner is a Function that no longer exists")
+	require.Equal(t, v1.FunctionOwner("gcwf-s1"), obj.(*v1.KVStore).Spec.Tables[0].Owner, "its table owner is a Function that no longer exists")
 }
 
 // scenario: removed-step-function-deleted

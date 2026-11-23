@@ -141,7 +141,8 @@ handler is
 
 ## Share a store between Functions
 
-Create the store as a separate KVStore, and set the `owner` of each table to the Function that writes the table:
+Create the store as a separate KVStore, and set the `owner` of each table to the Function or Job that writes the table, by
+its kind and name:
 
 ::include[../../../../../api/types/v1alpha1/examples/kv/kvstore.yaml#kvstore]
 

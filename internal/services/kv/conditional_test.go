@@ -27,7 +27,7 @@ func TestSweepFreesQuotaAtOnce(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: v1.FunctionOwner("fn"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	db := memory.New()
 	book := quota.NewBook(clock.System(), nil)

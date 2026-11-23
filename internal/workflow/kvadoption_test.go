@@ -36,7 +36,7 @@ func previousStore(t *testing.T, s store.Store, name v1.ObjectName, wf *v1.Workf
 	st := &v1.KVStore{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
 		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "t", Owner: materializedName(wf, wf.Spec.Steps[0].Name)}}},
+		Spec:       v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "t", Owner: v1.FunctionOwner(materializedName(wf, wf.Spec.Steps[0].Name))}}},
 	}
 	if controller {
 		st.OwnerReferences = []v1.OwnerReference{ownerRef(wf)}
@@ -164,7 +164,7 @@ func TestScenarioUpgradeMigrationMarksOwnStore(t *testing.T) {
 			policy, flipped = flipped, policy
 		}
 		kv := storeKV("w-kv", policy)
-		kv.Tables[0].Owner = "s"
+		kv.Tables[0].Owner = v1.FunctionOwner("s")
 		w := storedWorkflow(t, s, "w", []string{"s"}, kv)
 		prev := previousStore(t, s, "w-kv", w, controller)
 
@@ -320,7 +320,7 @@ func TestMigrationStripsBindingsToStoresLeftUnmarked(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 	kv := storeKV("w-kv", v1.DeletionRetain)
-	kv.Tables[0].Owner = "s"
+	kv.Tables[0].Owner = v1.FunctionOwner("s")
 	w := storedWorkflow(t, s, "w", []string{"s"}, kv)
 	steps := *w
 	steps.Spec.KVStores = nil
@@ -344,7 +344,7 @@ func TestScenarioMigrationRecordStopsRerun(t *testing.T) {
 	require.NoError(t, err, "the record is written")
 
 	kv := storeKV("w-kv", v1.DeletionRetain)
-	kv.Tables[0].Owner = "s"
+	kv.Tables[0].Owner = v1.FunctionOwner("s")
 	w := storedWorkflow(t, s, "w", []string{"s"}, kv)
 	prev := previousStore(t, s, "w-kv", w, false)
 	require.NoError(t, MarkKVStoresOnce(ctx, s, nil))
@@ -361,7 +361,7 @@ func TestIssue830_KVMigrationLogsThroughItsLogger(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	s := newStore(t)
 	kv := storeKV("w-kv", v1.DeletionRetain)
-	kv.Tables[0].Owner = "s"
+	kv.Tables[0].Owner = v1.FunctionOwner("s")
 	w := storedWorkflow(t, s, "w", []string{"s"}, kv)
 	previousStore(t, s, "w-kv", w, false)
 
@@ -382,7 +382,7 @@ func TestScenarioMigrationAuditIsOneLine(t *testing.T) {
 	want := map[string]*v1.Workflow{}
 	for _, name := range []v1.ObjectName{"w1", "w2"} {
 		kv := storeKV(name+"-kv", v1.DeletionRetain)
-		kv.Tables[0].Owner = "s"
+		kv.Tables[0].Owner = v1.FunctionOwner("s")
 		w := storedWorkflow(t, s, name, []string{"s"}, kv)
 		previousStore(t, s, name+"-kv", w, false)
 		want[string(name)+"-kv"] = w
@@ -425,7 +425,7 @@ func TestKVMarkerCoversAnApp(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 	kv := storeKV("w-kv", v1.DeletionRetain)
-	kv.Tables[0].Owner = "s"
+	kv.Tables[0].Owner = v1.FunctionOwner("s")
 	w := storedWorkflow(t, s, "w", []string{"s"}, kv)
 	prev := previousStore(t, s, "w-kv", w, false)
 	prev.OwnerReferences = []v1.OwnerReference{ref(v1.KindApp, false)}

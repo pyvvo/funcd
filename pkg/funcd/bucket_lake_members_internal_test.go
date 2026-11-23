@@ -436,7 +436,7 @@ func TestScenarioGoneLakeKeepsItsPrefix(t *testing.T) {
 	obj, err := r.st.Get(r.ctx, v1.KindBucket.GVK(), "orders", "data")
 	require.NoError(t, err)
 	data := obj.(*v1.Bucket)
-	data.Spec.Prefixes[0].Owner = v1.PrefixOwner{}
+	data.Spec.Prefixes[0].Owner = v1.WorkloadRef{}
 	_, err = r.st.Update(r.ctx, data)
 	require.NoError(t, err)
 	r.putBlob(salesFile2, "f2")

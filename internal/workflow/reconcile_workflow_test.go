@@ -39,7 +39,7 @@ func TestMaterializeOwnedFunctionsAndKV(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{Name: "orders", Namespace: "default", ResourceGroup: "rg1", UID: "wf-uid"},
 		Spec: v1.WorkflowSpec{
 			Pooling:  v1.WorkflowPooling{Mode: v1.PoolingShared, MinReplicas: 1},
-			KVStores: []v1.KVStoreEntry{{Name: "counters-kv", Deletion: v1.DeletionDelete, KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "t", Owner: "ingest"}}}}},
+			KVStores: []v1.KVStoreEntry{{Name: "counters-kv", Deletion: v1.DeletionDelete, KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "t", Owner: v1.FunctionOwner("ingest")}}}}},
 			Steps: []v1.WorkflowStep{
 				{Name: "ingest", Function: &v1.FunctionStep{Image: "oci:ingest-v1", Bindings: v1.StepBindings{KV: []v1.FunctionKV{{Alias: "c", Store: "counters-kv", Table: "t"}}}}},
 				{Name: "solo", Function: &v1.FunctionStep{Image: "oci:solo-v1", Pooling: &v1.WorkflowPooling{Mode: v1.PoolingIsolated}}},
@@ -88,7 +88,7 @@ func TestMaterializeOwnedFunctionsAndKV(t *testing.T) {
 		t.Fatalf("owned kvstore not created: %v", err)
 	}
 	kv := kvObj.(*v1.KVStore)
-	if kv.Spec.Tables[0].Owner != "orders-ingest" {
+	if kv.Spec.Tables[0].Owner != v1.FunctionOwner("orders-ingest") {
 		t.Fatalf("kv owner = %q, want orders-ingest (materialized)", kv.Spec.Tables[0].Owner)
 	}
 	if controllerRefs(kv.OwnerReferences) != 1 || !hasMarker(kv.OwnerReferences) {
@@ -241,7 +241,7 @@ func TestIssue19_RematerializeKeepsKVStoreStatus(t *testing.T) {
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
 		ObjectMeta: v1.ObjectMeta{Name: "orders", Namespace: "default", ResourceGroup: "rg1", UID: "wf-uid"},
 		Spec: v1.WorkflowSpec{
-			KVStores: []v1.KVStoreEntry{{Name: "counters-kv", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "t", Owner: "ingest"}}}}},
+			KVStores: []v1.KVStoreEntry{{Name: "counters-kv", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "t", Owner: v1.FunctionOwner("ingest")}}}}},
 			Steps: []v1.WorkflowStep{
 				{Name: "ingest", Function: &v1.FunctionStep{Image: "oci:ingest-v1", Bindings: v1.StepBindings{KV: []v1.FunctionKV{{Alias: "c", Store: "counters-kv", Table: "t"}}}}},
 			},
@@ -336,7 +336,7 @@ func TestIssue722_GroupMoveRestampsChildren(t *testing.T) {
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
 		ObjectMeta: v1.ObjectMeta{Name: "w", Namespace: "default", ResourceGroup: "team", UID: "uid-w"},
 		Spec: v1.WorkflowSpec{
-			KVStores: []v1.KVStoreEntry{{Name: "keep", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "t", Owner: "s1"}}}}},
+			KVStores: []v1.KVStoreEntry{{Name: "keep", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "t", Owner: v1.FunctionOwner("s1")}}}}},
 			Steps: []v1.WorkflowStep{{Name: "s1", Function: &v1.FunctionStep{
 				Image:    "oci:x",
 				Bindings: v1.StepBindings{KV: []v1.FunctionKV{{Alias: "c", Store: "keep", Table: "t"}}},

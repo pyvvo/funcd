@@ -57,7 +57,7 @@ func (b fakeKVResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.Obj
 		if maxValue == 0 {
 			maxValue = 1 << 20
 		}
-		return kvsvc.Binding{Store: "s", Table: "t", Owner: b.owner, MaxValueBytes: maxValue, MaxKeyBytes: 1024}, nil
+		return kvsvc.Binding{Store: "s", Table: "t", Owner: v1.FunctionOwner(b.owner), MaxValueBytes: maxValue, MaxKeyBytes: 1024}, nil
 	}
 	return kvsvc.Binding{}, fault.Forbiddenf("fakeKVResolver", "no kv binding for %s/%s", fn, alias)
 }
@@ -165,7 +165,7 @@ func TestIssue169_DeclaredValueCapIsServable(t *testing.T) {
 		ks := &v1.KVStore{
 			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
 			ObjectMeta: v1.ObjectMeta{Name: "s", Namespace: "default", ResourceGroup: "rg1"},
-			Spec:       v1.KVStoreSpec{Quota: v1.KVStoreQuota{MaxValueBytes: capBytes}, Tables: []v1.KVTable{{Name: "t", Owner: "fn"}}},
+			Spec:       v1.KVStoreSpec{Quota: v1.KVStoreQuota{MaxValueBytes: capBytes}, Tables: []v1.KVTable{{Name: "t", Owner: v1.FunctionOwner("fn")}}},
 		}
 		if ks.Validate() != nil {
 			continue

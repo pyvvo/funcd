@@ -196,7 +196,7 @@ The handler:
 ## Access
 
 - A Function can read the Secrets it binds (`secret::read`). The declared keys check readiness; they do not restrict which keys the binding exposes.
-- A Function can write a bound Secret whose `spec.owner` names it (`secret::write`). Other writers need `Secret Data Writer`, scoped to the Secret or its namespace.
+- A Function or a Job can write a bound Secret whose `spec.owner` names it by kind and name (`secret::write`). Other writers need `Secret Data Writer`, scoped to the Secret or its namespace.
 - `Secret Data Reader` adds no access beyond a binding. These data roles apply to Functions. The general roles `Reader`, `Contributor` and `Owner` include no Secret actions.
 
 See the complete RolesAssignment in [Let another Function write](#let-another-function-write-a-secret).

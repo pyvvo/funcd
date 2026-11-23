@@ -27,7 +27,7 @@ func seedKVStore(t *testing.T, r *Reconciler, name string, tables ...string) {
 	ks := obj.(*v1.KVStore)
 	ks.Name, ks.Namespace, ks.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	for _, tb := range tables {
-		ks.Spec.Tables = append(ks.Spec.Tables, v1.KVTable{Name: tb, Owner: "some-owner"})
+		ks.Spec.Tables = append(ks.Spec.Tables, v1.KVTable{Name: tb, Owner: v1.FunctionOwner("some-owner")})
 	}
 	_, err := r.store.Create(context.Background(), ks)
 	require.NoError(t, err)

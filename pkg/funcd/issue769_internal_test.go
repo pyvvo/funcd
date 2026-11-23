@@ -100,7 +100,7 @@ func (r *asleepRig) del(t *testing.T, kind v1.Kind, name v1.ObjectName) {
 	require.NoError(t, r.c.Delete(context.Background(), kind, "default", name))
 }
 
-func (r *asleepRig) bucket(t *testing.T, name, prefix v1.ObjectName, owner v1.PrefixOwner) {
+func (r *asleepRig) bucket(t *testing.T, name, prefix v1.ObjectName, owner v1.WorkloadRef) {
 	t.Helper()
 	obj, _ := v1.NewObject(v1.KindBucket)
 	b := obj.(*v1.Bucket)

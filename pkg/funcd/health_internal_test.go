@@ -95,7 +95,7 @@ func todoParts(t *testing.T, p *Platform) {
 	t.Helper()
 	ks := &v1.KVStore{TypeMeta: v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore}}
 	ks.Name, ks.Namespace, ks.ResourceGroup = "todo-store", "default", "rg1"
-	ks.Spec.Tables = []v1.KVTable{{Name: "todos", Owner: "todo-api"}}
+	ks.Spec.Tables = []v1.KVTable{{Name: "todos", Owner: v1.FunctionOwner("todo-api")}}
 	create(t, p.cfg.store, ks)
 	b := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	b.Name, b.Namespace, b.ResourceGroup = "todo-files", "default", "rg1"

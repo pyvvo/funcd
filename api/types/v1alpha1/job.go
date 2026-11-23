@@ -89,6 +89,10 @@ func (j *Job) Validate() error {
 }
 
 // FunctionSpec is the Job's fields that a Function shares, as a FunctionSpec, so that the Function's checks and hooks
+// isPrincipalObject marks *Job as a PrincipalObject (ADR-0351 Decision 1): the principal of its runs' workers, whose
+// bindings the capability registry materializes as a Function's.
+func (j *Job) isPrincipalObject() {}
+
 // run over them unchanged; the Function's own fields stay zero (ADR-0347 Decisions 1 and 5).
 func (s *JobSpec) FunctionSpec() FunctionSpec {
 	return FunctionSpec{Runtime: s.Runtime, Handler: s.Handler, Image: s.Image, ImageDigest: s.ImageDigest,

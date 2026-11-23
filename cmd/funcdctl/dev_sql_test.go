@@ -36,7 +36,7 @@ func requireSQLEngine(t *testing.T) {
 
 // sqlFunction is Function name declaring and owning database db at its root and binding it as app.
 func sqlFunction(name, db, build string) map[string]string {
-	return nodeFunction(name, "  sql:\n    - name: "+db+"\n      owner: "+name+"\n"+
+	return nodeFunction(name, "  sql:\n    - name: "+db+"\n      owner:\n        kind: Function\n        name: "+name+"\n"+
 		"  bindings:\n    sql:\n      - alias: app\n        database: "+db+"\n", build)
 }
 
@@ -126,7 +126,7 @@ func TestScenarioDevFunctionBindsDatabase(t *testing.T) {
 	require.NoError(t, err)
 	db := obj.(*v1.SQLDatabase)
 	require.Equal(t, v1.PhaseReady, db.Status.Phase)
-	require.Equal(t, v1.ObjectName(inst.functions[0]), db.Spec.Owner)
+	require.Equal(t, v1.FunctionOwner(v1.ObjectName(inst.functions[0])), db.Spec.Owner)
 }
 
 // scenario: dev-data-persists-with-persist — with --persist the rows of one run are there in the next; without it each

@@ -150,8 +150,9 @@ on their `ports`, or on every port:
   `example.com` itself;
 - [`cidrs`](spec.md#egresspolicyspecrulesto): address ranges, such as `10.0.0.0/8`.
 
-[`appliesTo`](spec.md#egresspolicyspec) names the Functions, else all of the namespace's; the rules of all its
-EgressPolicies add up. A worker can look up only the names that a domain rule allows, and a domain rule allows only the
+[`appliesTo`](spec.md#egresspolicyspec) names the Functions and Jobs it applies to, each by its kind and name, such as
+`{kind: Job, name: tofu}`; without it, the rules apply to all of the namespace's Functions and to no Job. The rules of
+all its EgressPolicies add up. A worker can look up only the names that a domain rule allows, and a domain rule allows only the
 addresses that the lookup returned, never a private one. So a CIDR host reached by name also needs a domain rule, and a
 private address needs a CIDR rule.
 

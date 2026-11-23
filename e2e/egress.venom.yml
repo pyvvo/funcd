@@ -288,7 +288,9 @@ testcases:
             namespace: default
             resourceGroup: rg1
           spec:
-            owner: egress-probe
+            owner:
+              kind: Function
+              name: egress-probe
           YAML
             FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /tmp/egress-engine.yaml'
         assertions:

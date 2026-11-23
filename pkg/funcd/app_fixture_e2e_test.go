@@ -35,7 +35,7 @@ func todoApp(t *testing.T, e *gcEnv) *v1.App {
 		ObjectMeta: v1.ObjectMeta{Name: "todo", Namespace: "default", ResourceGroup: "rg1"},
 		Spec: v1.AppSpec{
 			KV: []v1.KVStoreEntry{
-				{Name: "todo-store", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "todos", Owner: "todo-api"}}}},
+				{Name: "todo-store", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "todos", Owner: v1.FunctionOwner("todo-api")}}}},
 				{Name: "todo-cache", Deletion: v1.DeletionDelete, KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "entries"}}}},
 			},
 			Buckets: []v1.BucketEntry{

@@ -6,7 +6,9 @@ metadata:
   namespace: default
   resourceGroup: rg1
 spec:
-  owner: notes
+  owner:
+    kind: Function
+    name: notes
   quota:
     maxSize: 1Gi
   resources:

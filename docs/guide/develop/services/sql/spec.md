@@ -18,9 +18,16 @@ This page lists the spec and status fields of SQLDatabase, each with its type, i
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it. |
+| `owner` | object, [`SQLDatabase.spec.owner`](#sqldatabasespecowner) | The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it. |
 | `quota` | object, [`SQLDatabase.spec.quota`](#sqldatabasespecquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
 | `resources` | object, [`SQLDatabase.spec.resources`](#sqldatabasespecresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
+
+### `SQLDatabase.spec.owner`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `kind` | string, required, one of `Function`, `Lake`, `Job` | The workload's kind. A Function, a Lake and a Job may share a name, so the kind says which one it is; each field names the kinds it accepts. |
+| `name` | string, required, a DNS-1123 label | The workload's name, in the object's namespace. |
 
 ### `SQLDatabase.spec.quota`
 

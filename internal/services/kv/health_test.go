@@ -85,7 +85,7 @@ func TestKVStoreStatusFollowsTheKVProbe(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := store.New(storemem.New())
-	_, err := st.Create(ctx, mkKVStore("todo-store", v1.KVTable{Name: "todos", Owner: "todo-api"}))
+	_, err := st.Create(ctx, mkKVStore("todo-store", v1.KVTable{Name: "todos", Owner: v1.FunctionOwner("todo-api")}))
 	require.NoError(t, err)
 	_, err = st.Create(ctx, mkFunctionWithKV("todo-api", v1.FunctionKV{Alias: "store", Store: "todo-store", Table: "todos"}))
 	require.NoError(t, err)

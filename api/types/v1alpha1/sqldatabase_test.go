@@ -42,9 +42,9 @@ func TestSQLBindingValidate(t *testing.T) {
 
 	d := &v1.SQLDatabase{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSQLDatabase.GVK().APIVersion(), Kind: v1.KindSQLDatabase}}
 	d.Name, d.Namespace, d.ResourceGroup = "todo-db", "default", "rg1"
-	d.Spec.Owner = "todo-api"
+	d.Spec.Owner = v1.FunctionOwner("todo-api")
 	require.NoError(t, d.Validate())
-	d.Spec.Owner = "Todo API"
+	d.Spec.Owner = v1.FunctionOwner("Todo API")
 	require.Equal(t, fault.Invalid, fault.KindOf(d.Validate()))
 
 	ra := &v1.RolesAssignment{TypeMeta: v1.TypeMeta{APIVersion: v1.KindRolesAssignment.GVK().APIVersion(), Kind: v1.KindRolesAssignment}}

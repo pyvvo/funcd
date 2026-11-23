@@ -123,13 +123,18 @@ func CompileEgressPolicy(ns v1.NamespaceName, ep *v1.EgressPolicy, funcs []v1.Ob
 }
 
 // EgressDomains returns ep's domain rules that apply to principal: the principals CompileEgressPolicy grants. With no
-// spec.appliesTo that is each Function of ep's namespace, with one each Function it names, and never another owner kind
-// (ADR-0175). The DNS forwarder forwards only the names these allow (ADR-0315).
+// spec.appliesTo that is each Function of ep's namespace, with one each Function and Job it names by kind and name,
+// and never another owner kind (ADR-0175, ADR-0351 Decision 6). The DNS forwarder forwards only the names these allow
+// (ADR-0315).
 func EgressDomains(ep *v1.EgressPolicy, principal auth.EntityRef) []string {
-	if ep == nil || principal.Type != v1.KindFunction || principal.Namespace != ep.Namespace {
+	if ep == nil || principal.Namespace != ep.Namespace {
 		return nil
 	}
-	if len(ep.Spec.AppliesTo) > 0 && !slices.Contains(ep.Spec.AppliesTo, principal.Name) {
+	ref := v1.WorkloadRef{Kind: principal.Type, Name: principal.Name}
+	switch {
+	case len(ep.Spec.AppliesTo) > 0 && !slices.Contains(ep.Spec.AppliesTo, ref):
+		return nil
+	case len(ep.Spec.AppliesTo) == 0 && principal.Type != v1.KindFunction:
 		return nil
 	}
 	var out []string
@@ -146,12 +151,13 @@ func namespaceScope(ns v1.NamespaceName) estNode {
 	return estAnd(estIs(estVar("principal"), entityTypeFunction), estEq(estAccess(estVar("principal"), "namespace"), estVal(string(ns))))
 }
 
-// appliesToScope is the bounded named-appliesTo disjunction: (principal == Function::"<ns>/<fn>" || …).
-// The id "<ns>/<fn>" matches functionUID exactly so it compares to the request principal UID.
-func appliesToScope(ns v1.NamespaceName, appliesTo []v1.ObjectName) estNode {
+// appliesToScope is the bounded named-appliesTo disjunction: (principal == Function::"<ns>/<fn>" || principal ==
+// Job::"<ns>/<job>" || …). Each id "<ns>/<name>" matches workloadUID exactly so it compares to the request principal
+// UID (ADR-0351 Decision 6).
+func appliesToScope(ns v1.NamespaceName, appliesTo []v1.WorkloadRef) estNode {
 	var scope estNode
-	for i, fn := range appliesTo {
-		eq := estEq(estVar("principal"), estEntity(entityTypeFunction, string(ns)+"/"+string(fn)))
+	for i, ref := range appliesTo {
+		eq := estEq(estVar("principal"), estEntity(string(workloadUID(ns, ref).Type), string(ns)+"/"+string(ref.Name)))
 		if i == 0 {
 			scope = eq
 			continue

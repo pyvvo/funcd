@@ -40,14 +40,14 @@ func TestScenarioResolverResolvesBinding(t *testing.T) {
 	ctx := context.Background()
 	r := newResolver(t,
 		mkFunctionWithKV("customers-svc", v1.FunctionKV{Alias: "customers", Store: "orders", Table: "customers"}),
-		mkKVStore("orders", v1.KVTable{Name: "customers", Owner: "customers-svc"}),
+		mkKVStore("orders", v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("customers-svc")}),
 	)
 
 	b, err := r.Resolve(ctx, "default", "customers-svc", "customers")
 	require.NoError(t, err)
 	require.Equal(t, v1.ObjectName("orders"), b.Store)
 	require.Equal(t, "customers", b.Table)
-	require.Equal(t, v1.ObjectName("customers-svc"), b.Owner)
+	require.Equal(t, v1.FunctionOwner("customers-svc"), b.Owner)
 	require.Equal(t, v1.DefaultMaxValueBytes, b.MaxValueBytes)
 	require.Equal(t, v1.DefaultMaxKeyBytes, b.MaxKeyBytes)
 }
@@ -57,7 +57,7 @@ func TestScenarioResolverDefaultDeny(t *testing.T) {
 	ctx := context.Background()
 	r := newResolver(t,
 		mkFunctionWithKV("customers-svc", v1.FunctionKV{Alias: "customers", Store: "orders", Table: "customers"}),
-		mkKVStore("orders", v1.KVTable{Name: "customers", Owner: "customers-svc"}),
+		mkKVStore("orders", v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("customers-svc")}),
 	)
 
 	_, err := r.Resolve(ctx, "default", "customers-svc", "nope")
@@ -83,7 +83,7 @@ func TestResolverDanglingBindingForbidden(t *testing.T) {
 	// store present but missing table
 	r2 := newResolver(t,
 		mkFunctionWithKV("svc", v1.FunctionKV{Alias: "a", Store: "orders", Table: "gone"}),
-		mkKVStore("orders", v1.KVTable{Name: "customers", Owner: "svc"}),
+		mkKVStore("orders", v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("svc")}),
 	)
 	_, err = r2.Resolve(ctx, "default", "svc", "a")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err))
@@ -95,7 +95,7 @@ func TestResolverDanglingBindingForbidden(t *testing.T) {
 func TestIssue170_ResolverCacheEvictsExpiredEntries(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
-	_, err := st.Create(ctx, mkKVStore("orders", v1.KVTable{Name: "customers", Owner: "svc"}))
+	_, err := st.Create(ctx, mkKVStore("orders", v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("svc")}))
 	require.NoError(t, err)
 	// A negative TTL expires each entry as soon as it is cached: the deterministic "wait past the TTL".
 	r, err := kvsvc.NewResolverTTL(metaReader{st}, -time.Nanosecond)

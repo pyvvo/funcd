@@ -3,9 +3,13 @@ kv:
     deletion: ${{ values.data.deletion }}
     tables:
       - name: todos
-        owner: ${{ app.name + "-api" }}
+        owner:
+          kind: Function
+          name: ${{ app.name + "-api" }}
       - name: runs
-        owner: ${{ app.name + "-planner" }}
+        owner:
+          kind: Function
+          name: ${{ app.name + "-planner" }}
 functions:
   - name: ${{ app.name + "-migrate" }}
     runtime: nodejs22

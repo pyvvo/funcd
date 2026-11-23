@@ -5,7 +5,9 @@ metadata:
   namespace: default
   resourceGroup: rg1
 spec:
-  owner: notes
+  owner:
+    kind: Function
+    name: notes
 ---
 apiVersion: funcd.io/v1alpha1
 kind: Function

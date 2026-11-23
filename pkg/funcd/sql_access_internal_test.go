@@ -82,7 +82,7 @@ func startAccess(t *testing.T, ready bool, extra ...v1.Object) *accessEnv {
 	engines := newFakeEngines(t, ready)
 	e := &accessEnv{sqlEnv: startSQL(t, engines), engines: engines}
 	db := sqlDatabase("todo-db")
-	db.Spec.Owner = "todo-api"
+	db.Spec.Owner = v1.FunctionOwner("todo-api")
 	seedObjects(t, e.p.cfg.store, append([]v1.Object{db, sqlFunction("todo-api", "todo-db"), sqlFunction("todo-report", "todo-db")}, extra...)...)
 	if ready {
 		e.waitReady(t, "todo-db", 1)

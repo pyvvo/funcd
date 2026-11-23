@@ -118,12 +118,12 @@ func TestFunctionLakeValidate(t *testing.T) {
 
 // ADR-0275: a set prefix owner names a Function or a Lake, by a DNS-1123 label.
 func TestBucketValidatePrefixOwner(t *testing.T) {
-	for _, o := range []PrefixOwner{FunctionOwner("f"), LakeOwner("lake")} {
+	for _, o := range []WorkloadRef{FunctionOwner("f"), LakeOwner("lake")} {
 		if err := bucket("ok", 0, BucketPrefix{Name: "p", Owner: o}).Validate(); err != nil {
 			t.Errorf("owner %+v rejected: %v", o, err)
 		}
 	}
-	for _, o := range []PrefixOwner{{Kind: KindSite, Name: "s"}, {Kind: KindFunction}, {Name: "f"}, {Kind: KindLake, Name: "Bad_Name"}} {
+	for _, o := range []WorkloadRef{{Kind: KindSite, Name: "s"}, {Kind: KindFunction}, {Name: "f"}, {Kind: KindLake, Name: "Bad_Name"}} {
 		if err := bucket("bad", 0, BucketPrefix{Name: "p", Owner: o}).Validate(); fault.KindOf(err) != fault.Invalid {
 			t.Errorf("owner %+v: want Invalid, got %v", o, err)
 		}

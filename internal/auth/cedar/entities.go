@@ -153,6 +153,8 @@ func principalUID(p auth.EntityRef) (cedartypes.EntityUID, error) {
 	switch p.Type {
 	case v1.KindFunction:
 		return functionUID(p.Namespace, p.Name), nil
+	case v1.KindJob:
+		return jobUID(p.Namespace, p.Name), nil
 	case v1.KindS3Identity:
 		return s3IdentityUID(p.Namespace, p.Name), nil
 	case v1.KindIdentity:
@@ -162,7 +164,7 @@ func principalUID(p auth.EntityRef) (cedartypes.EntityUID, error) {
 	case v1.KindAddonObject:
 		return addonObjectUID(p.Namespace, p.Name), nil
 	default:
-		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function, Lake, AddonObject, S3Identity, Identity)", p.Type)
+		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function, Job, Lake, AddonObject, S3Identity, Identity)", p.Type)
 	}
 }
 

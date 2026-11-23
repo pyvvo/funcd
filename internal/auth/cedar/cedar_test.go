@@ -41,7 +41,7 @@ func newOrders() *v1.KVStore {
 	return &v1.KVStore{
 		ObjectMeta: v1.ObjectMeta{Name: "orders", Namespace: "default", ResourceGroup: "rg1"},
 		Spec: v1.KVStoreSpec{Tables: []v1.KVTable{
-			{Name: "customers", Owner: "customers-svc"},
+			{Name: "customers", Owner: v1.FunctionOwner("customers-svc")},
 			{Name: "public"},
 		}},
 	}

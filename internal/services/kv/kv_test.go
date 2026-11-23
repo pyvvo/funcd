@@ -93,7 +93,7 @@ func TestScenarioKVBindingResolves(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	f := newFacade(t, b, allowAll{})
 
@@ -129,7 +129,7 @@ func TestScenarioFacadeReadDefaultDeny(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("reporting", "customers"): {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("reporting", "customers"): {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	pdp := &pdpStub{readGrants: map[string]bool{}, owners: map[string]v1.ObjectName{"orders/customers": "customers-svc"}}
 	f := newFacade(t, b, pdp)
@@ -146,8 +146,8 @@ func TestScenarioFacadeReadAllowedWithPolicy(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
-		bkey("reporting", "customers"):     {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("reporting", "customers"):     {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	pdp := &pdpStub{
 		readGrants: map[string]bool{rgKey("default", "reporting", "orders"): true},
@@ -168,8 +168,8 @@ func TestScenarioFacadeOwnerWrite(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
-		bkey("reporting", "customers"):     {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("reporting", "customers"):     {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	pdp := &pdpStub{
 		readGrants: map[string]bool{rgKey("default", "reporting", "orders"): true},
@@ -188,7 +188,7 @@ func TestScenarioPerFunctionPrincipal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	pdp := &pdpStub{readGrants: map[string]bool{}, owners: map[string]v1.ObjectName{"orders/customers": "customers-svc"}}
 	f := newFacade(t, b, pdp)
@@ -210,7 +210,7 @@ func TestScenarioValueOverCapRejected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("fn", "small"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 4, MaxKeyBytes: 3},
+		bkey("fn", "small"): {Store: "s", Table: "t", Owner: v1.FunctionOwner("fn"), MaxValueBytes: 4, MaxKeyBytes: 3},
 	}}
 	pdp := &pdpStub{owners: map[string]v1.ObjectName{"s/t": "fn"}}
 	f := newFacade(t, b, pdp)
@@ -237,13 +237,13 @@ func TestIssue377_DeclaredKeyCapIsStorable(t *testing.T) {
 		ks := &v1.KVStore{
 			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
 			ObjectMeta: v1.ObjectMeta{Name: store, Namespace: ns, ResourceGroup: "rg1"},
-			Spec:       v1.KVStoreSpec{Quota: v1.KVStoreQuota{MaxKeyBytes: capBytes}, Tables: []v1.KVTable{{Name: table, Owner: "fn"}}},
+			Spec:       v1.KVStoreSpec{Quota: v1.KVStoreQuota{MaxKeyBytes: capBytes}, Tables: []v1.KVTable{{Name: table, Owner: v1.FunctionOwner("fn")}}},
 		}
 		if ks.Validate() != nil {
 			continue
 		}
 		b := fakeResolver{m: map[string]kv.Binding{
-			bkey("fn", "b"): {Store: store, Table: table, Owner: "fn", MaxValueBytes: ks.Spec.EffectiveMaxValueBytes(), MaxKeyBytes: ks.Spec.EffectiveMaxKeyBytes()},
+			bkey("fn", "b"): {Store: store, Table: table, Owner: v1.FunctionOwner("fn"), MaxValueBytes: ks.Spec.EffectiveMaxValueBytes(), MaxKeyBytes: ks.Spec.EffectiveMaxKeyBytes()},
 		}}
 		f, err := kv.NewFacade(kv.FacadeDeps{KV: db, Resolver: b, Authorizer: allowAll{}})
 		require.NoError(t, err)
@@ -274,7 +274,7 @@ func (m rawMeta) Get(_ context.Context, gvk v1.GroupVersionKind, _ v1.NamespaceN
 func TestIssue461_StoredOverLimitCapsAreClamped(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	ks := mkKVStore("legacy", v1.KVTable{Name: "t", Owner: "fn"})
+	ks := mkKVStore("legacy", v1.KVTable{Name: "t", Owner: v1.FunctionOwner("fn")})
 	ks.Spec.Quota.MaxKeyBytes, ks.Spec.Quota.MaxValueBytes = 100000, 4<<20
 	require.Error(t, ks.Validate(), "precondition: today's Validate rejects the stored caps")
 	r, err := kv.NewResolver(rawMeta{
@@ -308,7 +308,7 @@ func TestScenarioKVLoweredKeyCapKeepsKeys(t *testing.T) {
 	engine := memory.New()
 	facade := func(maxKeyBytes int) *kv.Facade {
 		b := fakeResolver{m: map[string]kv.Binding{
-			bkey("fn", "b"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 1 << 20, MaxKeyBytes: maxKeyBytes},
+			bkey("fn", "b"): {Store: "s", Table: "t", Owner: v1.FunctionOwner("fn"), MaxValueBytes: 1 << 20, MaxKeyBytes: maxKeyBytes},
 		}}
 		f, err := kv.NewFacade(kv.FacadeDeps{KV: engine, Resolver: b, Authorizer: allowAll{}})
 		require.NoError(t, err)
@@ -336,7 +336,7 @@ func TestScenarioKVTotalRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: v1.FunctionOwner("fn"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	db := memory.New()
 	book := quota.NewBook(clock.System(), nil)
@@ -373,7 +373,7 @@ func TestFloorRefusesKVPut(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: v1.FunctionOwner("fn"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	db := memory.New()
 	var free atomic.Int64

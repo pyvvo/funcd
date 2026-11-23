@@ -34,7 +34,7 @@ type Capability struct {
 	EmitsEntityType cedartypes.EntityType
 	// SupportingEntityTypes are the additional Cedar entity types this capability contributes to the
 	// schema vocabulary beyond its primary EmitsEntityType — the resource's parent (KVStore for kv,
-	// Bucket for s3) and any alternate principal type it admits (S3Identity for s3). A Policy may scope
+	// Bucket for s3) and any alternate principal type it admits (S3Identity for s3, Job for a workload's, ADR-0351). A Policy may scope
 	// on these (`resource in KVStore::"…"`, `principal == S3Identity::"…"`), so KnownEntityType must
 	// accept them; they are assembled from the registry exactly like EmitsEntityType (never hand-listed).
 	SupportingEntityTypes []cedartypes.EntityType

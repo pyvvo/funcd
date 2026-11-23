@@ -159,7 +159,7 @@ func TestFunctionStoreOwner(t *testing.T) {
 	data := v1.ConfigMapSpec{Data: map[string]string{"TZ": "UTC"}}
 	stored := v1.AppConfigMapName("settings", data)
 	fn := rootFunction(func(s *v1.FunctionSpec) {
-		s.KVStores[0].Tables = append(s.KVStores[0].Tables, v1.KVTable{Name: "audit", Owner: "auditor"})
+		s.KVStores[0].Tables = append(s.KVStores[0].Tables, v1.KVTable{Name: "audit", Owner: v1.FunctionOwner("auditor")})
 		s.Buckets = []v1.BucketEntry{{Name: "files", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw"}}}}, {Ref: "shared"}}
 		s.SQLDatabases = []v1.SQLDatabaseEntry{{Name: "notes"}}
 		s.ConfigMaps = []v1.ConfigMapEntry{{Name: "settings", ConfigMapSpec: data}, {Ref: "flags"}}
@@ -168,10 +168,31 @@ func TestFunctionStoreOwner(t *testing.T) {
 	out, err := a.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: v1.KindFunction.GVK(), Object: fn})
 	require.NoError(t, err)
 	s := out.(*v1.Function).Spec
-	require.Equal(t, []v1.KVTable{{Name: "counts", Owner: "counter"}, {Name: "audit", Owner: "auditor"}}, s.KVStores[0].Tables, "an explicit owner is kept")
+	require.Equal(t, []v1.KVTable{{Name: "counts", Owner: v1.FunctionOwner("counter")}, {Name: "audit", Owner: v1.FunctionOwner("auditor")}}, s.KVStores[0].Tables, "an explicit owner is kept")
 	require.Equal(t, v1.FunctionOwner("counter"), s.Buckets[0].Prefixes[0].Owner)
-	require.Equal(t, v1.ObjectName("counter"), s.SQLDatabases[0].Owner)
+	require.Equal(t, v1.FunctionOwner("counter"), s.SQLDatabases[0].Owner)
 	require.Equal(t, []v1.ObjectName{stored, "flags", stored, "settings-other"}, s.Bindings.Config)
+}
+
+// ADR-0351 Decision 3: an omitted owner of a table, a prefix or a database that a Job defines at its root becomes the
+// Job, named with its kind, never the Function of its name.
+func TestJobStoreOwner(t *testing.T) {
+	t.Parallel()
+	a := admission.NewFunctionStoreOwnerAdmission()
+	require.True(t, a.Handles(v1.KindJob.GVK(), admission.Create))
+	job := &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob},
+		ObjectMeta: v1.ObjectMeta{Name: "tofu", Namespace: "default", ResourceGroup: "rg1"},
+		Spec: v1.JobSpec{Runtime: "nodejs22", Handler: "handle", Image: "oci://x/tofu:1",
+			KVStores:     []v1.KVStoreEntry{{Name: "locks", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "l"}, {Name: "o", Owner: v1.FunctionOwner("tofu")}}}}},
+			Buckets:      []v1.BucketEntry{{Name: "state", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "tf"}}}}},
+			SQLDatabases: []v1.SQLDatabaseEntry{{Name: "runs"}}}}
+	out, err := a.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: v1.KindJob.GVK(), Object: job})
+	require.NoError(t, err)
+	s := out.(*v1.Job).Spec
+	require.Equal(t, v1.JobOwner("tofu"), s.KVStores[0].Tables[0].Owner)
+	require.Equal(t, v1.FunctionOwner("tofu"), s.KVStores[0].Tables[1].Owner, "an explicit owner is kept")
+	require.Equal(t, v1.JobOwner("tofu"), s.Buckets[0].Prefixes[0].Owner)
+	require.Equal(t, v1.JobOwner("tofu"), s.SQLDatabases[0].Owner)
 }
 
 // listed is a StoreReader over fixed objects.

@@ -62,8 +62,8 @@ func TestSecretOwnerIsAFunctionName(t *testing.T) {
 	sec := obj.(*Secret)
 	sec.Namespace, sec.Name, sec.ResourceGroup = "data", "oauth", "rg1"
 	require.NoError(t, sec.Validate(), "no owner")
-	sec.Spec.Owner = "refresher"
+	sec.Spec.Owner = FunctionOwner("refresher")
 	require.NoError(t, sec.Validate())
-	sec.Spec.Owner = "Not_A_Name"
+	sec.Spec.Owner = FunctionOwner("Not_A_Name")
 	require.ErrorContains(t, sec.Validate(), "spec.owner")
 }

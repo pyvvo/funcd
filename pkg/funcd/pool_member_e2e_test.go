@@ -137,7 +137,7 @@ func ownedKVStore(owner v1.ObjectName) *v1.KVStore {
 	obj, _ := v1.NewObject(v1.KindKVStore)
 	s := obj.(*v1.KVStore)
 	s.Name = "s"
-	s.Spec.Tables = []v1.KVTable{{Name: "t", Owner: owner}}
+	s.Spec.Tables = []v1.KVTable{{Name: "t", Owner: v1.FunctionOwner(owner)}}
 	return s
 }
 

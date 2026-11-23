@@ -219,7 +219,11 @@ func (g grantedWriters) SecretWriters(_ context.Context, ns v1.NamespaceName, se
 func writeMeta() secretMeta {
 	m := newSecretMeta()
 	sec := func(name, owner v1.ObjectName) *v1.Secret {
-		return &v1.Secret{ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1"}, Spec: v1.SecretSpec{Owner: owner}}
+		o := v1.WorkloadRef{}
+		if owner != "" {
+			o = v1.FunctionOwner(owner)
+		}
+		return &v1.Secret{ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1"}, Spec: v1.SecretSpec{Owner: o}}
 	}
 	m.secrets = map[v1.ObjectName]*v1.Secret{"oauth": sec("oauth", "checkout"), "plain": sec("plain", "")}
 	return m

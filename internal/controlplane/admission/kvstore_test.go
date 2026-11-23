@@ -109,10 +109,10 @@ func TestScenarioTableRemovalProtected(t *testing.T) {
 	adm := admission.NewKVStoreDeletionProtectionAdmission(rBound, fakeProber{has: false})
 
 	old := mkStore("orders",
-		v1.KVTable{Name: "customers", Owner: "svc"},
-		v1.KVTable{Name: "fulfillment", Owner: "svc"})
+		v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("svc")},
+		v1.KVTable{Name: "fulfillment", Owner: v1.FunctionOwner("svc")})
 	// the update drops "fulfillment", which is still bound ⇒ Conflict
-	newKS := mkStore("orders", v1.KVTable{Name: "customers", Owner: "svc"})
+	newKS := mkStore("orders", v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("svc")})
 	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Update, GVK: gvk, Old: old, Object: newKS})
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "removing a still-bound table ⇒ Conflict")
 
@@ -141,8 +141,8 @@ func (p keyProber) HasAny(_ context.Context, prefix string) (bool, error) {
 func TestIssue150_ReaddedTableDoesNotKeepRemovedData(t *testing.T) {
 	ctx := context.Background()
 	gvk := v1.KindKVStore.GVK()
-	removed := mkStore("s", v1.KVTable{Name: "keep", Owner: "a"})
-	readded := mkStore("s", v1.KVTable{Name: "keep", Owner: "a"}, v1.KVTable{Name: "t", Owner: "b"})
+	removed := mkStore("s", v1.KVTable{Name: "keep", Owner: v1.FunctionOwner("a")})
+	readded := mkStore("s", v1.KVTable{Name: "keep", Owner: v1.FunctionOwner("a")}, v1.KVTable{Name: "t", Owner: v1.FunctionOwner("b")})
 	update := admission.Request{Operation: admission.Update, GVK: gvk, Old: removed, Object: readded}
 
 	unreclaimed := keyProber{"default/s/keep/k", "default/s/t/secret"}
@@ -155,7 +155,7 @@ func TestIssue150_ReaddedTableDoesNotKeepRemovedData(t *testing.T) {
 	require.NoError(t, err, "re-adding table t after its data is reclaimed is allowed")
 
 	ownerChange := admission.Request{Operation: admission.Update, GVK: gvk, Old: readded,
-		Object: mkStore("s", v1.KVTable{Name: "keep", Owner: "b"}, v1.KVTable{Name: "t", Owner: "b"})}
+		Object: mkStore("s", v1.KVTable{Name: "keep", Owner: v1.FunctionOwner("b")}, v1.KVTable{Name: "t", Owner: v1.FunctionOwner("b")})}
 	_, err = admission.NewKVStoreDeletionProtectionAdmission(kvReader{}, unreclaimed).Admit(ctx, ownerChange)
 	require.NoError(t, err, "an in-place owner change keeps the table's data")
 }

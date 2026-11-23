@@ -516,12 +516,16 @@ spec:
     - name: todo-store
       tables:
         - name: todos
-          owner: todo-api
+          owner:
+            kind: Function
+            name: todo-api
     - name: todo-cache
       deletion: delete
       tables:
         - name: entries
-          owner: todo-api
+          owner:
+            kind: Function
+            name: todo-api
   buckets:
     - name: todo-files
       prefixes:

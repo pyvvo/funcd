@@ -16,7 +16,7 @@ import (
 type Binding struct {
 	Store         v1.ObjectName
 	Table         string
-	Owner         v1.ObjectName
+	Owner         v1.WorkloadRef
 	MaxValueBytes int64
 	MaxKeyBytes   int
 }
@@ -99,7 +99,7 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 	if !ok {
 		return Binding{}, fault.Internalf(op, "object %q is not a KVStore", bind.Store)
 	}
-	var owner v1.ObjectName
+	var owner v1.WorkloadRef
 	found := false
 	for _, tb := range ks.Spec.Tables {
 		if tb.Name == bind.Table {

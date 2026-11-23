@@ -361,41 +361,50 @@ func stepUndeclared(u undeclared, path string, b v1.FunctionBindings) error {
 type functionStoreOwner struct{}
 
 // NewFunctionStoreOwnerAdmission returns the Mutating admission "function-store-owner": an omitted owner of a table, a
-// prefix or a database the Function defines at its root becomes the Function (Decision 4), and a bindings.config entry
-// naming a ConfigMap it defines becomes that ConfigMap's stored name (Decision 5), also when it names an earlier stored
-// name of it, so the environment, the pool key and the GC read the name that holds the data.
+// prefix or a database that a Function or a Job defines at its root becomes that workload, named with its kind
+// (Decision 4, ADR-0351 Decision 3), and a bindings.config entry naming a ConfigMap it defines becomes that ConfigMap's
+// stored name (Decision 5), also when it names an earlier stored name of it, so the environment, the pool key and the
+// GC read the name that holds the data.
 func NewFunctionStoreOwnerAdmission() Admission { return functionStoreOwner{} }
 
 func (functionStoreOwner) Name() string { return "function-store-owner" }
 func (functionStoreOwner) Phase() Phase { return Mutating }
 
 func (functionStoreOwner) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return gvk == v1.KindFunction.GVK() && (op == Create || op == Update)
+	return (gvk == v1.KindFunction.GVK() || gvk == v1.KindJob.GVK()) && (op == Create || op == Update)
 }
 
 func (functionStoreOwner) Admit(_ context.Context, req Request) (v1.Object, error) {
-	fn, ok := req.Object.(*v1.Function)
-	if !ok {
-		return req.Object, nil
+	switch o := req.Object.(type) {
+	case *v1.Function:
+		s := &o.Spec
+		ownStores(v1.FunctionOwner(o.Name), s.KVStores, s.SQLDatabases)
+		ownDefined(v1.FunctionOwner(o.Name), s.Buckets, s.ConfigMaps, s.Bindings.Config)
+	case *v1.Job:
+		s := &o.Spec
+		ownStores(v1.JobOwner(o.Name), s.KVStores, s.SQLDatabases)
+		ownDefined(v1.JobOwner(o.Name), s.Buckets, s.ConfigMaps, s.Bindings.Config)
 	}
-	s := &fn.Spec
-	for i := range s.KVStores {
-		if s.KVStores[i].Name == "" {
+	return req.Object, nil
+}
+
+// ownStores writes owner into each omitted owner of a table of a store, and of a database, defined by name.
+func ownStores(owner v1.WorkloadRef, kvs []v1.KVStoreEntry, dbs []v1.SQLDatabaseEntry) {
+	for i := range kvs {
+		if kvs[i].Name == "" {
 			continue
 		}
-		for j := range s.KVStores[i].Tables {
-			if t := &s.KVStores[i].Tables[j]; t.Owner == "" {
-				t.Owner = fn.Name
+		for j := range kvs[i].Tables {
+			if t := &kvs[i].Tables[j]; t.Owner.IsZero() {
+				t.Owner = owner
 			}
 		}
 	}
-	for i := range s.SQLDatabases {
-		if d := &s.SQLDatabases[i]; d.Name != "" && d.Owner == "" {
-			d.Owner = fn.Name
+	for i := range dbs {
+		if d := &dbs[i]; d.Name != "" && d.Owner.IsZero() {
+			d.Owner = owner
 		}
 	}
-	ownDefined(v1.FunctionOwner(fn.Name), s.Buckets, s.ConfigMaps, s.Bindings.Config)
-	return fn, nil
 }
 
 type lakeStoreOwner struct{}
@@ -424,7 +433,7 @@ func (lakeStoreOwner) Admit(_ context.Context, req Request) (v1.Object, error) {
 // ownDefined writes owner, the definer with its kind (ADR-0275), into each omitted owner of a prefix of a bucket
 // defined by name, and repoints each config binding that names a defined ConfigMap, or an earlier stored name of it, at
 // its current stored name.
-func ownDefined(owner v1.PrefixOwner, buckets []v1.BucketEntry, configMaps []v1.ConfigMapEntry, config []v1.ObjectName) {
+func ownDefined(owner v1.WorkloadRef, buckets []v1.BucketEntry, configMaps []v1.ConfigMapEntry, config []v1.ObjectName) {
 	for i := range buckets {
 		if buckets[i].Name == "" {
 			continue

@@ -1401,11 +1401,8 @@ components:
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                       type: string
                     owner:
-                      description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-                      maxLength: 63
-                      minLength: 1
-                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-                      type: string
+                      $ref: "#/components/schemas/WorkloadRef"
+                      description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
                     quota:
                       $ref: "#/components/schemas/SizeQuota"
                       description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -1806,11 +1803,8 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               owner:
-                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-                maxLength: 63
-                minLength: 1
-                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-                type: string
+                $ref: "#/components/schemas/WorkloadRef"
+                description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
               quota:
                 $ref: "#/components/schemas/SizeQuota"
                 description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -2129,11 +2123,8 @@ components:
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                       type: string
                     owner:
-                      description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-                      maxLength: 63
-                      minLength: 1
-                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-                      type: string
+                      $ref: "#/components/schemas/WorkloadRef"
+                      description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
                     quota:
                       $ref: "#/components/schemas/SizeQuota"
                       description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -2678,8 +2669,8 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         owner:
-          $ref: "#/components/schemas/PrefixOwner"
-          description: The one Function or Lake that may write the prefix, besides the writers that a RolesAssignment names. In a Bucket that a Function or a Lake declares by name, an omitted owner is that Function or Lake. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one.
+          $ref: "#/components/schemas/WorkloadRef"
+          description: The one Function, Lake or Job that may write the prefix, named with its kind, besides the writers that a RolesAssignment names. In a Bucket that a Function, a Lake or a Job declares by name, an omitted owner is that workload. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one.
         quota:
           $ref: "#/components/schemas/SizeQuota"
           description: "A cap on the prefix's total size: a write into the prefix must fit both this cap and the Bucket's, and while it is set funcd refuses to sign a presigned PUT URL into the prefix, with 403. It also caps a Lake's files under the prefix, though not the Lake's catalog."
@@ -2995,12 +2986,9 @@ components:
       additionalProperties: false
       properties:
         appliesTo:
-          description: The Functions of the namespace, by name, that the rules apply to; empty applies them to every Function of the namespace.
+          description: The Functions and Jobs of the namespace that the rules apply to, each named with its kind; empty applies them to every Function of the namespace and to no Job.
           items:
-            maxLength: 63
-            minLength: 1
-            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-            type: string
+            $ref: "#/components/schemas/WorkloadRef"
           type:
             - array
             - "null"
@@ -3772,11 +3760,8 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               owner:
-                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-                maxLength: 63
-                minLength: 1
-                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-                type: string
+                $ref: "#/components/schemas/WorkloadRef"
+                description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
               quota:
                 $ref: "#/components/schemas/SizeQuota"
                 description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -4523,11 +4508,8 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               owner:
-                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-                maxLength: 63
-                minLength: 1
-                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-                type: string
+                $ref: "#/components/schemas/WorkloadRef"
+                description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
               quota:
                 $ref: "#/components/schemas/SizeQuota"
                 description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -4714,11 +4696,8 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         owner:
-          description: The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in one that a Workflow declares, it names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv.
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
+          $ref: "#/components/schemas/WorkloadRef"
+          description: The Function or Job that owns the table, in the store's namespace, named with its kind. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function or a Job declares, the owner defaults to that workload; in one that a Workflow declares, a Function owner names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every workload, the owner included, reaches the table through an entry of its spec.bindings.kv.
       required:
         - name
       type: object
@@ -5507,32 +5486,14 @@ components:
           description: "A worker id, a DNS-1123 label: Functions of the namespace that name it, run the same runtime, are in the same resource group and have the same bindings, owned data and grants share one worker, which status.pool names. Empty, the default, runs the Function solo. Only the process runtime pools, for node runtimes and, when the server's Python is 3.14 or later, python ones; anywhere else the Function runs solo too. A pool takes the first 16 Functions by name, and the others wait in Pending with PoolFull."
           type: string
       type: object
-    PrefixOwner:
-      additionalProperties: false
-      properties:
-        kind:
-          description: The writer's kind. A Function and a Lake may share a name, so the kind says which one writes.
-          enum:
-            - Function
-            - Lake
-          type: string
-        name:
-          description: The writer's name, in the Bucket's namespace. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares.
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
-      required:
-        - kind
-        - name
-      type: object
     PrincipalRef:
       additionalProperties: false
       properties:
         kind:
-          description: "The kind of the principal: a Function, or an Identity for a caller outside funcd."
+          description: "The kind of the principal: a Function, a Job, whose runs' workers act as it, or an Identity for a caller outside funcd."
           enum:
             - Function
+            - Job
             - Identity
           type: string
         name:
@@ -6311,11 +6272,8 @@ components:
       additionalProperties: false
       properties:
         owner:
-          description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
+          $ref: "#/components/schemas/WorkloadRef"
+          description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
         quota:
           $ref: "#/components/schemas/SizeQuota"
           description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -6463,11 +6421,8 @@ components:
           description: "The Secret's values by key, each in base64. Each key is an environment-variable name: a letter or an underscore, then letters, digits and underscores; a key that starts with FUNCD_ never reaches a workload. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a Secret holding another value does not start."
           type: object
         owner:
-          description: The one Function that may write the Secret's keys through ctx.secret, in its namespace, besides the writers that a RolesAssignment names, such as the Secret Data Writer role. The Function writes only while it binds the Secret. With no owner, only those writers can write it. An apply of the Secret replaces its data, keys a Function wrote included.
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
+          $ref: "#/components/schemas/WorkloadRef"
+          description: The one Function or Job that may write the Secret's keys through ctx.secret, in its namespace, named with its kind, besides the writers that a RolesAssignment names, such as the Secret Data Writer role. The owner writes only while it binds the Secret. With no owner, only those writers can write it. An apply of the Secret replaces its data, keys a workload wrote included.
         type:
           description: funcd does not read it.
           enum:
@@ -7494,11 +7449,8 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               owner:
-                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-                maxLength: 63
-                minLength: 1
-                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-                type: string
+                $ref: "#/components/schemas/WorkloadRef"
+                description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
               quota:
                 $ref: "#/components/schemas/SizeQuota"
                 description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -7627,6 +7579,26 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
       required:
+        - name
+      type: object
+    WorkloadRef:
+      additionalProperties: false
+      properties:
+        kind:
+          description: The workload's kind. A Function, a Lake and a Job may share a name, so the kind says which one it is; each field names the kinds it accepts.
+          enum:
+            - Function
+            - Lake
+            - Job
+          type: string
+        name:
+          description: The workload's name, in the object's namespace.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - kind
         - name
       type: object
   securitySchemes:
