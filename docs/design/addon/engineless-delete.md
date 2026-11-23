@@ -13,8 +13,8 @@ stateDiagram-v2
     [*] --> s2
     s0 --> s0 : Answer, Approve, CallFails, Retain, Retry, RunEnds, Send, Stop
     s0 --> s1 : Remove
-    s1 --> s1 : Answer, Approve, CallFails, CollectJob, Retry, RunEnds, Stop
+    s1 --> s1 : Answer, Approve, CallFails, CollectRest, Retry, RunEnds, Stop
     s2 --> s0 : CollectStack
-    s2 --> s2 : DeleteApp, Stop
+    s2 --> s2 : Answer, CallFails, DeleteApp, Retry, Send, Stop
     s1 --> [*]
 ```

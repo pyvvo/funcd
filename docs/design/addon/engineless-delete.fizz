@@ -1,30 +1,35 @@
 ---
-# The deletion hold of an engineless add-on object (ADR-0345 Decisions 6 and 7), for one App whose parts are a stack
-# (an engineless object with deletion: delete), the Job its Function runs and that Function. Someone deletes the App.
-# The owner garbage collector marks the stack deleting instead of removing it, and removes the App's other parts only
-# once no engineless part of the App remains. funcd sends the stack's group its list, the stack with deleting: true,
-# while no call is in flight. The Function starts the destroy run of the Job, which waits for an approval, answers not
-# ok while the run has not ended, and ok once it has. funcd removes the stack on an ok answer for it, or once someone
-# sets deletion: retain. A call may fail, and funcd may stop and start again: what funcd knows of its calls lives in
-# memory, the hold in the store. Environment: the controller runs one worker, so a pass is one step, and the call runs
-# beside it; the destroy run needs its Job; the approval comes. Left out: several stacks and groups, a prune that drops
-# the stack with its Job (the same order), a standalone stack whose Job someone deletes by hand, the resync's period
-# and the backoff's length; tests hold those.
+# The deletion hold of an engineless add-on object (ADR-0345 Decisions 6 to 8), for one App whose parts are a stack
+# (an engineless object with deletion: delete), the Job its Function runs and that Function. funcd's pass sends the
+# stack's group its list while no call is in flight: before the deletion with deleting: false, which the Function
+# answers ok once it has applied the stack, after it with deleting: true. Someone deletes the App. The owner garbage
+# collector marks the stack deleting instead of removing it, and removes the App's other parts, the Job and the
+# Function, only once no engineless part of the App remains. For a deleting stack the Function starts the destroy run
+# of the Job, which waits for an approval, answers not ok while the run has not ended, and ok once it has. funcd removes
+# the stack on an ok answer to a call that carried it with deleting: true, or once someone sets deletion: retain. A call
+# in flight when the stack turns deleting answers for the stack as it was sent. A call may fail, and funcd may stop and
+# start again: what funcd knows of its calls lives in memory, the hold in the store. Environment: the controller runs
+# one worker, so a pass is one step, and the call runs beside it; the Function answers only while it exists; the
+# destroy run needs its Job; the approval comes. Left out: several stacks and groups, a prune that drops the stack with
+# its Job (the same order), a standalone stack whose Job someone deletes by hand, the resync's period and the
+# backoff's length; tests hold those.
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
-  max_actions: 24
+  max_actions: 15
   crash_on_yield: false
 ---
 # diagram: stack
-# mutant no-order: JobOutlivesTheStack
+# mutant no-order: PartsOutliveTheStack
 # mutant no-hold: NoStackGoesUndestroyed
 # mutant gone-on-any-answer: NoStackGoesUndestroyed
+# mutant ok-from-live-call: NoStackGoesUndestroyed
 # mutant no-retry: liveness
 
-# no-order: the collector removes the Job with the stack, not after it.
+# no-order: the collector removes the Job and the Function with the stack, not after it.
 # no-hold: the collector removes the stack at once, as it removes any other part.
 # gone-on-any-answer: funcd removes the stack at its first answer, ok or not.
+# ok-from-live-call: an ok answer to a call sent before the deletion removes the stack.
 # no-retry: a failed call is not sent again.
 MUTANT = ""
 
@@ -32,11 +37,15 @@ action Init:
     app = "live"
     stack = "live"
     job = True
+    fn = True
     run = "none"
     destroyed = False
     retained = False
     call = "idle"
+    sentdel = False
     answer = "none"
+    answerdel = False
+    applies = 0
     fails = 0
     stops = 0
 
@@ -54,34 +63,45 @@ atomic fair action CollectStack:
         stack = "deleting"
 
 # The App's other parts once no engineless part of it remains.
-atomic fair action CollectJob:
+atomic fair action CollectRest:
     require app == "deleted"
-    require job
+    require job or fn
     if MUTANT != "no-order":
         require stack == "gone"
     job = False
+    fn = False
 
-# funcd's pass sends the group's list while no call is in flight.
+# funcd's pass sends the group's list while no call is in flight: the stack as it is now.
 atomic fair action Send:
-    require stack == "deleting"
+    require stack != "gone"
     require call == "idle"
+    require fn
+    if stack == "live":
+        require applies < 1
+        applies += 1
     call = "sent"
+    sentdel = stack == "deleting"
 
-# The Function answers for the deleting stack: it starts the destroy run when none has started and the Job exists,
-# answers not ok until the run has ended, and ok once it has.
+# The Function answers for the stack as it was sent: ok once a live stack is applied; for a deleting one, it starts the
+# destroy run when none has started and the Job exists, answers not ok until the run has ended, and ok once it has.
 atomic fair action Answer:
     require call == "sent"
-    if run == "done":
+    require fn
+    if not sentdel:
+        answer = "ok"
+    elif run == "done":
         answer = "ok"
     else:
         if run == "none" and job:
             run = "waiting"
         answer = "notok"
+    answerdel = sentdel
     call = "idle"
 
+# A call fails, or finds its Function gone.
 atomic action CallFails:
     require call == "sent"
-    require fails < 1
+    require fails < 1 or not fn
     fails += 1
     call = "failed"
 
@@ -103,13 +123,16 @@ atomic fair action RunEnds:
     else:
         run = "none"
 
-# funcd removes the held stack on an ok answer for it, or once deletion: retain is set.
+# funcd removes the held stack on an ok answer to a call that carried it with deleting: true, or once deletion: retain
+# is set.
 atomic fair action Remove:
     require stack == "deleting"
     if MUTANT == "gone-on-any-answer":
         require answer != "none"
-    else:
+    elif MUTANT == "ok-from-live-call":
         require answer == "ok" or retained
+    else:
+        require (answer == "ok" and answerdel) or retained
     stack = "gone"
 
 atomic action Retain:
@@ -123,12 +146,13 @@ atomic action Stop:
     stops += 1
     call = "idle"
     answer = "none"
+    answerdel = False
 
-always assertion JobOutlivesTheStack:
-    return stack == "gone" or job
+always assertion PartsOutliveTheStack:
+    return stack == "gone" or (job and fn)
 
 always assertion NoStackGoesUndestroyed:
     return stack != "gone" or app == "live" or destroyed or retained
 
 always eventually assertion DeletedAppGoes:
-    return app == "live" or (stack == "gone" and not job)
+    return app == "live" or (stack == "gone" and not job and not fn)
