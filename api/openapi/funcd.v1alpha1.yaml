@@ -1450,6 +1450,356 @@ components:
         hooks:
           $ref: "#/components/schemas/AppHooks"
           description: "Functions of this App that funcd calls for each new revision whose spec has them: preApply before the revision's parts change, postApply once it is current. Each call is recorded in the revision's status.hooks; a call that ends during a stop of funcd, a hold or a pause is not recorded and is made again, so a hook must be safe to repeat."
+        jobs:
+          description: "The Jobs that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret it binds is one that the App's lists of those names declare. A Job part is Ready when its Job is, and its runs count for nothing in the App's readiness: an upgrade waits for no run, and a run that has not ended keeps the revision it pinned. Deleting the App, or dropping the entry, deletes the Job, which cancels its runs that have not ended."
+          items:
+            additionalProperties: false
+            properties:
+              bindings:
+                $ref: "#/components/schemas/FunctionBindings"
+                description: "What the code may use: KV tables, Bucket prefixes, SQL databases, Lakes and Functions, each under an alias, and ConfigMaps and Secrets. A binding is the grant: a call on an alias with no binding is refused with 403. Each store, Lake, ConfigMap and Secret it names must be declared at the root, in this spec's kv, buckets, sql, lakes, configMaps or secrets."
+              buckets:
+                description: "The Buckets the Job declares: by name it creates and owns one, and a Bucket of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.blob binds only a declared Bucket."
+                items:
+                  additionalProperties: false
+                  properties:
+                    deletion:
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
+                      enum:
+                        - retain
+                        - delete
+                      type: string
+                    name:
+                      description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    prefixes:
+                      description: The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound.
+                      items:
+                        $ref: "#/components/schemas/BucketPrefix"
+                      type:
+                        - array
+                        - "null"
+                    quota:
+                      $ref: "#/components/schemas/BucketQuota"
+                      description: Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403.
+                    ref:
+                      description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  type: object
+                type:
+                  - array
+                  - "null"
+              concurrency:
+                description: "How many of the Job's runs may hold a worker at once: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued."
+                format: int64
+                maximum: 15
+                minimum: 1
+                type: integer
+              configMaps:
+                description: "The ConfigMaps the Job declares: by name it defines one from its data, which goes with the Job, by ref it uses an existing one. spec.bindings.config binds only a declared ConfigMap."
+                items:
+                  additionalProperties: false
+                  properties:
+                    data:
+                      additionalProperties:
+                        type: string
+                      description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
+                      type: object
+                    name:
+                      description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    ref:
+                      description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  type: object
+                type:
+                  - array
+                  - "null"
+              handler:
+                description: The name of the export that the shim calls once for each run, such as handle. A Job without one, or whose code has no such export, is not Ready, with ShapeInvalid.
+                pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
+                type: string
+              image:
+                description: "The OCI reference of the code's artifact: a registry reference with a tag or a digest, or an oci-layout:// reference to a layout on the server's disk. A Job whose image is missing, or cannot be resolved or pulled, starts no run."
+                type: string
+              imageDigest:
+                description: The sha256 digest that funcd pulls the image by and checks it against. Unset, funcd resolves the image to its digest when it creates the Revision of a new spec and keeps that digest, so a tag that moves later changes nothing.
+                pattern: ^sha256:[a-f0-9]{64}$
+                type: string
+              kv:
+                description: "The KVStores the Job declares: by name it creates and owns one, and a store of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.kv binds only a declared store."
+                items:
+                  additionalProperties: false
+                  properties:
+                    deletion:
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
+                      enum:
+                        - retain
+                        - delete
+                      type: string
+                    name:
+                      description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    quota:
+                      $ref: "#/components/schemas/KVStoreQuota"
+                      description: Caps on the store's total size, on each value and on each key.
+                    ref:
+                      description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    tables:
+                      description: The store's tables. A table is a key space that only its owner and the writers that a RolesAssignment names may write. Table names are unique within the store, and a store with no table has nothing a Function can write.
+                      items:
+                        $ref: "#/components/schemas/KVTable"
+                      type:
+                        - array
+                        - "null"
+                  type: object
+                type:
+                  - array
+                  - "null"
+              lakes:
+                description: "The Lakes the Job declares: by name it creates one that goes with the Job, by ref it uses an existing one. spec.bindings.lake binds only a declared Lake, and a Lake declared by name declares nothing at its own root: it binds the Job's buckets, configMaps and secrets."
+                items:
+                  additionalProperties: false
+                  properties:
+                    bindings:
+                      $ref: "#/components/schemas/LakeBindings"
+                      description: "What the Lake's engine uses: Bucket prefixes, and the ConfigMaps and Secrets of its environment."
+                    buckets:
+                      description: "The Buckets that a Lake applied on its own declares: by name the Lake creates the Bucket, an omitted prefix owner being the Lake, and a Bucket of that name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each Bucket that the Lake's bindings.blob names must be declared here. A lake that another resource declares sets none."
+                      items:
+                        additionalProperties: false
+                        properties:
+                          deletion:
+                            description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
+                            enum:
+                              - retain
+                              - delete
+                            type: string
+                          name:
+                            description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                            type: string
+                          prefixes:
+                            description: The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound.
+                            items:
+                              $ref: "#/components/schemas/BucketPrefix"
+                            type:
+                              - array
+                              - "null"
+                          quota:
+                            $ref: "#/components/schemas/BucketQuota"
+                            description: Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403.
+                          ref:
+                            description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                            type: string
+                        type: object
+                      type:
+                        - array
+                        - "null"
+                    configMaps:
+                      description: "The ConfigMaps that a Lake applied on its own declares: by name the Lake defines one, and a ConfigMap of its stored name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each ConfigMap that the Lake's bindings.config names must be declared here. A lake that another resource declares sets none."
+                      items:
+                        additionalProperties: false
+                        properties:
+                          data:
+                            additionalProperties:
+                              type: string
+                            description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
+                            type: object
+                          name:
+                            description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                            type: string
+                          ref:
+                            description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                            type: string
+                        type: object
+                      type:
+                        - array
+                        - "null"
+                    ingress:
+                      $ref: "#/components/schemas/Ingress"
+                      description: Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/<name>, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself.
+                    location:
+                      $ref: "#/components/schemas/LakeLocation"
+                      description: The Bucket prefix that holds the Lake's files, one of the Lake's bindings.blob. The Lake waits in Pending, with the reason PrefixNotOwned, until the prefix's owner is this Lake. The Lake's catalog is kept outside the Bucket, under the same location, so a Lake located where another was finds that Lake's files and catalog.
+                    name:
+                      description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    ref:
+                      description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    resources:
+                      $ref: "#/components/schemas/ResourceSpec"
+                      description: The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine.
+                    secrets:
+                      description: The Secrets that a Lake applied on its own declares, with the keys its engine reads. Each Secret that the Lake's bindings.secret names must be declared here, and the Lake waits in Pending, with SecretNotFound or SecretKeyMissing, while one is missing or lacks a key. A lake that another resource declares sets none.
+                      items:
+                        additionalProperties: false
+                        properties:
+                          description:
+                            description: What the Secret is for, for the installer who provides it.
+                            type: string
+                          keys:
+                            description: "The keys read from the Secret: its data must hold each of them."
+                            items:
+                              pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                              type: string
+                            minItems: 1
+                            type: array
+                          name:
+                            description: The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                            type: string
+                        required:
+                          - name
+                          - keys
+                        type: object
+                      type:
+                        - array
+                        - "null"
+                  type: object
+                type:
+                  - array
+                  - "null"
+              name:
+                description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              ref:
+                description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              resources:
+                $ref: "#/components/schemas/ResourceSpec"
+                description: The CPU and memory caps of each run's worker; a field left empty takes functions.defaultResources. Only the containerd runtime enforces them.
+              runtime:
+                description: The runtime that runs the code, such as nodejs22 or python314. A Job without one is not Ready, with ShapeInvalid, and one whose runtime this node cannot run is not Ready, with RuntimeUnavailable.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              secrets:
+                description: The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Job waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key.
+                items:
+                  additionalProperties: false
+                  properties:
+                    description:
+                      description: What the Secret is for, for the installer who provides it.
+                      type: string
+                    keys:
+                      description: "The keys read from the Secret: its data must hold each of them."
+                      items:
+                        pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                        type: string
+                      minItems: 1
+                      type: array
+                    name:
+                      description: The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  required:
+                    - name
+                    - keys
+                  type: object
+                type:
+                  - array
+                  - "null"
+              sql:
+                description: "The SQLDatabases the Job declares: by name it creates and owns one, and a database of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.sql binds only a declared database."
+                items:
+                  additionalProperties: false
+                  properties:
+                    deletion:
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
+                      enum:
+                        - retain
+                        - delete
+                      type: string
+                    name:
+                      description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    owner:
+                      $ref: "#/components/schemas/WorkloadRef"
+                      description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
+                    quota:
+                      $ref: "#/components/schemas/SizeQuota"
+                      description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
+                    ref:
+                      description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    resources:
+                      $ref: "#/components/schemas/ResourceSpec"
+                      description: The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine.
+                  type: object
+                type:
+                  - array
+                  - "null"
+              timeout:
+                description: "The bound on each call of a run's handler, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops."
+                pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+                patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+                type: string
+              volumes:
+                description: The directories each run's worker mounts. Apply refuses a Job with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A local volume is the Job's own, never a same-named Function's, and allows a concurrency of at most 1.
+                items:
+                  $ref: "#/components/schemas/VolumeEntry"
+                type:
+                  - array
+                  - "null"
+            type: object
+          type:
+            - array
+            - "null"
         kv:
           description: "The KVStores that the App declares or refers to; no two entries name the same one. A store that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned."
           items:
@@ -2174,7 +2524,7 @@ components:
       additionalProperties: false
       properties:
         children:
-          description: One line per entry of configMaps, kv, buckets, sql, addons, functions, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them; an addons line names the add-on's kind. Then one Pruning line per dropped object not deleted yet.
+          description: One line per entry of configMaps, kv, buckets, sql, addons, functions, jobs, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them; an addons line names the add-on's kind. Then one Pruning line per dropped object not deleted yet.
           items:
             $ref: "#/components/schemas/AppChild"
           type:

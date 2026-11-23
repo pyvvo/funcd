@@ -25,6 +25,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `eventSources` | array of [`App.spec.eventSources[]`](#appspeceventsources) | The EventSources that the App declares or refers to; no two entries name the same one. |
 | `functions` | array of [`App.spec.functions[]`](#appspecfunctions) | The Functions that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret it binds is one that the App's lists of those names declare. A workflows step that sets function.image is written as a Function named &lt;workflow&gt;-&lt;step&gt;, a name no entry may declare. |
 | `hooks` | object, [`App.spec.hooks`](#appspechooks) | Functions of this App that funcd calls for each new revision whose spec has them: preApply before the revision's parts change, postApply once it is current. Each call is recorded in the revision's status.hooks; a call that ends during a stop of funcd, a hold or a pause is not recorded and is made again, so a hook must be safe to repeat. |
+| `jobs` | array of [`App.spec.jobs[]`](#appspecjobs) | The Jobs that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret it binds is one that the App's lists of those names declare. A Job part is Ready when its Job is, and its runs count for nothing in the App's readiness: an upgrade waits for no run, and a run that has not ended keeps the revision it pinned. Deleting the App, or dropping the entry, deletes the Job, which cancels its runs that have not ended. |
 | `kv` | array of [`App.spec.kv[]`](#appspeckv) | The KVStores that the App declares or refers to; no two entries name the same one. A store that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned. |
 | `lakes` | array of [`App.spec.lakes[]`](#appspeclakes) | The Lakes that the App declares or refers to; no two entries name the same one. An entry leaves buckets, configMaps and secrets empty; each Bucket and Secret it binds is declared in the App's buckets and secrets. |
 | `paused` | boolean | While true, funcd only sets the App's Paused condition: it creates no revision, writes or deletes no part and calls no hook. Changing it creates no revision, and a rollout in progress gets a full app.upgradeTimeout again on resume. An apply without it resumes the App; funcdctl app deploy and app rollback keep it as it is. |
@@ -479,6 +480,115 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | --- | --- | --- |
 | `function` | string, required, a DNS-1123 label | The name of a functions entry of this App, not a ref entry, at most once per list. funcd calls it with a CloudEvent whose type is the list's name and whose data is the revision's spec.hookInput. The call fails on an answer of 400 or more, on a Function with protocol http, or when no answer starts within the Function's spec.timeout, else invoke.defaultTimeout, its wake included. |
 
+### `App.spec.jobs[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `bindings` | object, [`App.spec.functions[].bindings`](#appspecfunctionsbindings) | What the code may use: KV tables, Bucket prefixes, SQL databases, Lakes and Functions, each under an alias, and ConfigMaps and Secrets. A binding is the grant: a call on an alias with no binding is refused with 403. Each store, Lake, ConfigMap and Secret it names must be declared at the root, in this spec's kv, buckets, sql, lakes, configMaps or secrets. |
+| `buckets` | array of [`App.spec.jobs[].buckets[]`](#appspecjobsbuckets) | The Buckets the Job declares: by name it creates and owns one, and a Bucket of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.blob binds only a declared Bucket. |
+| `concurrency` | integer, 1 to 15 | How many of the Job's runs may hold a worker at once: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued. |
+| `configMaps` | array of [`App.spec.jobs[].configMaps[]`](#appspecjobsconfigmaps) | The ConfigMaps the Job declares: by name it defines one from its data, which goes with the Job, by ref it uses an existing one. spec.bindings.config binds only a declared ConfigMap. |
+| `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` | The name of the export that the shim calls once for each run, such as handle. A Job without one, or whose code has no such export, is not Ready, with ShapeInvalid. |
+| `image` | string | The OCI reference of the code's artifact: a registry reference with a tag or a digest, or an oci-layout:// reference to a layout on the server's disk. A Job whose image is missing, or cannot be resolved or pulled, starts no run. |
+| `imageDigest` | string, a sha256 digest | The sha256 digest that funcd pulls the image by and checks it against. Unset, funcd resolves the image to its digest when it creates the Revision of a new spec and keeps that digest, so a tag that moves later changes nothing. |
+| `kv` | array of [`App.spec.jobs[].kv[]`](#appspecjobskv) | The KVStores the Job declares: by name it creates and owns one, and a store of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.kv binds only a declared store. |
+| `lakes` | array of [`App.spec.jobs[].lakes[]`](#appspecjobslakes) | The Lakes the Job declares: by name it creates one that goes with the Job, by ref it uses an existing one. spec.bindings.lake binds only a declared Lake, and a Lake declared by name declares nothing at its own root: it binds the Job's buckets, configMaps and secrets. |
+| `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
+| `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The CPU and memory caps of each run's worker; a field left empty takes functions.defaultResources. Only the containerd runtime enforces them. |
+| `runtime` | string, a DNS-1123 label | The runtime that runs the code, such as nodejs22 or python314. A Job without one is not Ready, with ShapeInvalid, and one whose runtime this node cannot run is not Ready, with RuntimeUnavailable. |
+| `secrets` | array of [`App.spec.jobs[].secrets[]`](#appspecjobssecrets) | The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Job waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key. |
+| `sql` | array of [`App.spec.jobs[].sql[]`](#appspecjobssql) | The SQLDatabases the Job declares: by name it creates and owns one, and a database of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.sql binds only a declared database. |
+| `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The bound on each call of a run's handler, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops. |
+| `volumes` | array of [`App.spec.functions[].volumes[]`](#appspecfunctionsvolumes) | The directories each run's worker mounts. Apply refuses a Job with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A local volume is the Job's own, never a same-named Function's, and allows a concurrency of at most 1. |
+
+### `App.spec.jobs[].buckets[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry. |
+| `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
+| `prefixes` | array of [`App.spec.buckets[].prefixes[]`](#appspecbucketsprefixes) | The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound. |
+| `quota` | object, [`App.spec.buckets[].quota`](#appspecbucketsquota) | Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403. |
+| `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
+
+### `App.spec.jobs[].configMaps[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and \_, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD\_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
+| `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
+
+### `App.spec.jobs[].kv[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry. |
+| `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
+| `quota` | object, [`App.spec.functions[].kv[].quota`](#appspecfunctionskvquota) | Caps on the store's total size, on each value and on each key. |
+| `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
+| `tables` | array of [`App.spec.functions[].kv[].tables[]`](#appspecfunctionskvtables) | The store's tables. A table is a key space that only its owner and the writers that a RolesAssignment names may write. Table names are unique within the store, and a store with no table has nothing a Function can write. |
+
+### `App.spec.jobs[].lakes[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `bindings` | object, [`App.spec.functions[].lakes[].bindings`](#appspecfunctionslakesbindings) | What the Lake's engine uses: Bucket prefixes, and the ConfigMaps and Secrets of its environment. |
+| `buckets` | array of [`App.spec.jobs[].lakes[].buckets[]`](#appspecjobslakesbuckets) | The Buckets that a Lake applied on its own declares: by name the Lake creates the Bucket, an omitted prefix owner being the Lake, and a Bucket of that name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each Bucket that the Lake's bindings.blob names must be declared here. A lake that another resource declares sets none. |
+| `configMaps` | array of [`App.spec.jobs[].lakes[].configMaps[]`](#appspecjobslakesconfigmaps) | The ConfigMaps that a Lake applied on its own declares: by name the Lake defines one, and a ConfigMap of its stored name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each ConfigMap that the Lake's bindings.config names must be declared here. A lake that another resource declares sets none. |
+| `ingress` | object, [`App.spec.addons[].ingress`](#appspecaddonsingress) | Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/&lt;name&gt;, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself. |
+| `location` | object, [`App.spec.functions[].lakes[].location`](#appspecfunctionslakeslocation) | The Bucket prefix that holds the Lake's files, one of the Lake's bindings.blob. The Lake waits in Pending, with the reason PrefixNotOwned, until the prefix's owner is this Lake. The Lake's catalog is kept outside the Bucket, under the same location, so a Lake located where another was finds that Lake's files and catalog. |
+| `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
+| `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine. |
+| `secrets` | array of [`App.spec.jobs[].lakes[].secrets[]`](#appspecjobslakessecrets) | The Secrets that a Lake applied on its own declares, with the keys its engine reads. Each Secret that the Lake's bindings.secret names must be declared here, and the Lake waits in Pending, with SecretNotFound or SecretKeyMissing, while one is missing or lacks a key. A lake that another resource declares sets none. |
+
+### `App.spec.jobs[].lakes[].buckets[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry. |
+| `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
+| `prefixes` | array of [`App.spec.buckets[].prefixes[]`](#appspecbucketsprefixes) | The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound. |
+| `quota` | object, [`App.spec.buckets[].quota`](#appspecbucketsquota) | Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403. |
+| `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
+
+### `App.spec.jobs[].lakes[].configMaps[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and \_, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD\_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
+| `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
+
+### `App.spec.jobs[].lakes[].secrets[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `description` | string | What the Secret is for, for the installer who provides it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
+
+### `App.spec.jobs[].secrets[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `description` | string | What the Secret is for, for the installer who provides it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
+
+### `App.spec.jobs[].sql[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry. |
+| `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
+| `owner` | object, [`App.spec.buckets[].prefixes[].owner`](#appspecbucketsprefixesowner) | The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it. |
+| `quota` | object, [`App.spec.buckets[].prefixes[].quota`](#appspecbucketsprefixesquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
+| `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
+
 ### `App.spec.kv[]`
 
 | Field | Type and limits | Description |
@@ -869,7 +979,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `children` | array of [`App.status.children[]`](#appstatuschildren) | One line per entry of configMaps, kv, buckets, sql, addons, functions, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them; an addons line names the add-on's kind. Then one Pruning line per dropped object not deleted yet. |
+| `children` | array of [`App.status.children[]`](#appstatuschildren) | One line per entry of configMaps, kv, buckets, sql, addons, functions, jobs, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them; an addons line names the add-on's kind. Then one Pruning line per dropped object not deleted yet. |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
 | `currentRevision` | string, a DNS-1123 label | The AppRevision whose rollout last completed, empty until one has. After a failed rollout the parts keep the newer spec, so it names the last complete rollout, not what runs. |
 | `lastSelfHeal` | object, [`App.status.lastSelfHeal`](#appstatuslastselfheal) | The last part that funcd wrote back after another writer changed or deleted it, and when. |
