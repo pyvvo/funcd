@@ -117,7 +117,12 @@ jobs:
 
       - name: Run CI (fmt check + lint + fast tests + build)
         if: needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.generated == 'true' || github.event_name == 'push'
-        run: nix develop --command just ci
+        run: |
+          echo "STEP pid $$ pgid $(ps -o pgid= -p $$) sid $(ps -o sid= -p $$)"
+          ps -eo pid,ppid,pgid,sid,comm --forest | head -40
+          python3 .github/diag/canary.py &
+          ( while sleep 60; do echo "MEM $(date -u +%T) $(free -m | awk '/Mem:/{print $3 "/" $2 " MB"}') $(head -1 /proc/pressure/memory)"; done ) &
+          nix develop --command just ci
 
       - name: Check the design specs, the behavior registry and the repository hygiene (docs only)
         if: needs.changes.outputs.nondocs != 'true' && needs.changes.outputs.generated != 'true' && github.event_name != 'push'
