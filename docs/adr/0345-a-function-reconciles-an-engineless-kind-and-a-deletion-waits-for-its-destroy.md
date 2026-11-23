@@ -275,8 +275,9 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
 - **(−)** An engineless object's first pass writes its status before its first call. The Function must apply each list
   idempotently, and tell an object sent with `deleting: true`, to destroy, from one that left the list, to forget.
 - **(−)** Under `funcdctl dev` a hold lasts while dev runs and, with `--persist`, across its restarts; without it, the
-  object goes with dev's store and what it manages stays, as `retain` would. A destroy Job on an Addon's runtime runs
-  on dev's container engine (ADR-0344 Decision 13).
+  object goes with dev's store and what it manages stays, as `retain` would. A destroy Job on an Addon's runtime is
+  `RuntimeUnavailable` under dev until ADR-0346 is implemented (ADR-0344 Decision 13), so meanwhile its stack stays held
+  there until `retain`.
 - **(−)** Restores stay as FEAT-0009 decided them, and app-todo's D cases run them: an App's backup copies no
   engineless object, which has no snapshot (`scope.app`, ADR-0337 Decision 7), but copies the stores its Function
   keeps state in; one cannot be restored in place (no `restore`, ADR-0333); after a host loss, `funcd restore run`

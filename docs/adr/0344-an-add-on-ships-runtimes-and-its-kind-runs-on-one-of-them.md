@@ -41,7 +41,8 @@ as `WithAddonRuntime` stay the provider that runs engines; a runtime an Addon sh
 - `scenario: addon-runtime-wrong-workload` — *When* a Function names a runtime whose entry lists only `Job` or
   `Engine`, *Then* it fails with `RuntimeUnavailable` naming the Addon and the workloads, before any worker starts.
 - `scenario: addon-runtime-process-driver` (amended 2026-11-23) — *When* a Function names an Addon's runtime on a
-  process server, *Then* it fails with `RuntimeUnavailable`: no driver of that server runs an image.
+  process server, or under `funcdctl dev` until ADR-0346 is implemented, *Then* it fails with `RuntimeUnavailable`: no
+  worker driver of that server runs an image.
 - `scenario: addon-runtime-job` (amended 2026-11-23) — *Given* `deno2` lists `Job`, *When* a Job names it, *Then* its
   runs run `deno2`'s image; *when* a Job names a runtime that lists only `Function`, *Then* `RuntimeUnavailable`,
   `ships it for Function, not for Jobs`.
@@ -71,8 +72,9 @@ as `WithAddonRuntime` stay the provider that runs engines; a runtime an Addon sh
 ## Scope
 
 **In** (amended 2026-11-23): Decisions 1 to 13; rauthy's manifest reshaped in pyvvo/funcd-addons and its pin bumped; the
-guide, the API reference, the behavior rows and the blueprint. **Out**: the `Engineless` workload (F270's ADR); the
-shim protocol for runtimes built outside funcd (a follow-up under F139); image signatures; wasm.
+guide, the API reference, the behavior rows and the blueprint. **Out**: the `Engineless` workload (F270's ADR); the shim
+protocol for runtimes built outside funcd (a follow-up under F139); how dev runs workers on an Addon's runtime
+(ADR-0346); image signatures; wasm.
 
 ## Constraints & Decision drivers
 
@@ -117,7 +119,7 @@ shim protocol for runtimes built outside funcd (a follow-up under F139); image s
    later included, though running workers keep the operator's image until they stop (Decision 8). The gate reads the
    stored Addons on each pass and fails the Function with `RuntimeUnavailable`, in ADR-0149 Decision 4's form, with one
    of three new causes: `Addon "<addon>" ships it for <workloads>, not for <Functions|Jobs>`; `it is an Addon's image,
-   which no driver of this server runs` (amended 2026-11-23); `the Addon that shipped it is gone`, for a Revision that
+   which no worker driver of this server runs` (amended 2026-11-23); `the Addon that shipped it is gone`, for a Revision that
    recorded its image.
 7. **Recovery.** The Function controller watches Addons. A watch event carries no prior state (`controller.MapFunc`),
    so each change requeues every Function whose `spec.runtime` is none of funcd's own.
@@ -163,6 +165,8 @@ before a run starts (amended 2026-11-23). ADR-0339's AddonRevision pin and `revi
   runtime with no image" (`:40`): an Addon's runtime is known at the gate and recovers when its Addon appears.
 - **functions.md**: beside "A tag that moved" (`:66`), a row: an Addon's new image moves no Revision.
 - **funcdctl.md** (`:30`) and **funcdctl-dev.md** (`:53`): a template's `addon.yaml` that adds no kind, exit 1.
+- **funcdctl-dev.md** (amended 2026-11-23): a new row "A worker on an Addon's runtime": `RuntimeUnavailable` until
+  ADR-0346.
 
 ## Temporary workarounds
 
