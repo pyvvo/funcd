@@ -3372,7 +3372,8 @@ func (r *Reconciler) addRecordBound(env map[string]string) {
 // worker gets a local API socket of its own, on which it acts as its Job (ADR-0351 Decision 2).
 func (r *Reconciler) workerSpec(ctx context.Context, w workload, rev v1.ObjectName, wo workerOf, artifactPath string, we workerEnv) (runtime.WorkerSpec, error) {
 	m := w.meta()
-	spec := runtime.WorkerSpec{Namespace: m.Namespace, Name: wo.name, OwnerKind: wo.kind, Replica: wo.replica, Image: string(w.spec.Runtime)}
+	// Only the container shape sets Image (ADR-0346 Decision 2): runtime.Pair runs a spec with one on its image side.
+	spec := runtime.WorkerSpec{Namespace: m.Namespace, Name: wo.name, OwnerKind: wo.kind, Replica: wo.replica}
 	if r.materializer == nil {
 		// Legacy placeholder: a long-lived process stands in for the worker; real execution is the shim path (ADR-0030).
 		spec.Command = []string{"sleep", "86400"}
@@ -3382,11 +3383,19 @@ func (r *Reconciler) workerSpec(ctx context.Context, w workload, rev v1.ObjectNa
 	if err != nil {
 		return runtime.WorkerSpec{}, err
 	}
+	spec.Limits = r.limitsOf(ctx, w.fn())
+	if r.endpointMode != EndpointNetnsFixedPort {
+		if img, ok, err := r.addonImage(ctx, w, rev); err != nil || ok {
+			if err != nil {
+				return runtime.WorkerSpec{}, err
+			}
+			return r.imageWorkerSpec(spec, w, rev, wo, artifactPath, we, img)
+		}
+	}
 	sock, err := r.invokeSocket(callerRef(w, wo))
 	if err != nil {
 		return runtime.WorkerSpec{}, err
 	}
-	spec.Limits = r.limitsOf(ctx, w.fn())
 	if r.endpointMode != EndpointNetnsFixedPort {
 		// Process mode (ADR-0030): ShimCommand launches the shim, which binds loopback and writes its port file; the
 		// worker sees the host paths, and its volumes are host directories with no mount (ADR-0262).
