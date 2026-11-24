@@ -116,6 +116,26 @@ func TestAWorkerNodeRunsTheNamespacePlacedOnIt(t *testing.T) {
 		"a WorkerNode a namespace names cannot be deleted")
 }
 
+// TestAControlPlaneAloneRunsNoNamespace starts funcd server's platform: it serves the API and the node API, opens no data
+// plane, and leaves an unplaced namespace's objects waiting for a node (FEAT-0002 F241).
+func TestAControlPlaneAloneRunsNoNamespace(t *testing.T) {
+	ctx := context.Background()
+	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))),
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0"}))
+	require.Empty(t, cp.DataPlaneAddr())
+	require.NotEmpty(t, cp.ClusterAddr())
+	admin, err := sdk.New("http://"+cp.Addr(), sdk.WithToken(clusterAdmin))
+	require.NoError(t, err)
+	kv := &v1.KVStore{TypeMeta: tmeta(v1.KindKVStore)}
+	kv.Name, kv.Namespace, kv.ResourceGroup = "kv1", "e1", "rg1"
+	_, err = admin.Apply(ctx, kv)
+	require.NoError(t, err)
+	time.Sleep(500 * time.Millisecond)
+	obj, err := admin.Get(ctx, v1.KindKVStore, "e1", "kv1")
+	require.NoError(t, err)
+	require.Empty(t, obj.(*v1.KVStore).Status.Phase)
+}
+
 func TestAnAPITokenKeptAsAHashWorksUntilItIsMintedAgainOrDeleted(t *testing.T) {
 	cp := runPlatform(t, funcd.WithStore(store.New(memory.New())))
 	base := "http://" + cp.Addr()

@@ -36,11 +36,12 @@ func (n *node) joined(t *testing.T, admin *sdk.Client, cluster string, name v1.O
 	require.Contains(t, out, "joined as worker node "+string(name))
 }
 
-// newControlPlane is a node that serves as the control plane alone, and the address of its node API.
+// newControlPlane is a node that serves as the control plane alone, and the address of its node API. Its config names the
+// container runtime, which a control plane alone does not need.
 func newControlPlane(t *testing.T) (*node, string) {
 	t.Helper()
 	cluster := freeAddr(t)
-	n := newNode(t, nil, fmt.Sprintf("cluster:\n  listenAddr: %q\n", cluster))
+	n := newNode(t, nil, fmt.Sprintf("cluster:\n  listenAddr: %q\nruntime:\n  mode: containerd\n", cluster))
 	n.role = roleServer
 	return n, cluster
 }

@@ -85,6 +85,9 @@ func (p *Platform) heldByRestore() bool {
 	return held && m.Reason == hold.ReasonRestore
 }
 
+// controlPlaneAlone reports whether this process is the control plane of worker nodes and runs no namespace itself.
+func (p *Platform) controlPlaneAlone() bool { return p.cfg.cluster != nil && !p.cfg.cluster.LocalRuns }
+
 // elsewhere reports whether a worker node runs namespace ns (FEAT-0002): a control plane that worker nodes join leaves the
 // namespace's objects, its runs, its Routes and its children to that node.
 func (p *Platform) elsewhere(ns v1.NamespaceName) bool { return p.cluster != nil && p.cluster.Skip(ns) }

@@ -1403,6 +1403,9 @@ func (p *Platform) buildControlPlane() error {
 	// deadline once the body is read, so it does not cut a long-running handler.
 	p.dataPlaneServer = &http.Server{Handler: recordGateway(dpHandler), ReadHeaderTimeout: serverReadHeaderTimeout,
 		ReadTimeout: cmp.Or(c.gatewayReadTimeout, serverReadTimeout), ErrorLog: httpErrorLog}
+	if p.controlPlaneAlone() {
+		return nil // each node's edge serves its own namespaces
+	}
 	dln, err := net.Listen("tcp", c.dataPlaneAddr)
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "bind data-plane listener on %s", c.dataPlaneAddr)
@@ -1450,7 +1453,7 @@ func (p *Platform) registerSignIn(ctrl *controller.Controller, fns *function.Rec
 func (p *Platform) Addr() string { return p.addr }
 
 // DataPlaneAddr returns the bound data-plane (function-invocation) address, available
-// after New (ADR-0033).
+// after New (ADR-0033); "" on a control plane alone, which has no data plane (FEAT-0002).
 func (p *Platform) DataPlaneAddr() string { return p.dataPlaneAddr }
 
 // WaitS3Gateway blocks until the WithS3Gateway frontend is bound and serving (nil), it stopped first (its error),
@@ -1606,11 +1609,13 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.logger.ErrorContext(ctx, "control-plane server stopped", "error", err)
 		}
 	}()
-	go func() {
-		if err := serve(p.dataPlaneServer, p.dataPlaneListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			p.logger.ErrorContext(ctx, "data-plane server stopped", "error", err)
-		}
-	}()
+	if p.dataPlaneListener != nil {
+		go func() {
+			if err := serve(p.dataPlaneServer, p.dataPlaneListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				p.logger.ErrorContext(ctx, "data-plane server stopped", "error", err)
+			}
+		}()
+	}
 	if p.bridgeListen.IsValid() {
 		go p.serveBridge(ctx, serve)
 	}

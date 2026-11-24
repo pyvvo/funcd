@@ -25,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/durable"
 	"github.com/pyvvo/funcd/internal/platform/stopsignal"
 	"github.com/pyvvo/funcd/internal/platform/version"
+	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -80,6 +81,19 @@ func (r role) secretsKey(cfg config.Config) (config.Config, error) {
 	}
 	cfg.Secrets.EncryptionKeyFile = path
 	return cfg, nil
+}
+
+// runsWorkers reports whether the role runs namespaces: a control plane alone runs none, so it needs no container runtime
+// and none of what workers reach.
+func (r role) runsWorkers() bool { return r != roleServer }
+
+// executionOptions are the role's runtime and its shims.
+func (r role) executionOptions(ctx context.Context, cfg config.Config, log *slog.Logger) ([]funcd.Option, func() error, error) {
+	if r.runsWorkers() {
+		return executionOptions(ctx, cfg, log)
+	}
+	rt := process.New(log)
+	return []funcd.Option{funcd.WithRuntime(rt)}, rt.Close, nil
 }
 
 // hasJoined reports whether this machine joined a control plane as a worker node.
@@ -185,8 +199,8 @@ func newServerCmd(out io.Writer) *cobra.Command {
 		Use:   "server",
 		Short: "Run the control plane alone: the API, the metastore and the node API that worker nodes join",
 		Long: "Run the control plane alone: the API, the metastore and the node API that worker nodes join, on " +
-			"cluster.listenAddr (0.0.0.0:7443 when unset). It runs no namespace itself: each runs on the worker node its " +
-			"spec.node names.",
+			"cluster.listenAddr (0.0.0.0:7443 when unset). It runs no namespace itself, so it needs no container runtime and " +
+			"opens no data plane: each namespace runs on the worker node its spec.node names.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return serveAs(cmd.Context(), configPath, nil, out, roleServer)

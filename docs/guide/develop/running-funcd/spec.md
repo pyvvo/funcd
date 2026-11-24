@@ -530,7 +530,7 @@ Clear the unclean-start count after safe mode stopped funcd; the next start is h
 ```text
 funcd server [flags]
 
-Run the control plane alone: the API, the metastore and the node API that worker nodes join, on cluster.listenAddr (0.0.0.0:7443 when unset). It runs no namespace itself: each runs on the worker node its spec.node names.
+Run the control plane alone: the API, the metastore and the node API that worker nodes join, on cluster.listenAddr (0.0.0.0:7443 when unset). It runs no namespace itself, so it needs no container runtime and opens no data plane: each namespace runs on the worker node its spec.node names.
 ```
 
 | Flag | Type | Default | Description |

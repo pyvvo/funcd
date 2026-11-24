@@ -510,7 +510,7 @@ func buildOptionsAs(ctx context.Context, cfg config.Config, root *slog.Logger, h
 	// Egress network isolation (ADR-0115, FEAT-0007/F80): opt-in worker-egress default-deny + redirect to
 	// the egress gateway (F81). Linux/containerd only (network.New is a no-op elsewhere). The subnet comes
 	// from the containerd runtime; the gateway port / resolver / internal allowlist from config.
-	if n := cfg.Server.Network; n.Egress {
+	if n := cfg.Server.Network; n.Egress && r.runsWorkers() {
 		subnet, err := netip.ParsePrefix(cfg.Runtime.Containerd.SubnetCIDR)
 		if err != nil {
 			return nil, noopClose, nil, "", fmt.Errorf("egress isolation: parse worker subnet %q: %w", cfg.Runtime.Containerd.SubnetCIDR, err)
@@ -561,7 +561,7 @@ func buildOptionsAs(ctx context.Context, cfg config.Config, root *slog.Logger, h
 	if perr != nil {
 		return nil, noopClose, nil, "", perr
 	}
-	if cfg.S3Gateway.Enabled {
+	if cfg.S3Gateway.Enabled && r.runsWorkers() {
 		opts = append(opts, funcd.WithS3Gateway(
 			cfg.S3Gateway.ListenAddr, s3Endpoint(cfg), cfg.S3Gateway.MaxUploadBytes,
 			cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir), funcd.WithS3KeyRotation(period))
@@ -569,7 +569,7 @@ func buildOptionsAs(ctx context.Context, cfg config.Config, root *slog.Logger, h
 
 	// The lake proxies and the SQL change feed bind and publish the bridge address, where a worker or an engine in
 	// its own netns reaches them (ADR-0238); without one (the process runtime) they keep the shared loopback.
-	if bridge, ok := bridgeAddress(cfg); ok {
+	if bridge, ok := bridgeAddress(cfg); ok && r.runsWorkers() {
 		opts = append(opts, funcd.WithBridgeAddress(bridge))
 	}
 
@@ -610,7 +610,7 @@ func buildOptionsAs(ctx context.Context, cfg config.Config, root *slog.Logger, h
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
-	if cfg.S3Gateway.Enabled {
+	if cfg.S3Gateway.Enabled && r.runsWorkers() {
 		if err := renewalFits(period, pace); err != nil {
 			return nil, noopClose, nil, "", err
 		}
@@ -717,7 +717,7 @@ func buildOptionsAs(ctx context.Context, cfg config.Config, root *slog.Logger, h
 		opts = append(opts, funcd.WithoutFunclogTraces())
 	}
 
-	execOpts, closeExec, err := executionOptions(ctx, cfg, root)
+	execOpts, closeExec, err := r.executionOptions(ctx, cfg, root)
 	if err != nil {
 		return nil, noopClose, nil, "", fmt.Errorf("wire execution: %w", err)
 	}
