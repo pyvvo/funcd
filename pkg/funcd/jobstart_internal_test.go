@@ -74,6 +74,13 @@ func TestJobRunStarterStarts(t *testing.T) {
 	require.ErrorIs(t, err, local.ErrJobRunNotFound, "a run of another Job")
 	_, err = s.Get(ctx, "team", "tofu", "tofu-9")
 	require.ErrorIs(t, err, local.ErrJobRunNotFound, "a run that is gone")
+
+	require.NoError(t, st.Delete(ctx, v1.KindJob.GVK(), "team", "tofu", ""))
+	got, err = s.Get(ctx, "team", "tofu", "tofu-gen-7")
+	require.NoError(t, err, "a run of a deleted Job stays readable until job.retention removes it")
+	require.Equal(t, v1.ObjectName("tofu-gen-7"), got.Name)
+	_, _, err = s.Start(ctx, caller, "tofu", "", nil)
+	require.ErrorIs(t, err, local.ErrJobNotFound, "a start on a deleted Job")
 }
 
 // ADR-0349 Decision 2: an input is equal to another as a JSON value: objects in any key order, arrays item by item,

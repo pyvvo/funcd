@@ -1,0 +1,29 @@
+apiVersion: funcd.io/v1alpha1
+kind: Job
+metadata:
+  name: report
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/report:1.0.0
+  approval:
+    bypass: true
+---
+# region planner
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: planner
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/planner:1.0.0
+  bindings:
+    job:
+      - alias: reports
+        job: report
+# endregion planner
