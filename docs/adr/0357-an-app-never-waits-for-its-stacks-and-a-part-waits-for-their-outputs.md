@@ -151,9 +151,7 @@ post-hooks, prune and dry run around them.
 - **Bounds**: one stack, one part that reads its outputs, one other part that boots after the stamp and one dropped
   part, in an App with a post-hook and in one without; a boot of 2 ticks at most and a deadline of 3, a boot shorter
   than the deadline as ADR-0200 Decision 10 orders them; 10 actions, the longest way to the end (9 cuts it).
-- **Faults**: each pass is one step, since an App's passes never overlap (ADR-0214 Decision 4). A stop or a Conflict
-  between a pass's writes is harmless and not modeled: the next pass reads Decision 3's trigger from the stored App
-  status, and the term lands in the write that drops the `Lagging` line.
+- **Faults**: none beyond time: each pass is one step, since an App's passes never overlap (ADR-0214 Decision 4).
 - **Environment**: the Secret's and the parts' watches bring a pass after each write (fair); a written part turns
   ready within `runtime.bootTimeout`; the clock is `Tick`; a person may never approve (not fair).
 - **Mutants**: `stack-pending` and `reader-pending` (a lagging part counts as Pending) and `no-lag-term` (the deadline
@@ -163,7 +161,9 @@ post-hooks, prune and dry run around them.
   `OldPartServesUntilReplaced`; `no-reader-write` fails liveness.
 - **Result**: pass, 356 states, 0.4 s, FizzBee v0.5.4; wider (12 actions): pass, 356 states.
 - **Left to tests**: the parts funcd runs and their own readiness; an add-on part's pin
-  (`docs/design/addon/revisions.fizz`); the self-heal record.
+  (`docs/design/addon/revisions.fizz`); the self-heal record; a stop or a Conflict between a pass's writes, which
+  `TestLagEndSurvivesACutPass` in `internal/app` holds: it writes the part while the stored App status still lists it
+  `Lagging`, runs the next pass, and checks that the pass sets `status.lagEndedAt`.
 
 ## Behavior rows
 
@@ -224,7 +224,7 @@ func anyLagging(vs []verdict) bool // new: gates the post-hooks and prune (Decis
    (Decision 5).
 4. Docs: the behavior rows; `docs/guide/platform/workloads/app.md` on stacks and `Lagging`.
 
-Tests, each written to pass: unit tests in `internal/app` for each Decision; one `TestScenario…` per scenario in
+Tests, each written to pass: unit tests in `internal/app` for each Decision, `TestLagEndSurvivesACutPass` among them; one `TestScenario…` per scenario in
 `pkg/funcd`'s e2e suite, on an engineless Addon whose `.mjs` Function answers as a stack does and a test that writes
 the Job's key, each assertion's test under `// oracle: docs/design/app/stack-rollout.fizz#<Assertion>`. Done when
 `just ci-full` passes on ADR-0345's and ADR-0350's implementations, and the frp-bunny lane
