@@ -7,14 +7,19 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/multinode/agent"
 	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 	"github.com/pyvvo/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // secretBodyCap is the local API's cap on a Secret write's body, maxSecretBytes.
@@ -70,12 +75,51 @@ func TestSecretCauseMatrix(t *testing.T) {
 	runCauseMatrix(t, secretCauseRows(secretEnvs{
 		main:      secretCauseEnv(t),
 		contended: secretCauseEnv(t, funcd.WithStore(contendedSecrets{store.New(memory.New())})),
+		away:      awaySecretEnv(t),
 	}))
 }
 
-// secretEnvs are the platforms of the secret matrix: main, and contended, whose Secrets change under every write.
+// secretEnvs are the platforms of the secret matrix: main, contended, whose Secrets change under every write, and away, a
+// worker node whose control plane stopped.
 type secretEnvs struct {
-	main, contended *causeEnv
+	main, contended, away *causeEnv
+}
+
+// awaySecretEnv runs a worker node whose control plane stopped, once the node holds the default namespace's Secret s and
+// Function writer, which owns and binds it (FEAT-0002).
+func awaySecretEnv(t *testing.T) *causeEnv {
+	t.Helper()
+	ctx := context.Background()
+	cp, stop := stoppablePlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))), asCluster(t))
+	c, base := answersClient(), "http://"+cp.Addr()
+	admin, err := sdk.New(base, sdk.WithToken(answersAdmin))
+	require.NoError(t, err)
+	wn := &v1.WorkerNode{TypeMeta: tmeta(v1.KindWorkerNode), ObjectMeta: v1.ObjectMeta{Name: "vm1"}}
+	ns := namespace("default")
+	ns.Spec.Node = "vm1"
+	fn := function("writer")
+	fn.Spec.SecretDeclarations = []v1.SecretDeclaration{{Name: "s", Keys: []string{"K"}}}
+	fn.Spec.Bindings.Secret = []v1.ObjectName{"s"}
+	s := secretWithData("s", map[string][]byte{"K": []byte("v")})
+	s.Spec.Owner = v1.FunctionOwner("writer")
+	for _, obj := range []v1.Object{wn, ns, s, fn} {
+		_, err := admin.Apply(ctx, obj)
+		require.NoError(t, err)
+	}
+	tok, err := admin.MintJoinToken(ctx, "vm1", "")
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
+	require.NoError(t, err)
+	node := answersPlatform(t, funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: dir, Version: "test"}))
+	for _, path := range []string{"secrets/s", "functions/writer"} {
+		require.Eventually(t, func() bool {
+			return statusOf(c, http.MethodGet, "http://"+node.Addr()+"/apis/funcd.io/v1alpha1/namespaces/default/"+path, answersAdmin) == http.StatusOK
+		}, 15*time.Second, 20*time.Millisecond, "the node holds %s", path)
+	}
+	c.CloseIdleConnections() // the control plane's Shutdown waits for a connection the client keeps open
+	stop()
+	return &causeEnv{p: node}
 }
 
 // secretCauseRows is the secret matrix over envs.
@@ -90,7 +134,7 @@ func secretCauseRows(envs secretEnvs) []causeRow {
 		return causeRequest{method: http.MethodPut, path: path, body: body}
 	}
 	remove := func(path string) causeRequest { return causeRequest{method: http.MethodDelete, path: path} }
-	main, contended := envs.main, envs.contended
+	main, contended, away := envs.main, envs.contended, envs.away
 	var rows []causeRow
 	for _, e := range []struct{ endpoint, path string }{{list, "/secret"}, {key, "/secret/K"}} {
 		rows = append(rows,
@@ -124,7 +168,8 @@ func secretCauseRows(envs secretEnvs) []causeRow {
 			causeRow{endpoint: e.endpoint, cause: secrets.ErrSecretMissing, env: main, caller: "dangling", request: e.request("nope")},
 			causeRow{endpoint: e.endpoint, cause: secrets.ErrWriteDenied, env: main, caller: "reader", request: e.request("s")},
 			causeRow{endpoint: e.endpoint, cause: secrets.ErrWriteContended, env: contended, caller: "writer",
-				request: e.request("s")})
+				request: e.request("s")},
+			causeRow{endpoint: e.endpoint, cause: secrets.ErrControlPlaneAway, env: away, caller: "writer", request: e.request("s")})
 	}
 	return rows
 }
