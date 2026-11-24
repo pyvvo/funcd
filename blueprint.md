@@ -952,7 +952,10 @@ unit. It is an add-on with no engine, which ships its OpenTofu runtime: an add-o
 and its own kind. Each change runs as a `JobRun` of a generic run-to-completion `Job`, which is built as a Function is:
 its runtime is a shim with its tool, funcd's own or an add-on's. A run waits for a person's approval of its preview
 unless its Job says `bypass`. A stack's outputs, plain and sensitive, reach Functions and add-on engines through a
-Secret that its Job owns, which its runs write ([ADR-0356](docs/adr/0356-a-stacks-outputs-reach-its-readers-through-the-secret-its-job-owns.md)). The [design report](docs/reports/infrastack-design.md) holds the study.
+Secret that its Job owns, which its runs write ([ADR-0356](docs/adr/0356-a-stacks-outputs-reach-its-readers-through-the-secret-its-job-owns.md)).
+The add-on's `funcdctl infra` plugin pushes a module as an image index of one bundle per architecture, its providers
+pinned by its lock file and its contract made from its variables and outputs
+([ADR-0355](docs/adr/0355-an-opentofu-module-is-pushed-with-its-providers-and-a-contract-from-its-variables.md)). The [design report](docs/reports/infrastack-design.md) holds the study.
 ADR-0344 to ADR-0346 decide runtimes from add-ons and engineless kinds, and ADR-0347 to ADR-0351 the Job and its runs,
 their approval, a Function's start, an App's Jobs and the Job's own identity; the InfraStack add-on itself takes no
 ADR.
