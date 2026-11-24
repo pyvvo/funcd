@@ -106,6 +106,7 @@ func (s *Server) Close() error { return s.srv.Close() }
 // routes are the node API on the API's own stack (decision 9): the join, then the routes of a joined node.
 func (s *Server) routes() http.Handler {
 	r := chi.NewRouter()
+	r.Use(fault.LogCauses(s.cfg.Logger))
 	handle(nodeAPI(r), op(http.MethodPost, PathJoin, maxJoinBody), s.join)
 	r.Group(func(r chi.Router) {
 		r.Use(s.authNode)
@@ -157,8 +158,8 @@ func nodeOf(ctx context.Context) v1.ObjectName {
 
 // authNode admits a node by the certificate it joined with, or the one it renewed it with: verified against the CA, and
 // one its WorkerNode names, so a new join or a deleted WorkerNode ends the old ones, and the first call with a renewed
-// certificate ends the one before. A node speaking a node API version this control
-// plane does not serve gets 426, and one on a newer release than the control plane's 409 (decision 12).
+// certificate ends the one before. A node speaking a node API version this control plane does not serve gets 426, and
+// one on a newer release than the control plane's 409 (decision 12).
 func (s *Server) authNode(next http.Handler) http.Handler {
 	const op = "multinode.authNode"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
