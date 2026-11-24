@@ -480,6 +480,7 @@ func TestScenarioAppPostHookAfterStack(t *testing.T) {
 	})
 	t.Run("the approved run writes the key", func(t *testing.T) {
 		t.Parallel()
+		// relay's boot waits for a file the test writes once bunny is Ready, so runtime.bootTimeout outlasts that hold.
 		e := startStacks(t, funcd.Pacing{AppUpgradeTimeout: 10 * time.Second, BootTimeout: 8 * time.Second,
 			ActivationTimeout: 3 * time.Second, SupervisionPeriod: 500 * time.Millisecond})
 		booted := filepath.Join(shortDataDir(t), "booted")
