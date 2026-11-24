@@ -80,6 +80,8 @@ type enginelessRig struct {
 	mu        sync.Mutex
 	clock     time.Time
 	collected []v1.NamespaceName
+	// follow builds the reconciler as funcdctl dev does: every object follows its Addon's current revision.
+	follow bool
 }
 
 func newEnginelessRig(t *testing.T) *enginelessRig {
@@ -104,7 +106,7 @@ func infraStackAddon() *v1.Addon {
 // reconciler is a reconciler of the rig's store, as a funcd start builds one: it knows nothing of earlier calls.
 func (g *enginelessRig) reconciler() *addon.Reconciler {
 	r, err := addon.NewReconciler(addon.Deps{Store: g.st, Provider: readyRuntime{}, RunsImages: true, SupervisionPeriod: time.Hour,
-		Now: g.now, Collect: func(_ context.Context, ns v1.NamespaceName) error {
+		Now: g.now, FollowCurrent: g.follow, Collect: func(_ context.Context, ns v1.NamespaceName) error {
 			g.mu.Lock()
 			defer g.mu.Unlock()
 			g.collected = append(g.collected, ns)
@@ -631,4 +633,42 @@ func TestEnginelessPartPinFollowsItsApp(t *testing.T) {
 	g.pass("bunny")
 	g.callEnds("bunny")
 	require.Equal(t, v1.ObjectName("edge-2"), g.object("bunny").Status.AppRevision, "the next answer keeps the stored pin")
+}
+
+// ADR-0339 Decision 7, under funcdctl dev, as ADR-0345 Decision 1 applies it to an engineless object: the object follows
+// its Addon's current revision, and the pass stores the moved AddonRevision although its App revision, which it has
+// none of, and its Ready condition do not change.
+func TestEnginelessPinFollowsTheCurrentRevisionUnderDev(t *testing.T) {
+	t.Parallel()
+	g := newEnginelessRig(t)
+	g.follow = true
+	g.r = g.reconciler()
+	g.stack("bunny", v1.DeletionRetain, "")
+	g.caller.set(func(_ context.Context, c addon.ObjectsCall) (addon.SettingsReply, error) {
+		return answerAll(c, true, ""), nil
+	})
+	g.marked("bunny")
+	g.pass("bunny")
+	g.callEnds("bunny")
+	require.Equal(t, v1.PhaseReady, g.object("bunny").Status.Phase)
+	require.Equal(t, v1.AddonRevisionName("infrastack", 1), g.object("bunny").Status.AddonRevision)
+
+	obj, err := g.st.Get(g.ctx, v1.KindAddon.GVK(), "", "infrastack")
+	require.NoError(t, err)
+	a := obj.(*v1.Addon)
+	a.Spec.Runtimes[0].Attributes.Resync = v1.Duration(2 * time.Minute)
+	_, err = g.st.Update(g.ctx, a)
+	require.NoError(t, err)
+	_, err = g.r.Revisions().Reconcile(g.ctx, controller.Request{GVK: v1.KindAddon.GVK(), Name: "infrastack"})
+	require.NoError(t, err)
+	obj, err = g.st.Get(g.ctx, v1.KindAddon.GVK(), "", "infrastack")
+	require.NoError(t, err)
+	current := obj.(*v1.Addon).Status.CurrentRevision
+	require.NotEqual(t, v1.AddonRevisionName("infrastack", 1), current, "the change stamps a new current revision")
+
+	g.pass("bunny")
+	got := g.object("bunny")
+	require.Equal(t, current, got.Status.AddonRevision, "the moved AddonRevision is stored")
+	require.Empty(t, got.Status.AppRevision)
+	require.Equal(t, v1.PhaseReady, got.Status.Phase)
 }
