@@ -76,7 +76,7 @@ This page lists the spec and status fields of Job and JobRun, each with its type
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `alias` | string, required, a DNS-1123 label | The name that the code passes to ctx.job.start and ctx.job.get. Unique in the list. |
-| `job` | string, required, a DNS-1123 label | A Job of the Function's namespace. A missing Job grants nothing that runs: a start or a read on its alias answers 404. |
+| `job` | string, required, a DNS-1123 label | A Job of the Function's namespace. While the Job is missing, a start on its alias answers 404, and a read still answers each run that a deleted Job left, until job.retention removes it. |
 
 ### `Job.spec.bindings.kv[]`
 
@@ -440,7 +440,6 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | Method | Status | Problem type | When | What to do |
 | --- | --- | --- | --- | --- |
 | `start` | 400 | `urn:funcd:problem:invalid` | The body of the start is not &#123;"input": &lt;JSON&gt;, "name": "&lt;run&gt;"&#125;, or the name is not a DNS-1123 name. | Send the input as JSON, and a name of lowercase letters, digits and dashes, or no name. |
-| `start` | 400 | `urn:funcd:problem:invalid` | The run's input does not match the input schema of the Job's contract; the message names each path. | Send an input that the Job's contract accepts. |
 | `start` | 403 | `urn:funcd:problem:forbidden` | The Function binds no Job under the alias. | Start or read a run under an alias of spec.bindings.job, or add the alias there. |
 | `start` | 403 | `urn:funcd:problem:forbidden` | Cedar denies the Function job::start or job::read on the bound Job, as when a namespace Policy forbids it. | Ask the operator to lift the forbid. |
 | `start` | 404 | `urn:funcd:problem:not-found` | The Job that the alias binds does not exist. | Create the Job, or bind a Job that exists. |
@@ -467,7 +466,6 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | Method | Status | Problem type | When | What to do |
 | --- | --- | --- | --- | --- |
 | `start` | 400 | `urn:funcd:problem:invalid` | The body of the start is not &#123;"input": &lt;JSON&gt;, "name": "&lt;run&gt;"&#125;, or the name is not a DNS-1123 name. | Send the input as JSON, and a name of lowercase letters, digits and dashes, or no name. |
-| `start` | 400 | `urn:funcd:problem:invalid` | The run's input does not match the input schema of the Job's contract; the message names each path. | Send an input that the Job's contract accepts. |
 | `start` | 403 | `urn:funcd:problem:forbidden` | The Function binds no Job under the alias. | Start or read a run under an alias of spec.bindings.job, or add the alias there. |
 | `start` | 403 | `urn:funcd:problem:forbidden` | Cedar denies the Function job::start or job::read on the bound Job, as when a namespace Policy forbids it. | Ask the operator to lift the forbid. |
 | `start` | 404 | `urn:funcd:problem:not-found` | The Job that the alias binds does not exist. | Create the Job, or bind a Job that exists. |

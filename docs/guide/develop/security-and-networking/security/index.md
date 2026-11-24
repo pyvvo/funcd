@@ -156,14 +156,14 @@ funcd decides together with the RolesAssignments and the built-in rules quoted o
 
 - a principal: `principal`, or `principal == <entity>`;
 - one action: `s3::read`, `s3::write`, `kv::read`, `kv::write`, `sql::read`, `sql::write`, `lake::query`,
-  `secret::read`, `secret::write`, `link::invoke` or `egress::connect`;
+  `secret::read`, `secret::write`, `link::invoke`, `job::start`, `job::read` or `egress::connect`;
 - a resource: `resource`, `resource == <entity>`, or `resource in <entity>` for what the entity holds;
 - an optional `when` or `unless` condition on attributes.
 
 The entities, with IDs prefixed by their namespace except the last:
 
-- `Function`, `Identity` and `Lake`, the principals; a Lake is also the resource of `lake::query`, and a Function of
-  `link::invoke`;
+- `Function`, `Job`, `Identity` and `Lake`, the principals; a Lake is also the resource of `lake::query`, a Function
+  of `link::invoke`, and a Job of `job::start` and `job::read`, the start and the read of its runs from a Function;
 - `BlobPrefix::"<ns>/<bucket>/<prefix>"`, held by `Bucket::"<ns>/<bucket>"`;
 - `KVTable::"<ns>/<store>/<table>"`, held by `KVStore::"<ns>/<store>"`;
 - `SQLDatabase::"<ns>/<database>"` and `Secret::"<ns>/<name>"`;

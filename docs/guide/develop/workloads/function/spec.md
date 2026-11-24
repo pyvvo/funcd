@@ -72,7 +72,7 @@ This page lists the spec and status fields of Function, Revision and Invocation,
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `alias` | string, required, a DNS-1123 label | The name that the code passes to ctx.job.start and ctx.job.get. Unique in the list. |
-| `job` | string, required, a DNS-1123 label | A Job of the Function's namespace. A missing Job grants nothing that runs: a start or a read on its alias answers 404. |
+| `job` | string, required, a DNS-1123 label | A Job of the Function's namespace. While the Job is missing, a start on its alias answers 404, and a read still answers each run that a deleted Job left, until job.retention removes it. |
 
 ### `Function.spec.bindings.kv[]`
 

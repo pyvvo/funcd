@@ -118,7 +118,7 @@ type FunctionAddon struct {
 // Decision 1): the binding is the grant of job::start and job::read on that Job.
 type FunctionJob struct {
 	Alias string     `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The name that the code passes to ctx.job.start and ctx.job.get. Unique in the list."`
-	Job   ObjectName `json:"job" doc:"A Job of the Function's namespace. A missing Job grants nothing that runs: a start or a read on its alias answers 404."`
+	Job   ObjectName `json:"job" doc:"A Job of the Function's namespace. While the Job is missing, a start on its alias answers 404, and a read still answers each run that a deleted Job left, until job.retention removes it."`
 }
 
 // FunctionLake binds this function to a Lake it consumes (ADR-0091, F61). Declaring the
