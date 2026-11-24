@@ -56,7 +56,7 @@ recovery](disaster-recovery.md).
 | A namespace's master | Derived from the control plane's master and the namespace's UID. A node keeps only its own namespaces' masters, under cluster.dataDir, and derives their S3 pairs, SQL passwords, lake and add-on tokens from them | none | `NamespaceKeyMissing` until it arrives | decided | decider 2026-11-16, #1486, `TestANodeKeepsTheMastersOfItsNamespacesOnly` |
 | Secrets on a node | Kept encrypted at rest; with no `secrets.encryptionKeyFile` the node makes its own key under cluster.dataDir, and losing it loses nothing, since the control plane holds every Secret | none | none | decided | decider 2026-11-16, #1486, `TestAWorkerNodeKeepsItsSecretsEncryptedWithAKeyOfItsOwn` |
 | A node's backups | A worker node backs up its own stores under nodes/<name>/ of backup.target and kvstore.backup.target, with no Secret and naming no key, as its `funcd upgrade` does; its restore asks for none | none | none | decided | decider 2026-11-16, #1488, `TestAWorkerNodeBacksUpUnderItsOwnPrefix`, `TestAWorkerNodesPreUpgradeGenerationHoldsNoSecret` |
-| A node's backup status | A node reports its platform backup to its WorkerNode's status.backup at its start, then when it changes | checked every `resyncEvery` 30 s | the WorkerNode's `status.backup` | decided | decider 2026-11-16, #1488, `TestANodeReportsItsBackupInItsWorkerNode` |
+| A node's backup status | A node reports its platform backup to its WorkerNode's status.backup at its start, then when it changes | checked every `selfEvery` 5m | the WorkerNode's `status.backup` | decided | decider 2026-11-16, #1488, `TestANodeReportsItsBackupInItsWorkerNode` |
 | A node whose store is new or restored | Before anything runs, so before a boot reclaim, it takes its namespaces whole with the children it made, credentials' Secrets included, and waits for the control plane to answer | none | `waits for the control plane's snapshot` | decided | decider 2026-11-16, #1488, `TestAReplacedNodeComesBackFromItsBackup`, `TestANodeThatLostItsMetastoreKeepsItsData` |
 | A restored node's runs | A run its restore paused shows paused on the control plane until a person resumes it; a run, a Backup or a Restore that ended there stays ended, whatever the node's older copy says | none | `spec.paused` | decided | ADR-0206 Decision 7, `TestARunTheRestoreOfItsNodePausedWaitsForAPerson`, `TestWhatEndedStaysEndedAfterItsNodesRestore` |
 | A restored control plane | While it is held, its nodes run on and follow nothing. After the release each starts again on the restored state, with the runs it made since; the data of what the backup lacks goes into its quarantine | `retryMax` 5 s after the release | 503 `is held after its restore` | decided | ADR-0206, ADR-0288, `TestARestoredControlPlaneLosesNoDataOfItsNodes` |
@@ -77,6 +77,7 @@ recovery](disaster-recovery.md).
 | `resyncEvery` | 30s | `internal/multinode/agent/agent.go` |
 | `retryMax` | 5s | `internal/multinode/agent/agent.go` |
 | `retryMin` | 100ms | `internal/multinode/agent/agent.go` |
+| `selfEvery` | 5m | `internal/multinode/agent/agent.go` |
 | `writeAttempts` | 5 | `internal/multinode/agent/copies.go` |
 | `idleConnTimeout` | 1m30s | `internal/multinode/agent/join.go` |
 | `joinRequestTimeout` | 30s | `internal/multinode/agent/join.go` |

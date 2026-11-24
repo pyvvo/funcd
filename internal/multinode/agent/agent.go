@@ -30,6 +30,8 @@ const (
 	retryMax    = 5 * time.Second
 	pollWait    = 25 * time.Second
 	resyncEvery = 30 * time.Second
+	// selfEvery paces the node's report of itself, which lists its backup target.
+	selfEvery = 5 * time.Minute
 	// requestTimeout bounds one call of the node API, above pollWait, so a connection that died unseen is dialed again.
 	requestTimeout = time.Minute
 )
