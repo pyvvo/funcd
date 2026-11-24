@@ -27,12 +27,12 @@ Secret, the way they read any Secret, with nothing copied by hand and no sensiti
 
 ## Scenarios
 
-- `scenario: stack-outputs-reach-function`: Given a stack whose module outputs `FRP_SERVER_ADDR` and the sensitive
+- `scenario: stack-outputs-reach-function`: Given a stack whose module outputs `pullzone_host` and the sensitive
   `FRP_TOKEN`, and whose Job owns the Secret `outputs`; when its apply run succeeds; then a Function that binds
-  `outputs` reads both through `ctx.secret.get`, and the run's result is `{"outputs": {"FRP_SERVER_ADDR": "…"}}`.
+  `outputs` reads both through `ctx.secret.get`, and the run's result is `{"outputs": {"pullzone_host": "…"}}`.
 - `scenario: stack-outputs-reach-engine`: Given an add-on object that binds `outputs`, whose Addon lists `FRP_TOKEN` in
   `secretKeys`; when the apply writes it; then the object's engine is replaced, with `FRP_TOKEN` in its environment.
-- `scenario: stack-output-changed`: Given a Function that reads `FRP_SERVER_ADDR`; when a later apply changes it; then
+- `scenario: stack-output-changed`: Given a Function that reads `pullzone_host`; when a later apply changes it; then
   the Function's next read returns the new value, and the Function keeps its revision.
 - `scenario: stack-output-name-refused`: Given a module with an output named `pull-zone`; when its run previews; then
   the preview fails, naming `pull-zone`, and nothing is applied.
@@ -54,7 +54,9 @@ the outputs; keeping them out of OpenTofu's environment; `funcdctl infra outputs
 
 **Out**:
 - Creating the outputs Secret: a write never creates one (ADR-0327 Decision 4), so a person creates it, owned by the
-  Job, before the stack's first apply, as every Secret an App declares (ADR-0213 Decision 6).
+  Job, before the stack's first apply, as every Secret an App declares (ADR-0213 Decision 6). Outside an App, the Job's
+  own declaration of it names at least one key, and the Job waits `Pending` until each exists, so the person creates
+  those keys, empty.
 - A part of an App that waits for the outputs: ADR-0357.
 - One Secret update for all outputs: ADR-0327's write is one key, and a route for several would change both shims, for
   the window that a crash between two writes opens and that the run's `Interrupted` end already shows.
@@ -74,6 +76,9 @@ the outputs; keeping them out of OpenTofu's environment; `funcdctl infra outputs
   change would need a roll. Rejected.
 - **Plain outputs only in the result** (today): a Function reads them through a Job binding only, an engine never.
   Rejected.
+- **A second Secret for the plain outputs**: a reader of plain outputs only would not bind the sensitive ones, at the
+  cost of a second Secret per stack that a person creates, an App declares and the Job owns and binds. Rejected: the
+  first reader, frp-bunny's Tunnel, needs the sensitive token anyway, and every stack would pay for the second.
 - **An automatic name mapping** (`-` to `_`): `a-b` and `a_b` would share a key, and a reader's key would differ from
   the module's name. Rejected: a rename in the module is one line.
 - **A roll of the readers on a changed output**: a Function reads each Secret from funcd at each read (ADR-0249
@@ -87,21 +92,24 @@ the outputs; keeping them out of OpenTofu's environment; `funcdctl infra outputs
 2. **Where they go.** At the end of an apply, the runtime writes each output in the state, plain or sensitive, into the
    Secret its Job's ConfigMap names in `INFRASTACK_OUTPUTS_SECRET`, one `ctx.secret.put` per output (ADR-0327
    Decision 4), and answers only after the last write, so a run that succeeds has delivered every output (ADR-0347
-   Decision 5). The plain ones are also its result, under `outputs` (ADR-0355 Decision 3); a sensitive one is in no
-   result, preview document, status or log line. A Job whose ConfigMap names no outputs Secret keeps its plain outputs
-   in its result alone and its sensitive ones nowhere, and its run logs each such name. Decided on the decider's
-   delegation of 2026-11-24: the plain outputs go to the Job's Secret, which outlives the runs that `job.retention`
-   removes.
+   Decision 5). The plain ones are also its result, under `outputs`, as ADR-0355 Decision 3 has the runtime answer; a
+   sensitive one is in no result, preview document, status or log line. A Job whose ConfigMap names no outputs Secret
+   keeps its plain outputs in its result alone and its sensitive ones nowhere, and its run logs each such name. Decided
+   on the decider's delegation of 2026-11-24: the plain outputs go to the Job's Secret, which outlives the runs that
+   `job.retention` removes.
 3. **A refused write.** A write that funcd refuses, such as a 403 for a Secret the Job does not own, fails the run
    after its apply, naming the output and the Secret, never the value. The applied change stays in the state, and the
-   stack's next apply writes every output again.
+   stack's next apply, which its add-on starts at the stack's next generation, writes every output again.
 4. **Names and values.** An output's key is its name, and its value is a string as it is, any other value its JSON. A
    module with an output whose name is not an env-var name (`^[A-Za-z_][A-Za-z0-9_]*$`, a Secret key's rule) or starts
-   with `FUNCD_`, which no reader loads (ADR-0327 Decision 7), fails its run's first call before it plans, naming the
-   output: the preview with `PreviewFailed`, a `bypass` run's one call with `HandlerFailed`.
+   with `FUNCD_`, which no reader loads (ADR-0327 Decision 7), or with `INFRASTACK_`, the prefix of the runtime's own
+   settings such as `INFRASTACK_STATE_PASSPHRASE`, fails its run's first call before it plans, naming the output: the
+   preview with `PreviewFailed`, a `bypass` run's one call with `HandlerFailed`.
 5. **A destroy.** A destroy run empties each output key it read before the destroy, keeps the key, and answers `{}`.
-   An emptying that funcd refuses is logged by the output's name, and the run goes on: the outputs are gone with what
-   made them.
+   It deletes no key: a deleted one would make an App's readers wait for it again, or stop the App's pass once the App
+   no longer declares the owner Job (ADR-0357 Decision 2), and hold a Job outside an App that declares it `Pending`
+   with `SecretKeyMissing`. An emptying that funcd refuses is logged by the output's name, and the run goes on: the
+   outputs are gone with what made them.
 6. **The readers.** A Function reads an output through `ctx.secret` of the outputs Secret it binds, from funcd at each
    read (ADR-0249 Decision 2), so a changed output reaches its next read and rolls nothing. An add-on object's engine
    gets each key its Addon lists in `secretKeys`, and a changed value replaces it (ADR-0332). No Secret value reaches
@@ -110,10 +118,12 @@ the outputs; keeping them out of OpenTofu's environment; `funcdctl infra outputs
    outputs, read with `tofu show -json -module`, so an output never sets a later run's variable (`TF_VAR_<name>`) or a
    provider's setting.
 8. **`funcdctl infra outputs <stack> [-n <namespace>] [-o json]`**, the plugin's (ADR-0355 Decision 1). Through
-   `$FUNCDCTL`, it reads the stack, the Job its `config.job` names, that Job's `status.contract` and its ConfigMap's
-   `INFRASTACK_OUTPUTS_SECRET`, then that Secret. It prints each key of the Secret, with its value when the contract's
-   `outputs` names it, else `(sensitive)`, so it never prints a sensitive value, nor one a contract written by hand
-   does not name. A read funcd refuses ends it with funcdctl's error.
+   `$FUNCDCTL`, it reads the stack; the Job its `config.job` names, the alias of the add-on Function's binding, which
+   the add-on's README requires to be the Job's name; that Job's `status.contract`; the `INFRASTACK_OUTPUTS_SECRET` of
+   its bound ConfigMaps, merged as the runtime reads them, a later ConfigMap's key winning (ADR-0093 Decision 2); then
+   that Secret. It prints each key of the Secret, with the string it holds when the contract's `outputs` names the
+   key, else `(sensitive)`, so it never prints a sensitive value, nor one that a contract written by hand does not
+   name. A read funcd refuses ends it with funcdctl's error.
 
 ## Design model
 
@@ -134,9 +144,10 @@ the outputs; keeping them out of OpenTofu's environment; `funcdctl infra outputs
   the apply to its answer.
 - **Mutants**: `answer-first` (the runtime answers before it writes) fails `ReadyStackHasItsOutputs`; `no-answer`
   fails liveness.
-- **Result**: pass, 9 states, 0.3 s, FizzBee v0.5.4; wider (5 actions): pass, 9 states.
-- **Left to tests**: the destroy's order and a refused write, in `handler_test.py`; the mix of two generations' values
-  that a restart between two writes leaves until the next apply (Consequences).
+- **Result**: pass, 9 states, 0.6 s, FizzBee v0.5.4; wider (5 actions): pass, 9 states.
+- **Left to tests**: the destroy's order and a refused write, in `handler_test.py`.
+- **Oracle markers**: the oracle tests live in pyvvo/funcd-addons, where the review checks their markers;
+  `just check-specs` greps funcd only, so it lists both assertions as having no oracle test yet.
 
 ## Behavior rows
 
@@ -162,12 +173,13 @@ def outputs(stack: str, namespace: str, as_json: bool) -> int: ...  # new: Decis
 `funcdctl infra outputs frp-bunny-stack` prints (new):
 
 ```text
-NAME             VALUE
-FRP_SERVER_ADDR  frp-lane.b-cdn.net
-FRP_TOKEN        (sensitive)
+NAME           VALUE
+pullzone_host  frp-lane.b-cdn.net
+FRP_TOKEN      (sensitive)
 ```
 
-With `-o json`: `{"outputs": {"FRP_SERVER_ADDR": "frp-lane.b-cdn.net"}, "sensitive": ["FRP_TOKEN"]}`.
+With `-o json`: `{"outputs": {"pullzone_host": "frp-lane.b-cdn.net"}, "sensitive": ["FRP_TOKEN"]}`, each value the
+string the Secret holds.
 
 | Dependency & I/O | Direction | Shape |
 |---|---|---|
@@ -202,9 +214,12 @@ docs/design/job/stack-outputs.fizz#<Assertion>`; `stack-destroy-empties-outputs`
 - A Function and an engine read a stack's outputs as they read any Secret, and see a change at the next read or with a
   new engine. The frp-bunny App's Tunnel gets frps' token there; the pull zone's host is there too, for any part that
   binds the Secret, though the App's values know it before the apply.
-- Plain outputs sit in a Secret, so reading them, with `funcdctl infra outputs` too, takes the right to read it.
-- A restart between two writes leaves some outputs of the new apply beside the old ones; the run ends `Interrupted`,
-  the stack shows it, and the next apply writes them all.
+- Plain outputs sit in a Secret, so reading them, with `funcdctl infra outputs` too, takes the right to read it, and a
+  Function that needs one plain output binds the Secret that holds every sensitive one, since a binding reads all its
+  keys (ADR-0249 Decision 2).
+- A person's apply of the outputs Secret replaces what the Job wrote (ADR-0327 Decision 7), and a restart between two
+  writes leaves some outputs of the new apply beside the old ones, the run ending `Interrupted`. Either lasts until the
+  stack's next apply, which its add-on starts at the stack's next generation.
 
 ## Open questions
 

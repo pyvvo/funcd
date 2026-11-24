@@ -1,12 +1,15 @@
 ---
-# An App's rollout with a stack (ADR-0357 Decisions 1 to 5). The App's latest revision holds an engineless part, the
+# An App's rollout with a stack (ADR-0357 Decisions 1 to 3). The App's latest revision holds an engineless part, the
 # stack, whose change waits for a person's approval; a part that reads the stack's outputs from the Secret the stack's
 # Job owns; an older part that the revision drops; and, in one of the two Apps explored, a post-hook. A pass writes the
-# reader once the outputs exist, switches the revision while no part is Pending, fails it at the deadline while one is,
-# then, in a later pass, starts the post-hook and prunes while no part is Lagging. A person may approve the stack's run,
-# which applies the change and writes the outputs. Environment: the controller runs one pass of an App at a time, so a
-# pass is one step; the Secret's watch requeues the App after the outputs are written, so a pass follows (fair); the
-# clock is Tick, bounded by the deadline. Left out: the parts funcd runs, judged by ADR-0199 as before; tests hold them.
+# reader once the outputs exist, which is then Pending until it is ready; it switches the revision in a pass that wrote
+# no part while no part is Pending, and fails it at the deadline while one is; in a later pass that writes nothing,
+# while no part is Lagging or Pending, it starts the post-hook and prunes. A person may approve the stack's run, which
+# applies the change and writes the outputs. Environment: the controller runs one pass of an App at a time, so a pass
+# is one step; a pass follows the stamp, the outputs' write (the Secret's watch) and a part's write or readiness (its
+# watch), so time passes only once that pass ran (due); a written part turns ready before the deadline, since
+# app.upgradeTimeout is more than runtime.bootTimeout (ADR-0200 Decision 10), so Tick waits while one boots; the clock
+# is Tick, bounded by the deadline. Left out: the parts funcd runs, judged by ADR-0199 as before; tests hold them.
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
@@ -18,6 +21,7 @@ options:
 # mutant reader-pending: NoFailWhileAStackWaits
 # mutant reader-early: ReaderWaitsForOutputs
 # mutant hook-early: PostHookAfterStacks
+# mutant hook-before-ready: PostHookAfterStacks
 # mutant prune-early: OldPartServesUntilReplaced
 # mutant no-reader-write: liveness
 
@@ -25,6 +29,7 @@ options:
 # reader-pending: a part that waits for the outputs counts as Pending.
 # reader-early: a pass writes the reader before the outputs exist.
 # hook-early: a pass starts the post-hook while a part is Lagging.
+# hook-before-ready: a pass starts the post-hook in a pass that wrote a part, or while one is Pending.
 # prune-early: a pass prunes while a part is Lagging.
 # no-reader-write: a pass never writes a part that waited for the outputs.
 MUTANT = ""
@@ -41,6 +46,7 @@ action Init:
     old = "serving"
     hook = "due"
     clock = 0
+    due = True
 
 # A person approves the stack's run; nothing makes them.
 atomic action Approve:
@@ -51,44 +57,67 @@ atomic action Approve:
 atomic fair action Apply:
     require approved and not applied
     applied = True
+    due = True
+
+# The written reader becomes ready.
+atomic fair action ReaderReady:
+    require reader == "written"
+    reader = "ready"
+    due = True
 
 # One pass of the App reconciler.
 atomic fair action Pass:
     was_current = revision == "current"
-    if (applied or MUTANT == "reader-early") and MUTANT != "no-reader-write":
+    wrote = False
+    due = False
+    if reader == "absent" and (applied or MUTANT == "reader-early") and MUTANT != "no-reader-write":
         reader = "written"
-    stack_pending = MUTANT == "stack-pending" and not applied
-    reader_pending = MUTANT == "reader-pending" and reader != "written"
-    lagging = not applied or reader != "written"
+        wrote = True
+        due = True
+    lagging = not applied or reader == "absent"
+    pending = reader == "written"
+    if MUTANT == "stack-pending" and not applied:
+        pending = True
+    if MUTANT == "reader-pending" and reader == "absent":
+        pending = True
     if revision == "deploying":
-        if not stack_pending and not reader_pending:
+        if not wrote and not pending:
             revision = "current"
         elif clock >= DEADLINE:
             revision = "failed"
-    if was_current and has_hook and (not lagging or MUTANT == "hook-early"):
+    hook_gate = was_current
+    if MUTANT != "hook-before-ready":
+        hook_gate = hook_gate and not wrote and not pending
+    if MUTANT != "hook-early":
+        hook_gate = hook_gate and not lagging
+    if has_hook and hook_gate:
         hook = "done"
-    if was_current and (not has_hook or hook == "done") and (not lagging or MUTANT == "prune-early"):
+    prune_gate = was_current and not wrote and not pending and (not has_hook or hook == "done")
+    if MUTANT != "prune-early":
+        prune_gate = prune_gate and not lagging
+    if prune_gate:
         old = "pruned"
 
-# Time passes while the revision deploys, up to its deadline.
+# Time passes while the revision deploys, up to its deadline, once the due pass ran, and not while a written part
+# boots.
 atomic fair action Tick:
-    require revision == "deploying" and clock < DEADLINE
+    require revision == "deploying" and clock < DEADLINE and reader != "written" and not due
     clock += 1
 
 always assertion NoFailWhileAStackWaits:
     return revision != "failed"
 
 always assertion ReaderWaitsForOutputs:
-    return reader != "written" or applied
+    return reader == "absent" or applied
 
 always assertion PostHookAfterStacks:
-    return hook != "done" or (applied and reader == "written")
+    return hook != "done" or (applied and reader == "ready")
 
 always assertion OldPartServesUntilReplaced:
-    return old == "serving" or reader == "written"
+    return old == "serving" or reader == "ready"
 
 eventually always assertion Switches:
     return revision == "current"
 
 eventually always assertion ConvergesOnceApproved:
-    return not approved or (reader == "written" and old == "pruned" and (not has_hook or hook == "done"))
+    return not approved or (reader == "ready" and old == "pruned" and (not has_hook or hook == "done"))
