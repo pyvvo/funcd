@@ -40,6 +40,9 @@ The implementation turns the Accepted ADR into working code with passing scenari
 - [ ] **Deps**: only those the ADR sanctioned; `go.mod`/`go.sum` tidy; resolved versions recorded.
 - [ ] **No scope creep**: the work implements *this* ADR, not a neighbouring decision (that's a new
       ADR).
+- [ ] **One mechanism per job** (`.claude/rules/reuse-before-design.md`): nothing the work adds repeats a component
+      that exists, such as a validator, a parser, a schedule, a reference form or an owner rule. A hand-written copy
+      is a Major that names the component; when the ADR ordered it, the finding is `adr`.
 - [ ] **Tracking**: module path `github.com/pyvvo/funcd`; no dev-machine reference leaked
       (absolute path / local username / personal email — checked **silently**, never written as a report
       section, see the CLAUDE.md absolute rule); the realized `docs/feat/` row at `reviewing` and the ADR at

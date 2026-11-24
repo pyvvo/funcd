@@ -135,6 +135,12 @@ lane case in its definition of done, is a Major (axis F): tests without funcd's 
 **I. Behavior rows (ADR-0313).** A Decision that changes what a user sees, with the section reading `None`, or a row it changes and
 does not list, is a Major.
 
+**J. Reuse (`.claude/rules/reuse-before-design.md`).** For each schema, check, reference, owner rule, schedule, retry,
+quota, expression or version that the Decision adds, search the types, the reconcilers and `docs/behavior/` yourself
+for the component that already does that job, and ask who reads the values. A second mechanism is a Major, and a
+Blocker when the two can disagree with nothing failing. An ADR that adds a mechanism and whose *Alternatives
+considered* name no existing component gets a Minor at least.
+
 ## Step 3 — Calibrate before writing
 
 Apply these rules to the findings so the verdict is trustworthy, not just long:

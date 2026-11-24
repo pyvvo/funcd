@@ -100,6 +100,9 @@ has each in full with rationale; consult it when a rule is unclear rather than g
 - **One driver = one file in its own subpackage** (dependency isolation), never a fan-out of files.
 - **Honor the import graph**: `api/**` imports nothing from `internal/`/`pkg/`; features never import
   sibling features; `internal/platform/**` is a leaf; no mock frameworks; `log/slog` only.
+- **Reuse before you write**, as `/fix` Step 4 says: search the package, its neighbours, `internal/platform`,
+  `api/fault`, the module's dependencies and the standard library first. When the ADR itself orders a second mechanism
+  for a job that a component already does (`.claude/rules/reuse-before-design.md`), stop and flag it as an `adr` gap.
 - **Typed surface**: no `interface{}`/`any`/`map[string]any` in hand-written exported or port
   signatures; typed enums/IDs; `ctx context.Context` first on every blocking call.
 - **Name every number that changes behavior; make it a config key if an operator may need to change it** (ADR-0313, CLAUDE.md

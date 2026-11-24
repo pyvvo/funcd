@@ -20,6 +20,8 @@ decision in one read, on any screen, between other work. Two modes share one sty
   cards at once. An acceptance brief rests on the ADR file as it is now and its last judge verdict. If a check is
   still running, say so in one line and what would change.
 - **Never present invention as fact** (CLAUDE.md *Grounding*): a new field, key, reason or number is marked new.
+- **Name what already does the job** (`.claude/rules/reuse-before-design.md`): each option says which component it
+  uses or extends, and an option that adds a second one says what the first lacks.
 - **Security:** CLAUDE.md *Issues* applies: a possible vulnerability goes into no public text and no shared decision
   record; it becomes a private draft advisory.
 

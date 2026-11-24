@@ -12,6 +12,8 @@ paths:
   named constant gets an entry in `TestScenarioDocNamesTheConstant`, or, for a constant of another package (a reason,
   a default), in that package's `TestDocNamesTheConstant`, through `internal/testkit/doctag`.
 - A type that several kinds reach is described without naming one of them.
+- A field that holds a JSON Schema belongs to the component that reads the values it describes. When only a Function
+  reads them, its contract is the schema, and the field does not exist (`reuse-before-design.md`).
 - A tag is a raw string literal: it cannot hold a backtick.
 - After a change, run `scripts/agent/d just generate`: it updates `api/openapi/funcd.v1alpha1.yaml` and the Spec pages
   (`docs/guide/develop/**/spec.md`). `TestEveryFieldIsDescribed` refuses a field with no tag.
