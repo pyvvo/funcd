@@ -1,6 +1,7 @@
 # ADR-0351: A Job's worker reaches the platform as the Job, its own principal
 
 - **Status**: Implemented (2026-11-24), review passed with three Minors and no Major ([report](../reviews/adr-0351-implementation-claude-opus-5-5.md)), its sockets scenario under the decider's ruling of 2026-11-23 on [#1018](https://github.com/pyvvo/funcd/issues/1018#issuecomment-7116120716); Reviewing (2026-11-23, implemented); Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
+- **Superseded in part by**: [ADR-0352](0352-an-egresspolicy-names-an-add-on-object-whose-engine-it-lets-out.md) (2026-11-24) — Decision 6 and its Contracts line (`appliesTo` items take an open kind, `AppliesToRef`)
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: jobs, security, cedar, local-api, egress, s3

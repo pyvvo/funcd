@@ -1,6 +1,6 @@
 # ADR-0353: The edge serves a workload only its own namespace's hosts
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-11-24), on the decider's delegation ("accept after a clean judge"), after two independent judge rounds; round 2's Majors on ADR-0353 resolved as the judge recommended, by leaving the egress indexes' writer to a later ADR
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, network, security, add-ons, hosts, egress
@@ -75,7 +75,7 @@ worker reaches the edge on any node address: no pin, as today; several nodes (FE
 | A pin on the Host header | simple | the by-name path serves `/function/<name>` on a host outside the base domain in the namespace a header names (ADR-0240 Decision 6) | rejected |
 | The engine reaches the public listener through an EgressPolicy CIDR rule | no new listener | the gateway would dial the edge, and every namespace's hosts stay reachable | rejected |
 | A per-object list of hosts in the add-on object | explicit | the namespace already owns its hosts (ADR-0240); a second list to keep in step | rejected |
-| The listener's address in each engine's `EgressOnly` too | the decider's answer | with egress on an engine has no output chain (ADR-0352 Decision 2); with egress off no pinned listener exists, and a wildcard data plane would serve that engine unpinned | rejected here (an open question) |
+| The listener's address in each engine's `EgressOnly` too | the decider's answer | with egress on an engine has no output chain (ADR-0352 Decision 2); with egress off no pinned listener exists, and a wildcard data plane would serve that engine unpinned | rejected: the address would do nothing with egress on and open an unpinned path with it off |
 
 ## Decision
 
@@ -172,8 +172,7 @@ Edge []netip.AddrPort
 
 ## Open questions
 
-- The decider's answer put the edge's address in each engine's `EgressOnly`; Decision 2 leaves it out (Alternatives).
-  For the decider to confirm at their review of this overnight work.
+None.
 
 ## References
 

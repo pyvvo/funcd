@@ -4,6 +4,7 @@
 - **Superseded in part by**: [ADR-0335](0335-the-edge-signs-users-in-with-an-openid-connect-provider.md) (2026-11-19) — Decision 5: `ProviderConflict` after `RouteConflict`.
 - **Date**: 2026-10-17
 - **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 5's last sentence: `enabled: true` opens a Function in an `explicit` namespace; Decision 6: on a namespace host, `/function/…` goes by name unless a rule of that namespace under `/function` matches.
+- **Superseded in part by**: [ADR-0353](0353-the-edge-serves-a-workload-only-its-own-namespaces-hosts.md) (2026-11-24) — Decision 6 (a bridge caller's `X-Funcd-Namespace` naming another namespace gets 403)
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, routing, namespace, multi-tenancy
 - **Realizes**: [FEAT-0006/F153](../feat/0006-feat-ingress-hardening.md) (namespace hosts)

@@ -9,6 +9,7 @@
   sources).
 - **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md)
   (2026-11-23) — Decisions 1 and 3: the egress index and the S3 key's kind code know a Job (Decisions 4 and 6).
+- **Superseded in part by**: [ADR-0352](0352-an-egresspolicy-names-an-add-on-object-whose-engine-it-lets-out.md) (2026-11-24) — Decision 2 (an EgressPolicy whose `appliesTo` names an add-on object reaches its engine)
 - **Date**: 2026-10-05 (judged twice by three lenses; held from publication)
 - **Deciders**: green-0-rabbit
 - **Tags**: authorization, cedar, s3, egress, catalog, identity

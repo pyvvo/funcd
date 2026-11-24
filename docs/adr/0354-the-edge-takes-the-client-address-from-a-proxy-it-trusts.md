@@ -1,6 +1,6 @@
 # ADR-0354: The edge takes the client address from a proxy it trusts
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-11-24), on the decider's delegation ("accept after a clean judge"), after two independent judge rounds; round 2's Majors on ADR-0353 resolved as the judge recommended, by leaving the egress indexes' writer to a later ADR
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, ingress, config, add-ons

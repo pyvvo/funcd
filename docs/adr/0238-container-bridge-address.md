@@ -4,6 +4,7 @@
   delegation; judged twice: the first round kept the proxies node-private, superseded ADR-0085's S3 endpoint default in
   part, moved the lane proof to the in-repo duckdb config and pinned the alias rules; the second found no Blocker or
   Major)
+- **Superseded in part by**: [ADR-0353](0353-the-edge-serves-a-workload-only-its-own-namespaces-hosts.md) (2026-11-24) — Decision 3 (the egress allow list gains the edge's bridge address and port)
 - **Amended before merge** (2026-10-12, at the decider's request): `catalog.proxyHost` is removed instead of kept as an
   alias; the configs pinned from funcd-functions and funcd-python drop it in releases this change pins.
 - **Date**: 2026-10-12
