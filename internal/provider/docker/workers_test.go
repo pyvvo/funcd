@@ -312,7 +312,7 @@ func (e *procEngine) WriteTar(_ context.Context, h Helper, dir string, _, _ int,
 func onHost(context.Context, Engine, Helper) (workerNet, error) { return workerNet{host: true}, nil }
 func inVM(context.Context, Engine, Helper) (workerNet, error)   { return workerNet{}, nil }
 
-func newTestWorkers(t *testing.T, e *procEngine, find netFinder) *workers {
+func newTestWorkers(t *testing.T, e Engine, find netFinder) *workers {
 	t.Helper()
 	w, err := newWorkers(context.Background(), e, testKey(t), slog.New(slog.DiscardHandler), find)
 	require.NoError(t, err)
@@ -437,6 +437,54 @@ func TestWorkersListenOnceReadinessAnswers(t *testing.T) {
 	require.True(t, got.Listened, "a 503 is an answer: the worker listens")
 	require.Equal(t, containerrt.LoopbackHost, got.IP)
 	require.Equal(t, atoi(port), got.Port)
+}
+
+// ADR-0346 Decision 4: a worker started again on the host's network listens once this run writes its port file, never
+// at the port an earlier run wrote (ADR-0160).
+func TestWorkersStartAgainListensAtItsOwnPort(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newProcEngine(t)
+	w := newTestWorkers(t, e, onHost)
+	once := filepath.Join(t.TempDir(), "once")
+	inst, err := w.Create(ctx, workerSpec(t, map[string]string{"ONCE": once}, "sh", "-c",
+		`if [ ! -e "$ONCE" ]; then touch "$ONCE"; echo 4242 > "$FUNCD_PORTFILE"; fi; exec sleep 30`))
+	require.NoError(t, err)
+	require.NoError(t, w.Start(ctx, inst.ID))
+	require.Eventually(t, func() bool {
+		got, serr := w.Status(ctx, inst.ID)
+		return serr == nil && got.Listened && got.Port == 4242
+	}, 10*time.Second, 10*time.Millisecond, "the first run listens at the port it wrote")
+	require.NoError(t, w.Stop(ctx, inst.ID))
+
+	require.NoError(t, w.Start(ctx, inst.ID))
+	got, err := w.Status(ctx, inst.ID)
+	require.NoError(t, err)
+	require.False(t, got.Listened, "the earlier run's port file is gone")
+	require.Zero(t, got.Port)
+	require.NoError(t, os.WriteFile(filepath.Join(e.volume(w.nameOf(inst.ID)+runSuffix), "port"), []byte("4343\n"), 0o600))
+	got, err = w.Status(ctx, inst.ID)
+	require.NoError(t, err)
+	require.True(t, got.Listened)
+	require.Equal(t, 4343, got.Port, "the port this run wrote")
+}
+
+// pullFails is procEngine on a registry that has no image.
+type pullFails struct{ *procEngine }
+
+func (pullFails) Pull(context.Context, string) error {
+	return fault.Unavailablef("procEngine", "pull: manifest unknown")
+}
+
+// ADR-0346 Decision 4: a worker whose image does not pull fails its Create as an image this runtime cannot run, which
+// its Function reads as RuntimeUnavailable, with the engine's error.
+func TestWorkersImageThatDoesNotPull(t *testing.T) {
+	t.Parallel()
+	w := newTestWorkers(t, pullFails{newProcEngine(t)}, onHost)
+	_, err := w.Create(context.Background(), workerSpec(t, nil, "sleep", "30"))
+	require.ErrorIs(t, err, containerrt.ErrImageUnavailable)
+	require.Equal(t, fault.NotFound, fault.KindOf(err))
+	require.ErrorContains(t, err, "manifest unknown")
 }
 
 // ADR-0346 Decision 5: an engine that shares this host's kernel but not its network, as a rootless one, runs no worker,
