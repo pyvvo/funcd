@@ -93,7 +93,7 @@ testcases:
             funcdctl apply -f bunny-api.yaml
             shred -u bunny-api.yaml bunny.key
             funcdctl apply -f live-outputs.yaml
-            sed "s/<name>/{{.bunnyname}}/g" egress.yaml > egress-live.yaml
+            sed "s/frp-bunny-example/{{.bunnyname}}/g" egress.yaml > egress-live.yaml
             funcdctl apply -f egress-live.yaml'
         info: "secrets and egress → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
