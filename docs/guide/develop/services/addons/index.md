@@ -183,7 +183,7 @@ place only. funcd restarts the engine with the copy, then again without it, and 
 An `OIDCProvider` with `client.registration` has funcd register the edge's sign-in client at the provider, and its
 `addon`, naming the IdentityProvider, has funcd reach rauthy at the engine's own address. A Route whose `auth.mode` is
 `oidc` then signs its callers in, and the code behind it reads who signed in:
-[Sign users in](../../security-and-networking/security/index.md#sign-users-in).
+[OIDC sign-in](../../security-and-networking/sign-in/index.md).
 
 ## Build one
 

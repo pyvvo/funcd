@@ -1,0 +1,61 @@
+apiVersion: funcd.io/v1alpha1
+kind: Addon
+metadata:
+  name: rauthy
+spec:
+  runtimes:
+    - name: rauthy
+      image: ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d
+      workloads:
+        - Engine
+      attributes:
+        kind: IdentityProvider
+        port: 8080
+        basePath: /auth/v1
+        readiness:
+          path: /auth/v1/ping
+        config:
+          type: object
+          additionalProperties: false
+          properties:
+            publicHost:
+              type: string
+            rpId:
+              type: string
+            https:
+              type: boolean
+          required:
+            - publicHost
+            - rpId
+            - https
+        secretKeys:
+          - ENC_KEYS
+---
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: rauthy-keys
+  namespace: default
+  resourceGroup: rg1
+spec:
+  data:
+    ENC_KEYS: azEvR2tRRG1RTGtpQkNpTWRiYWFTaWpDUUQ1QVM1Y0E2czc4MUxrYWw4ZWtnVT0=
+---
+# region identityprovider
+apiVersion: funcd.io/v1alpha1
+kind: IdentityProvider
+metadata:
+  name: login
+  namespace: default
+  resourceGroup: rg1
+spec:
+  config:
+    publicHost: login.localhost:8080
+    rpId: login.localhost
+    https: false
+  bindings:
+    secret:
+      - rauthy-keys
+  ingress:
+    host: login.localhost
+# endregion identityprovider

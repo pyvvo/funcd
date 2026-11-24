@@ -99,7 +99,7 @@ An `authenticated` rule:
 - otherwise needs a server credential's token in `Authorization: Bearer` or `X-Api-Key`, whose role may get the
   namespace's Functions: else 401, or 403. The Function gets the call without those headers.
 
-The `oidc` mode signs callers in with an OpenID Connect provider instead: [Sign users in](../security/index.md#sign-users-in).
+The `oidc` mode signs callers in with an OpenID Connect provider instead: [OIDC sign-in](../sign-in/index.md).
 
 A Route's mode covers only its rules: a Function's own address takes its
 [`spec.ingress.auth`](../../workloads/function/spec.md#functionspecingressauth), else the Namespace's default, else
