@@ -130,3 +130,39 @@ func TestARunTheNodeMadeOutlivesASnapshot(t *testing.T) {
 	onCP(t, n, v1.KindJobRun, "made", "the run reaches the control plane", func(*v1.JobRun) bool { return true })
 	onNode(t, n, v1.KindJobRun, "made", "and stays on the node", func(*v1.JobRun) bool { return true })
 }
+
+// A node that joins anew, as after a restore of the control plane to a point before its certificate, keeps its store and the
+// runs it made, and follows from a whole snapshot.
+func TestANodeThatJoinsAgainKeepsTheRunsItMade(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	n := joinNode(t, func(c *multinode.Config) { c.Dir = dir })
+	stop := n.start(t)
+	_, err := n.cp.Create(ctx, kvStore("kv1"))
+	require.NoError(t, err)
+	kv := onNode(t, n, v1.KindKVStore, "kv1", "the store reaches the node", anyKVStore)
+	_, err = n.node.Create(ctx, owned(configMap("e1", "dropped", "1"), kv))
+	require.NoError(t, err)
+	onCP(t, n, v1.KindConfigMap, "dropped", "a child reaches the control plane", anyConfigMap)
+	stop()
+	require.NoError(t, n.node.Delete(ctx, v1.KindConfigMap.GVK(), "e1", "dropped", ""))
+	n.cancelCP() // a new control plane process knows no node that polled a moment ago
+	n.cluster, err = multinode.New(multinode.Config{Store: n.cp, Dir: dir, ListenAddr: "127.0.0.1:0", LocalNode: "local",
+		LocalRuns: true, Master: []byte(cpMaster)})
+	require.NoError(t, err)
+	cpctx, stopCP := context.WithCancel(ctx)
+	defer stopCP()
+	go func() { _ = n.cluster.Run(cpctx) }()
+	_, err = n.node.Create(ctx, jobRun("made", "report"))
+	require.NoError(t, err)
+	require.NoError(t, n.cp.Delete(store.WithoutChangeLog(ctx), v1.KindKVStore.GVK(), "e1", "kv1", ""))
+	token, _, err := n.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	_, err = agent.Join(ctx, n.server(), token, n.dir, "test", "linux/arm64")
+	require.NoError(t, err)
+	n.prepare(t)
+	gone(t, n.node, v1.KindKVStore, "kv1", "a whole snapshot shows what went meanwhile")
+	onNode(t, n, v1.KindJobRun, "made", "the run the node made stays", func(*v1.JobRun) bool { return true })
+	onCP(t, n, v1.KindJobRun, "made", "and reaches the control plane", func(*v1.JobRun) bool { return true })
+	gone(t, n.node, v1.KindConfigMap, "dropped", "a child the node dropped does not come back")
+}
