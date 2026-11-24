@@ -54,13 +54,18 @@ func (f fakeRules) For(context.Context, auth.EntityRef) ([]string, error) { retu
 
 func rules(r ...string) fakeRules { return fakeRules{rules: r} }
 
-// policyRules reads EgressDomains over fixed policies, as the daemon's adapter does over the store.
+// policyRules reads EgressDomains over fixed policies, as the daemon's adapter does over the store, where every add-on
+// object is a Tunnel.
 type policyRules []*v1.EgressPolicy
 
 func (p policyRules) For(_ context.Context, principal auth.EntityRef) ([]string, error) {
+	kind := ""
+	if principal.Type == v1.KindAddonObject {
+		kind = "Tunnel"
+	}
 	var out []string
 	for _, ep := range p {
-		out = append(out, cedarauth.EgressDomains(ep, principal)...)
+		out = append(out, cedarauth.EgressDomains(ep, principal, kind)...)
 	}
 	return out, nil
 }
@@ -237,25 +242,31 @@ func TestScenarioLookupFollowsWhoARuleCovers(t *testing.T) {
 		Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"whole.example"}}}},
 	}}
 	named := &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "named", Namespace: "acme"}, Spec: v1.EgressPolicySpec{
-		AppliesTo: []v1.WorkloadRef{v1.FunctionOwner("etl")},
+		AppliesTo: []v1.AppliesToRef{{Kind: "Function", Name: "etl"}},
 		Rules:     []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"named.example"}}}},
 	}}
+	tunnel := &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "tunnel", Namespace: "acme"}, Spec: v1.EgressPolicySpec{
+		AppliesTo: []v1.AppliesToRef{{Kind: "Tunnel", Name: "etl"}},
+		Rules:     []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"tunnel.example"}}}},
+	}}
 	for _, tc := range []struct {
-		name          string
-		workers       fakeWorkers
-		whole, namedR int
+		name                   string
+		workers                fakeWorkers
+		whole, namedR, tunnelR int
 	}{
-		{"named Function", worker(v1.KindFunction, "etl"), dns.RcodeSuccess, dns.RcodeSuccess},
-		{"another Function", worker(v1.KindFunction, "web"), dns.RcodeSuccess, dns.RcodeRefused},
-		{"a Lake's engine", worker(v1.KindLake, "etl"), dns.RcodeRefused, dns.RcodeRefused},
+		{"named Function", worker(v1.KindFunction, "etl"), dns.RcodeSuccess, dns.RcodeSuccess, dns.RcodeRefused},
+		{"another Function", worker(v1.KindFunction, "web"), dns.RcodeSuccess, dns.RcodeRefused, dns.RcodeRefused},
+		{"a Lake's engine", worker(v1.KindLake, "etl"), dns.RcodeRefused, dns.RcodeRefused, dns.RcodeRefused},
+		{"a Tunnel's engine", worker(v1.KindAddonObject, "etl"), dns.RcodeRefused, dns.RcodeRefused, dns.RcodeSuccess},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			upstream, _ := startUpstream(t, answerA)
-			_, listen := serveForwarder(t, upstream, tc.workers, policyRules{whole, named}, nil)
+			_, listen := serveForwarder(t, upstream, tc.workers, policyRules{whole, named, tunnel}, nil)
 
 			require.Equal(t, tc.whole, lookupRcode(t, "udp", listen, "whole.example."))
 			require.Equal(t, tc.namedR, lookupRcode(t, "udp", listen, "named.example."))
+			require.Equal(t, tc.tunnelR, lookupRcode(t, "udp", listen, "tunnel.example."))
 		})
 	}
 }
@@ -268,7 +279,7 @@ func TestWildcardTokenFollowsWhoARuleCovers(t *testing.T) {
 		Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"api.y.example"}}}},
 	}}
 	named := &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "named", Namespace: "acme"}, Spec: v1.EgressPolicySpec{
-		AppliesTo: []v1.WorkloadRef{v1.FunctionOwner("etl")},
+		AppliesTo: []v1.AppliesToRef{{Kind: "Function", Name: "etl"}},
 		Rules:     []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"*.y.example"}}}},
 	}}
 	dst := netip.MustParseAddr("203.0.113.7")

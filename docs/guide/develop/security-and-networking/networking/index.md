@@ -140,8 +140,9 @@ Egress control works on Linux with the containerd runtime. Turn it on with these
 [server settings](../../running-funcd/spec.md#funcdconfigyaml), as the egress-probe example's
 [`funcdconfig.yaml`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/egress-probe/funcdconfig.yaml) does:
 `server.network.egress: true`, `server.network.egressGatewayPort`, `server.network.dnsForwarderPort` and
-`server.network.dnsResolver`. With it on, a Function reaches nothing outside funcd unless an EgressPolicy or a Policy
-allows it. Without it, and under `funcdctl dev`, workers connect anywhere.
+`server.network.dnsResolver`. With it on, a Function or an add-on engine reaches nothing outside funcd unless an
+EgressPolicy or a Policy allows it. Without it, and under `funcdctl dev`, workers connect anywhere, and an add-on
+engine nowhere.
 
 An EgressPolicy's [`rules`](spec.md#egresspolicyspec) allow TCP connections to their [`to`](spec.md#egresspolicyspecrules)
 on their `ports`, or on every port:
@@ -150,8 +151,11 @@ on their `ports`, or on every port:
   `example.com` itself;
 - [`cidrs`](spec.md#egresspolicyspecrulesto): address ranges, such as `10.0.0.0/8`.
 
-[`appliesTo`](spec.md#egresspolicyspec) names the Functions and Jobs it applies to, each by its kind and name, such as
-`{kind: Job, name: tofu}`; without it, the rules apply to all of the namespace's Functions and to no Job. The rules of
+[`appliesTo`](spec.md#egresspolicyspec) names the Functions, Jobs and add-on objects it applies to, each by its kind and
+name, such as `{kind: Job, name: tofu}`, or `{kind: Tunnel, name: public}` for the engine of an add-on object, its kind
+spelled as its Addon spells it. funcd refuses with 400 a kind that no Addon registers for objects that run an engine,
+such as a settings kind. Without `appliesTo`, the rules apply to all of the namespace's Functions and to no Job or
+engine. The rules of
 all its EgressPolicies add up. A worker can look up only the names that a domain rule allows, and a domain rule allows only the
 addresses that the lookup returned, never a private one. So a CIDR host reached by name also needs a domain rule, and a
 private address needs a CIDR rule.
@@ -175,7 +179,8 @@ port 443 at `1.1.1.1`, which a URL can name without a lookup; `https://1.0.0.1` 
 
 ## Access
 
-- **Outbound connections.** A Function gets none by itself. Each connection needs a `permit` of `egress::connect`:
+- **Outbound connections.** A Function or an add-on engine gets none by itself. Each connection needs a `permit` of
+  `egress::connect`:
   funcd makes one from each EgressPolicy rule, and a [Policy](../security/spec.md#policy) can hold one, but a lookup
   still needs a domain rule. A Policy's `forbid` stops a connection, not the lookup.
 - **Callers of an authenticated rule.** With `server.auth.edge: true`, the token's credential decides, from

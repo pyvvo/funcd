@@ -44,7 +44,9 @@ client, and `privatePaths` keeps that registration endpoint off the edge.
 | Loads a copy at its start when one variable names it, for restores | `HQL_BACKUP_RESTORE=file:<path>` |
 | Stops cleanly on SIGTERM within the stop grace | rauthy, with hiqlite's crash marker removed |
 
-On a server, an engine reaches nothing outward: funcd fences its network, and only funcd reaches its port. Under
+On a server, only funcd reaches an engine's port, and the engine reaches nothing outward unless egress control is on
+and an EgressPolicy names its object by kind and name, as
+[Networking](../../security-and-networking/networking/index.md#allow-a-functions-outbound-connections) shows. Under
 `funcdctl dev`, the engine runs on the local Docker or containerd network.
 
 ## The Addon

@@ -115,26 +115,26 @@ func TestPolicyNamesAJob(t *testing.T) {
 func TestEgressAppliesToKinds(t *testing.T) {
 	t.Parallel()
 	rules := []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"api.example.com"}}, Ports: []int{443}}}
-	ep := func(appliesTo ...v1.WorkloadRef) *v1.EgressPolicy {
+	ep := func(appliesTo ...v1.AppliesToRef) *v1.EgressPolicy {
 		return &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "egress", Namespace: "team", ResourceGroup: "rg1"},
 			Spec: v1.EgressPolicySpec{AppliesTo: appliesTo, Rules: rules}}
 	}
 	job := auth.EntityRef{Type: v1.KindJob, Namespace: "team", Name: "tofu"}
 	fn := auth.EntityRef{Type: v1.KindFunction, Namespace: "team", Name: "tofu"}
 
-	named := ep(v1.JobOwner("tofu"))
+	named := ep(v1.AppliesToRef{Kind: "Job", Name: "tofu"})
 	pols, err := cedar.CompileEgressPolicy("team", named, nil)
 	require.NoError(t, err)
 	require.Len(t, pols, 1)
 	require.Contains(t, pols[0].Spec.Cedar, `principal == Job::"team/tofu"`)
 	require.NotContains(t, pols[0].Spec.Cedar, `Function::"team/tofu"`)
-	require.Equal(t, []string{"api.example.com"}, cedar.EgressDomains(named, job))
-	require.Empty(t, cedar.EgressDomains(named, fn), "the Job's policy is not its namesake's")
+	require.Equal(t, []string{"api.example.com"}, cedar.EgressDomains(named, job, ""))
+	require.Empty(t, cedar.EgressDomains(named, fn, ""), "the Job's policy is not its namesake's")
 
 	whole := ep()
 	pols, err = cedar.CompileEgressPolicy("team", whole, nil)
 	require.NoError(t, err)
 	require.True(t, strings.Contains(pols[0].Spec.Cedar, "principal is Function"), pols[0].Spec.Cedar)
-	require.Empty(t, cedar.EgressDomains(whole, job), "an empty appliesTo reaches no Job")
-	require.Equal(t, []string{"api.example.com"}, cedar.EgressDomains(whole, fn))
+	require.Empty(t, cedar.EgressDomains(whole, job, ""), "an empty appliesTo reaches no Job")
+	require.Equal(t, []string{"api.example.com"}, cedar.EgressDomains(whole, fn, ""))
 }

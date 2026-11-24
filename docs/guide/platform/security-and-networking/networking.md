@@ -34,11 +34,13 @@ allows it. The local API also serves `health`, which checks the worker's binding
 Egress control is opt-in (`server.network.egress`) and is available on Linux with containerd. When it is off, a
 worker's outbound connections stay open. When it is on, nftables rules on the worker bridge, `funcd0`, block traffic
 between workers, redirect a worker's outbound TCP to the egress gateway and drop the rest. The rules also redirect a
-worker's DNS queries to funcd's DNS forwarder, which records the domain behind each answer.
+worker's DNS queries to funcd's DNS forwarder, which records the domain behind each answer. An add-on engine takes the
+same path: with egress control on, its own fence keeps only funcd's way in and no way out.
 
 For each connection, the egress gateway recovers the address that the worker dialled, identifies the worker by its
 source address, and takes the domain from the forwarder's records, never from what the client sends. It then asks
-Cedar whether the worker's Function, or Lake, may `egress::connect` there. Cedar decides from the namespace's
-EgressPolicies, whose rules name domains, exact or wildcard, CIDRs and ports, for the Functions they apply to. The
+Cedar whether the worker's Function, Job or Lake, or the add-on object of an engine, may `egress::connect` there. Cedar
+decides from the namespace's EgressPolicies, whose rules name domains, exact or wildcard, CIDRs and ports, for the
+workloads they apply to. The
 gateway connects an allowed connection through to its destination and closes a refused one. It audits every
 connection.

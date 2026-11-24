@@ -23,8 +23,9 @@ const (
 	workerLink     = "eth0"               // the interface CNI gives a worker
 )
 
-// FenceNetns writes the funcd_fence table into the network namespace at netnsPath: its output chain drops every
-// packet but loopback, established or related traffic, and new TCP to an allow endpoint (ADR-0269). With admit
+// FenceNetns writes the funcd_fence table into the network namespace at netnsPath. With allow non-nil, its output chain
+// drops every packet but loopback, established or related traffic, and new TCP to an allow endpoint (ADR-0269); with
+// allow nil it has none, so the worker's connections meet the node's egress rules (ADR-0352 Decision 2). With admit
 // non-nil, its input chain drops every packet but loopback, established or related traffic, and IPv4 from an admit
 // address (ADR-0332 Decision 3). A process in that netns without CAP_NET_ADMIN cannot change it, and it goes with the
 // netns.
@@ -51,26 +52,38 @@ func FenceNetns(netnsPath string, allow []netip.AddrPort, admit []netip.Addr) er
 	}
 	t := c.AddTable(&nftables.Table{Family: nftables.TableFamilyINet, Name: fenceTableName})
 	drop := nftables.ChainPolicyDrop
-	ch := c.AddChain(&nftables.Chain{
-		Name: "output", Table: t, Type: nftables.ChainTypeFilter,
-		Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityFilter, Policy: &drop,
-	})
-	for _, exprs := range fenceRules(allow) {
-		c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: exprs})
-	}
-	if admit != nil {
-		in := c.AddChain(&nftables.Chain{
-			Name: "input", Table: t, Type: nftables.ChainTypeFilter,
-			Hooknum: nftables.ChainHookInput, Priority: nftables.ChainPriorityFilter, Policy: &drop,
+	for _, fc := range fenceChains(allow, admit) {
+		ch := c.AddChain(&nftables.Chain{
+			Name: fc.name, Table: t, Type: nftables.ChainTypeFilter,
+			Hooknum: fc.hook, Priority: nftables.ChainPriorityFilter, Policy: &drop,
 		})
-		for _, exprs := range admitRules(admit) {
-			c.AddRule(&nftables.Rule{Table: t, Chain: in, Exprs: exprs})
+		for _, exprs := range fc.rules {
+			c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: exprs})
 		}
 	}
 	if err := c.Flush(); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "program %s in netns %s", fenceTableName, netnsPath)
 	}
 	return nil
+}
+
+// fenceChain is one chain of the funcd_fence table: its name, its hook and the accepts before its drop policy.
+type fenceChain struct {
+	name  string
+	hook  *nftables.ChainHook
+	rules [][]expr.Any
+}
+
+// fenceChains are the chains FenceNetns writes: the output chain unless allow is nil, the input chain unless admit is.
+func fenceChains(allow []netip.AddrPort, admit []netip.Addr) []fenceChain {
+	var out []fenceChain
+	if allow != nil {
+		out = append(out, fenceChain{name: "output", hook: nftables.ChainHookOutput, rules: fenceRules(allow)})
+	}
+	if admit != nil {
+		out = append(out, fenceChain{name: "input", hook: nftables.ChainHookInput, rules: admitRules(admit)})
+	}
+	return out
 }
 
 // fenceRules are the output chain's accepts, in order: loopback, established or related, then IPv4 TCP to each allow

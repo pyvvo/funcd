@@ -635,3 +635,29 @@ func TestScenarioAddonFenceStays(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, dec.Allowed, "the engine of the object the Function binds is refused too")
 }
+
+// ADR-0352 Decision 3: Sources names a source by the worker index, else the engine index, and refuses an address the two
+// hold with different principals, as it refuses one neither holds.
+func TestSourcesNamesAWorkerElseAnEngine(t *testing.T) {
+	t.Parallel()
+	fn := auth.EntityRef{Type: v1.KindFunction, Namespace: "team", Name: "api"}
+	engine := auth.EntityRef{Type: v1.KindAddonObject, Namespace: "team", Name: "public"}
+	workers, engines := NewMemoryWorkerIndex(), NewMemoryWorkerIndex()
+	workers.Add(netip.MustParseAddr("10.63.0.2"), fn)
+	engines.Add(netip.MustParseAddr("10.63.0.3"), engine)
+	workers.Add(netip.MustParseAddr("10.63.0.4"), fn)
+	engines.Add(netip.MustParseAddr("10.63.0.4"), engine)
+	src := Sources(workers, engines)
+	for ip, want := range map[string]*auth.EntityRef{"10.63.0.2": &fn, "10.63.0.3": &engine, "10.63.0.4": nil, "10.63.0.9": nil} {
+		ref, ok := src.Lookup(netip.MustParseAddr(ip))
+		require.Equal(t, want != nil, ok, ip)
+		if want != nil {
+			require.Equal(t, *want, ref, ip)
+		} else {
+			require.Zero(t, ref, ip)
+		}
+	}
+	ref, ok := Sources(workers, nil).Lookup(netip.MustParseAddr("10.63.0.4"))
+	require.True(t, ok, "with no engine index the worker index alone names a source")
+	require.Equal(t, fn, ref)
+}

@@ -21,7 +21,7 @@ func egressReg(t *testing.T) *Registry {
 	t.Helper()
 	reg, err := NewRegistry(
 		[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability()},
-		[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource()},
+		[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource(), AddonObjectPrincipalSource()},
 	)
 	require.NoError(t, err)
 	return reg
@@ -62,7 +62,7 @@ func etlPolicy() *v1.EgressPolicy {
 	return &v1.EgressPolicy{
 		ObjectMeta: v1.ObjectMeta{Name: "egress", Namespace: "acme", ResourceGroup: "rg1"},
 		Spec: v1.EgressPolicySpec{
-			AppliesTo: []v1.WorkloadRef{v1.FunctionOwner("etl")},
+			AppliesTo: []v1.AppliesToRef{{Kind: "Function", Name: "etl"}},
 			Rules: []v1.EgressRule{
 				{To: v1.EgressTo{Domains: []string{"*.x.com"}}, Ports: []int{443}},
 				{To: v1.EgressTo{CIDRs: []string{"10.0.0.0/8"}}, Ports: []int{5432}},
@@ -128,7 +128,7 @@ func TestEgress_CompilesToCedar(t *testing.T) {
 	ep := &v1.EgressPolicy{
 		ObjectMeta: v1.ObjectMeta{Name: "egress", Namespace: "acme", ResourceGroup: "rg1"},
 		Spec: v1.EgressPolicySpec{
-			AppliesTo: []v1.WorkloadRef{v1.FunctionOwner("etl")},
+			AppliesTo: []v1.AppliesToRef{{Kind: "Function", Name: "etl"}},
 			Rules: []v1.EgressRule{
 				{To: v1.EgressTo{Domains: []string{"*.x.com"}, CIDRs: []string{"10.0.0.0/8"}}, Ports: []int{443, 5432}},
 			},
@@ -264,14 +264,26 @@ func TestScenarioEgressCapabilityRegistered(t *testing.T) {
 	require.False(t, ok, "the egress capability defers a non-NetDestination resource")
 }
 
-// agreeMeta is regMeta with Lake etl too.
+// agreeMeta is regMeta with Lake etl too, and acme's add-on objects etl, a Tunnel, and web, an IdentityProvider.
 type agreeMeta struct{ regMeta }
 
 func (m agreeMeta) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
 	if gvk.Kind == v1.KindLake && name == "etl" {
 		return &v1.Lake{ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"}}, nil
 	}
+	if kind := map[v1.ObjectName]string{"etl": "Tunnel", "web": "IdentityProvider"}[name]; gvk.Kind == v1.KindAddonObject && ns == "acme" && kind != "" {
+		return &v1.AddonObject{ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"}, Spec: v1.AddonObjectSpec{Kind: kind}}, nil
+	}
 	return m.regMeta.Get(ctx, gvk, ns, name)
+}
+
+// kindOf is the kind of the add-on object principal names, as the platform reads it for the forwarder: "" for any other.
+func (m agreeMeta) kindOf(principal auth.EntityRef) string {
+	o, err := m.Get(context.Background(), v1.KindAddonObject.GVK(), principal.Namespace, principal.Name)
+	if principal.Type != v1.KindAddonObject || err != nil {
+		return ""
+	}
+	return o.(*v1.AddonObject).Spec.Kind
 }
 
 // scenario: forwarder-and-pdp-agree — EgressDomains, which the DNS forwarder reads, holds a domain exactly when the real
@@ -279,18 +291,20 @@ func (m agreeMeta) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Names
 // must agree, one a Go reading of what the other compiles to Cedar, so every class of input runs through both.
 func TestScenarioForwarderAndPDPAgree(t *testing.T) {
 	t.Parallel()
-	policy := func(name v1.ObjectName, ns v1.NamespaceName, appliesTo []v1.WorkloadRef, rules ...v1.EgressRule) *v1.EgressPolicy {
+	policy := func(name v1.ObjectName, ns v1.NamespaceName, appliesTo []v1.AppliesToRef, rules ...v1.EgressRule) *v1.EgressPolicy {
 		return &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"}, Spec: v1.EgressPolicySpec{AppliesTo: appliesTo, Rules: rules}}
 	}
 	domains := func(d ...string) v1.EgressRule {
 		return v1.EgressRule{To: v1.EgressTo{Domains: d}, Ports: []int{443}}
 	}
 	whole := policy("whole", "acme", nil, domains("whole.example"))
-	named := policy("named", "acme", []v1.WorkloadRef{v1.FunctionOwner("etl")}, domains("named.example"))
+	named := policy("named", "acme", []v1.AppliesToRef{{Kind: "Function", Name: "etl"}}, domains("named.example"))
+	tunnel := policy("tunnel", "acme", []v1.AppliesToRef{{Kind: "Tunnel", Name: "etl"}, {Kind: "Tunnel", Name: "web"}}, domains("tunnel.example"))
+	upper := policy("upper", "acme", []v1.AppliesToRef{{Kind: "TUNNEL", Name: "etl"}}, domains("upper.example"))
 	mixed := policy("mixed", "acme", nil,
 		v1.EgressRule{To: v1.EgressTo{Domains: []string{"exact.example", "*.wild.example"}, CIDRs: []string{"198.51.100.0/24"}}, Ports: []int{443}},
 		domains("second.example"))
-	anyPort := policy("any", "acme", []v1.WorkloadRef{v1.FunctionOwner("web")}, v1.EgressRule{To: v1.EgressTo{Domains: []string{"any.example"}}})
+	anyPort := policy("any", "acme", []v1.AppliesToRef{{Kind: "Function", Name: "web"}}, v1.EgressRule{To: v1.EgressTo{Domains: []string{"any.example"}}})
 	elsewhere := policy("elsewhere", "beta", nil, domains("beta.example"))
 
 	principals := []auth.EntityRef{
@@ -298,8 +312,12 @@ func TestScenarioForwarderAndPDPAgree(t *testing.T) {
 		{Type: v1.KindFunction, Namespace: "acme", Name: "web"},
 		{Type: v1.KindLake, Namespace: "acme", Name: "etl"},
 		{Type: v1.KindFunction, Namespace: "beta", Name: "etl"},
+		{Type: v1.KindAddonObject, Namespace: "acme", Name: "etl"},
+		{Type: v1.KindAddonObject, Namespace: "acme", Name: "web"},
+		{Type: v1.KindAddonObject, Namespace: "acme", Name: "gone"},
 	}
-	names := []string{"whole.example", "named.example", "exact.example", "*.wild.example", "second.example", "any.example", "beta.example", "other.example"}
+	names := []string{"whole.example", "named.example", "exact.example", "*.wild.example", "second.example", "any.example", "beta.example",
+		"tunnel.example", "upper.example", "other.example"}
 
 	for name, policies := range map[string][]*v1.EgressPolicy{
 		"no policy":                    nil,
@@ -309,7 +327,9 @@ func TestScenarioForwarderAndPDPAgree(t *testing.T) {
 		"exact, wildcard, CIDR, rules": {mixed},
 		"a rule of any port":           {anyPort},
 		"another namespace's":          {elsewhere},
-		"all":                          {whole, named, mixed, anyPort, elsewhere},
+		"an add-on kind":               {tunnel},
+		"an add-on kind in other case": {upper},
+		"all":                          {whole, named, mixed, anyPort, elsewhere, tunnel, upper},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -330,7 +350,7 @@ func TestScenarioForwarderAndPDPAgree(t *testing.T) {
 			for _, principal := range principals {
 				var forwarded []string
 				for _, ep := range policies {
-					forwarded = append(forwarded, EgressDomains(ep, principal)...)
+					forwarded = append(forwarded, EgressDomains(ep, principal, m.kindOf(principal))...)
 				}
 				for _, domain := range names {
 					dst := auth.NetDestination{IP: netip.MustParseAddr("93.184.216.34"), Port: 443, Domains: []string{domain}}
@@ -340,4 +360,31 @@ func TestScenarioForwarderAndPDPAgree(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ADR-0352 Decision 4: an item of an add-on kind compiles to the object's UID and its stored kind, so the grant reaches
+// the Tunnel etl and neither a Function of its name nor an object of another kind that takes the name.
+func TestEgressItemNamesTheAddonKind(t *testing.T) {
+	t.Parallel()
+	ep := &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "egress", Namespace: "acme", ResourceGroup: "rg1"},
+		Spec: v1.EgressPolicySpec{AppliesTo: []v1.AppliesToRef{{Kind: "Tunnel", Name: "etl"}},
+			Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"example.com"}}, Ports: []int{443}}}}}
+	pols, err := CompileEgressPolicy("acme", ep, nil)
+	require.NoError(t, err)
+	require.Len(t, pols, 1)
+	text := pols[0].Spec.Cedar
+	require.Contains(t, text, `principal == AddonObject::"acme/etl"`)
+	require.Contains(t, text, `principal.kind == "Tunnel"`)
+	require.NotContains(t, text, `Function::"acme/etl"`)
+
+	reg := egressReg(t)
+	m := agreeMeta{regMeta{fns: map[string]*v1.Function{"acme/etl": {ObjectMeta: v1.ObjectMeta{Name: "etl", Namespace: "acme", ResourceGroup: "rg1"}}}}}
+	dst := auth.NetDestination{IP: netip.MustParseAddr("93.184.216.34"), Port: 443, Domains: []string{"example.com"}}
+	require.True(t, decideEgress(t, reg, m, auth.EntityRef{Type: v1.KindAddonObject, Namespace: "acme", Name: "etl"}, dst, text))
+	require.False(t, decideEgress(t, reg, m, auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "etl"}, dst, text))
+	ep.Spec.AppliesTo[0].Name = "web"
+	pols, err = CompileEgressPolicy("acme", ep, nil)
+	require.NoError(t, err)
+	require.False(t, decideEgress(t, reg, m, auth.EntityRef{Type: v1.KindAddonObject, Namespace: "acme", Name: "web"}, dst, pols[0].Spec.Cedar),
+		"web is an IdentityProvider, not a Tunnel")
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/stretchr/testify/require"
@@ -71,6 +72,23 @@ func TestFenceAdmitsOnlyLoopbackAndTheBridgeAddress(t *testing.T) {
 
 	require.Len(t, admitRules([]netip.Addr{}), 2, "an empty list admits loopback alone")
 	require.Error(t, FenceNetns("/nonexistent", []netip.AddrPort{}, []netip.Addr{netip.MustParseAddr("::1")}), "an IPv6 source is refused")
+}
+
+// ADR-0352 Decision 2: with no allow list the fence writes no output chain, so a host-only engine with egress on keeps
+// its input chain alone; an empty allow list still writes one that allows no new connection.
+func TestFenceChainsLeaveOutTheOutputChainWithNoAllowList(t *testing.T) {
+	bridge := []netip.Addr{netip.MustParseAddr("10.63.0.1")}
+	names := func(chains []fenceChain) []string {
+		var out []string
+		for _, c := range chains {
+			out = append(out, c.name)
+		}
+		return out
+	}
+	require.Equal(t, []string{"input"}, names(fenceChains(nil, bridge)))
+	require.Equal(t, []string{"output", "input"}, names(fenceChains([]netip.AddrPort{}, bridge)))
+	require.Equal(t, []string{"output"}, names(fenceChains([]netip.AddrPort{netip.MustParseAddrPort("10.63.0.1:9000")}, nil)))
+	require.Equal(t, nftables.ChainHookInput, fenceChains(nil, bridge)[0].hook)
 }
 
 // ipv6Tree makes a tree shaped as /proc/sys/net/ipv6, each link's disable_ipv6 reading 0.

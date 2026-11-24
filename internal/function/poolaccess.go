@@ -109,7 +109,7 @@ func (r *Reconciler) accessIn(ctx context.Context, ns v1.NamespaceName) (accessI
 			}
 			grant := "egresspolicy/" + string(ep.Name) + "@" + sha256Hex(rules)
 			for _, ref := range ep.Spec.AppliesTo {
-				if ref.Kind == v1.KindFunction { // a Job is in no pool (ADR-0351 Decision 3)
+				if ref.Kind == string(v1.KindFunction) { // a Job or an engine is in no pool (ADR-0351 Decision 3)
 					idx.grants[ref.Name] = append(idx.grants[ref.Name], grant)
 				}
 			}

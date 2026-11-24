@@ -23,6 +23,9 @@
 #   * job-egress-named (ADR-0351 Decision 6) — a run of Job egress-probe egresses as its Job: a policy whose appliesTo
 #     names the Job lets it reach example.com, the Function of its name does not, and the wildcard policy, whose
 #     appliesTo is empty, reaches no Job.
+#   * engine-egress-named (ADR-0352) — the engine of the Tunnel public, a test Addon of traefik/whoami, has no output
+#     fence with egress on: a policy whose appliesTo names the Tunnel public lets its lookup of example.com and its TLS
+#     connection there through, and the Function public, of its name, still reaches nothing.
 #
 # The EgressPolicies are applied MID-SUITE (in-VM `limactl shell` — co-located with the daemon, no path leak;
 # {{.vm}} is injected by the recipe --var) so the deny-then-allow ordering is observable. http steps hit the
@@ -231,7 +234,7 @@ testcases:
             scaling:
               minReplicas: 1
           YAML
-            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /tmp/egress-sibling.yaml'
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=egress-lane-developer funcdctl apply -f /tmp/egress-sibling.yaml'
         assertions:
           - result.code ShouldEqual 0
       - type: exec
@@ -295,7 +298,7 @@ testcases:
               kind: Function
               name: egress-probe
           YAML
-            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /tmp/egress-engine.yaml'
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=egress-lane-developer funcdctl apply -f /tmp/egress-engine.yaml'
         assertions:
           - result.code ShouldEqual 0
       - type: exec
@@ -335,7 +338,7 @@ testcases:
         # collapses the env assignments into one FUNCD_SERVER value (invalid-port parse error), so the
         # apply silently fails and the policy is never applied (the e2e bug that made the allow-cases fail).
         script: |
-          limactl shell {{.vm}} -- sudo bash -c 'FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /opt/lane/fixtures/egresspolicy-wildcard.yaml'
+          limactl shell {{.vm}} -- sudo bash -c 'FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=egress-lane-developer funcdctl apply -f /opt/lane/fixtures/egresspolicy-wildcard.yaml'
         assertions:
           - result.code ShouldEqual 0
       - type: http
@@ -387,7 +390,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo bash -c 'FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /opt/lane/fixtures/egresspolicy-cidr.yaml'
+          limactl shell {{.vm}} -- sudo bash -c 'FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=egress-lane-developer funcdctl apply -f /opt/lane/fixtures/egresspolicy-cidr.yaml'
         assertions:
           - result.code ShouldEqual 0
       - type: http
@@ -459,7 +462,7 @@ testcases:
                 ports:
                   - 15098
           YAML
-            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /tmp/egresspolicy-bridge.yaml'
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=egress-lane-developer funcdctl apply -f /tmp/egresspolicy-bridge.yaml'
         assertions:
           - result.code ShouldEqual 0
       - type: http
@@ -516,14 +519,14 @@ testcases:
                 ports:
                   - 443
           YAML
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=egress-lane-developer
             funcdctl apply -f /tmp/job-egress-probe.yaml && funcdctl apply -f /tmp/egresspolicy-job.yaml'
         assertions:
           - result.code ShouldEqual 0
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} -- sudo bash -c '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=egress-lane-developer
             run=$(funcdctl job run egress-probe --input "{\"url\":\"https://example.com\"}") || exit 1
             for i in $(seq 60); do
               out=$(funcdctl get jobrun "$run" -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin).get(\"status\",{});print(s.get(\"phase\",\"\"),json.dumps((s.get(\"result\") or {}).get(\"ok\")))")
@@ -549,7 +552,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} -- sudo bash -c '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=egress-lane-developer
             run=$(funcdctl job run egress-probe --input "{\"url\":\"https://www.example.com\"}") || exit 1
             for i in $(seq 60); do
               out=$(funcdctl get jobrun "$run" -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin).get(\"status\",{});print(s.get(\"phase\",\"\"),json.dumps((s.get(\"result\") or {}).get(\"ok\")))")
@@ -560,3 +563,128 @@ testcases:
         info: "a run under the wildcard policy only → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldContainSubstring "Succeeded false"
+
+  # 8) engine-egress-named: the Tunnel public runs traefik/whoami as its engine, which has no output fence with egress
+  #    on, so its lookups meet the forwarder and its connections the gateway. The probe runs in the engine's netns.
+  #    The wildcard policy, whose appliesTo is empty, names no engine, so its lookups are refused until the policy that
+  #    names the Tunnel public applies; the Function public, of the object's name, stays in.
+  - name: engine-egress-named
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            cat >/tmp/tunnel-addon.yaml <<"YAML"
+          apiVersion: funcd.io/v1alpha1
+          kind: Addon
+          metadata:
+            name: tunnel-probe
+          spec:
+            runtimes:
+              - name: tunnel-probe
+                image: docker.io/traefik/whoami@sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c
+                workloads:
+                  - Engine
+                attributes:
+                  kind: Tunnel
+                  port: 80
+                  readiness:
+                    path: /health
+          YAML
+            cat >/tmp/tunnel.yaml <<"YAML"
+          apiVersion: funcd.io/v1alpha1
+          kind: Tunnel
+          metadata:
+            name: public
+            namespace: default
+            resourceGroup: rg1
+          ---
+          apiVersion: funcd.io/v1alpha1
+          kind: Function
+          metadata:
+            name: public
+            namespace: default
+            resourceGroup: rg1
+          spec:
+            runtime: nodejs22
+            handler: handle
+            image: oci-layout:///mnt/funcd-deps/registry:egress-probe
+          YAML
+            export FUNCD_SERVER=http://127.0.0.1:8080
+            FUNCD_TOKEN=egress-lane-admin funcdctl apply -f /tmp/tunnel-addon.yaml &&
+              FUNCD_TOKEN=egress-lane-developer funcdctl apply -f /tmp/tunnel.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=egress-lane-developer funcdctl get tunnels public -n default -o json |
+              python3 -c "import sys,json;print(json.load(sys.stdin).get(\"status\",{}).get(\"phase\",\"\"))"'
+        retry: 60
+        delay: 3
+        info: "the Tunnel public → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual Ready
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            eng=$({{.ctr}} task ls | awk "\$1 == \"public-r0\" && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            [ -n "$eng" ] || { echo "no engine yet"; exit 1; }
+            addr=$(getent ahostsv4 example.com | awk "{print \$1; exit}")
+            nsenter -t "$eng" -n python3 /opt/lane/engine-probe.py lookup www.example.com
+            nsenter -t "$eng" -n python3 /opt/lane/engine-probe.py lookup example.com "$addr"'
+        retry: 10
+        delay: 2
+        info: "the engine before a policy names it → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "lookup www.example.com rcode 5"
+          - result.systemout ShouldContainSubstring "lookup example.com rcode 5"
+          - result.systemout ShouldContainSubstring "connect example.com failed"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            cat >/tmp/egresspolicy-tunnel.yaml <<"YAML"
+          apiVersion: funcd.io/v1alpha1
+          kind: EgressPolicy
+          metadata:
+            name: allow-the-tunnel
+            namespace: default
+            resourceGroup: rg1
+          spec:
+            appliesTo:
+              - kind: Tunnel
+                name: public
+            rules:
+              - to:
+                  domains:
+                    - example.com
+                ports:
+                  - 443
+          YAML
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=egress-lane-developer funcdctl apply -f /tmp/egresspolicy-tunnel.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            eng=$({{.ctr}} task ls | awk "\$1 == \"public-r0\" && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            nsenter -t "$eng" -n python3 /opt/lane/engine-probe.py lookup example.com'
+        retry: 15
+        delay: 2
+        info: "the engine under the policy that names it → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "lookup example.com rcode 0"
+          - result.systemout ShouldContainSubstring "tls example.com TLSv1"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/public"
+        headers:
+          content-type: application/json
+        body: '{"data":{"url":"https://example.com"}}'
+        retry: 20
+        delay: 2
+        info: "the Function of the object's name → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.ok ShouldEqual false

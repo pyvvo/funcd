@@ -1194,6 +1194,8 @@ func (p *Platform) buildControlPlane() error {
 			// ADR-0074 Policy validity: spec.cedar parses + references only the actions and entity types of the
 			// registered capabilities (ADR-0116) — so every stored Policy compiles.
 			admission.NewPolicyValidityAdmission(),
+			// ADR-0352 Decision 1: an EgressPolicy item of an add-on kind names a kind an Addon registers for engines.
+			admission.NewEgressAppliesToAdmission(r),
 			// ADR-0248 Decision 2: a binding names what its root declares; a Function's own stores default their
 			// owner to it and its config bindings name the stored ConfigMaps.
 			admission.NewBindingDeclaredAdmission(r),
@@ -1942,6 +1944,10 @@ type storeDomainRules struct{ s store.Store }
 
 func (r storeDomainRules) For(ctx context.Context, principal auth.EntityRef) ([]string, error) {
 	const op = "funcd.storeDomainRules.For"
+	kind, err := addonKindOf(ctx, r.s, principal)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "read the add-on object")
+	}
 	res, err := r.s.List(ctx, v1.KindEgressPolicy.GVK(), store.ListOptions{Namespace: principal.Namespace})
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list egress policies")
@@ -1949,10 +1955,30 @@ func (r storeDomainRules) For(ctx context.Context, principal auth.EntityRef) ([]
 	var out []string
 	for _, o := range res.Items {
 		if ep, ok := o.(*v1.EgressPolicy); ok {
-			out = append(out, cedarauth.EgressDomains(ep, principal)...)
+			out = append(out, cedarauth.EgressDomains(ep, principal, kind)...)
 		}
 	}
 	return out, nil
+}
+
+// addonKindOf is the kind of the stored add-on object that principal names, as an EgressPolicy item names it (ADR-0352
+// Decision 4): "" for another principal, or for an object no longer stored.
+func addonKindOf(ctx context.Context, st store.Store, principal auth.EntityRef) (string, error) {
+	if principal.Type != v1.KindAddonObject {
+		return "", nil
+	}
+	obj, err := st.Get(ctx, v1.KindAddonObject.GVK(), principal.Namespace, principal.Name)
+	if fault.KindOf(err) == fault.NotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	o, _ := obj.(*v1.AddonObject)
+	if o == nil {
+		return "", nil
+	}
+	return o.Spec.Kind, nil
 }
 
 // egressAuditSink records each egress decision (ADR-0117): every connection (allowed + blocked) is

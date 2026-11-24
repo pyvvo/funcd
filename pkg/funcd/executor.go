@@ -39,6 +39,7 @@ type executor struct {
 
 	egressWorkers   *egress.MemoryWorkerIndex // src-IP → Ref, filled by the containerd runtime (ADR-0117 §5); nil unless egress is on
 	egressEngines   *egress.MemoryWorkerIndex // the add-on engines' addresses, which the gateway never dials (ADR-0332); nil unless egress is on
+	egressSources   egress.WorkerIndex        // a source address's principal over both indexes (ADR-0352 Decision 3); nil unless egress is on
 	engineIndexMu   sync.Mutex                // one indexAddonEngines run at a time
 	addonNamespaces func() []v1.NamespaceName // the add-on runtime's engines' namespaces, a stopping engine's included
 	egressForwarder egress.Forwarder
@@ -135,17 +136,19 @@ func (e *executor) buildEgress(authz auth.Authorizer) error {
 			"bridge address (WithBridgeAddress), else no lookup is answered")
 	}
 	e.egressWorkers, e.egressEngines = egress.NewMemoryWorkerIndex(), egress.NewMemoryWorkerIndex()
+	// ADR-0352 Decision 3: a source is a worker, else an engine, read through one view that refuses a conflict.
+	e.egressSources = egress.Sources(e.egressWorkers, e.egressEngines)
 	fwd := egress.NewForwarder(
 		netip.AddrPortFrom(bridge, c.dnsForwarderPort),
 		c.dnsUpstream,
-		e.egressWorkers,           // src-IP → principal (ADR-0117 §5)
+		e.egressSources,           // src-IP → principal (ADR-0117 §5)
 		storeDomainRules{c.store}, // principal → the domain rules that apply to it (ADR-0315)
 		c.logger.With("component", "egress.dns"),
 	)
 	e.egressForwarder = fwd
 	e.egressGateway = egress.New(true, egress.Deps{
 		GatewayPort: c.egressGatewayPort,
-		Workers:     e.egressWorkers,
+		Workers:     e.egressSources,
 		DNS:         fwd,
 		Authz:       authz,
 		Audit:       egressAuditSink{logger: c.logger.With("component", "egress.audit")},

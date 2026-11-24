@@ -86,6 +86,10 @@ func (p registryProvider) EntitiesFor(ctx context.Context, principal, resource a
 			"namespace":     cedartypes.String(ns),
 			"resourceGroup": cedartypes.String(rg),
 		}
+		// ADR-0352 Decision 4: an add-on object carries its kind, which an EgressPolicy's appliesTo item names.
+		if o, ok := obj.(*v1.AddonObject); ok {
+			attrs["kind"] = cedartypes.String(o.Spec.Kind)
+		}
 		// Attach every capability's binding Set. A capability whose Bind returns nil for this source type
 		// contributes nothing (attr absent — e.g. kv/invoke for a Lake); a non-nil (possibly
 		// empty) slice sets the attr (a Function always carries links/kvBindings/blobBindings, matching
