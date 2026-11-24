@@ -5,7 +5,9 @@
   ([report](../reviews/adr-0355-implementation-claude-opus-5-5-3.md)); Accepted (2026-11-24), on the decider's bar of
   2026-11-24, after four independent judge rounds, the fourth with no finding
 - **Amended in place**: 2026-11-24, by the decider, recorded on [#1021](https://github.com/pyvvo/funcd/issues/1021): a
-  run's `variables` record stays closed when the module has no variable that is not sensitive (Decision 3)
+  module with no plain variable takes void `variables`, as [ADR-0090](0090-mandatory-single-io-schema.md) has a
+  Function's side that takes nothing, and `variables` is required only when a plain variable has no default
+  (Decision 3)
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: infrastack, artifacts, contracts, funcdctl, addons
@@ -51,8 +53,8 @@ the path; and a run that only plans answers what would change, for F141's drift 
 - `scenario: infra-sensitive-variable-refused`: Given a module whose variable `token` is sensitive; when a run's
   variables set `token`; then its creation answers 422; with `TF_VAR_token` in a Secret the Job binds, the run plans.
 - `scenario: infra-sensitive-only-module`: Given a module whose only variable `token` is sensitive; when the plugin
-  writes its contract; then its `variables` record is closed with no member, so a run's input that sets `token` is
-  refused (amended 2026-11-24).
+  writes its contract; then its `variables` is `{"type": "null"}` and not required, so a run's input that sets `token`
+  is refused, and `funcdctl push` accepts the contract (amended 2026-11-24).
 - `scenario: infra-plan-run`: Given a module whose one resource is `random_pet.name`, applied with `prefix: a`; when a
   run with action `plan` and `prefix: b` runs; then it applies nothing and answers `{"plan": {"add": 0, "change": 0,
   "destroy": 0, "replace": 1, "resources": ["random_pet.name"]}}`.
@@ -134,15 +136,16 @@ where the runtime installs providers from.
    The build reaches the providers' registries; a run reaches none.
 3. **The contract.** Its runtime is `opentofu1`. Its input is the run's `{action, variables}`: `action` one of `apply`,
    `destroy` and `plan`; `variables` a closed record of the module's variables, typed by Contracts' table, the required
-   ones those with no default. A sensitive variable is left out, so no run's input holds it: its value comes from a
+   ones those with no default, and itself required only when one is (amended 2026-11-24). A sensitive variable is left out, so no run's input holds it: its value comes from a
    bound Secret's `TF_VAR_<name>` key, which the runtime gives OpenTofu already. The runtime's work copy of a module
    leaves out the files that step 1 of Decision 2 refuses, so a run's variables come only from its input, the
    `TF_VAR_<name>` keys of its bound ConfigMaps and Secrets, and the module's defaults, a module pushed by hand
    included. Its output is a closed record of two
    optional members: `outputs`, a closed record of the module's outputs that are not sensitive, each any value, none
    required; and `plan`, Decision 5's finding. A record that would have no member is the empty schema `{}`, except
-   `variables`, which stays closed with no member, so a module whose every variable is sensitive admits none in a
-   run's input (amended 2026-11-24). The
+   `variables`: a module with no plain variable takes `{"type": "null"}`, a void side as ADR-0090 has a Function's, so
+   a run's input sets none, while funcd's contract profile has no closed record without a member (amended
+   2026-11-24). The
    runtime answers in this shape: an apply `{"outputs": {…}}`, a destroy `{}`, a `plan` run `{"plan": {…}}`; so a
    contract written by hand for this runtime takes it too.
 4. **The run's providers.** The runtime runs `tofu init -plugin-dir=<module>/.funcd-providers` when the module holds
@@ -308,7 +311,7 @@ F141's work adds to funcd's `e2e/` (`addon-infrastack.venom.yml`), on a module t
   the image `INFRASTACK_OPENTOFU_IMAGE` names.
 - [ ] The push refuses a child module outside the folder, and each platform's bundle holds only its own packages.
 - [ ] Each row of the type table has a test, and no generated input schema holds a sensitive variable, nor admits one
-  through an empty `variables` record (amended 2026-11-24).
+  through an empty `variables` record: it is `{"type": "null"}` (amended 2026-11-24).
 - [ ] A `plan` run writes no output and keeps no saved plan.
 
 ## Consequences
