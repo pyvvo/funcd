@@ -237,15 +237,18 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "KEYS=outputs OUTPUTS=name NAME=example-"
-      # The reader answers only the sha256 of the sensitive output, which the admin's read of the Secret checks.
+      # The reader answers only the sha256 of the sensitive output, which the admin's read of the Secret checks. Its first
+      # answer must hold the values (ADR-0356 Decisions 2 and 6): only a call that fails is sent again.
       - type: exec
         script: &reader |
           limactl shell --workdir / {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} bash -c '
             secret=$(funcdctl get secret random-stack-outputs -n default -o json)
-            answer=$(curl -s -X POST -H "content-type: application/json" -d "{\"data\":null}" http://127.0.0.1:8081/function/random-stack-reader)
+            answer=""
+            for i in $(seq 1 15); do
+              answer=$(curl -sf -X POST -H "content-type: application/json" -d "{\"data\":null}" http://127.0.0.1:8081/function/random-stack-reader) && break
+              answer=""; sleep 2
+            done
             python3 -c "import sys,json,base64,hashlib;d=json.loads(sys.argv[1])[\"spec\"][\"data\"];a=json.loads(sys.argv[2]);v=lambda k:base64.b64decode(d.get(k,\"\")).decode();print(\"READ_NAME=%s NAME_MATCH=%s TOKEN_MATCH=%s TOKEN_LEN=%d\" % (a.get(\"name\"),a.get(\"name\")==v(\"name\"),a.get(\"tokenSha256\")==hashlib.sha256(v(\"token\").encode()).hexdigest(),len(v(\"token\"))))" "$secret" "$answer"'
-        retry: 15
-        delay: 2
         info: "the reader → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -331,8 +334,6 @@ testcases:
           - result.systemout ShouldContainSubstring "KEYS=outputs OUTPUTS=name NAME=changed-"
       - type: exec
         script: *reader
-        retry: 15
-        delay: 2
         info: "the reader → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
