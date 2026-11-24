@@ -48,8 +48,8 @@ require (
 	github.com/parquet-go/parquet-go v0.32.1
 	github.com/pyvvo/funcd-addons v0.2.0
 	github.com/pyvvo/funcd-functions v0.27.0
-	github.com/pyvvo/funcd-python v0.28.0
-	github.com/pyvvo/funcd-typescript v0.33.0
+	github.com/pyvvo/funcd-python v0.29.0
+	github.com/pyvvo/funcd-typescript v0.34.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/spf13/cobra v1.10.2
