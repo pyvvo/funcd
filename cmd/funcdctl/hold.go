@@ -1,12 +1,8 @@
 package main
 
 import (
-	"context"
-
 	"github.com/spf13/cobra"
 
-	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -22,31 +18,8 @@ func (a *cli) holdCmd() *cobra.Command {
 }
 
 func (a *cli) holdStatusCmd() *cobra.Command {
-	var node string
-	cmd := &cobra.Command{
-		Use:   "status",
-		Short: "Show the hold: marker, restore report, counts, paused runs, dead letters, pending blob keys, orphan data, namespace markers",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return printStatus(cmd.Context(), a, "funcdctl hold status", "encode", func(c *sdk.Client, ctx context.Context) (hold.Evidence, error) {
-				return c.HoldStatus(ctx, onNode(node)...)
-			})
-		},
-	}
-	nodeFlag(cmd, &node)
-	return cmd
-}
-
-// nodeFlag adds --node, the worker node a command is about.
-func nodeFlag(cmd *cobra.Command, node *string) {
-	cmd.Flags().StringVar(node, "node", "", "a worker node, instead of the funcd at --server")
-}
-
-func onNode(node string) []sdk.NodeOption {
-	if node == "" {
-		return nil
-	}
-	return []sdk.NodeOption{sdk.OnNode(v1.ObjectName(node))}
+	return statusCmd(a, "funcdctl hold status", "Show the hold: marker, restore report, counts, paused runs, dead letters, "+
+		"pending blob keys, orphan data, namespace markers", "encode", (*sdk.Client).HoldStatus)
 }
 
 func (a *cli) holdReleaseCmd() *cobra.Command {
