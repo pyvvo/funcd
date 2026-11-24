@@ -238,7 +238,7 @@ creates and changes both, and a viewer only reads them.
 | `Pending` | `Queued` | The Job's `concurrency` or the node's `job.maxRunning` is reached. |
 | `Running` | | The run's worker runs the handler. |
 | `Succeeded` | | The handler answered; `result` holds its answer. |
-| `Failed` | `StartFailed` | The worker did not start, or did not become ready within `runtime.bootTimeout`; the message names the last binding check that failed. |
+| `Failed` | `StartFailed` | The run's worker could not be created or started, ended before it was ready, was not ready within `runtime.bootTimeout`, or a worker of the run's name still remained that long; the message says which. When the worker's last readiness answer named a binding whose check failed, the message names that binding too. |
 | `Failed` | `InputSchemaMismatch` | The input does not match the contract of the Revision that the run pinned, or the handler refused it with 422. |
 | `Failed` | `HandlerFailed` | The handler failed or its answer was not JSON; the message holds the first line of the cause. |
 | `Failed` | `PayloadLimitExceeded` | The result is larger than `job.payloadLimit`. |
@@ -249,8 +249,8 @@ creates and changes both, and a viewer only reads them.
 | `Cancelled` | `Restored` | A restore of the platform ended the run: the backup cannot say whether it ran since. |
 
 The Job itself is Ready once funcd has checked it as it checks a Function before its first worker. `funcdctl get job
-<job> -n <namespace> -o json` shows its `Ready` condition, with a Function's reasons and two of its own:
-`ContractMissing`, when the artifact carries no contract, and `ContractInvalid`, when its contract does not compile.
+<job> -n <namespace> -o json` shows its `Ready` condition, with a Function's reasons, such as `ContractMissing` when the
+artifact carries no contract and `ContractInvalid` when its contract does not compile.
 
 ## Changes and deletion
 
@@ -259,10 +259,11 @@ The Job itself is Ready once funcd has checked it as it checks a Function before
   not ended pins it.
 - A Revision keeps the image digest of its creation, so push new code under a new tag, or set
   [`imageDigest`](spec.md#jobspec).
-- Deleting a run stops its worker. Deleting a Job ends each of its runs that has not ended, `Cancelled` with
-  `JobDeleted`, and removes its Revisions, with a Lake or a [ConfigMap](../configuration/index.md) that the Job
-  declares by `name`. A KVStore, Bucket or SQLDatabase that it declares by `name` stays, unless its `deletion` is
-  `delete`.
+- Deleting a run stops its worker. Deleting a Job ends each of its runs that has not ended and holds the Job's UID,
+  `Cancelled` with `JobDeleted`; a run records the UID when it is created after its Job, or when it starts. A run
+  created before its Job that has not started holds none, and waits in `Pending` with `JobNotFound`.
+- Deleting a Job removes its Revisions, with a Lake or a [ConfigMap](../configuration/index.md) that the Job declares
+  by `name`. A KVStore, Bucket or SQLDatabase that it declares by `name` stays, unless its `deletion` is `delete`.
 - When funcd stops, the runs that are running stop with it; at its next start, each ends `Failed` with `Interrupted`.
 
 ## CLI errors

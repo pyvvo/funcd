@@ -10,8 +10,9 @@ uses. Each change to a Job's spec creates an immutable Revision.
 A JobRun is one run of a Job, with its input. A run waits until its Job is Ready and a slot is free: a Job lets a set
 number of its runs hold a worker at once, and the node sets a number for all Jobs together. When a run starts, it pins
 its Job's current Revision, and funcd starts one worker of that Revision for the run alone. funcd calls the handler
-once with the run's input and keeps the answer as the run's result; then the run ends and its worker stops. A run is
-in one of these phases: Pending, Running, Succeeded, Failed or Cancelled.
+once with the run's input. It stops and removes the worker at every end, and then writes the run's end: a successful
+answer becomes the run's result, and any other ends the run Failed. A run is in one of these phases: Pending, Running,
+Succeeded, Failed or Cancelled.
 
 funcd never runs a run again on its own. A run that fails, that is cancelled, or that is running when funcd stops
 ends for good, and only a new run does the work again. A run reaches the stores, Secrets and Functions of its Job as
