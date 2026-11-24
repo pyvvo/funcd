@@ -224,11 +224,12 @@ func anyLagging(vs []verdict) bool // new: gates the post-hooks and prune (Decis
    (Decision 5).
 4. Docs: the behavior rows; `docs/guide/platform/workloads/app.md` on stacks and `Lagging`.
 
-Tests, each written to pass: unit tests in `internal/app` for each Decision, `TestLagEndSurvivesACutPass` among them; one `TestScenario…` per scenario in
-`pkg/funcd`'s e2e suite, on an engineless Addon whose `.mjs` Function answers as a stack does and a test that writes
-the Job's key, each assertion's test under `// oracle: docs/design/app/stack-rollout.fizz#<Assertion>`. Done when
-`just ci-full` passes on ADR-0345's and ADR-0350's implementations, and the frp-bunny lane
-(`e2e/addon-frp-bunny.venom.yml`) installs its App with the outputs Secret holding no key.
+Tests, each written to pass: unit tests in `internal/app` for each Decision, `TestLagEndSurvivesACutPass` among them;
+one `TestScenario…` per scenario in `pkg/funcd`'s e2e suite, on an engineless Addon whose `.mjs` Function answers as a
+stack does and a test that writes the Job's key, each assertion's test under `// oracle:
+docs/design/app/stack-rollout.fizz#<Assertion>`. Done when `just ci-full` passes on ADR-0345's and ADR-0350's
+implementations, and the frp-bunny lane (`e2e/addon-frp-bunny.venom.yml`) installs its App with the outputs Secret
+holding no key.
 
 ## Review checklist
 
