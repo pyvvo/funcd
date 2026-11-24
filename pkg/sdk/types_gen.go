@@ -138,8 +138,8 @@ func genPyi(in, out typeSchema, b v1.FunctionBindings, names typeNames) []byte {
 	buf.WriteString("\n")
 	buf.WriteString(pyiBindings(names.pyBindings, b))
 	if names.job {
-		buf.WriteString("\n\nclass RunInfo:\n")
-		buf.WriteString("    name: str\n    job: str\n    revision: str\n    phase: Literal[\"run\"]\n    startedBy: str\n")
+		buf.WriteString("\n\nclass RunInfo(TypedDict):\n")
+		buf.WriteString("    name: str\n    job: str\n    revision: str\n    phase: Literal[\"run\", \"preview\"]\n    started_by: str\n")
 		buf.WriteString("\n\nclass JobContext:\n    run: RunInfo\n")
 	}
 	return []byte(buf.String())
@@ -229,7 +229,7 @@ func genDts(in, out typeSchema, b v1.FunctionBindings, names typeNames) []byte {
 	buf.WriteString(dtsBindings(names.tsBindings, b))
 	if names.job {
 		buf.WriteString("\nexport interface RunInfo {\n")
-		buf.WriteString("  name: string;\n  job: string;\n  revision: string;\n  phase: \"run\";\n  startedBy: string;\n}\n")
+		buf.WriteString("  name: string;\n  job: string;\n  revision: string;\n  phase: \"run\" | \"preview\";\n  startedBy: string;\n}\n")
 		buf.WriteString("\nexport interface JobContext {\n  run: RunInfo;\n}\n")
 	}
 	return []byte(buf.String())

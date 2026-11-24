@@ -3,6 +3,7 @@ package sdk_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/contract"
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -150,7 +152,7 @@ func TestGenerateJobTypes(t *testing.T) {
 	require.NoError(t, err)
 	ts := string(files["funcd.d.ts"])
 	for _, want := range []string{"export interface JobInput", "export interface JobOutput", `export interface JobBindings {
-  kv: "pycounters";`, `phase: "run";`, "startedBy: string;", "export interface JobContext {\n  run: RunInfo;\n}"} {
+  kv: "pycounters";`, `phase: "run" | "preview";`, "startedBy: string;", "export interface JobContext {\n  run: RunInfo;\n}"} {
 		require.Contains(t, ts, want)
 	}
 	require.NotContains(t, ts, "FuncInput")
@@ -158,9 +160,49 @@ func TestGenerateJobTypes(t *testing.T) {
 	require.NoError(t, err)
 	py := string(files["funcd_types.py"])
 	for _, want := range []string{"class JobInput(TypedDict)", "class JobOutput(TypedDict)", `kv: Literal["pycounters"]`,
-		"class RunInfo:", `phase: Literal["run"]`, "class JobContext:\n    run: RunInfo"} {
+		"class RunInfo(TypedDict):", `phase: Literal["run", "preview"]`, "started_by: str", "class JobContext:\n    run: RunInfo"} {
 		require.Contains(t, py, want)
 	}
+}
+
+// ADR-0347 Decision 9: the RunInfo that a Job's types hold has its shim's shape, read from the pinned shims' sources: a
+// TypedDict keyed name, job, revision, phase and started_by in Python, an interface with startedBy in TypeScript, and
+// phase "run" or "preview" in both.
+func TestJobRunInfoIsTheShims(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		runtime, file, mod, shim, open, field string
+	}{
+		{"nodejs22", "funcd.d.ts", langmod.TypeScript, "shim/src/types.ts", "export interface RunInfo {", `^\s+(\w+): ([^;]+);$`},
+		{"python314", "funcd_types.py", langmod.Python, "shim/src/funcd_shim/types.py", "class RunInfo(TypedDict):", `^ {4}(\w+): (.+)$`},
+	} {
+		shim, err := os.ReadFile(filepath.Join(langmod.Dir(t, tc.mod), filepath.FromSlash(tc.shim)))
+		require.NoError(t, err)
+		files, err := sdk.GenerateJobTypes(counterFile(t, v1.RuntimeName(tc.runtime)), counterBindings())
+		require.NoError(t, err)
+		want := blockFields(t, string(shim), tc.open, tc.field)
+		require.NotEmpty(t, want, "%s holds RunInfo's fields", tc.shim)
+		require.Equal(t, want, blockFields(t, string(files[tc.file]), tc.open, tc.field), "%s's RunInfo", tc.file)
+	}
+}
+
+// blockFields are the fields of the block that starts with open, up to the next line that is not indented: each
+// line that field matches gives a name and its type, with TypeScript's single quotes as double ones.
+func blockFields(t *testing.T, src, open, field string) map[string]string {
+	t.Helper()
+	i := strings.Index(src, open)
+	require.GreaterOrEqual(t, i, 0, "no %q in:\n%s", open, src)
+	re := regexp.MustCompile(field)
+	out := map[string]string{}
+	for _, line := range strings.Split(src[i+len(open):], "\n")[1:] {
+		if line != "" && !strings.HasPrefix(line, " ") {
+			break
+		}
+		if m := re.FindStringSubmatch(line); m != nil {
+			out[m[1]] = strings.ReplaceAll(m[2], "'", `"`)
+		}
+	}
+	return out
 }
 
 // An http Function has no I/O contract to type.
