@@ -69,8 +69,8 @@ func TestScenarioDevAddonDeletion(t *testing.T) {
 
 // snapshotAddon is echoAddon with ADR-0333's snapshot and restore folders under its storage.
 func snapshotAddon() string {
-	return strings.Replace(echoAddon, "    gid: 10001\n", "    gid: 10001\n  snapshot:\n    path: /data/snapshots\n"+
-		"  restore:\n    path: /data/restore\n    env:\n      RESTORE_FROM: ${{ restore.file }}\n", 1)
+	return strings.Replace(echoAddon, "          gid: 10001\n", "          gid: 10001\n        snapshot:\n          path: /data/snapshots\n"+
+		"        restore:\n          path: /data/restore\n          env:\n            RESTORE_FROM: ${{ restore.file }}\n", 1)
 }
 
 // backupBucket is the Bucket the Backup writes to through dev's S3 frontend, whose keypair is the Function api's: api
