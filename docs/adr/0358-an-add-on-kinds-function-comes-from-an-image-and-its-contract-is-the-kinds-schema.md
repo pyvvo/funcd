@@ -13,7 +13,9 @@
   [ADR-0345](0345-a-function-reconciles-an-engineless-kind-and-a-deletion-waits-for-its-destroy.md) Decisions 1
   (`config` goes), 2 (an image's group is one object), 3 (an image's Function, an object's bindings) and 5 (two more
   reasons); [ADR-0338](0338-a-function-calls-an-add-on-objects-engine.md) Decision 1 (what uses an object);
-  [ADR-0337](0337-an-app-template-carries-its-add-on.md) Decision 3 (the schema that a part's config fits).
+  [ADR-0337](0337-an-app-template-carries-its-add-on.md) Decision 3 (the schema that a part's config fits);
+  [ADR-0356](0356-a-stacks-outputs-reach-its-readers-through-the-secret-its-job-owns.md) Decision 8 (which Job a stack's
+  outputs come from: Decision 2).
 - **Relates to**: [ADR-0096](0096-engine-native-builtin-steps.md) (a step's `image` and `ref`) ·
   [ADR-0094](0094-workflow-engine-core.md) (the Function a Workflow creates) ·
   [ADR-0303](0303-funcd-checks-every-call-against-its-contract.md) ·
@@ -111,16 +113,17 @@ kind that needs KV, a Bucket or SQL names a `ref`); publishing an add-on's image
 2. **The Function of an image.** The add-on reconciler creates one for an object and a settings kind of it once an
    object of that kind names it, and one for an engineless object at its first pass. It is kept while such an object
    exists: what differs is put back, and a deleted one is back, at the next pass. With the last object gone it stays and
-   gets the empty list; it goes with its owner, or once `spec.functions` or the pinned revision names another. Its name
-   is `<object>-<kind in lower case>`, shortened with a hash past 63 characters as an AddonRevision's. It is written as
-   a Workflow's step Function (ADR-0094): in the object's namespace and resource group, with the object's marker and
-   controller reference (`internal/ownedstore`, whose owners gain AddonObject, and the owner collector's new pair
-   `(AddonObject, Function)`), the runtime the artifact declares, the export `handle`, no minimum replica and the step's
-   idle timeout. It runs in a worker of its own, and its address is off (`ingress.enabled: false`), since its caller is
-   funcd. It binds:
+   gets the empty list; it goes with its owner, or once `spec.functions` or the pinned revision names another or none.
+   Its name is `<object>-<kind in lower case>`, shortened with a hash past 63 characters as an AddonRevision's. It is
+   written as a Workflow's step Function (ADR-0094): in the object's namespace and resource group, with the object's
+   marker and controller reference (`internal/ownedstore`, whose owners gain AddonObject, and the owner collector's new
+   pair `(AddonObject, Function)`), the runtime the artifact declares, the export `handle`, no minimum replica and the
+   step's idle timeout. It runs in a worker of its own, and its address is off (`ingress.enabled: false`), since its
+   caller is funcd. It binds:
    - the object itself in `addon`, as `self`, when the object runs an engine; that alias goes in the call;
    - the object's `bindings.secret`;
-   - an engineless object's `bindings.job` (new), as a Function's (ADR-0349 Decision 1).
+   - an engineless object's `bindings.job` (new), as a Function's (ADR-0349 Decision 1). An InfraStack names its Job
+     there, under the alias `stack`, in place of `config.job`, and `funcdctl infra outputs` reads that Job.
 
    An engineless object may set these two bindings only when its kind's Function is an image. A Function that an object
    controls is no user of it, so an App's prune can drop the object. A Function of that name without the object's marker
@@ -135,12 +138,13 @@ kind that needs KV, a Bucket or SQL names a `ref`); publishing an add-on's image
 4. **Reading an image.** An Addon is stored and its revision stamped as today. Its pass reads the contract and the
    runtime of each image, by digest and from registry metadata as a Job's contract (ADR-0347 Decision 2), into
    `AddonRevision.status.contracts`: once before it names a new revision current, whatever comes of it, so that a
-   deploy's App is checked against them, and again each `runtime.supervisionPeriod` for what it could not read. The
-   Addon then reports `Ready`, a condition it lacks today: True once the images of its current revision are read and its
-   constraints fit their schemas, else False with `ArtifactNotReady` or `SettingsInvalid` (new), naming the kind.
-   Nothing waits for it: engines start and objects are stored, and only an object whose image is not read waits, with
-   `ArtifactNotReady`, after `TargetNotReady`. A contract that does not compile checks nothing at a write, and fails its
-   Function, as any (ADR-0303 Decision 3). A kind with a `ref` takes no rules (400), which need a schema to type them.
+   deploy's App is checked against them, and again each `runtime.supervisionPeriod` for what it could not read, in each
+   of its revisions. The Addon then reports `Ready`, a condition it lacks today: True once the images of its current
+   revision are read and its constraints fit their schemas, else False with `ArtifactNotReady` or `SettingsInvalid`
+   (new), naming the kind. Nothing waits for it: engines start and objects are stored, and only an object whose image is
+   not read waits, with `ArtifactNotReady`, after `TargetNotReady`. A contract that does not compile checks nothing at a
+   write, and fails its Function, as any (ADR-0303 Decision 3). A kind with a `ref` takes no rules (400), which need a
+   schema to type them.
 5. **One revision per target.** A settings kind that the Addon declares is read whole, its Function, contract,
    constraints and resync, from the revision its target pins, or from the current one while the target does not exist or
    pins none, no longer from the Addon as it is now (ADR-0341 Decision 1). A replace of the Addon may not change a
@@ -151,9 +155,9 @@ kind that needs KV, a Bucket or SQL names a `ref`); publishing an add-on's image
    call, and waits with `FunctionNotFound`, or with `Progressing` before the first revision; its write is checked
    against the current revision, or against the Addon's other constraints while none has the kind. A contract that is
    not read checks nothing, nor do its rules, as a JobRun's input before its Job's contract is read (ADR-0347 Decision
-   3). At the call, the contract is checked as any Function's (ADR-0303): a list with an object that does not fit, as
-   when its target moved, is refused before the Function runs, and each of its objects is `ReconcileFailed`, naming the
-   path.
+   3), and a write for a Function that `spec.functions` names is checked as a `ref`'s. At the call, the contract is
+   checked as any Function's (ADR-0303): a list with an object that does not fit, as when its target moved, is refused
+   before the Function runs, and each of its objects is `ReconcileFailed`, naming the path.
 
 ## Design model
 
@@ -250,7 +254,7 @@ func KindSchema(contract v1.WorkflowContract, kind string) json.RawMessage
 ## Review checklist
 
 - [ ] No field of an Addon describes an object that only a Function reads.
-- [ ] No write and no object's pass calls a registry; an engine's start waits for no Function's image.
+- [ ] No write and no object's pass calls a registry; an engine's start waits for no read to succeed.
 - [ ] A list, its constraints and its call come from one revision, the target's.
 - [ ] A created Function has its object's marker and bindings and no address; another's is never written.
 - [ ] No Function exists, and nothing is called, for a target that no object of the kind ever named.
