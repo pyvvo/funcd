@@ -5,6 +5,12 @@ the round-1 report (`docs/reviews/adr-0344-implementation-claude-opus-5-5.md`). 
 the generated reference and two new tests, and no code of the shipped path. So round 1's checks of that code and its
 lane evidence stand. Every check below was run at `9322d4dc`, not read.
 
+**Correction, added in ADR-0345's round 2.** This round ran the tests of the five packages whose files `9322d4dc`
+changed, but not of the packages that read them. `9322d4dc`'s new wording of the add-on object's 422 case broke
+`TestAddonObjectAnswersMatrix` in `pkg/funcd`, whose rows quote that wording. The test fails with `9322d4dc`'s rows
+(`createAddonObject: one case holds "spec.config breaks the schema"`), and `3ce5f0ff` fixed the rows, where the full
+`pkg/funcd` suite passes. The miss was this review's: the pass and the stamp hold for the tip that ships.
+
 ### Round 1's findings
 
 - **Major 1, the guide's first command: closed.** `docs/guide/develop/services/addons/index.md:19` now pipes
