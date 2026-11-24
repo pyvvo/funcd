@@ -61,6 +61,7 @@ func chapters() []chapter {
 		{"Workers", []string{"internal/runtime", "internal/workernode", "internal/volume", "internal/funclog", "internal/scheduler"}, []string{"runtime", "volumes", "funclog"}},
 		{"Functions", []string{"internal/function", "internal/pooling", "internal/artifact", "internal/contract", "internal/contractcheck", "internal/revhold"}, []string{"functions"}},
 		{"Calls", []string{"internal/edge", "internal/gateway", "internal/dataplane", "internal/activator", "internal/invoke", "internal/route", "internal/site"}, []string{"server", "invoke", "site"}},
+		{"Edge behind a tunnel", nil, nil},
 		{"Services", []string{"internal/kvstore", "internal/blob", "internal/sql", "internal/lake", "internal/services", "internal/provider"}, []string{"kvstore", "blob", "s3gateway", "lake", "sql"}},
 		{"Addons", []string{"internal/services/addon"}, []string{"addons"}},
 		{"Engineless kinds", nil, nil},
