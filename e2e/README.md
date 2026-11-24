@@ -21,7 +21,7 @@ and its suite. Every lane runs in one shared VM (ADR-0230).
 | `kv-claim.venom.yml` | `kv-claim` | Two functions race context.kv's conditional writes on one table, and a key that expires (ADR-0320) |
 | `secret-writer.venom.yml` | `secret-writer` | A Secret's owner writes and deletes a key through context.secret, and another function writes it only once a Secret Data Writer grant names it, in JS and in Python (ADR-0327, ADR-0328) |
 | `workflow.venom.yml` | `workflow` | The workflow engine: runs, chaining, fan-out, when and join, pause, resume and cancel (ADR-0094, ADR-0096) |
-| `job.venom.yml` | `job` | A Job's runs (ADR-0347): a run's container gone after its answer, a cancel that stops it within the grace, and a funcd crash that leaves the run `Interrupted` with no container |
+| `job.venom.yml` | `job` | A Job's runs (ADR-0347): a run of each language's job-report example that reports on a month, a run's container gone after its answer, a cancel that stops it within the grace, and a funcd crash that leaves the run `Interrupted` with no container |
 | `funclog.venom.yml` | `funclog` | Function log capture, reads and traces (ADR-0081, ADR-0084, ADR-0101) |
 | `egress.venom.yml` | `egress` | Egress enforcement (ADR-0117), and what a worker's network holds (ADR-0318) |
 | `sql.venom.yml` | `sql` | SQL databases (ADR-0232 to ADR-0236), and a database at its quota (ADR-0292) |
