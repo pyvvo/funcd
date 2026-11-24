@@ -1,24 +1,25 @@
 ---
-# An App's rollout with a stack (ADR-0357 Decisions 1 to 3). The App's latest revision holds an engineless part, the
+# An App's rollout with a stack (ADR-0357 Decisions 1 to 4). The App's latest revision holds an engineless part, the
 # stack, whose change waits for a person's approval; a part that reads the stack's outputs from the Secret the stack's
-# Job owns; an older part that the revision drops; and, in one of the two Apps explored, a post-hook. A pass writes the
-# reader once the outputs exist, which is then Pending until it is ready; it switches the revision in a pass that wrote
-# no part while no part is Pending, and fails it at the deadline while one is; in a later pass that writes nothing,
-# while no part is Lagging or Pending, it starts the post-hook and prunes. A person may approve the stack's run, which
-# applies the change and writes the outputs. Environment: the controller runs one pass of an App at a time, so a pass
-# is one step; a pass follows the stamp, the outputs' write (the Secret's watch) and a part's write or readiness (its
-# watch), so time passes only once that pass ran (due); a written part turns ready before the deadline, since
-# app.upgradeTimeout is more than runtime.bootTimeout (ADR-0200 Decision 10), so Tick waits while one boots; the clock
-# is Tick, bounded by the deadline. Left out: the parts funcd runs, judged by ADR-0199 as before; tests hold them.
+# Job owns; another part, which boots after the stamp; an older part that the revision drops; and, in one of the two
+# Apps explored, a post-hook. A pass writes the reader once the outputs exist, which restarts the deadline, and the
+# reader is then Pending until it is ready; a pass switches the revision when it wrote no part and no part is Pending,
+# and fails it once the deadline passed while one is. In a later pass that writes nothing, while no part is Lagging or
+# Pending, it starts the post-hook and prunes. A person may approve the stack's run, which applies the change and
+# writes the outputs. Environment: the controller runs one pass of an App at a time, so a pass is one step; the
+# Secret's and the parts' watches bring a pass after each write (fair); a written part turns ready within BOOT ticks,
+# runtime.bootTimeout, less than the deadline's DEADLINE, app.upgradeTimeout (ADR-0200 Decision 10); the clock is Tick.
+# Left out: the parts funcd runs, judged by ADR-0199 as before; tests hold them.
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
-  max_actions: 6
+  max_actions: 10
   crash_on_yield: false
 ---
 # diagram: revision, reader
 # mutant stack-pending: NoFailWhileAStackWaits
 # mutant reader-pending: NoFailWhileAStackWaits
+# mutant no-lag-term: NoFailWhileAStackWaits
 # mutant reader-early: ReaderWaitsForOutputs
 # mutant hook-early: PostHookAfterStacks
 # mutant hook-before-ready: PostHookAfterStacks
@@ -27,6 +28,7 @@ options:
 
 # stack-pending: a stack whose change is not applied counts as Pending, as before this ADR.
 # reader-pending: a part that waits for the outputs counts as Pending.
+# no-lag-term: the deadline does not restart when a part's wait ends.
 # reader-early: a pass writes the reader before the outputs exist.
 # hook-early: a pass starts the post-hook while a part is Lagging.
 # hook-before-ready: a pass starts the post-hook in a pass that wrote a part, or while one is Pending.
@@ -34,7 +36,8 @@ options:
 # no-reader-write: a pass never writes a part that waited for the outputs.
 MUTANT = ""
 
-DEADLINE = 2
+DEADLINE = 3
+BOOT = 2
 
 action Init:
     h = oneof [True, False]
@@ -43,10 +46,12 @@ action Init:
     approved = False
     applied = False
     reader = "absent"
+    reader_age = 0
+    other = "booting"
+    other_age = 0
     old = "serving"
     hook = "due"
-    clock = 0
-    due = True
+    since = 0
 
 # A person approves the stack's run; nothing makes them.
 atomic action Approve:
@@ -57,25 +62,26 @@ atomic action Approve:
 atomic fair action Apply:
     require approved and not applied
     applied = True
-    due = True
 
-# The written reader becomes ready.
+atomic fair action OtherReady:
+    require other == "booting"
+    other = "ready"
+
 atomic fair action ReaderReady:
     require reader == "written"
     reader = "ready"
-    due = True
 
 # One pass of the App reconciler.
 atomic fair action Pass:
     was_current = revision == "current"
     wrote = False
-    due = False
     if reader == "absent" and (applied or MUTANT == "reader-early") and MUTANT != "no-reader-write":
         reader = "written"
         wrote = True
-        due = True
+        if revision == "deploying" and MUTANT != "no-lag-term":
+            since = 0
     lagging = not applied or reader == "absent"
-    pending = reader == "written"
+    pending = reader == "written" or other == "booting"
     if MUTANT == "stack-pending" and not applied:
         pending = True
     if MUTANT == "reader-pending" and reader == "absent":
@@ -83,7 +89,7 @@ atomic fair action Pass:
     if revision == "deploying":
         if not wrote and not pending:
             revision = "current"
-        elif clock >= DEADLINE:
+        elif since >= DEADLINE:
             revision = "failed"
     hook_gate = was_current
     if MUTANT != "hook-before-ready":
@@ -98,11 +104,16 @@ atomic fair action Pass:
     if prune_gate:
         old = "pruned"
 
-# Time passes while the revision deploys, up to its deadline, once the due pass ran, and not while a written part
-# boots.
+# Time passes while the revision deploys, up to its deadline; a booting part turns ready within BOOT ticks.
 atomic fair action Tick:
-    require revision == "deploying" and clock < DEADLINE and reader != "written" and not due
-    clock += 1
+    require revision == "deploying" and since < DEADLINE
+    require other != "booting" or other_age < BOOT
+    require reader != "written" or reader_age < BOOT
+    since += 1
+    if other == "booting":
+        other_age += 1
+    if reader == "written":
+        reader_age += 1
 
 always assertion NoFailWhileAStackWaits:
     return revision != "failed"
