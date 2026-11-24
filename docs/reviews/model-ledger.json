@@ -15313,5 +15313,20 @@
     "dod_total": 20,
     "report": "docs/reviews/adr-0346-implementation-claude-opus-5-5-2.md",
     "notes": "round 2 at a51e81a1: round 1's Major (a registry serves the classic store's save, and a skip fails under CI), both Minors (the row split, four tests) and both routed items (the ADR-0351 back-link, the delegated extension-folder rule) closed; 32 of 33 mutants caught, M5d equivalent; Minor (model): imageWorkerSpec deletes DUCKDB_EXTENSION_DIRECTORY whatever set it, so a developer's bound config key of that name is lost while FUNCD_CONFIG_KEYS lists it (probe), though containerd keeps it (ADR-0306 Decision 3); imageregistry is a line-for-line move, no duplication"
+  },
+  {
+    "date": "2026-11-24",
+    "adr": "0346",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 20,
+    "dod_total": 20,
+    "report": "docs/reviews/adr-0346-implementation-claude-opus-5-5-3.md",
+    "notes": "round 3 at d6890ffa: round 2's Minor closed, imageWorkerSpec drops DUCKDB_EXTENSION_DIRECTORY only when it holds dev's folder, and a bound config key of that name stays (three probes); mutants of the new condition (no equality, inverted, never delete) caught, and the dropped non-empty guard survives as equivalent in practice (it differs only for an empty-valued config key with no dev folder); stamped Implemented, F139 dev workers implemented"
   }
 ]
