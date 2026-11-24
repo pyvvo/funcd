@@ -15373,5 +15373,20 @@
     "dod_total": 12,
     "report": "docs/reviews/adr-0356-implementation-claude-opus-5-5.md",
     "notes": "runtime part (funcd-addons 679fc14): pass, no finding; just ci and the OpenTofu image check green, 10 mutants killed; routed: Decision 8's plugin (ADR-0355), the 4 lane cases, funcd-functions' contracts in the new shape, the status moves at PR assembly"
+  },
+  {
+    "date": "2026-11-24",
+    "adr": "0355",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 1,
+    "model_attributed": 2,
+    "dod_passed": 10,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0355-implementation-claude-opus-5-5.md",
+    "notes": "funcd-addons feat/infra-push e869eb6: Major (model) funcdctl infra outputs prints key: value and a flat JSON map, not ADR-0356 Contracts' NAME VALUE table and {outputs, sensitive}; Minor (model) CLAUDE.md's Go-only plugin rule not amended; all else verified, 20 mutants killed; routed: two lane scenarios, funcd-functions' contracts, nerdctl (env), status moves"
   }
 ]
