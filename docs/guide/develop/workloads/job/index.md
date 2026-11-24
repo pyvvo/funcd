@@ -13,8 +13,18 @@ This example applies the Job `report`, or `pyreport` in Python, to a running ser
 `2026-10`, reads its result and its logs, then cancels a second run. It needs funcdctl
 ([Install](../../../get-started/install.md)), Git, and a funcd server on the same machine whose API listens at
 `127.0.0.1:8080`, such as [`funcd --memory`](../../running-funcd/index.md), which accepts the built-in token
-`funcd-dev-token` in the namespace `default`. funcd runs the TypeScript handler with the Node.js on its `PATH`, and the
-Python handler with the `python3` on its `PATH`, Python 3.12 or later, or the interpreter that `FUNCD_PYTHON` names.
+`funcd-dev-token` in the namespace `default`. funcd runs the TypeScript handler with the Node.js on its `PATH`. The
+Python section needs Python 3.14 on the machine where funcd runs: funcd runs a Python handler with the interpreter
+that `FUNCD_PYTHON` names, else with the `python3` on its `PATH`.
+
+`funcd --memory` still writes its working files, such as its sockets, under
+[`storage.dataDir`](../../running-funcd/spec.md#funcdconfigyaml), `/var/lib/funcd` by default, which only root can
+create, and funcd has no flag for it. As another user, give it a short directory that it can write through
+`FUNCD_DATA_DIR`, here a new temporary one, and add `FUNCD_PYTHON` for the Python section:
+
+```console
+$ FUNCD_DATA_DIR="$(mktemp -d)" FUNCD_PYTHON="$(command -v python3.14)" funcd --memory
+```
 
 The handler is a [Function's handler](../function/index.md#write-a-handler-and-its-contract): it receives the run's
 input in `event.data`, and its return value, in JSON, is the run's result. This one logs the month with the name of
@@ -22,8 +32,9 @@ its run, works for three seconds, so that the cancel below catches a run while i
 day of the month. Its contract takes `month` alone, and a Job whose artifact carries no contract is not Ready.
 [`funcdctl push`](../../tools/funcdctl/spec.md#funcdctl-push) writes the artifact into an OCI layout in the current
 directory, which the server on the same machine reads; replace the Job's `image` with the reference that it prints.
-[`timeout`](spec.md#jobspec) bounds each run's call, and [`concurrency`](spec.md#jobspec) lets two runs of the Job hold
-a worker at once.
+The manifest's `resourceGroup` names the [resource group](../../../platform/tenancy-and-limits/namespaces.md) of the
+Job within its namespace, [`timeout`](spec.md#jobspec) bounds each run's call, and [`concurrency`](spec.md#jobspec)
+lets two runs of the Job hold a worker at once.
 
 After the apply, repeat `get` until `status.phase` is `Ready`. [`funcdctl job run`](../../tools/funcdctl/spec.md#funcdctl-job-run)
 starts a run and prints its name; without a name, funcd names the run after its Job with a suffix. Repeat
@@ -44,7 +55,7 @@ runs, newest first.
 
 The handler, in `src/main.ts`:
 
-::include[../../../../../_repos/funcd-typescript/examples/job-report/src/main.ts#handler]
+::include[../../../../../_repos/funcd-typescript/examples/job-report/src/main.ts]
 
 Its contract, in `report.contract.yaml`:
 
@@ -55,7 +66,8 @@ The Job `report`, in `report.yaml`:
 ::include[../../../../../_repos/funcd-typescript/examples/job-report/report.yaml#job]
 
 Clone the repository, push the committed build `report.mjs` with its contract beside it, and replace `image` in
-`report.yaml` with the reference that the push prints:
+`report.yaml` with the reference that the push prints. A change to `src/main.ts` needs a new `report.mjs`, which the
+[Vite plugin](../function/index.md#write-a-handler-and-its-contract) bundles:
 
 ```console
 $ git clone https://github.com/pyvvo/funcd-typescript
@@ -85,7 +97,8 @@ $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job logs repor
 2026-11-23T23:59:26.082Z [INFO] 0 building the report of 2026-10 in run report-1 source=console inv=12d0eb3882cceb46 trace=beccbdf49268b7cae8e7de5ada16e4b0 args=["building the report of 2026-10 in run report-1"]
 ```
 
-Start a second run, cancel it while it runs, and read it:
+Start a second run and cancel it while it runs: send `job cancel` right after `job run`, within the three seconds
+that the report works, since a later cancel finds the run `Succeeded`. Then read it:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run report report-2 --input '{"month":"2026-11"}'
@@ -106,7 +119,7 @@ full logs: funcdctl job logs report-2
 
 The handler, in `src/main.py`:
 
-::include[../../../../../_repos/funcd-python/examples/job-report/src/main.py#handler]
+::include[../../../../../_repos/funcd-python/examples/job-report/src/main.py]
 
 Its contract, in `pyreport.contract.yaml`:
 
@@ -148,7 +161,7 @@ $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job logs pyrep
 2026-11-23T23:59:31.118Z [INFO] 0 building the report of 2026-10 in run pyreport-1 source=stdout
 ```
 
-Start a second run, cancel it while it runs, and read it:
+Start a second run and cancel it within the three seconds that the report works, then read it:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run pyreport pyreport-2 --input '{"month":"2026-11"}'
