@@ -30,6 +30,8 @@ const (
 	retryMax    = 5 * time.Second
 	pollWait    = 25 * time.Second
 	resyncEvery = 30 * time.Second
+	// requestTimeout bounds one call of the node API, above pollWait, so a connection that died unseen is dialed again.
+	requestTimeout = time.Minute
 )
 
 // Config configures a node's agent.
@@ -53,7 +55,8 @@ type Agent struct {
 
 	mu       sync.Mutex
 	cursor   uint64
-	timeline string      // the control plane metastore's timeline the cursor belongs to
+	timeline string      // the control plane metastore's timeline the cursor belongs to; "" ⇒ the store holds no copy yet
+	local    string      // the timeline of the node's own store, which the saved cursor names too
 	resync   atomic.Bool // a namespace's snapshot failed: the next poll starts from a whole snapshot
 	mine     map[v1.NamespaceName]bool
 	keys     map[v1.NamespaceName]multinode.NamespaceKey
@@ -85,8 +88,11 @@ func New(cfg Config) (*Agent, error) {
 	a := &Agent{cfg: cfg, id: id, log: cfg.Logger.With("component", "node-agent", "node", id.name),
 		mine: map[v1.NamespaceName]bool{}, keys: keys, pushed: map[string]string{}, unsent: map[string]url.Values{},
 		resynced: make(chan struct{}, 1)}
+	if cl, ok := cfg.Store.(store.ChangeLog); ok {
+		a.local = cl.Timeline()
+	}
 	if b, err := os.ReadFile(filepath.Join(cfg.Dir, cursorFile)); err == nil { //nolint:gosec // the node's own directory
-		if f := strings.Fields(string(b)); len(f) == 2 {
+		if f := strings.Fields(string(b)); len(f) == 3 && f[2] == a.local {
 			a.timeline = f[0]
 			a.cursor, _ = strconv.ParseUint(f[1], 10, 64)
 		}
@@ -108,7 +114,7 @@ func (a *Agent) SetCommands(c multinode.Commands) { a.cfg.Commands = c }
 
 // Run follows, reports and answers until ctx ends.
 func (a *Agent) Run(ctx context.Context) error {
-	if err := a.loadMine(ctx); err != nil {
+	if err := a.Prepare(ctx); err != nil {
 		return err
 	}
 	a.log.InfoContext(ctx, "node agent starting", "server", a.id.server, "since", a.cursor)
@@ -168,6 +174,8 @@ func (a *Agent) do(ctx context.Context, method, path string, body, out any) (int
 		}
 		rd = bytes.NewReader(b)
 	}
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, a.id.server+path, rd)
 	if err != nil {
 		return 0, err
@@ -198,10 +206,10 @@ func (a *Agent) do(ctx context.Context, method, path string, body, out any) (int
 	return resp.StatusCode, nil
 }
 
-// follow keeps the local copy: a snapshot first, then the feed from its revision; a revision the change log no longer
-// holds starts again from a snapshot.
+// follow keeps the local copy with the feed, from the saved revision; one the change log no longer holds starts again
+// from a snapshot.
 func (a *Agent) follow(ctx context.Context) {
-	backoff, failing, resync := retryMin, false, a.cursor == 0 || a.timeline == ""
+	backoff, failing, resync := retryMin, false, false
 	fail := func(what string, err error) {
 		if !failing {
 			a.log.WarnContext(ctx, what, "error", err.Error())
@@ -252,7 +260,7 @@ func (a *Agent) follow(ctx context.Context) {
 func (a *Agent) saveCursor(timeline string, rev uint64) {
 	a.cursor, a.timeline = rev, timeline
 	tmp := filepath.Join(a.cfg.Dir, cursorFile+".tmp")
-	if err := os.WriteFile(tmp, []byte(timeline+" "+strconv.FormatUint(rev, 10)+"\n"), 0o600); err == nil {
+	if err := os.WriteFile(tmp, []byte(timeline+" "+strconv.FormatUint(rev, 10)+" "+a.local+"\n"), 0o600); err == nil {
 		_ = os.Rename(tmp, filepath.Join(a.cfg.Dir, cursorFile))
 	}
 }

@@ -30,6 +30,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/version"
+	"github.com/pyvvo/funcd/internal/restore"
 	"github.com/pyvvo/funcd/internal/safemode"
 	"github.com/pyvvo/funcd/internal/store"
 	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
@@ -189,6 +190,39 @@ func TestScenarioUpgradePinsOldState(t *testing.T) {
 		require.Equal(t, "v0.8.0", f.manifest(t, *res.Pin).Funcd)
 		require.Equal(t, "v0.8.0", versionOf(t, f.self+".previous"))
 	})
+}
+
+// A worker node's pre-upgrade generation holds no Secret and names no key, as the node's other backups (FEAT-0002 F251): the
+// control plane holds them.
+func TestAWorkerNodesPreUpgradeGenerationHoldsNoSecret(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, "v0.8.0")
+	eng, err := badgerstore.Open(f.cfg.Storage.MetastoreDir)
+	require.NoError(t, err)
+	st := store.New(eng)
+	_, err = st.Create(ctx, &v1.Secret{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSecret.GVK().APIVersion(), Kind: v1.KindSecret},
+		ObjectMeta: v1.ObjectMeta{Name: "api", Namespace: "team", ResourceGroup: "rg1"},
+		Spec:       v1.SecretSpec{Data: map[string][]byte{"token": []byte("hunter2")}}})
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+	o := f.options(fakeBinary(t, "funcd-0.9.0", "v0.9.0"))
+	o.Node = true
+	res, err := upgrade.Run(ctx, o)
+	require.NoError(t, err, f.out.String())
+	require.Equal(t, backup.Keys{}, f.manifest(t, *res.Pin).Keys)
+
+	src, err := gocloud.Open(ctx, gocloud.FileURL(f.targetDir))
+	require.NoError(t, err)
+	defer func() { _ = src.Close() }()
+	gens, err := restore.List(ctx, src)
+	require.NoError(t, err)
+	require.Len(t, gens, 1)
+	v, err := restore.Inspect(ctx, gens[0], restore.Options{Config: f.cfg, Source: src})
+	require.NoError(t, err)
+	defer func() { _ = v.Close() }()
+	require.Empty(t, v.Secrets)
+	_, err = v.Meta.Get(ctx, v1.KindNamespace.GVK(), "", "team")
+	require.NoError(t, err, "every other object is there")
 }
 
 // scenario: snapshot-unavailable-stops-upgrade — no backup.target, a failing s3:// probe or an empty metastore

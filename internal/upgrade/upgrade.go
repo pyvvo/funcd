@@ -31,6 +31,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/version"
 	"github.com/pyvvo/funcd/internal/restore"
 	"github.com/pyvvo/funcd/internal/safemode"
+	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
 	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
@@ -48,8 +49,10 @@ type Options struct {
 	Self       string
 	Unit       string
 	NoSnapshot bool
-	Systemctl  func(args ...string) ([]byte, error)
-	Out        io.Writer
+	// Node is the upgrade of a worker node (FEAT-0002 F251): its pre-upgrade generation goes without Secrets and names no key.
+	Node      bool
+	Systemctl func(args ...string) ([]byte, error)
+	Out       io.Writer
 	// version is the installed binary's version, "" ⇒ version.Version; tests set it.
 	version string
 }
@@ -105,7 +108,7 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	if o.NoSnapshot {
 		o.printf("warning: --no-snapshot: no pre-upgrade generation is written, so this upgrade has no way back to funcd %s\n", res.From)
 	} else {
-		if s, err = prepare(ctx, cfg, log); err != nil {
+		if s, err = prepare(ctx, cfg, o.Node, log); err != nil {
 			return res, err
 		}
 		defer s.closeTarget()
@@ -301,7 +304,7 @@ func pruneCommand(target string, e backup.Entry) string {
 // is fault.Invalid; a store or the file:// lock held by a running daemon is fault.Conflict naming its directory; every
 // return after step 4 began re-owns what root wrote (Decision 1, Owner).
 func Snapshot(ctx context.Context, cfg config.Config) (backup.Manifest, error) {
-	s, err := prepare(ctx, cfg, slog.Default())
+	s, err := prepare(ctx, cfg, false, slog.Default())
 	if err != nil {
 		return backup.Manifest{}, err
 	}
@@ -313,6 +316,7 @@ func Snapshot(ctx context.Context, cfg config.Config) (backup.Manifest, error) {
 // snapshotRun is a pre-upgrade generation being written: the checked config, its sealer and its open target.
 type snapshotRun struct {
 	cfg    config.Config
+	node   bool // a worker node's (Options.Node)
 	sealer *envelope.Sealer
 	tg     backup.Target
 	// dir is a file:// target's directory, "" on s3://.
@@ -321,7 +325,7 @@ type snapshotRun struct {
 
 // prepare is step 2: the checks that take no lock. On s3:// the probe runs here; a directory's lock waits for step 4.
 // A master secret it creates under <storage.dataDir> takes that directory's owner (Decision 1, Owner).
-func prepare(ctx context.Context, cfg config.Config, log *slog.Logger) (*snapshotRun, error) {
+func prepare(ctx context.Context, cfg config.Config, node bool, log *slog.Logger) (*snapshotRun, error) {
 	const op = "upgrade.Snapshot"
 	if cfg.Storage.Mode != "file" || cfg.Backup.Target == "" {
 		return nil, fault.Invalidf(op, "a pre-upgrade generation needs the platform backup on (storage.mode file, "+
@@ -337,21 +341,9 @@ func prepare(ctx context.Context, cfg config.Config, log *slog.Logger) (*snapsho
 		return nil, fault.Invalidf(op, "storage.metastoreDir %s is absent or empty: is --config the daemon's? (its unit "+
 			"sets FUNCD_DATA_DIR, this shell may not), %s", dir, noSnapshotHint)
 	}
-	data := cfg.Storage.DataDir
-	before, err := listDirs(data, masterDirs())
+	sealer, err := sealerOf(cfg, node, log)
 	if err != nil {
 		return nil, err
-	}
-	master, err := envelope.LoadMaster(cfg, log)
-	if oerr := errors.Join(ownNew(data, data, masterDirs(), before)...); oerr != nil {
-		return nil, errors.Join(err, fault.Wrapf(oerr, fault.Internal, op, "re-own the master secret"))
-	}
-	if err != nil {
-		return nil, err
-	}
-	sealer, err := envelope.FromConfig(cfg, master, log)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.KindOf(err), op, "backup.encryption, %s", noSnapshotHint)
 	}
 	r := cfg.Backup.Retention
 	tg, err := backup.Open(ctx, backup.Config{
@@ -365,7 +357,7 @@ func prepare(ctx context.Context, cfg config.Config, log *slog.Logger) (*snapsho
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "%s", noSnapshotHint)
 	}
-	s := &snapshotRun{cfg: cfg, sealer: sealer, tg: tg}
+	s := &snapshotRun{cfg: cfg, node: node, sealer: sealer, tg: tg}
 	u, err := url.Parse(cfg.Backup.Target)
 	if err != nil {
 		_ = tg.Close()
@@ -380,6 +372,40 @@ func prepare(ctx context.Context, cfg config.Config, log *slog.Logger) (*snapsho
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "the probe of backup.target %s, %s", cfg.Backup.Target, noSnapshotHint)
 	}
 	return s, nil
+}
+
+// sealerOf seals the generation under cfg's recipients, and names the platform's keys unless it is a worker node's.
+func sealerOf(cfg config.Config, node bool, log *slog.Logger) (*envelope.Sealer, error) {
+	const op = "upgrade.Snapshot"
+	var sealer *envelope.Sealer
+	var err error
+	if node {
+		sealer, err = envelope.FromNodeConfig(cfg, log)
+	} else {
+		var master []byte
+		if master, err = ownMaster(cfg, log); err != nil {
+			return nil, err
+		}
+		sealer, err = envelope.FromConfig(cfg, master, log)
+	}
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "backup.encryption, %s", noSnapshotHint)
+	}
+	return sealer, nil
+}
+
+// ownMaster loads the master secret; one it creates takes the data directory's owner (Decision 1, Owner).
+func ownMaster(cfg config.Config, log *slog.Logger) ([]byte, error) {
+	data := cfg.Storage.DataDir
+	before, err := listDirs(data, masterDirs())
+	if err != nil {
+		return nil, err
+	}
+	master, err := envelope.LoadMaster(cfg, log)
+	if oerr := errors.Join(ownNew(data, data, masterDirs(), before)...); oerr != nil {
+		return nil, errors.Join(err, fault.Wrapf(oerr, fault.Internal, "upgrade.Snapshot", "re-own the master secret"))
+	}
+	return master, err
 }
 
 func (s *snapshotRun) closeTarget() {
@@ -452,7 +478,11 @@ func (s *snapshotRun) write(ctx context.Context) (m backup.Manifest, past []back
 	if err != nil {
 		return m, nil, err
 	}
-	m, err = s.tg.Write(ctx, events, st, runs,
+	var meta snapshot.Source = st
+	if s.node {
+		meta = store.WithoutSecrets(st)
+	}
+	m, err = s.tg.Write(ctx, events, meta, runs,
 		backup.WriteOptions{Seal: s.sealer.Seal(), Keys: s.sealer.Keys(), Parent: parent, Pin: backup.PreUpgrade})
 	if err != nil {
 		return m, nil, err

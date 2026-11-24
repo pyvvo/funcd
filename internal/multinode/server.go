@@ -114,6 +114,7 @@ func (s *Server) routes() http.Handler {
 		r.Get(PathKeys, s.keys)
 		r.Put(PathBackup, s.backup)
 		r.Post(PathSecrets, s.secret)
+		r.Get(PathChildren, s.children)
 	})
 	return r
 }
@@ -316,14 +317,9 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	out := Snapshot{Rev: head, Timeline: s.cl.Timeline(), Objects: []store.Change{}}
 	add := func(obj v1.Object) error {
-		raw, err := json.Marshal(obj)
-		if err != nil {
-			return fault.Wrapf(err, fault.Internal, "multinode.snapshot", "marshal")
-		}
-		m := obj.GetObjectMeta()
-		out.Objects = append(out.Objects, store.Change{Rev: head, Type: store.Added, Kind: obj.GroupVersionKind().Kind,
-			Namespace: m.Namespace, Name: m.Name, Object: raw})
-		return nil
+		c, err := added(obj, head)
+		out.Objects = append(out.Objects, c)
+		return err
 	}
 	for _, k := range NodeKinds() {
 		res, err := s.cfg.Store.List(ctx, k.GVK(), store.ListOptions{})
@@ -368,6 +364,49 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 					writeFault(w, err)
 					return
 				}
+			}
+		}
+	}
+	writeJSON(w, out)
+}
+
+// added is obj as a record at rev.
+func added(obj v1.Object, rev uint64) (store.Change, error) {
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		return store.Change{}, fault.Wrapf(err, fault.Internal, "multinode.snapshot", "marshal")
+	}
+	m := obj.GetObjectMeta()
+	return store.Change{Rev: rev, Type: store.Added, Kind: obj.GroupVersionKind().Kind, Namespace: m.Namespace, Name: m.Name,
+		Object: raw}, nil
+}
+
+// children answers GET …/children: the children a node made in the namespaces placed on it, as the control plane holds them.
+func (s *Server) children(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	namespaces, err := s.cfg.Placement.Namespaces(ctx, nodeOf(ctx))
+	if err != nil {
+		writeFault(w, err)
+		return
+	}
+	out := []store.Change{}
+	for _, ns := range namespaces {
+		for _, k := range childKinds() {
+			res, err := s.cfg.Store.List(ctx, k.GVK(), store.ListOptions{Namespace: ns})
+			if err != nil {
+				writeFault(w, err)
+				return
+			}
+			for _, obj := range res.Items {
+				if len(obj.GetObjectMeta().OwnerReferences) == 0 {
+					continue
+				}
+				c, err := added(obj, 0)
+				if err != nil {
+					writeFault(w, err)
+					return
+				}
+				out = append(out, c)
 			}
 		}
 	}
@@ -608,6 +647,7 @@ func (s *Server) putCopy(ctx context.Context, obj v1.Object, raw json.RawMessage
 			return err
 		}
 		KeepDecisions(next, cur)
+		KeepPause(next, obj)
 		ctx = store.WithoutChangeLog(ctx)
 	}
 	next.GetObjectMeta().ResourceVersion = cm.ResourceVersion

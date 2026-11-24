@@ -195,6 +195,7 @@ func merged(obj, cur v1.Object) (v1.Object, error) {
 		return nil, err
 	}
 	multinode.KeepDecisions(next, obj)
+	multinode.KeepPause(next, cur)
 	return next, nil
 }
 

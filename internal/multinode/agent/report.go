@@ -27,6 +27,7 @@ func (a *Agent) report(ctx context.Context) {
 		}
 	}
 	a.reportBackup(ctx)
+	dropped := a.dropChildren(ctx)
 	t := time.NewTicker(resyncEvery)
 	defer t.Stop()
 	for {
@@ -37,10 +38,12 @@ func (a *Agent) report(ctx context.Context) {
 			a.push(ctx, ev.Type, ev.Object)
 		case <-a.resynced:
 			a.resyncReports(ctx)
+			dropped = a.dropChildren(ctx)
 		case <-t.C:
 			a.resendDeletes(ctx)
 			a.resyncReports(ctx)
 			a.reportBackup(ctx)
+			dropped = dropped || a.dropChildren(ctx)
 		}
 	}
 }

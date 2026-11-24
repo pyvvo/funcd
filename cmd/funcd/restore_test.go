@@ -139,9 +139,10 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// node is a funcd node a restore loads into: a config file on a short data directory.
+// node is a funcd node a restore loads into: a config file on a short data directory, served as role.
 type node struct {
 	dataDir, cfgPath, control string
+	role                      role
 	logs                      lockedBuffer
 }
 
@@ -166,9 +167,14 @@ func newNode(t *testing.T, key []byte, extra string) *node {
 
 // restore runs `funcd restore <args> --config <node config>`.
 func (n *node) restore(args ...string) (string, error) {
+	return n.run(append([]string{"restore"}, args...)...)
+}
+
+// run runs `funcd <args> --config <node config>`.
+func (n *node) run(args ...string) (string, error) {
 	var out bytes.Buffer
 	cmd := newRootCmd(&out)
-	cmd.SetArgs(append(append([]string{"restore"}, args...), "--config", n.cfgPath))
+	cmd.SetArgs(append(args, "--config", n.cfgPath))
 	err := cmd.ExecuteContext(context.Background())
 	return out.String(), err
 }
@@ -181,7 +187,7 @@ func (n *node) start(t *testing.T) (*sdk.Client, func()) {
 	var serveErr error
 	go func() {
 		defer close(done)
-		serveErr = serve(ctx, n.cfgPath, nil, &n.logs)
+		serveErr = serveAs(ctx, n.cfgPath, nil, &n.logs, n.role)
 	}()
 	var once sync.Once
 	stop := func() {
@@ -790,18 +796,10 @@ func TestScenarioDeadLettersHeld(t *testing.T) {
 	require.Len(t, runs, 1)
 }
 
-// scenario: first-drill — a seeded platform, its generation sealed to two age recipients with its keys escrowed, is
-// restored into a scratch directory: the integrity checks pass, the counts per kind equal the source's, a read of
-// each object works on the node booted held (never released), and the time is logged.
-//
-// Serial: it reopens the node's Badger directories, which a parallel test's forked child can hold locked (#1178).
-func TestScenarioFirstDrill(t *testing.T) {
-	ctx := context.Background()
-	start := time.Now()
-	key, master := bytes.Repeat([]byte{4}, 32), bytes.Repeat([]byte{5}, 32)
+// ageRecipients are two recipients files a backup is sealed to, and the recovery identity that opens it.
+func ageRecipients(t *testing.T) (recipients []string, identity string) {
+	t.Helper()
 	keys := t.TempDir()
-	var recipients []string
-	var identity string
 	for i := range 2 {
 		id, err := age.GenerateX25519Identity()
 		require.NoError(t, err)
@@ -813,6 +811,19 @@ func TestScenarioFirstDrill(t *testing.T) {
 			require.NoError(t, os.WriteFile(identity, []byte(id.String()+"\n"), 0o600))
 		}
 	}
+	return recipients, identity
+}
+
+// scenario: first-drill — a seeded platform, its generation sealed to two age recipients with its keys escrowed, is
+// restored into a scratch directory: the integrity checks pass, the counts per kind equal the source's, a read of
+// each object works on the node booted held (never released), and the time is logged.
+//
+// Serial: it reopens the node's Badger directories, which a parallel test's forked child can hold locked (#1178).
+func TestScenarioFirstDrill(t *testing.T) {
+	ctx := context.Background()
+	start := time.Now()
+	key, master := bytes.Repeat([]byte{4}, 32), bytes.Repeat([]byte{5}, 32)
+	recipients, identity := ageRecipients(t)
 	sealer, err := envelope.New(envelope.Config{Recipients: recipients, SecretsKey: key, Master: master,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	require.NoError(t, err)

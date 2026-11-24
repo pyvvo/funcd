@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/durable"
@@ -80,6 +82,20 @@ func (r role) secretsKey(cfg config.Config) (config.Config, error) {
 	return cfg, nil
 }
 
+// hasJoined reports whether this machine joined a control plane as a worker node.
+func hasJoined(cfg config.Config) bool {
+	_, err := agent.JoinedName(cfg.Cluster.DataDir)
+	return err == nil
+}
+
+// sealer seals the platform backup; a worker node's names no key (FEAT-0002 F251).
+func (r role) sealer(cfg config.Config, master []byte, log *slog.Logger) (*envelope.Sealer, error) {
+	if r == roleNode {
+		return envelope.FromNodeConfig(cfg, log)
+	}
+	return envelope.FromConfig(cfg, master, log)
+}
+
 // nodeBackups puts a worker node's backups under nodes/<name>/ of backup.target and of kvstore.backup.target (FEAT-0002
 // F251): each node backs up its own stores, so the nodes and the control plane share one target without fencing each
 // other.
@@ -97,6 +113,28 @@ func (r role) nodeBackups(cfg config.Config) (config.Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// makeTargets creates the nodes/<name>/ directory of a worker node's file:// targets, where the target itself exists: one
+// that is not there, such as a disk that is not mounted, is left for backup.Open to refuse.
+func (r role) makeTargets(cfg config.Config) error {
+	if r != roleNode {
+		return nil
+	}
+	for _, t := range []string{cfg.Backup.Target, cfg.Kvstore.Backup.Target} {
+		u, err := url.Parse(t)
+		if err != nil || u.Scheme != "file" {
+			continue
+		}
+		dir := filepath.FromSlash(u.Path)
+		if _, err := os.Stat(filepath.Dir(filepath.Dir(dir))); err != nil {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create the node's part of the backup target: %w", err)
+		}
+	}
+	return nil
 }
 
 // nodeTarget is target's nodes/<node>/ part: the prefix parameter of an s3:// target, a subdirectory of a file:// one.

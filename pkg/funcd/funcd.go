@@ -1315,7 +1315,7 @@ func (p *Platform) buildControlPlane() error {
 	if c.backupRunner != nil {
 		var meta snapshot.Source = c.store
 		if p.agent != nil {
-			meta = withoutSecrets{c.store}
+			meta = store.WithoutSecrets(c.store)
 		}
 		if err := c.backupRunner.Bind(runner.Inputs{Events: p.eventStore, Meta: meta, Runs: runs, Parent: c.backupParent}); err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "bind the platform backup")
@@ -1485,6 +1485,14 @@ func (p *Platform) Run(ctx context.Context) error {
 	}
 	if err := validBaseDomain(p.cfg.baseDomain, p.cfg.tlsSpec); err != nil {
 		return abort(err)
+	}
+
+	// FEAT-0002 F251: a worker node whose store is new or restored takes its namespaces from the control plane first, so no
+	// step below, such as the reclaim of what a deleted store left, reads a store that lacks them.
+	if p.agent != nil {
+		if err := p.agent.Prepare(ctx); err != nil && ctx.Err() == nil {
+			return abort(err)
+		}
 	}
 
 	// The providers start first, the Executor at their head: it applies the egress fence before anything can run a

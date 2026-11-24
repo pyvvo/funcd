@@ -12,6 +12,8 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/snapshot"
+	"github.com/pyvvo/funcd/internal/snapshot/snapshotcontract"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -181,4 +183,35 @@ func TestACopyKeepsItsOriginalsIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, orig.UID, got.GetObjectMeta().UID, "any other write keeps the stored identity")
 	require.Equal(t, int64(4), got.GetObjectMeta().Generation)
+}
+
+// A restored metastore has another timeline, which no node can follow the old change log of, so a backup leaves it out.
+func TestASnapshotLeavesTheChangeLogOut(t *testing.T) {
+	ctx := context.Background()
+	s, cl := changeLog(t)
+	put(t, s, "a", "1")
+	put(t, s, "a", "2")
+	var recs []snapshot.Record
+	_, err := s.(snapshot.Source).Snapshot(ctx, func(r snapshot.Record) error {
+		require.NotContains(t, string(r.Key), "node-changes")
+		recs = append(recs, snapshot.Record{Key: bytes.Clone(r.Key), Value: bytes.Clone(r.Value)})
+		return nil
+	})
+	require.NoError(t, err)
+
+	eng := memory.New()
+	require.NoError(t, eng.Load(ctx, snapshotcontract.Feed(recs)))
+	restored := store.New(eng, store.WithChangeLog(0))
+	got, ok := restored.(store.ChangeLog)
+	require.True(t, ok)
+	require.NotEqual(t, cl.Timeline(), got.Timeline())
+	head, err := got.Head(ctx)
+	require.NoError(t, err)
+	old, err := cl.Head(ctx)
+	require.NoError(t, err)
+	require.Equal(t, old, head, "the restored store goes on from the same revision")
+	put(t, restored, "b", "1")
+	out, _, err := got.Changes(ctx, head, 0, all)
+	require.NoError(t, err)
+	require.Len(t, out, 1, "and a follower of the restored store gets what it writes")
 }

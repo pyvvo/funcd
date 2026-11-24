@@ -337,12 +337,7 @@ func TestANodeTakesASnapshotAfterTheControlPlaneIsRestored(t *testing.T) {
 	// revision is of another timeline of the metastore, as after a restore from a backup.
 	_, err = r.cp.Create(store.WithoutChangeLog(ctx), configMap("e1", "probe", "restored"))
 	require.NoError(t, err)
-	cursor := filepath.Join(dir, "cursor")
-	b, err := os.ReadFile(cursor)
-	require.NoError(t, err)
-	f := strings.Fields(string(b))
-	require.Len(t, f, 2, "the cursor names its timeline and revision")
-	require.NoError(t, os.WriteFile(cursor, []byte("an-older-timeline "+f[1]+"\n"), 0o600))
+	(&joinedNode{dir: dir}).forgetTimeline(t)
 	defer run()()
 	eventually(t, "the node takes a new snapshot", func() bool {
 		obj, err := r.node.Get(ctx, v1.KindConfigMap.GVK(), "e1", "probe")

@@ -171,6 +171,9 @@ func serveAs(parent context.Context, configPath string, memoryFlag *bool, out io
 	if cfg, err = r.nodeBackups(cfg); err != nil {
 		return err
 	}
+	if err := r.makeTargets(cfg); err != nil {
+		return err
+	}
 	// ADR-0314 Decision 3: a config mistake, refused before the data directory, so it never counts as a start (ADR-0207).
 	if err := checkBuiltInTokenBind(cfg); err != nil {
 		return err
@@ -351,7 +354,7 @@ func buildOptionsAs(ctx context.Context, cfg config.Config, root *slog.Logger, h
 		return nil, noopClose, nil, "", err
 	}
 	logBackupFindings(cfg, root)
-	sealer, err := envelope.FromConfig(cfg, master, root)
+	sealer, err := r.sealer(cfg, master, root)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}

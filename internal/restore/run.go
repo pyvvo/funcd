@@ -62,6 +62,9 @@ type Options struct {
 	NewMasterSecret bool
 	SecretsKey      []byte
 	Out             io.Writer
+	// Node is the restore of a worker node (FEAT-0002 F251): the generation names no key, and the node takes its Secrets
+	// and the masters of its namespaces from the control plane again.
+	Node bool
 }
 
 func (o Options) printf(format string, args ...any) {
@@ -135,16 +138,19 @@ func Run(ctx context.Context, p Point, o Options) (_ Report, err error) {
 	if err != nil {
 		return Report{}, err
 	}
-	key, err := readKey(cfg.Secrets.EncryptionKeyFile)
-	if err != nil {
-		return Report{}, err
-	}
-	if err := escrow.CheckSecretsKey(m, key, o.EscrowDir); err != nil {
-		return Report{}, err
-	}
-	plan, err := escrow.PlanMaster(m, cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir, o.EscrowDir, o.NewMasterSecret)
-	if err != nil {
-		return Report{}, err
+	var key []byte
+	var plan escrow.MasterPlan
+	if !o.Node {
+		if key, err = readKey(cfg.Secrets.EncryptionKeyFile); err != nil {
+			return Report{}, err
+		}
+		if err := escrow.CheckSecretsKey(m, key, o.EscrowDir); err != nil {
+			return Report{}, err
+		}
+		plan, err = escrow.PlanMaster(m, cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir, o.EscrowDir, o.NewMasterSecret)
+		if err != nil {
+			return Report{}, err
+		}
 	}
 	var opts []store.Option
 	if key != nil {

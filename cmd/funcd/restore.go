@@ -26,7 +26,6 @@ import (
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
-	"github.com/pyvvo/funcd/internal/multinode/agent"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/version"
@@ -62,7 +61,7 @@ func (f *restoreFlags) load() (config.Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if _, err := agent.JoinedName(cfg.Cluster.DataDir); err == nil {
+	if hasJoined(cfg) {
 		return roleNode.nodeBackups(cfg)
 	}
 	return cfg, nil
@@ -83,7 +82,7 @@ func (f *restoreFlags) openConfig(ctx context.Context, cfg config.Config) (resto
 	if err != nil {
 		return restore.Options{}, nil, err
 	}
-	return restore.Options{Config: cfg, Source: src, Identities: ids, EscrowDir: f.escrow},
+	return restore.Options{Config: cfg, Source: src, Identities: ids, EscrowDir: f.escrow, Node: hasJoined(cfg)},
 		func() { _ = src.Close() }, nil
 }
 

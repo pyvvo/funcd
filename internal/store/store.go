@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,10 +35,11 @@ const (
 	watchChanBuf   = 64
 )
 
-// The meta records' snapshot keys, bucket+NUL+key as every Engine emits them.
+// The meta records' snapshot keys, bucket+NUL+key as every Engine emits them, and the start of the change log's.
 const (
-	revisionRecordKey = metaBucket + "\x00" + revisionKey
-	timelineRecordKey = metaBucket + "\x00" + timelineKey
+	revisionRecordKey  = metaBucket + "\x00" + revisionKey
+	timelineRecordKey  = metaBucket + "\x00" + timelineKey
+	changeRecordPrefix = changeBucket + "\x00"
 )
 
 // Store is the metastore port: generic CRUD + List + in-process Watch over
@@ -247,19 +249,22 @@ func (s *store) loadMeta(ctx context.Context) error {
 // version formats revision n as a resourceVersion of this store's timeline.
 func (s *store) version(n uint64) string { return Version{Timeline: s.timeline, N: n}.String() }
 
-// Snapshot emits the engine's records but the timeline record, from one read, and
-// returns "<timeline>-<revision>" of that read (ADR-0202 Decision 1).
+// Snapshot emits the engine's records but the timeline record and the change log, from one
+// read, and returns "<timeline>-<revision>" of that read (ADR-0202 Decision 1). A store loaded
+// from it has a new timeline, so no node could follow the change log it was cut with.
 func (s *store) Snapshot(ctx context.Context, emit func(snapshot.Record) error) (string, error) {
 	if s.initErr != nil {
 		return "", s.initErr
 	}
 	var v Version
 	if _, err := s.eng.Snapshot(ctx, func(r snapshot.Record) error {
-		switch string(r.Key) {
-		case timelineRecordKey:
+		switch key := string(r.Key); {
+		case key == timelineRecordKey:
 			v.Timeline = string(r.Value)
 			return nil
-		case revisionRecordKey:
+		case strings.HasPrefix(key, changeRecordPrefix):
+			return nil
+		case key == revisionRecordKey:
 			n, err := parseRevision(r.Value)
 			if err != nil {
 				return err
