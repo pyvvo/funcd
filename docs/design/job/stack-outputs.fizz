@@ -1,0 +1,66 @@
+---
+# A stack's outputs (ADR-0356 Decision 2), for the apply run of a stack's second generation, after a first
+# apply wrote both outputs. The OpenTofu runtime applies the approved plan, writes each output into the Secret the
+# stack's Job owns, one key per write, then answers; the run ends Succeeded on the answer (ADR-0347 Decision 5), and
+# the stack is Ready at its generation once that run succeeded. funcd may stop at any step: at boot the run ends
+# Interrupted (ADR-0347 Decision 7), and its handler is never called again. Environment: each write is one Secret
+# update (ADR-0327 Decision 4); the runtime holds the outputs in memory between the apply and the writes. Left out: the
+# destroy, which empties the keys in the same order, and a write that funcd refuses, which fails the run; tests hold
+# those.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 4
+  crash_on_yield: false
+---
+# diagram: run
+# mutant answer-first: ReadyStackHasItsOutputs
+# mutant no-answer: liveness
+
+# answer-first: the runtime answers before it writes the outputs.
+# no-answer: the runtime never answers after its writes.
+MUTANT = ""
+
+action Init:
+    run = "applying"
+    applied = 1
+    first = 1
+    second = 1
+    ready = False
+
+# The runtime applies the saved plan: the infrastructure is the second generation's.
+atomic fair action Apply:
+    require run == "applying"
+    applied = 2
+    if MUTANT == "answer-first":
+        run = "answered"
+    else:
+        run = "writing-first"
+
+atomic fair action WriteFirst:
+    require run == "writing-first"
+    first = 2
+    run = "writing-second"
+
+atomic fair action WriteSecond:
+    require run == "writing-second"
+    second = 2
+    if MUTANT != "no-answer":
+        run = "answered"
+
+# The answer ends the run Succeeded, and the stack's Function reports it Ready at its generation.
+atomic fair action Succeed:
+    require run == "answered"
+    run = "succeeded"
+    ready = True
+
+# funcd stops while the run is Running; at its next boot the run ends Interrupted.
+atomic action Restart:
+    require run in ("applying", "writing-first", "writing-second", "answered")
+    run = "interrupted"
+
+always assertion ReadyStackHasItsOutputs:
+    return not ready or (first == 2 and second == 2)
+
+eventually always assertion RunEnds:
+    return run in ("succeeded", "interrupted")
