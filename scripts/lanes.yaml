@@ -10,7 +10,8 @@
 #             github.com/pyvvo/funcd-python or github.com/pyvvo/funcd-functions (the example Apps), resolved
 #             by scripts/moddir.sh (module cache or go.work). Absent = the funcd repo root. The language
 #             repos commit their example builds.
-#   dir     — the example directory, relative to the module root; source of the staged files.
+#   dir     — the example directory, relative to the module root; source of the staged files. Absent = a lane
+#             that runs no example: it stages funcd's own fixtures, each a {from} entry, with no build or copy.
 #   copy    — true = build in a writable copy (the module cache is read-only): the whole module goes to
 #             .modcopy/lane/<module>, so the example's relative references still resolve.
 #   build   — host shell commands (run in the lane's dir, in order, with FUNCD_ROOT set to the funcd checkout) that

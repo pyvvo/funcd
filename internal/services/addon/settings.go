@@ -313,15 +313,22 @@ func settingsDigest(epoch int, address string, fn *v1.Function, alias string, ob
 func (r *Reconciler) settingsDue(key settingsKey, digest string, resync time.Duration) (string, time.Duration) {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	if r.caller == nil {
+	return dueLocked(r.settings, r.caller != nil, key, r.now(), digest, resync)
+}
+
+// dueLocked is due for key's state in states, under settingsMu, a new key's state made unknown: nothing is due without
+// a caller (calls false).
+func dueLocked[K comparable](states map[K]*settingsState, calls bool, key K, now time.Time, digest string,
+	resync time.Duration) (string, time.Duration) {
+	if !calls {
 		return "", 0
 	}
-	s, known := r.settings[key]
+	s, known := states[key]
 	if !known {
 		s = &settingsState{}
-		r.settings[key] = s
+		states[key] = s
 	}
-	return s.due(known, r.now(), digest, resync)
+	return s.due(known, now, digest, resync)
 }
 
 // startCall calls fn with call on a goroutine bounded by addons.settingsTimeout. Once it ends it writes each sent

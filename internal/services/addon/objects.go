@@ -238,15 +238,7 @@ func groupDigest(fn *v1.Function, objs []*v1.AddonObject) string {
 func (r *Reconciler) groupDue(key groupKey, digest string, resync time.Duration) (string, time.Duration) {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	if r.objectsCaller == nil {
-		return "", 0
-	}
-	s, known := r.groups[key]
-	if !known {
-		s = &settingsState{}
-		r.groups[key] = s
-	}
-	return s.due(known, r.now(), digest, resync)
+	return dueLocked(r.groups, r.objectsCaller != nil, key, r.now(), digest, resync)
 }
 
 // startObjectsCall calls key's Function with call on a goroutine bounded by addons.settingsTimeout. Once it ends it
