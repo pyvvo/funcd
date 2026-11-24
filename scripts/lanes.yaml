@@ -956,7 +956,7 @@ addon-rauthy-restore:
   venom: e2e/addon-rauthy-restore.venom.yml
 
 job:
-  description: A Job's runs on real containerd (ADR-0347) — the job-report examples of funcd-typescript and funcd-python each report on a month, a run that ends Succeeded with no container left, a cancel that stops the run's container within the grace, and a funcd crash during a run that leaves it Interrupted with no container; and a run of a Job without approval.bypass, in each language, that previews and runs once funcdctl job approve names its digest (ADR-0348).
+  description: A Job's runs on real containerd (ADR-0347) — the job-report examples of funcd-typescript and funcd-python each report on a month, a run that ends Succeeded with no container left, a cancel that stops the run's container within the grace, and a funcd crash during a run that leaves it Interrupted with no container; and a run of a Job without approval.bypass, in each language, that previews and runs once funcdctl job approve names its digest (ADR-0348); and the job-planner example's Function, in each language, which starts one run of its bound Job through ctx.job for a month and reads it back (ADR-0349).
   module: github.com/pyvvo/funcd-typescript
   dir: examples/job-report
   # The Python example needs no third-party package, so its src/main.py is pushed as one file, pyreport.py beside its
@@ -990,6 +990,23 @@ job:
       to: funcdconfig.yaml
     - from: e2e/fixtures/job-report-approved.yaml
       to: job-report-approved.yaml
+    - from: e2e/fixtures/job-input-september.json
+      to: job-input-september.json
+    - from: examples/job-planner/planner.mjs
+      to: planner/planner.mjs
+    - from: examples/job-planner/planner.contract.yaml
+      to: planner/planner.contract.yaml
+    - from: examples/job-planner/planner.yaml
+      to: planner/planner.yaml
+    - from: examples/job-planner/src/main.py
+      module: github.com/pyvvo/funcd-python
+      to: py/pyplanner.py
+    - from: examples/job-planner/pyplanner.contract.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/pyplanner.contract.yaml
+    - from: examples/job-planner/planner.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/planner.yaml
   push:
     - artifact: report.mjs
       ref: report
@@ -997,11 +1014,17 @@ job:
       ref: pyreport
     - artifact: job-sleep.mjs
       ref: job-sleep
+    - artifact: planner/planner.mjs
+      ref: planner
+    - artifact: py/pyplanner.py
+      ref: pyplanner
   apply:
     - report.yaml
     - py/report.yaml
     - job-sleep.yaml
     - job-report-approved.yaml
+    - planner/planner.yaml
+    - py/planner.yaml
   ready:
     kind: job
     names:

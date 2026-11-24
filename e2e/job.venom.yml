@@ -10,7 +10,9 @@
 #      and the drivers' boot sweep has removed its container.
 #   4. job-approval-runs-the-preview — a run of each language's Job without approval.bypass previews, waits
 #      AwaitingApproval with the preview's digest, and ends Succeeded once funcdctl job approve names it (ADR-0348).
-name: jobs — a run, a cancel that stops its container, a crash during a run, and an approved preview (ADR-0347, ADR-0348, containerd lane)
+#   5. job-planner-starts-a-run — each language's job-planner Function starts one run of its bound Job through
+#      ctx.job for a month, a second call starts none, and the run records the Function that started it (ADR-0349).
+name: jobs — a run, a cancel that stops its container, a crash during a run, an approved preview and a Function's start (ADR-0347, ADR-0348, ADR-0349, containerd lane)
 
 vars:
   vmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -c"
@@ -110,6 +112,44 @@ testcases:
         assertions:
           - result.systemout ShouldContainSubstring PHASE=Succeeded
           - 'result.systemout ShouldContainSubstring RESULT={"month":"2026-10","rows":31}'
+
+  - name: job-planner-starts-a-run — a Function starts one run of its bound Job through ctx.job, in each language
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'curl -s -X POST -H "content-type: application/json" --data @/opt/lane/job-input-september.json http://127.0.0.1:8081/function/planner; echo; curl -s -X POST -H "content-type: application/json" --data @/opt/lane/job-input-september.json http://127.0.0.1:8081/function/pyplanner'
+        retry: 60
+        delay: 2
+        info: "planner, pyplanner → {{.result.systemout}}"
+        assertions:
+          - 'result.systemout ShouldContainSubstring "run":"report-2026-09"'
+          - 'result.systemout ShouldContainSubstring "run":"pyreport-2026-09"'
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl get jobrun report-2026-09 -n default -o json' | python3 -c 'import sys,json;s=json.load(sys.stdin).get("status",{});print("PHASE="+s.get("phase",""),"BY="+s.get("startedBy",""),"RESULT="+json.dumps(s.get("result"),separators=(",",":")))'
+        retry: 30
+        delay: 2
+        info: "report-2026-09 → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - 'result.systemout ShouldContainSubstring BY=Function::"default/planner"'
+          - 'result.systemout ShouldContainSubstring RESULT={"month":"2026-09","rows":30}'
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl get jobrun pyreport-2026-09 -n default -o json' | python3 -c 'import sys,json;s=json.load(sys.stdin).get("status",{});print("PHASE="+s.get("phase",""),"BY="+s.get("startedBy",""),"RESULT="+json.dumps(s.get("result"),separators=(",",":")))'
+        retry: 30
+        delay: 2
+        info: "pyreport-2026-09 → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - 'result.systemout ShouldContainSubstring BY=Function::"default/pyplanner"'
+          - 'result.systemout ShouldContainSubstring RESULT={"month":"2026-09","rows":30}'
+      - type: exec
+        script: |
+          {{.vmsh}} 'curl -s -X POST -H "content-type: application/json" --data @/opt/lane/job-input-september.json http://127.0.0.1:8081/function/planner >/dev/null; curl -s -X POST -H "content-type: application/json" --data @/opt/lane/job-input-september.json http://127.0.0.1:8081/function/pyplanner >/dev/null; echo "RUNS=$(funcdctl job runs report | grep -c "^report-2026-09$")/$(funcdctl job runs pyreport | grep -c "^pyreport-2026-09$")"'
+        info: "a second call of each → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring RUNS=1/1
 
   - name: job-run-succeeds — a run ends Succeeded with its result, and no container of it remains
     steps:
