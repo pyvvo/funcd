@@ -6,6 +6,9 @@
     "blobBindings": [
       "BlobPrefix::\"team/files/uploads\""
     ],
+    "jobBindings": [
+      "Job::\"team/tofu\""
+    ],
     "kvBindings": [
       "KVTable::\"team/cache/hot\"",
       "KVTable::\"team/counters/counts\""
@@ -29,6 +32,7 @@
       "BlobPrefix::\"team/lakehouse/bronze\"",
       "BlobPrefix::\"team/lakehouse/gold\""
     ],
+    "jobBindings": [],
     "kvBindings": [],
     "lakeBindings": [],
     "links": [],

@@ -1,6 +1,7 @@
 # ADR-0349: A Function starts a Job's run through its binding and reads it back
 
-- **Status**: Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
+- **Status**: Implemented (2026-11-24), review passed in round 2 with two Minors; Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
+- **Amended in place**: 2026-11-24, by the decider on [#1492](https://github.com/pyvvo/funcd/issues/1492#issuecomment-7119567941): an input off the Job's contract answers 422 as a Function's call does, not as a declared cause (Decision 4)
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: jobs, functions, bindings, local-api, sdk
@@ -82,7 +83,8 @@ App's part binds a Job part (F271).
    run of another Job, or one that `job.retention` removed, answers 404.
 4. **The answers.** 403 when the Function has no binding of that alias or Cedar denies the action; 404 when the Job
    or the run is gone; 409 for a name another run holds; 413 over `job.payloadLimit`; 422 for an input off the Job's
-   `status.contract`. Each is a declared cause (ADR-0330).
+   `status.contract`, answered as a Function's call answers it: the contract's `{"error", "details"}` body, relayed as
+   is (amended 2026-11-24). Each other answer is a declared cause (ADR-0330).
 5. **The shims.** Both shims add `ctx.job.start(alias, input, name=None) -> str` and `ctx.job.get(alias, run) ->
    JobRunState` (`name`, `phase`, `reason`, `started_at`, `ended_at`, `result`; camelCase in TypeScript), raising the
    shim's error for each answer above, as `ctx.addon.fetch` does. `kindref` lists `job.start` and `job.get` among the
@@ -168,7 +170,7 @@ check-specs` pass with ADR-0347 implemented.
 - [ ] A start runs ADR-0347's admission and records the caller's Cedar principal in `startedBy`.
 - [ ] A start sent again with its name and input answers 200 with the run; another holder of the name answers 409.
 - [ ] Both actions come from the binding alone, and a forbid Policy revokes each; a Job's spec refuses the binding.
-- [ ] A read answers only a run of the bound Job, and every answer is a declared cause.
+- [ ] A read answers only a run of the bound Job, and every answer but the contract's 422 is a declared cause (amended 2026-11-24).
 
 ## Consequences
 

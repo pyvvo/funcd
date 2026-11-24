@@ -1,4 +1,5 @@
 # ADR-0347: a Job whose run sleeps for its input's ms; the job lane cancels one run and crashes funcd during another.
+# It runs unattended, so it bypasses the approval of its runs (ADR-0348).
 apiVersion: funcd.io/v1alpha1
 kind: Job
 metadata:
@@ -10,3 +11,5 @@ spec:
   handler: handle
   image: oci-layout:///mnt/funcd-deps/registry:job-sleep
   concurrency: 2
+  approval:
+    bypass: true

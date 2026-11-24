@@ -34,13 +34,17 @@ day of the month. Its contract takes `month` alone, and a Job whose artifact car
 directory, which the server on the same machine reads; replace the Job's `image` with the reference that it prints.
 The manifest's `resourceGroup` names the [resource group](../../../platform/tenancy-and-limits/namespaces.md) of the
 Job within its namespace, [`timeout`](spec.md#jobspec) bounds each run's call, and [`concurrency`](spec.md#jobspec)
-lets two runs of the Job hold a worker at once.
+lets two runs of the Job hold a worker at once. [`approval.bypass`](spec.md#jobspecapproval) makes each run run at once;
+a Job without it previews each run and waits for a person's approval, as [Approve a run](approval.md) shows.
+A Function starts runs through its `spec.bindings.job`, as [Start a run from a Function](start-from-a-function.md)
+shows.
 
 After the apply, repeat `get` until `status.phase` is `Ready`. [`funcdctl job run`](../../tools/funcdctl/spec.md#funcdctl-job-run)
 starts a run and prints its name; without a name, funcd names the run after its Job with a suffix. Repeat
 [`funcdctl job describe`](../../tools/funcdctl/spec.md#funcdctl-job-describe) until the phase is `Succeeded`, `Failed`
 or `Cancelled`. The run pinned the Job's current **Revision** when it started, and keeps it to its end; `started by`
-is the subject of the credential that created the run, which grants nothing. An input off the contract, such as
+is the subject of the credential that created the run, or the Function that started it, as
+[Start a run from a Function](start-from-a-function.md) shows, and it grants nothing. An input off the contract, such as
 `{"day":1}`, is refused with 422 `InputSchemaMismatch`, naming `body.spec.input.day` and `body.spec.input.month`.
 
 [`funcdctl job logs`](../../tools/funcdctl/spec.md#funcdctl-job-logs) prints the run's records: its worker's output
@@ -73,7 +77,7 @@ Clone the repository, push the committed build `report.mjs` with its contract be
 $ git clone https://github.com/pyvvo/funcd-typescript
 $ cd funcd-typescript/examples/job-report
 $ funcdctl push report.mjs "oci-layout://$PWD/registry:report"
-oci-layout:///home/dev/funcd-typescript/examples/job-report/registry:report@sha256:d124133ffbb80a5f496f4bc9adcbd7253d9ba6c29d5642382074f3b36d6a31e0
+oci-layout:///home/dev/funcd-typescript/examples/job-report/registry:report@sha256:aff19a7ace15032acd1aea667bd124dfd5e408ae0bd30bced659559cb86735e8
 ```
 
 Apply the Job, start a run, and read it:
@@ -86,7 +90,7 @@ $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run report
 report-1
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe report-1
 RUN report-1   job: report   phase: Succeeded
-revision: report-v1   digest: sha256:d124133ffbb80a5f496f4bc9adcbd7253d9ba6c29d5642382074f3b36d6a31e0
+revision: report-v1   digest: sha256:aff19a7ace15032acd1aea667bd124dfd5e408ae0bd30bced659559cb86735e8
 started by: dev
 started: 2026-11-23T23:59:25.895Z   ended: 2026-11-23T23:59:29.097Z   duration: 3s202ms
 result: {"month":"2026-10","rows":31}
@@ -108,7 +112,7 @@ cancel requested for report-2
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe report-2
 RUN report-2   job: report   phase: Cancelled
 reason: Cancelled   message: spec.cancel: the worker was stopped, and the handler may have done part of its work
-revision: report-v1   digest: sha256:d124133ffbb80a5f496f4bc9adcbd7253d9ba6c29d5642382074f3b36d6a31e0
+revision: report-v1   digest: sha256:aff19a7ace15032acd1aea667bd124dfd5e408ae0bd30bced659559cb86735e8
 started by: dev
 started: 2026-11-23T23:59:29.317Z   ended: 2026-11-23T23:59:30.855Z   duration: 1s538ms
 trace: efeff33a9f4006868293e109685e480b
@@ -137,7 +141,7 @@ $ git clone https://github.com/pyvvo/funcd-python
 $ cd funcd-python/examples/job-report
 $ mkdir -p dist && cp src/main.py dist/pyreport.py && cp pyreport.contract.yaml dist/
 $ funcdctl push dist/pyreport.py "oci-layout://$PWD/registry:pyreport"
-oci-layout:///home/dev/funcd-python/examples/job-report/registry:pyreport@sha256:600449c953fee8acbea825d3a373f9640091bff6b342a895bbf475c7e588397f
+oci-layout:///home/dev/funcd-python/examples/job-report/registry:pyreport@sha256:06645d8829109d45a1a31457612bf3e0d4bb82b15a2efeb2ea559ce74db0f31b
 ```
 
 Apply the Job, start a run, and read it:
@@ -150,7 +154,7 @@ $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run pyrepo
 pyreport-1
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe pyreport-1
 RUN pyreport-1   job: pyreport   phase: Succeeded
-revision: pyreport-v1   digest: sha256:600449c953fee8acbea825d3a373f9640091bff6b342a895bbf475c7e588397f
+revision: pyreport-v1   digest: sha256:06645d8829109d45a1a31457612bf3e0d4bb82b15a2efeb2ea559ce74db0f31b
 started by: dev
 started: 2026-11-23T23:59:30.990Z   ended: 2026-11-23T23:59:34.141Z   duration: 3s151ms
 result: {"month":"2026-10","rows":31}
@@ -171,7 +175,7 @@ cancel requested for pyreport-2
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe pyreport-2
 RUN pyreport-2   job: pyreport   phase: Cancelled
 reason: Cancelled   message: spec.cancel: the worker was stopped, and the handler may have done part of its work
-revision: pyreport-v1   digest: sha256:600449c953fee8acbea825d3a373f9640091bff6b342a895bbf475c7e588397f
+revision: pyreport-v1   digest: sha256:06645d8829109d45a1a31457612bf3e0d4bb82b15a2efeb2ea559ce74db0f31b
 started by: dev
 started: 2026-11-23T23:59:34.250Z   ended: 2026-11-23T23:59:35.793Z   duration: 1s543ms
 trace: 51c7777ae8d47fff2ded8845b2953907
@@ -235,9 +239,9 @@ creates and changes both, and a viewer only reads them.
 - [`job.maxRunning`](../../running-funcd/spec.md#funcdconfigyaml): the runs of all Jobs that hold a worker at once on
   the node, 4 by default. A run past it, or past its Job's `concurrency`, waits in `Pending` with `Queued`, and a free
   slot goes to the oldest waiting run whose Job is below its own `concurrency`.
-- [`job.payloadLimit`](../../running-funcd/spec.md#funcdconfigyaml): 262144 bytes by default for an input and for a
-  result. A larger input is refused with 413 when the run is created; a larger result ends the run `Failed` with
-  `PayloadLimitExceeded`.
+- [`job.payloadLimit`](../../running-funcd/spec.md#funcdconfigyaml): 262144 bytes by default for an input, a preview and
+  a result. A larger input is refused with 413 when the run is created; a larger preview or result ends the run `Failed`
+  with `PayloadLimitExceeded`.
 - [`job.retention`](../../running-funcd/spec.md#funcdconfigyaml): funcd deletes a run 720h after it ends, by default.
 
 ## Status
@@ -249,17 +253,19 @@ creates and changes both, and a viewer only reads them.
 | `Pending` | `JobNotFound` | The Job does not exist yet. |
 | `Pending` | `JobNotReady` | The Job is not Ready at its latest spec. |
 | `Pending` | `Queued` | The Job's `concurrency` or the node's `job.maxRunning` is reached. |
+| `Previewing`, `AwaitingApproval` | | The run of a Job without `approval.bypass` previews, then waits for a person: [Approve a run](approval.md#status). |
 | `Running` | | The run's worker runs the handler. |
 | `Succeeded` | | The handler answered; `result` holds its answer. |
 | `Failed` | `StartFailed` | The run's worker could not be created or started, ended before it was ready, was not ready within `runtime.bootTimeout`, or a worker of the run's name still remained that long; the message says which. When the worker's last readiness answer named a binding whose check failed, the message names that binding too. |
 | `Failed` | `InputSchemaMismatch` | The input does not match the contract of the Revision that the run pinned, or the handler refused it with 422. |
 | `Failed` | `HandlerFailed` | The handler failed or its answer was not JSON; the message holds the first line of the cause. |
-| `Failed` | `PayloadLimitExceeded` | The result is larger than `job.payloadLimit`. |
+| `Failed` | `PayloadLimitExceeded` | The preview or the result is larger than `job.payloadLimit`. |
 | `Failed` | `RunTimedOut` | The call ran past the Job's `timeout`, and the worker was stopped. |
 | `Failed` | `Interrupted` | funcd stopped while the run was running; the run does not run again. |
 | `Cancelled` | `Cancelled` | The run was cancelled. |
 | `Cancelled` | `JobDeleted` | The Job was deleted or created again, or the Revision that the run pinned is gone. |
 | `Cancelled` | `Restored` | A restore of the platform ended the run: the backup cannot say whether it ran since. |
+| `Rejected` | `Rejected` | A person rejected the run before it ran: [Reject a run](approval.md#reject-a-run). |
 
 The Job itself is Ready once funcd has checked it as it checks a Function before its first worker. `funcdctl get job
 <job> -n <namespace> -o json` shows its `Ready` condition, with a Function's reasons, such as `ContractMissing` when the

@@ -540,8 +540,23 @@ Print a function artifact's I/O contract from its OCI metadata (no bundle pull, 
 ```text
 funcdctl job
 
-Run Jobs and read their runs (run|runs|logs|describe|cancel)
+Run Jobs and read their runs (run|runs|logs|describe|cancel|approve|reject)
 ```
+
+## `funcdctl job approve`
+
+```text
+funcdctl job approve <run> [flags]
+
+Approve a run's preview, so the run runs exactly what it previewed.
+
+Without --digest, the command prints the preview's document and digest and, on a terminal, asks to confirm. With --digest, it approves that digest with no question, for scripts. funcd refuses an approval that names another preview than the run's current one with 409, and one from a caller who may not update the run's Job with 403.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--digest` | string |  | approve this preview digest, sha256:&lt;hex&gt;, with no question (default: show the preview and ask) |
+| `-n`, `--namespace` | string |  | namespace (default: default) |
 
 ## `funcdctl job cancel`
 
@@ -560,7 +575,7 @@ Cancel a run (sets spec.cancel; a running run's worker is stopped)
 ```text
 funcdctl job describe <run> [flags]
 
-Show a run: phase, reason, revision, digest, who started it, its times and its result
+Show a run: phase, reason, revision, digest, who started it, its preview, who approved or rejected it, its times and its result
 ```
 
 | Flag | Type | Default | Description |
@@ -583,6 +598,19 @@ Print a run's logs: its worker's lines and those of the calls it made
 | `-o`, `--output` | string |  | output format: wide (append source/inv/attrs inline) \| json |
 | `--severity` | string |  | minimum level: trace\|debug\|info\|warn\|error\|fatal |
 | `--since` | string |  | only logs since a duration ago (15m, 1h30m) or an RFC3339 time (2026-10-07T22:00:00Z) |
+
+## `funcdctl job reject`
+
+```text
+funcdctl job reject <run> [flags]
+
+Reject a run that has not started running, so it ends Rejected and its handler never runs
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `-n`, `--namespace` | string |  | namespace (default: default) |
+| `--reason` | string |  | why the run is rejected, at most 512 bytes: the message of its Ready condition |
 
 ## `funcdctl job run`
 
@@ -610,7 +638,7 @@ List a Job's runs (newest first; --phase to filter)
 | --- | --- | --- | --- |
 | `-n`, `--namespace` | string |  | namespace (default: default) |
 | `-o`, `--output` | string |  | output format: json |
-| `--phase` | string |  | filter by run phase (Pending\|Running\|Succeeded\|Failed\|Cancelled) |
+| `--phase` | string |  | filter by run phase (Pending\|Previewing\|AwaitingApproval\|Running\|Succeeded\|Failed\|Cancelled\|Rejected) |
 
 ## `funcdctl kvstore`
 

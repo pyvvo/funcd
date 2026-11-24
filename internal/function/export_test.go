@@ -2,6 +2,8 @@ package function
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 
@@ -63,11 +65,26 @@ func NewRunAnswer(phase v1.JobRunPhase, reason, message string, result json.RawM
 	return runAnswer{phase: phase, reason: reason, message: message, result: result}
 }
 
-// RunsWith is r's run reconciler with launch as the executor of its runs.
-func RunsWith(r *Reconciler, cfg RunsConfig, launch func(ctx context.Context, run *v1.JobRun, rev *v1.Revision) RunAnswer) *JobRunReconciler {
+// RunCall is which of its calls a run's executor makes (ADR-0348 Decision 2): CallApply or CallPreview.
+type RunCall = runCall
+
+// The two calls of a run.
+const (
+	CallApply   = callApply
+	CallPreview = callPreview
+)
+
+// NewPreviewAnswer is a preview call's answer: document, with its digest.
+func NewPreviewAnswer(document json.RawMessage) RunAnswer {
+	sum := sha256.Sum256(document)
+	return runAnswer{preview: &v1.JobRunPreview{Digest: "sha256:" + hex.EncodeToString(sum[:]), Document: document}}
+}
+
+// RunsWith is r's run reconciler with launch as the executor of its runs' calls.
+func RunsWith(r *Reconciler, cfg RunsConfig, launch func(ctx context.Context, run *v1.JobRun, rev *v1.Revision, call RunCall) RunAnswer) *JobRunReconciler {
 	j := r.Runs(cfg)
-	j.launch = func(ctx context.Context, run *v1.JobRun, _ *v1.Job, rev *v1.Revision) runAnswer {
-		return launch(ctx, run, rev)
+	j.launch = func(ctx context.Context, run *v1.JobRun, _ *v1.Job, rev *v1.Revision, call runCall) runAnswer {
+		return launch(ctx, run, rev, call)
 	}
 	return j
 }

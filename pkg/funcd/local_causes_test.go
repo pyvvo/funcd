@@ -285,7 +285,7 @@ func kvCauseRows(envs kvEnvs) []causeRow {
 func causeMatrices() map[string][]causeRow {
 	return map[string][]causeRow{"kv": kvCauseRows(kvEnvs{}), "blob": blobCauseRows(blobEnvs{}),
 		"secret": secretCauseRows(secretEnvs{}), "sql": sqlCauseRows(sqlEnvs{}), "invoke": invokeCauseRows(nil),
-		"fetch": fetchCauseRows(nil), "addon": addonCauseRows(addonEnvs{})}
+		"fetch": fetchCauseRows(nil), "addon": addonCauseRows(addonEnvs{}), "job": jobCauseRows(jobEnvs{})}
 }
 
 // TestEveryDeclaredCauseHasARow holds each described endpoint's declared causes to the matrix of its service: one row

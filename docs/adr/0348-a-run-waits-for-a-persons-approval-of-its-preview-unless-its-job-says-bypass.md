@@ -1,6 +1,6 @@
 # ADR-0348: A run waits for a person's approval of its preview, unless its Job says bypass
 
-- **Status**: Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
+- **Status**: Implemented (2026-11-24), review passed in round 2 with two Minors; Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: jobs, approval, control-plane, local-api, cli

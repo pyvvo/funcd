@@ -1,0 +1,29 @@
+# The job lane's Jobs without approval.bypass (ADR-0348): the job-report builds that the lane pushes as report and
+# pyreport, so each run previews and waits for funcdctl job approve.
+apiVersion: funcd.io/v1alpha1
+kind: Job
+metadata:
+  name: report-approved
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:report
+  timeout: 10m
+  approval:
+    expiry: 1h
+---
+apiVersion: funcd.io/v1alpha1
+kind: Job
+metadata:
+  name: pyreport-approved
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: python314
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:pyreport
+  timeout: 10m
+  approval:
+    expiry: 1h

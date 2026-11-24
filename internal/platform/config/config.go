@@ -385,7 +385,7 @@ type Config struct {
 	// run's input and its result, and Retention is how long an ended run is kept, a positive duration (CheckJob).
 	Job struct {
 		MaxRunning   int    `json:"maxRunning,omitempty" env:"FUNCD_JOB_MAX_RUNNING" validate:"min=1" doc:"The most JobRuns that may hold a worker at once on this node, all Jobs together, at least 1. A run past it waits in Pending with Queued, and a free slot goes to the oldest waiting run whose Job is below its own concurrency."`
-		PayloadLimit int64  `json:"payloadLimit,omitempty" env:"FUNCD_JOB_PAYLOAD_LIMIT" validate:"min=1" doc:"The most bytes that a JobRun's input and its result may hold, at least 1. A larger input is refused with 413 when the run is created, and a larger result fails the run with reason PayloadLimitExceeded."`
+		PayloadLimit int64  `json:"payloadLimit,omitempty" env:"FUNCD_JOB_PAYLOAD_LIMIT" validate:"min=1" doc:"The most bytes that a JobRun's input, its preview and its result may hold, at least 1. A larger input is refused with 413 when the run is created, and a larger preview or result fails the run with reason PayloadLimitExceeded."`
 		Retention    string `json:"retention,omitempty" env:"FUNCD_JOB_RETENTION" doc:"How long funcd keeps a JobRun after it ends, as a positive duration; then it deletes the run. Empty means 720h."`
 	} `json:"job,omitempty"`
 

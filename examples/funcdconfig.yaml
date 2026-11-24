@@ -148,7 +148,7 @@ storage:
 #   defaultRetryBackoff: 0s       # first retry gap of a step with no retry.backoff, doubled up to 1h. default: 0s (none)
 # job:                            # Jobs (ADR-0347)
 #   maxRunning: 4                 # JobRuns holding a worker at once on this node, all Jobs together; at least 1. default: 4
-#   payloadLimit: 262144          # max run input / result bytes; at least 1. default: 262144 (256 KiB)
+#   payloadLimit: 262144          # max run input / preview / result bytes; at least 1. default: 262144 (256 KiB)
 #   retention: 720h               # how long an ended run is kept, a positive duration. default: 720h
 # eventing:                       # Sensor delivery reliability (ADR-0118)
 #   deliveryAttempts: 3           # attempts before a failed action is dead-lettered. default: 3

@@ -80,7 +80,7 @@ var clients = map[string][]string{
 	"services/secrets":        {"secret"},
 	"workloads/configuration": {"config"},
 	"workloads/function":      {""},
-	"workloads/job":           {""},
+	"workloads/job":           {"", "job"},
 }
 
 // language is a shim whose handler API a Spec page shows: its name and its api.json.

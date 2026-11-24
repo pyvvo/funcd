@@ -92,13 +92,15 @@ func (p *Platform) dependencyChecks() []health.Binding {
 	return out
 }
 
-// facets are the providers' facets of a worker's local API, in list order.
+// facets are the providers' facets of a worker's local API, in list order, then the Job facet, which a run's worker
+// reads its run from (ADR-0348 Decision 6) and a Function starts and reads the runs of the Jobs it binds through
+// (ADR-0349).
 func (p *Platform) facets() []local.Facet {
 	var out []local.Facet
 	for _, h := range lifecycle.Each[facetHook](p.phases) {
 		out = append(out, h.Facet())
 	}
-	return out
+	return append(out, local.JobFacet(jobRuns{store: p.cfg.store}, p.jobStarts, p.jobGrants))
 }
 
 // providerCatalog builds the platform's provider catalog (ADR-0082) from its providers, each naming its own entries,

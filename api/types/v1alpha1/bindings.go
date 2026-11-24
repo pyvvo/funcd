@@ -22,6 +22,8 @@ type FunctionBindings struct {
 	// Links binds an alias to a target Function, called through ctx.invoke and ctx.fetch (ADR-0064); with no matching
 	// link the call is refused.
 	Links []FunctionLink `json:"links,omitempty" doc:"The Functions the code calls, each under its alias: through ctx.invoke one whose protocol is cloudevent, through ctx.fetch one whose protocol is http. Each target must exist in the namespace when this Function is applied, the namespace's links form no cycle, and a Function that a link targets cannot be deleted until the link goes."`
+	// Job binds an alias to a Job of the namespace whose runs the code starts and reads through ctx.job (ADR-0349).
+	Job []FunctionJob `json:"job,omitempty" doc:"The Jobs whose runs the code starts with ctx.job.start and reads with ctx.job.get, each under its alias. The binding grants both, and a namespace Policy that forbids job::start or job::read to the Function revokes one. A run that the code starts passes the checks of a run that a person starts, and a Job's own spec refuses this list."`
 	// Config names ConfigMaps whose keys become env vars (ADR-0093), less a key a bound Secret holds; a missing one
 	// fails closed (ConfigResolveFailed).
 	Config []ObjectName `json:"config,omitempty" doc:"ConfigMaps whose keys each worker gets as environment variables when it starts, a later ConfigMap's value winning for a key that both hold. A key that starts with FUNCD_, or that a bound Secret holds, is left out; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of a ConfigMap's. A missing ConfigMap holds the Function Failed with ConfigResolveFailed."`
