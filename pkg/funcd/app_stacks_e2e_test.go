@@ -41,10 +41,11 @@ const stackQuiet = 1500 * time.Millisecond
 
 const stackTick = 50 * time.Millisecond
 
-// stackPacing scales the rollout down: app.upgradeTimeout 3 s > runtime.bootTimeout 1 s > invoke.activationTimeout
-// 500 ms (ADR-0200 Decision 10), and a supervision period of 500 ms, which paces a held prune and a stack's passes.
+// stackPacing scales the rollout down: app.upgradeTimeout 3 s > runtime.bootTimeout 2 s > invoke.activationTimeout
+// 500 ms (ADR-0200 Decision 10), and a supervision period of 500 ms, which paces a held prune and a stack's passes. The
+// 2 s boot keeps a loaded host from failing the stack reconciler's first boot for good (ADR-0161 Decision 2).
 func stackPacing() funcd.Pacing {
-	return funcd.Pacing{AppUpgradeTimeout: 3 * time.Second, BootTimeout: time.Second, ActivationTimeout: 500 * time.Millisecond,
+	return funcd.Pacing{AppUpgradeTimeout: 3 * time.Second, BootTimeout: 2 * time.Second, ActivationTimeout: 500 * time.Millisecond,
 		SupervisionPeriod: 500 * time.Millisecond}
 }
 
