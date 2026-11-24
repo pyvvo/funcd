@@ -68,6 +68,9 @@ components:
             type: string
           description: The engine's environment. Each value is a literal, or a single ${{ }} expression over config, such as ${{ config.issuer }}, which funcd checks against the config schema when the Addon is applied. A value that is not a string reaches the engine as its JSON; one that fails holds the object in Pending with EnvInvalid.
           type: object
+        function:
+          $ref: "#/components/schemas/AddonSettingsFunction"
+          description: "An Engineless entry's Function, which reconciles the objects of its kind: a Function of each object's namespace, named as a settings kind's is, which funcd calls with the list of objects it reconciles. An object may name its own in spec.functions."
         kind:
           description: "The namespaced kind that the entry runs: an upper-case letter, then 1 to 62 letters or digits. Its objects are served at /apis/funcd.io/v1alpha1/namespaces/<namespace>/<plural>, where the plural is the kind in lower case with an s. funcd refuses a kind that is its own, or whose plural is a path funcd serves or another Addon's plural, whatever the case. An Addon gains its kind once: it cannot change or go."
           pattern: ^[A-Z][A-Za-z0-9]{1,62}$
@@ -91,6 +94,11 @@ components:
         restore:
           $ref: "#/components/schemas/AddonRestore"
           description: How the engine loads a copy at its start, which an in-place Restore of an object puts in place. Unset, an object of the add-on cannot be restored.
+        resync:
+          description: How often funcd sends an Engineless kind's lists again with no change, from 1s to 24h; unset is 10m.
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
         secretKeys:
           description: The keys of an object's bound Secrets that reach the engine's environment. A bound Secret's other keys do not.
           items:
@@ -212,13 +220,13 @@ components:
         config:
           description: The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object.
         deletion:
-          description: "What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way."
+          description: "What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it."
           enum:
             - retain
             - delete
           type: string
         functions:
-          description: The object's own Function for a settings kind of its Addon, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none.
+          description: The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none.
           items:
             $ref: "#/components/schemas/AddonObjectFunction"
           type:
@@ -277,6 +285,14 @@ components:
         restore:
           $ref: "#/components/schemas/AddonRestoreState"
           description: "The in-place Restore whose copy the engine loads: it goes once an engine started without restore.env is Ready, or once that Restore has failed or is gone. While it stands, the namespace is held."
+        workload:
+          description: "The workload of the object's kind, which funcd stores at the object's first pass: Engineless for a kind whose objects run no engine. No call of its Function carries the object before then, and a deletion holds only an object that has it."
+          enum:
+            - Function
+            - Job
+            - Engine
+            - Engineless
+          type: string
       type: object
     AddonReadiness:
       additionalProperties: false
@@ -891,13 +907,13 @@ components:
               config:
                 description: The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object.
               deletion:
-                description: "What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way."
+                description: "What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it."
                 enum:
                   - retain
                   - delete
                 type: string
               functions:
-                description: The object's own Function for a settings kind of its Addon, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none.
+                description: The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none.
                 items:
                   $ref: "#/components/schemas/AddonObjectFunction"
                 type:
@@ -5251,7 +5267,7 @@ components:
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         deletionTimestamp:
-          description: funcd does not set it.
+          description: "When funcd held the object at its deletion: an object of an Engineless add-on kind with deletion: delete stays, deleting, until its Function has destroyed what it holds. funcd sets it on no other object, and a write keeps it."
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
@@ -6557,7 +6573,7 @@ components:
       properties:
         attributes:
           $ref: "#/components/schemas/AddonAttributes"
-          description: "The entry's fields for its workloads: an Engine entry's kind, config, settings and engine fields. A Function or Job entry takes none."
+          description: "The entry's fields for its workloads: an Engine entry's kind, config, settings and engine fields; an Engineless entry's kind, config, function and resync. A Function or Job entry takes none."
         image:
           description: The image, pinned by digest as <repository>@sha256:<64 hex digits>, from a registry that addons.registries lists, and pulled as an engine's. A registry taken out of that list stops no worker or engine, and refuses the Addon's next change.
           pattern: ^[^:@\s]+(:[0-9]+/[^:@\s]+)?@sha256:[a-f0-9]{64}$
@@ -6569,12 +6585,13 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         workloads:
-          description: "What the image serves: Function and Job, which Functions and Jobs may name in spec.runtime, or Engine, alone, which runs one engine of the image per object of the entry's kind."
+          description: "What the entry serves: Function and Job, which Functions and Jobs may name in spec.runtime; Engine, alone, which runs one engine of the image per object of the entry's kind; or Engineless, alone, whose kind's objects run no engine and no image: a Function of their namespace reconciles them."
           items:
             enum:
               - Function
               - Job
               - Engine
+              - Engineless
             type: string
           minItems: 1
           type:
@@ -25732,8 +25749,14 @@ paths:
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AddonObject"
+          description: Accepted
         "204":
-          description: No Content
+          description: The object is deleted.
         "400":
           content:
             application/problem+json:

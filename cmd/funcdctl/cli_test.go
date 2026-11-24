@@ -177,6 +177,33 @@ func TestScenarioCLIDelete(t *testing.T) {
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 }
 
+// ADR-0345 Decision 6: delete prints "deleting" for an object its engineless kind holds at its deletion, again for one
+// held already, and "deleted" for one that goes.
+func TestCLIDeleteHeldAddonObject(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c, _, st := newTestServer(t)
+	for name, deletion := range map[v1.ObjectName]v1.DeletionPolicy{"bunny-edge": v1.DeletionDelete, "old-edge": v1.DeletionRetain} {
+		o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddonObject.GVK().APIVersion(), Kind: v1.KindAddonObject},
+			ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "team-a", ResourceGroup: "rg1"}}
+		o.Spec.Kind, o.Spec.Deletion, o.Status.Workload = "InfraStack", deletion, v1.WorkloadEngineless
+		_, err := st.Create(ctx, o)
+		require.NoError(t, err)
+	}
+	for range 2 {
+		var out bytes.Buffer
+		require.NoError(t, execCLI(&out, c, "delete", "InfraStack", "bunny-edge", "-n", "team-a"))
+		require.Equal(t, "deleting InfraStack/bunny-edge\n", out.String())
+	}
+	obj, err := st.Get(ctx, v1.KindAddonObject.GVK(), "team-a", "bunny-edge")
+	require.NoError(t, err)
+	require.NotNil(t, obj.GetObjectMeta().DeletionTime, "held: its deletionTimestamp is set")
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "delete", "InfraStack", "old-edge", "-n", "team-a"))
+	require.Equal(t, "deleted InfraStack/old-edge\n", out.String())
+}
+
 // scenario: cli-validates-before-apply (missing resourceGroup AND unknown kind, both local).
 func TestScenarioCLIValidatesBeforeApply(t *testing.T) {
 	t.Parallel()

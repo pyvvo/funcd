@@ -76,6 +76,7 @@ const (
 	causeChange = "change"
 	causeRetry  = "retry"
 	causeResync = "resync"
+	causeRun    = "run" // a JobRun of the namespace ended (ADR-0345 Decision 4)
 )
 
 // DefaultSettingsTimeout is addons.settingsTimeout unset (Decision 8); maxSettingsBackoff is the longest wait before a
@@ -110,13 +111,55 @@ type settingsKey struct {
 	kind   string
 }
 
-// settingsState is what this process knows of a key's calls, in memory only, so a start sends again (Decision 7).
+// settingsState is what this process knows of a key's calls, in memory only, so a start sends again (Decision 7). An
+// engineless kind's group keeps the same state (ADR-0345 Decision 2), and run, a JobRun's end in its namespace that no
+// call has answered yet (ADR-0345 Decision 4).
 type settingsState struct {
 	sent     string // the digest of the last call that ended
 	ended    time.Time
 	inflight bool
 	failures int
 	retryAt  time.Time
+	run      bool
+}
+
+// due names the cause of a call that is due now for s, which this process knew (known), the first of start, change,
+// run, retry and resync that holds, and marks it in flight; else how long until one is due, 0 while a call runs, whose
+// end requeues the call's objects. A JobRun's end is due at once, before a failed call's backoff ends.
+func (s *settingsState) due(known bool, now time.Time, digest string, resync time.Duration) (string, time.Duration) {
+	var cause string
+	switch {
+	case s.inflight:
+		return "", 0
+	case !known:
+		cause = causeStart
+	case digest != s.sent:
+		cause = causeChange
+	case s.run:
+		cause = causeRun
+	case s.failures > 0 && now.Before(s.retryAt):
+		return "", s.retryAt.Sub(now)
+	case s.failures > 0:
+		cause = causeRetry
+	case now.Before(s.ended.Add(resync)):
+		return "", s.ended.Add(resync).Sub(now)
+	default:
+		cause = causeResync
+	}
+	s.inflight, s.run = true, false
+	return cause, 0
+}
+
+// done records a call's end at now: the digest it sent and, after a failure, when it is due again: 1 s, then twice as
+// long after each failure, at most 5 min or the resync (Decision 5).
+func (s *settingsState) done(now time.Time, digest string, resync time.Duration, err error) {
+	s.inflight, s.sent, s.ended = false, digest, now
+	if err == nil {
+		s.failures = 0
+		return
+	}
+	s.failures++
+	s.retryAt = s.ended.Add(min(time.Second<<min(s.failures-1, 20), maxSettingsBackoff, resync))
 }
 
 // targetSeen is whether a target was Ready at its last pass, and how many times it turned Ready.
@@ -273,31 +316,12 @@ func (r *Reconciler) settingsDue(key settingsKey, digest string, resync time.Dur
 	if r.caller == nil {
 		return "", 0
 	}
-	now := r.now()
 	s, known := r.settings[key]
 	if !known {
 		s = &settingsState{}
 		r.settings[key] = s
 	}
-	var cause string
-	switch {
-	case s.inflight:
-		return "", 0
-	case !known:
-		cause = causeStart
-	case digest != s.sent:
-		cause = causeChange
-	case s.failures > 0 && now.Before(s.retryAt):
-		return "", s.retryAt.Sub(now)
-	case s.failures > 0:
-		cause = causeRetry
-	case now.Before(s.ended.Add(resync)):
-		return "", s.ended.Add(resync).Sub(now)
-	default:
-		cause = causeResync
-	}
-	s.inflight = true
-	return cause, 0
+	return s.due(known, r.now(), digest, resync)
 }
 
 // startCall calls fn with call on a goroutine bounded by addons.settingsTimeout. Once it ends it writes each sent
@@ -392,17 +416,9 @@ func (r *Reconciler) writeResult(ctx context.Context, ns v1.NamespaceName, sent 
 func (r *Reconciler) settingsDone(key settingsKey, digest string, resync time.Duration, err error) {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	s, ok := r.settings[key]
-	if !ok {
-		return
+	if s, ok := r.settings[key]; ok {
+		s.done(r.now(), digest, resync, err)
 	}
-	s.inflight, s.sent, s.ended = false, digest, r.now()
-	if err == nil {
-		s.failures = 0
-		return
-	}
-	s.failures++
-	s.retryAt = s.ended.Add(min(time.Second<<min(s.failures-1, 20), maxSettingsBackoff, resync))
 }
 
 // settingsObject is the pass of a settings object, which runs no engine (Decision 4). While its calls miss something it

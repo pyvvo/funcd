@@ -37,7 +37,7 @@ func TestScenarioSettingsFunctionsRefused(t *testing.T) {
 		want string
 	}{
 		"a kind the Addon does not declare": {[]v1.AddonObjectFunction{{Kind: "RauthyGroup", Ref: "groups"}},
-			`spec.functions[0].kind "RauthyGroup" is no settings kind of Addon "rauthy"`},
+			`spec.functions[0].kind "RauthyGroup" is neither a settings kind of Addon "rauthy" nor the object's own engineless kind`},
 		"one kind twice": {[]v1.AddonObjectFunction{{Kind: "RauthyPasswordPolicy", Ref: "a"}, {Kind: "RauthyPasswordPolicy", Ref: "b"}},
 			`spec.functions[1].kind "RauthyPasswordPolicy" is named by spec.functions[0] too`},
 	} {
@@ -125,5 +125,38 @@ func TestAddonSettingsCallerSendsTheCall(t *testing.T) {
 	httpFn := addonSettingsCaller{inv: &sensor.HTTPInvoker{Endpoints: upstream(srv.URL), Caller: invoke.AddonSettings,
 		Protocol: func(context.Context, activator.FunctionRef) (v1.FunctionProtocol, error) { return v1.ProtocolHTTP, nil }}}
 	_, err = httpFn.Call(ctx, "default", "rauthy-settings", call)
+	require.Error(t, err, "a Function that serves HTTP")
+}
+
+// ADR-0345 Decision 2: an engineless kind's call reaches its Function as a CloudEvent of type funcd.addon.objects from
+// funcd://<namespace>/addon/<function>, the group's list its data, and the answer is the reply; a Function that serves
+// HTTP fails the call.
+func TestAddonObjectsCallerSendsTheCall(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var got eventing.CloudEvent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = io.WriteString(w, `{"results":[{"name":"bunny-edge","ok":false,"reason":"AwaitingApproval"}]}`)
+	}))
+	t.Cleanup(srv.Close)
+	caller := addonObjectsCaller{inv: &sensor.HTTPInvoker{Endpoints: upstream(srv.URL), Caller: invoke.AddonObjects}}
+	call := addonsvc.ObjectsCall{Kind: "InfraStack", Cause: "change", Objects: []addonsvc.CallObject{{Name: "bunny-edge",
+		UID: "9c2e41aa", Generation: 3, Deleting: true, Config: json.RawMessage(`{"job":"bunny-edge"}`)}}}
+	ctx := context.Background()
+	reply, err := caller.Call(ctx, "default", "infrastack-reconciler", call)
+	require.NoError(t, err)
+	require.Equal(t, addonsvc.SettingsReply{Results: []addonsvc.SettingsResult{{Name: "bunny-edge", Reason: "AwaitingApproval"}}}, reply)
+	mu.Lock()
+	require.Equal(t, "funcd.addon.objects", got.Type)
+	require.Equal(t, "funcd://default/addon/infrastack-reconciler", got.Source)
+	require.JSONEq(t, `{"kind":"InfraStack","cause":"change","objects":[{"name":"bunny-edge","uid":"9c2e41aa","generation":3,`+
+		`"deleting":true,"config":{"job":"bunny-edge"}}]}`, string(got.Data))
+	mu.Unlock()
+	httpFn := addonObjectsCaller{inv: &sensor.HTTPInvoker{Endpoints: upstream(srv.URL), Caller: invoke.AddonObjects,
+		Protocol: func(context.Context, activator.FunctionRef) (v1.FunctionProtocol, error) { return v1.ProtocolHTTP, nil }}}
+	_, err = httpFn.Call(ctx, "default", "infrastack-reconciler", call)
 	require.Error(t, err, "a Function that serves HTTP")
 }

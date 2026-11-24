@@ -77,6 +77,8 @@ type addonDeps struct {
 	master       []byte          // the add-on proxy's tokens come from it, with a key of their own
 	// engineLine keeps a line that a runtime reading its engines' output itself hands over (ADR-0342 Decision 5).
 	engineLine func(spec provider.ProviderSpec, stream, line string)
+	// collect runs the owner collector over a namespace once an App's last engineless part goes (ADR-0345 Decision 8).
+	collect func(ctx context.Context, ns v1.NamespaceName) error
 }
 
 func (s *addonProvider) Name() string { return "addon" }
@@ -238,6 +240,7 @@ func (s *addonProvider) build(d addonDeps) error {
 		Logger: c.logger, SupervisionPeriod: c.pacing.SupervisionPeriod, ReferentPollInterval: c.pacing.ReferentPollInterval,
 		EnginePollInterval: c.pacing.EnginePollInterval, Files: s.files, Volumes: volumes, Hold: c.gate(),
 		QuarantinePeriod: c.quarantinePeriodOrDefault(), Now: c.quarantineNow, FollowCurrent: c.addonFollowCurrent,
+		Collect: d.collect,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build the add-on object reconciler")
@@ -308,6 +311,32 @@ func (s *addonProvider) engineNamespaces() []v1.NamespaceName {
 // settingsReplyLimit bounds a settings Function's answer as the local API bounds a call's answer, maxInvokeBytes
 // (ADR-0341 Decision 2).
 const settingsReplyLimit = 1 << 20
+
+// addonObjectsCaller calls an engineless kind's Function with one group's list as a CloudEvent of type
+// funcd.addon.objects from funcd://<namespace>/addon/<function>, through an invoker of the App hooks' kind, and reads
+// its answer, at most 1 MiB (ADR-0345 Decision 2).
+type addonObjectsCaller struct{ inv *sensor.HTTPInvoker }
+
+func (a addonObjectsCaller) Call(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, call addonsvc.ObjectsCall) (addonsvc.SettingsReply, error) {
+	const op = "funcd.addonObjectsCaller"
+	data, err := json.Marshal(call)
+	if err != nil {
+		return addonsvc.SettingsReply{}, fault.Internalf(op, "marshal the call: %v", err)
+	}
+	now := time.Now()
+	ev := eventing.CloudEvent{SpecVersion: "1.0", ID: fmt.Sprintf("objects-%d", now.UnixNano()),
+		Source: fmt.Sprintf("funcd://%s/addon/%s", ns, fn), Type: "funcd.addon.objects",
+		Time: v1.NewTimestamp(now), DataContentType: "application/json", Data: data}
+	body, err := a.inv.InvokeReply(ctx, ns, fn, ev, settingsReplyLimit)
+	if err != nil {
+		return addonsvc.SettingsReply{}, err
+	}
+	var reply addonsvc.SettingsReply
+	if err := json.Unmarshal(body, &reply); err != nil {
+		return addonsvc.SettingsReply{}, fault.Unavailablef(op, "the answer of %s/%s is no objects reply: %v", ns, fn, err)
+	}
+	return reply, nil
+}
 
 // addonSettingsCaller calls a settings kind's Function with one target's list as a CloudEvent, through an invoker of the
 // App hooks' kind, and reads its answer (ADR-0341 Decision 2).

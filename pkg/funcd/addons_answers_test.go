@@ -140,6 +140,16 @@ func TestAddonObjectAnswersMatrix(t *testing.T) {
 	shared := kindFixture{kind: "AddonObject", kinds: "AddonObjects", path: "identityproviders", name: "login",
 		json: jsonOf(t, identityFixture("login")), broken: jsonOf(t, broken),
 		detail: "spec.ingress.path is not allowed"}.sharedRows(e)
+	for i, r := range shared {
+		if r.op == "deleteAddonObject" && r.when == "" {
+			shared[i].ask.status = http.StatusNoContent // an engine's object goes at once
+		}
+	}
+	// ADR-0345 Decision 6: an engineless kind's object with deletion: delete, past its first pass, is held: 202 with it.
+	held := answerRow{op: "deleteAddonObject", on: e, ask: ask{what: "an engineless object, held", method: http.MethodDelete,
+		path: "/apis/funcd.io/v1alpha1/namespaces/default/infrastacks/bunny-edge", token: answersDev,
+		status: http.StatusAccepted, detail: `"deletionTimestamp"`}}
+	held.setup = func(t *testing.T, e *answerEnv) { markedStack(t, e) }
 	// as is login, or the object name, with edit applied.
 	as := func(name v1.ObjectName, edit func(*v1.AddonObject)) string {
 		o := identityFixture(name)
@@ -176,7 +186,41 @@ func TestAddonObjectAnswersMatrix(t *testing.T) {
 		row("replaceAddonObject", "spec.config breaks the schema", e, ask{what: "a config that breaks the Addon's schema",
 			method: http.MethodPut, path: identityPath + "/login", body: as("login", typed),
 			detail: "body.spec.config.issuer"}),
+		held,
 	))
+}
+
+// markedStack registers the engineless kind InfraStack and creates its object bunny-edge of default, with deletion:
+// delete, and waits for its first pass to store its mark (ADR-0345 Decision 1).
+func markedStack(t *testing.T, e *answerEnv) {
+	t.Helper()
+	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddon.GVK().APIVersion(), Kind: v1.KindAddon}}
+	a.Name = "infrastack"
+	a.Spec.Runtimes = []v1.ShippedRuntime{{Name: "infrastack", Workloads: []v1.Workload{v1.WorkloadEngineless},
+		Attributes: &v1.AddonAttributes{Kind: "InfraStack", Config: json.RawMessage(`{"type":"object","properties":{"job":{"type":"string"}},"additionalProperties":false}`),
+			Function: &v1.AddonSettingsFunction{Ref: "infrastack-reconciler"}}}}
+	registerAddons(t, e, a)
+	const stacks = "/apis/funcd.io/v1alpha1/namespaces/default/infrastacks"
+	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddonObject.GVK().APIVersion(), Kind: "InfraStack"}}
+	o.Name, o.Namespace, o.ResourceGroup, o.Spec.Deletion = "bunny-edge", "default", "rg1", v1.DeletionDelete
+	// the Addon's first revision is stamped within a pass, and its kind is served once it is stored
+	require.Eventually(t, func() bool {
+		resp, err := ask{method: http.MethodPost, path: stacks, token: answersDev, body: jsonOf(t, o)}.do(e.c, e.api)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 10*time.Second, 20*time.Millisecond, "bunny-edge is created")
+	require.Eventually(t, func() bool {
+		resp, err := ask{method: http.MethodGet, path: stacks + "/bunny-edge", token: answersDev}.do(e.c, e.api)
+		if err != nil {
+			return false
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var got v1.AddonObject
+		return json.NewDecoder(resp.Body).Decode(&got) == nil && got.Status.Workload == v1.WorkloadEngineless
+	}, 10*time.Second, 20*time.Millisecond, "bunny-edge's first pass stores its mark")
 }
 
 // The answers of the AddonRevision operations (ADR-0339 Decision 1): an admin reads the revisions funcd stamps, and a

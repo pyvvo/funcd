@@ -386,6 +386,13 @@ func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.Nam
 // guard reads Old, so the delete is conditional on Old's version.
 func (h *storeHandlers) deleteGuarded(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string,
 	guard func(context.Context, v1.Object) error) error {
+	return h.deleteWith(ctx, kind, ns, name, rv, guard, nil)
+}
+
+// deleteWith is deleteGuarded whose last step is del, given Old, in place of the store's Delete at Old's version, when
+// del is set: an add-on object may be held instead (ADR-0345 Decision 6). del is conditional on Old's version too.
+func (h *storeHandlers) deleteWith(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string,
+	guard func(context.Context, v1.Object) error, del func(context.Context, v1.Object) error) error {
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
 	}
@@ -397,7 +404,7 @@ func (h *storeHandlers) deleteGuarded(ctx context.Context, kind v1.Kind, ns v1.N
 		return err
 	}
 	defer unlock()
-	if guard == nil && !h.admit.Handles(kind.GVK(), admission.Delete) {
+	if guard == nil && del == nil && !h.admit.Handles(kind.GVK(), admission.Delete) {
 		return h.store.Delete(ctx, kind.GVK(), ns, name, rv)
 	}
 	_, err = retryOwnRead(func() (v1.Object, bool, error) {
@@ -419,7 +426,11 @@ func (h *storeHandlers) deleteGuarded(ctx context.Context, kind v1.Kind, ns v1.N
 		}); err != nil {
 			return nil, false, err
 		}
-		err = h.store.Delete(ctx, kind.GVK(), ns, name, old.GetObjectMeta().ResourceVersion)
+		if del != nil {
+			err = del(ctx, old)
+		} else {
+			err = h.store.Delete(ctx, kind.GVK(), ns, name, old.GetObjectMeta().ResourceVersion)
+		}
 		return nil, rv == "" && fault.KindOf(err) == fault.Conflict, err
 	})
 	return err

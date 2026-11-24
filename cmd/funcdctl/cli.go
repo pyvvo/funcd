@@ -228,12 +228,16 @@ func (a *cli) deleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var opts []sdk.DeleteOption
+			var held bool
+			opts := []sdk.DeleteOption{sdk.Held(&held)}
 			if force {
 				opts = append(opts, sdk.Force())
 			}
 			if err := c.Delete(cmd.Context(), kind, v1.NamespaceName(ns), v1.ObjectName(args[1]), opts...); err != nil {
 				return err
+			}
+			if held { // held until its Function destroys what it holds (ADR-0345 Decision 6)
+				return a.writef("deleting %s/%s\n", kind, args[1])
 			}
 			return a.writef("deleted %s/%s\n", kind, args[1])
 		},

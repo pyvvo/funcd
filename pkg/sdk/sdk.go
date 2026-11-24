@@ -329,7 +329,10 @@ func (c *Client) Delete(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, 
 	if o.version != "" {
 		hdr = http.Header{"If-Match": {`"` + o.version + `"`}}
 	}
-	_, err = c.send(ctx, http.MethodDelete, itemURL, nil, hdr)
+	status, _, err := c.sendStatus(ctx, http.MethodDelete, itemURL, nil, hdr)
+	if err == nil && o.held != nil {
+		*o.held = status == http.StatusAccepted
+	}
 	return err
 }
 
@@ -366,6 +369,7 @@ type DeleteOption func(*deleteOptions)
 type deleteOptions struct {
 	force   bool
 	version string
+	held    *bool
 }
 
 // Force deletes a ResourceGroup's members first, each under its own protections, then the group (ADR-0170).
@@ -374,6 +378,10 @@ func Force() DeleteOption { return func(o *deleteOptions) { o.force = true } }
 
 // IfVersion makes Delete conditional on rv: fault.Conflict when the object's resourceVersion differs (ADR-0210).
 func IfVersion(rv string) DeleteOption { return func(o *deleteOptions) { o.version = rv } }
+
+// Held sets *held when the server holds the object at its deletion, answering 202: an engineless add-on kind's object
+// with deletion: delete stays, deleting, until its Function has destroyed what it holds (ADR-0345 Decision 6).
+func Held(held *bool) DeleteOption { return func(o *deleteOptions) { o.held = held } }
 
 // collectionURL builds the collection path for a kind (and namespace, if namespaced).
 func (c *Client) collectionURL(kind v1.Kind, ns v1.NamespaceName) (string, error) {
@@ -422,13 +430,19 @@ func (c *Client) do(ctx context.Context, method, url string, body []byte) ([]byt
 
 // send is do with extra request headers.
 func (c *Client) send(ctx context.Context, method, url string, body []byte, hdr http.Header) ([]byte, error) {
+	_, out, err := c.sendStatus(ctx, method, url, body, hdr)
+	return out, err
+}
+
+// sendStatus is send that also returns a successful answer's status.
+func (c *Client) sendStatus(ctx context.Context, method, url string, body []byte, hdr http.Header) (int, []byte, error) {
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
 	if err != nil {
-		return nil, fault.Internalf("sdk", "build request: %v", err)
+		return 0, nil, fault.Internalf("sdk", "build request: %v", err)
 	}
 	for k, vs := range hdr {
 		req.Header[k] = vs
@@ -442,17 +456,17 @@ func (c *Client) send(ctx context.Context, method, url string, body []byte, hdr 
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fault.Unavailablef("sdk", "%s %s: %v", method, url, err)
+		return 0, nil, fault.Unavailablef("sdk", "%s %s: %v", method, url, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fault.Internalf("sdk", "read response: %v", err)
+		return 0, nil, fault.Internalf("sdk", "read response: %v", err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, problemToFault(resp.StatusCode, respBody)
+		return 0, nil, problemToFault(resp.StatusCode, respBody)
 	}
-	return respBody, nil
+	return resp.StatusCode, respBody, nil
 }
 
 // toWireBody marshals obj with apiVersion/kind taken authoritatively from the object's GVK.

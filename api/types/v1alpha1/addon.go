@@ -38,22 +38,23 @@ type AddonSpec struct {
 type ShippedRuntime struct {
 	Name       RuntimeName      `json:"name" doc:"The runtime's name, which a Function's or a Job's spec.runtime names: a DNS label that is none of funcd's runtimes (nodejs22, python314, duckdb, rqlite), does not start with node or python, is no key of runtime.containerd.imageOverride, and that no other Addon ships."`
 	Image      string           `json:"image,omitempty" pattern:"^[^:@\\s]+(:[0-9]+/[^:@\\s]+)?@sha256:[a-f0-9]{64}$" doc:"The image, pinned by digest as <repository>@sha256:<64 hex digits>, from a registry that addons.registries lists, and pulled as an engine's. A registry taken out of that list stops no worker or engine, and refuses the Addon's next change."`
-	Workloads  []Workload       `json:"workloads" minItems:"1" doc:"What the image serves: Function and Job, which Functions and Jobs may name in spec.runtime, or Engine, alone, which runs one engine of the image per object of the entry's kind."`
-	Attributes *AddonAttributes `json:"attributes,omitempty" doc:"The entry's fields for its workloads: an Engine entry's kind, config, settings and engine fields. A Function or Job entry takes none."`
+	Workloads  []Workload       `json:"workloads" minItems:"1" doc:"What the entry serves: Function and Job, which Functions and Jobs may name in spec.runtime; Engine, alone, which runs one engine of the image per object of the entry's kind; or Engineless, alone, whose kind's objects run no engine and no image: a Function of their namespace reconciles them."`
+	Attributes *AddonAttributes `json:"attributes,omitempty" doc:"The entry's fields for its workloads: an Engine entry's kind, config, settings and engine fields; an Engineless entry's kind, config, function and resync. A Function or Job entry takes none."`
 }
 
-// Workload is a kind of work a shipped runtime serves (ADR-0344 Decision 2); F270's ADR adds Engineless.
+// Workload is a kind of work a shipped runtime serves (ADR-0344 Decision 2, ADR-0345 Decision 1).
 type Workload string
 
 const (
-	WorkloadFunction Workload = "Function"
-	WorkloadJob      Workload = "Job"
-	WorkloadEngine   Workload = "Engine"
+	WorkloadFunction   Workload = "Function"
+	WorkloadJob        Workload = "Job"
+	WorkloadEngine     Workload = "Engine"
+	WorkloadEngineless Workload = "Engineless" // joins ADR-0344's Workload enum (ADR-0345)
 )
 
 // Schema carries Workload's enum into the generated OpenAPI (ADR-0048).
 func (Workload) Schema(huma.Registry) *huma.Schema {
-	return enumSchema(string(WorkloadFunction), string(WorkloadJob), string(WorkloadEngine))
+	return enumSchema(string(WorkloadFunction), string(WorkloadJob), string(WorkloadEngine), string(WorkloadEngineless))
 }
 
 // WorkloadOf is the workload that an object of kind k runs as on a shipped runtime: Function for a Function, Job for a
@@ -69,7 +70,8 @@ func WorkloadOf(k Kind) Workload {
 }
 
 // AddonAttributes hold an entry's fields for its workloads (ADR-0344 Decision 3): an Engine entry's kind, config and
-// settings (ADR-0340) and ADR-0332's engine fields, port and readiness required.
+// settings (ADR-0340) and ADR-0332's engine fields, port and readiness required; an Engineless entry's kind, config,
+// function, required, and resync (ADR-0345 Decision 1).
 type AddonAttributes struct {
 	Kind         string            `json:"kind,omitempty" pattern:"^[A-Z][A-Za-z0-9]{1,62}$" doc:"The namespaced kind that the entry runs: an upper-case letter, then 1 to 62 letters or digits. Its objects are served at /apis/funcd.io/v1alpha1/namespaces/<namespace>/<plural>, where the plural is the kind in lower case with an s. funcd refuses a kind that is its own, or whose plural is a path funcd serves or another Addon's plural, whatever the case. An Addon gains its kind once: it cannot change or go."`
 	Config       json.RawMessage   `json:"config,omitempty" doc:"The JSON Schema of the objects' spec.config, within funcd's contract profile: closed objects, and no $ref. funcd refuses an object whose config breaks it; an object stored before a change that its config breaks waits in Pending with ConfigInvalid, with no engine."`
@@ -83,13 +85,32 @@ type AddonAttributes struct {
 	SecretKeys   []string          `json:"secretKeys,omitempty" doc:"The keys of an object's bound Secrets that reach the engine's environment. A bound Secret's other keys do not."`
 	Snapshot     *AddonSnapshot    `json:"snapshot,omitempty" doc:"Where the engine writes its own consistent copies, which a Backup of an object copies. Unset, a Backup that names an object of the add-on fails with reason NoSnapshot, and a resourceGroup scope leaves the add-on's objects out."`
 	Restore      *AddonRestore     `json:"restore,omitempty" doc:"How the engine loads a copy at its start, which an in-place Restore of an object puts in place. Unset, an object of the add-on cannot be restored."`
+	// Function and Resync are an Engineless entry's (ADR-0345 Decision 1).
+	Function *AddonSettingsFunction `json:"function,omitempty" doc:"An Engineless entry's Function, which reconciles the objects of its kind: a Function of each object's namespace, named as a settings kind's is, which funcd calls with the list of objects it reconciles. An object may name its own in spec.functions."`
+	Resync   Duration               `json:"resync,omitempty" doc:"How often funcd sends an Engineless kind's lists again with no change, from 1s to 24h; unset is 10m."`
+}
+
+// EffectiveResync is an Engineless entry's resync, DefaultAddonResync when unset (ADR-0345 Decision 1).
+func (at AddonAttributes) EffectiveResync() time.Duration {
+	if at.Resync == 0 {
+		return time.Duration(DefaultAddonResync)
+	}
+	return time.Duration(at.Resync)
 }
 
 // Serves reports whether the entry serves workload w.
 func (rt ShippedRuntime) Serves(w Workload) bool { return slices.Contains(rt.Workloads, w) }
 
-// RunsKind reports whether the entry runs the Addon's kind: its workloads hold Engine.
-func (rt ShippedRuntime) RunsKind() bool { return rt.Serves(WorkloadEngine) }
+// RunsKind reports whether the entry runs the Addon's kind: its workloads hold Engine or Engineless.
+func (rt ShippedRuntime) RunsKind() bool {
+	return rt.Serves(WorkloadEngine) || rt.Serves(WorkloadEngineless)
+}
+
+// Engineless reports whether the Addon's kind runs no engine: its kind entry serves Engineless (ADR-0345 Decision 1).
+func (s AddonSpec) Engineless() bool {
+	rt, ok := s.KindRuntime()
+	return ok && rt.Serves(WorkloadEngineless)
+}
 
 // KindRuntime returns the entry that runs the kind; Kind, Kinds and AddonBasePath read through it.
 func (s AddonSpec) KindRuntime() (ShippedRuntime, bool) {
@@ -392,9 +413,10 @@ func (a *Addon) Validate() error {
 	return nil
 }
 
-// validate checks one entry under field (ADR-0344 Decisions 2 to 5): its name is a DNS label that does not choose one
-// of funcd's runtime families, its workloads are known, each listed once, with Engine alone, its image is pinned by
-// digest, and it sets only the attributes its workloads take.
+// validate checks one entry under field (ADR-0344 Decisions 2 to 5, ADR-0345 Decision 1): its name is a DNS label that
+// does not choose one of funcd's runtime families, its workloads are known, each listed once, with Engine or Engineless
+// alone, its image is pinned by digest, an Engineless entry's absent, and it sets only the attributes its workloads
+// take.
 func (rt ShippedRuntime) validate(op, field string) error {
 	if rt.Name.Validate() != nil {
 		return fault.Invalidf(op, "%s.name %q is not a DNS label", field, rt.Name)
@@ -407,16 +429,21 @@ func (rt ShippedRuntime) validate(op, field string) error {
 	}
 	for j, w := range rt.Workloads {
 		switch {
-		case w != WorkloadFunction && w != WorkloadJob && w != WorkloadEngine:
-			return fault.Invalidf(op, "%s.workloads[%d] %q is not Function, Job or Engine", field, j, w)
+		case w != WorkloadFunction && w != WorkloadJob && w != WorkloadEngine && w != WorkloadEngineless:
+			return fault.Invalidf(op, "%s.workloads[%d] %q is not Function, Job, Engine or Engineless", field, j, w)
 		case slices.Contains(rt.Workloads[:j], w):
 			return fault.Invalidf(op, "%s.workloads[%d] %q is listed twice", field, j, w)
 		}
 	}
 	if rt.RunsKind() && len(rt.Workloads) > 1 {
-		return fault.Invalidf(op, "%s.workloads holds Engine beside another workload: an Engine entry stands alone", field)
+		return fault.Invalidf(op, "%s.workloads holds %s beside another workload: an entry that runs the kind stands alone",
+			field, rt.kindWorkload())
 	}
+	engineless := rt.Serves(WorkloadEngineless)
 	switch {
+	case engineless && rt.Image != "":
+		return fault.Invalidf(op, "%s.image is set: an Engineless entry runs no image", field)
+	case engineless:
 	case rt.Image == "":
 		return fault.Invalidf(op, "%s.image is required: an entry that serves %s runs an image", field, rt.Workloads[0])
 	case !addonImage.MatchString(rt.Image):
@@ -431,18 +458,38 @@ func (rt ShippedRuntime) validate(op, field string) error {
 			return fault.Invalidf(op, "%s.attributes.%s is not an attribute that a %s entry takes", field, k, rt.Workloads[0])
 		}
 	}
-	if !rt.RunsKind() {
+	switch {
+	case !rt.RunsKind():
 		return nil
-	}
-	if rt.Attributes == nil {
+	case rt.Attributes == nil && engineless:
+		return fault.Invalidf(op, "%s.attributes is required: an Engineless entry names its kind and its function", field)
+	case rt.Attributes == nil:
 		return fault.Invalidf(op, "%s.attributes is required: an Engine entry names its kind, port and readiness", field)
+	case engineless:
+		return rt.Attributes.validateEngineless(op, field+".attributes")
 	}
 	return rt.Attributes.validateEngine(op, field+".attributes")
 }
 
-// takes reports whether the entry's workloads take the attribute named key (ADR-0344 Decision 3): an Engine entry its
-// kind, config, settings and engine fields; a Function or Job entry none yet.
+// kindWorkload is the workload with which the entry runs the kind: Engine or Engineless.
+func (rt ShippedRuntime) kindWorkload() Workload {
+	if rt.Serves(WorkloadEngineless) {
+		return WorkloadEngineless
+	}
+	return WorkloadEngine
+}
+
+// takes reports whether the entry's workloads take the attribute named key (ADR-0344 Decision 3, ADR-0345 Decision 1):
+// an Engine entry its kind, config, settings and engine fields; an Engineless entry its kind, config, function and
+// resync; a Function or Job entry none yet.
 func (rt ShippedRuntime) takes(key string) bool {
+	if rt.Serves(WorkloadEngineless) {
+		switch key {
+		case "kind", "config", "function", "resync":
+			return true
+		}
+		return false
+	}
 	if !rt.RunsKind() {
 		return false
 	}
@@ -470,17 +517,47 @@ func (at *AddonAttributes) set() ([]string, error) {
 	return slices.Sorted(maps.Keys(fields)), nil
 }
 
-// validateEngine checks an Engine entry's attributes under field (ADR-0332 Decision 1): the kind and the port it
-// requires, the paths, the probe it requires, the storage, the config, the environment's names, the settings kinds
-// (ADR-0340) and the copies (ADR-0333).
-func (at *AddonAttributes) validateEngine(op, field string) error {
+// validateEngineless checks an Engineless entry's attributes under field (ADR-0345 Decision 1): the kind and the
+// function it requires, the function's name, the resync's bounds and the config's form.
+func (at *AddonAttributes) validateEngineless(op, field string) error {
+	if err := at.validateKind(op, field, WorkloadEngineless); err != nil {
+		return err
+	}
+	switch {
+	case at.Function == nil || at.Function.Ref == "":
+		return fault.Invalidf(op, "%s.function.ref is required: an Engineless entry names the Function that reconciles its objects", field)
+	case !dnsLabel.MatchString(string(at.Function.Ref)):
+		return fault.Invalidf(op, "%s.function.ref %q is not a valid DNS-1123 name", field, at.Function.Ref)
+	case at.Resync != 0 && (at.Resync < MinAddonResync || at.Resync > MaxAddonResync):
+		return fault.Invalidf(op, "%s.resync %s is not from %s to %s", field, at.Resync, MinAddonResync, MaxAddonResync)
+	}
+	if c := bytes.TrimSpace(at.Config); len(c) > 0 && c[0] != '{' {
+		return fault.Invalidf(op, "%s.config must be a JSON Schema object", field)
+	}
+	return nil
+}
+
+// validateKind checks the kind an entry runs, as workload: required, a kind name, and none of funcd's.
+func (at *AddonAttributes) validateKind(op, field string, workload Workload) error {
 	switch {
 	case at.Kind == "":
-		return fault.Invalidf(op, "%s.kind is required: an Engine entry runs the Addon's kind", field)
+		return fault.Invalidf(op, "%s.kind is required: an %s entry runs the Addon's kind", field, workload)
 	case !addonKind.MatchString(at.Kind):
 		return fault.Invalidf(op, "%s.kind %q is not a kind name: an upper-case letter, then 1 to 62 letters or digits", field, at.Kind)
 	case funcdKind(at.Kind):
 		return fault.Invalidf(op, "%s.kind %q is a kind of funcd's own", field, at.Kind)
+	}
+	return nil
+}
+
+// validateEngine checks an Engine entry's attributes under field (ADR-0332 Decision 1): the kind and the port it
+// requires, the paths, the probe it requires, the storage, the config, the environment's names, the settings kinds
+// (ADR-0340) and the copies (ADR-0333).
+func (at *AddonAttributes) validateEngine(op, field string) error {
+	if err := at.validateKind(op, field, WorkloadEngine); err != nil {
+		return err
+	}
+	switch {
 	case at.Port < 1 || at.Port > maxPort:
 		return fault.Invalidf(op, "%s.port %d is not a port from 1 to %d", field, at.Port, maxPort)
 	}
@@ -604,8 +681,8 @@ type AddonObjectSpec struct {
 	Bindings  AddonObjectBindings   `json:"bindings,omitempty" doc:"What the object's engine uses."`
 	Ingress   *Ingress              `json:"ingress,omitempty" doc:"Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused."`
 	Resources ResourceSpec          `json:"resources,omitempty" doc:"The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine."`
-	Deletion  DeletionPolicy        `json:"deletion,omitempty" doc:"What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way."`
-	Functions []AddonObjectFunction `json:"functions,omitempty" doc:"The object's own Function for a settings kind of its Addon, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none."`
+	Deletion  DeletionPolicy        `json:"deletion,omitempty" doc:"What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it."`
+	Functions []AddonObjectFunction `json:"functions,omitempty" doc:"The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none."`
 }
 
 // AddonObjectFunction names a target's own Function for one settings kind (ADR-0341 Decision 3).
@@ -621,9 +698,11 @@ type AddonObjectBindings struct {
 
 // AddonObjectStatus is the observed state of an add-on object.
 type AddonObjectStatus struct {
-	Status  `json:",inline"`
-	Address string             `json:"address,omitempty" doc:"The engine's own address, its host and port, which only funcd reaches."`
-	Restore *AddonRestoreState `json:"restore,omitempty" doc:"The in-place Restore whose copy the engine loads: it goes once an engine started without restore.env is Ready, or once that Restore has failed or is gone. While it stands, the namespace is held."`
+	Status `json:",inline"`
+	// Workload is the workload of the object's kind, stored at its first pass (ADR-0345 Decision 1).
+	Workload Workload           `json:"workload,omitempty" doc:"The workload of the object's kind, which funcd stores at the object's first pass: Engineless for a kind whose objects run no engine. No call of its Function carries the object before then, and a deletion holds only an object that has it."`
+	Address  string             `json:"address,omitempty" doc:"The engine's own address, its host and port, which only funcd reaches."`
+	Restore  *AddonRestoreState `json:"restore,omitempty" doc:"The in-place Restore whose copy the engine loads: it goes once an engine started without restore.env is Ready, or once that Restore has failed or is gone. While it stands, the namespace is held."`
 	// AddonRevision is the revision the engine runs, and AppRevision, for an App's part, the App revision whose record
 	// it pins (ADR-0339 Decisions 2 and 3).
 	AddonRevision ObjectName `json:"addonRevision,omitempty" doc:"The AddonRevision whose spec the engine runs. A newer revision of the Addon moves no object: an edit of the object moves it to the Addon's current revision, and for an App's part, the App's revision moves it."`

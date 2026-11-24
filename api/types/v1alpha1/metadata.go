@@ -174,7 +174,7 @@ type ObjectMeta struct {
 	// matches none this store holds.
 	ResourceVersion string           `json:"resourceVersion,omitempty" doc:"An opaque version of the stored object, which funcd sets. An update that sends it gets a conflict when the object changed since; compare it for equality only."`
 	CreationTime    Timestamp        `json:"creationTimestamp,omitzero" doc:"When funcd created the object."`
-	DeletionTime    *Timestamp       `json:"deletionTimestamp,omitempty" doc:"funcd does not set it."`
+	DeletionTime    *Timestamp       `json:"deletionTimestamp,omitempty" doc:"When funcd held the object at its deletion: an object of an Engineless add-on kind with deletion: delete stays, deleting, until its Function has destroyed what it holds. funcd sets it on no other object, and a write keeps it."`
 	OwnerReferences []OwnerReference `json:"ownerReferences,omitempty" doc:"The objects that own this one. funcd deletes an owned object when its owner goes."`
 	Finalizers      []string         `json:"finalizers,omitempty" doc:"funcd does not read it."`
 }

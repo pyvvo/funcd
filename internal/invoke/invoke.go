@@ -28,6 +28,7 @@ const (
 	AppHook                         // an App's lifecycle hook (ADR-0214)
 	AddonSettings                   // a settings kind's Function, called from its target's pass (ADR-0341)
 	JobRun                          // a JobRun's one call to its worker (ADR-0347)
+	AddonObjects                    // an engineless kind's Function, called with one group's list (ADR-0345)
 )
 
 // String names the caller in logs and test failures.
@@ -47,6 +48,8 @@ func (c Caller) String() string {
 		return "AddonSettings"
 	case JobRun:
 		return "JobRun"
+	case AddonObjects:
+		return "AddonObjects"
 	}
 	return "Caller(?)"
 }

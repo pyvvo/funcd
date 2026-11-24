@@ -414,9 +414,10 @@ func (p *pass) collectChild(ctx context.Context, obj v1.Object, ref v1.OwnerRefe
 	return err
 }
 
-// remove deletes the dead-owned obj at its resourceVersion, a Bucket through DeleteBucket. It leaves a Function or
-// Revision an open workflow run holds (ADR-0190 Decision 7), and an App's store something else still uses, for a
-// later sweep.
+// remove deletes the dead-owned obj at its resourceVersion, a Bucket through DeleteBucket and an add-on object through
+// DeleteAddonObject, which holds an engineless one with deletion: delete (ADR-0345 Decision 6). It leaves a Function or
+// Revision an open workflow run holds (ADR-0190 Decision 7), an App's store something else still uses, and an App's
+// part while an engineless part of the App remains (ADR-0345 Decision 8), for a later pass.
 func (c *Collector) remove(ctx context.Context, obj v1.Object, ref v1.OwnerReference) error {
 	if held, err := c.held(ctx, obj); err != nil || held {
 		return err
@@ -424,15 +425,28 @@ func (c *Collector) remove(ctx context.Context, obj v1.Object, ref v1.OwnerRefer
 	if used, err := c.usedElsewhere(ctx, obj, ref); err != nil || used {
 		return err
 	}
+	if wait, err := c.enginelessFirst(ctx, obj, ref); err != nil || wait {
+		return err
+	}
 	m := obj.GetObjectMeta()
 	gvk := obj.GroupVersionKind()
 	var err error
-	if b, ok := obj.(*v1.Bucket); ok {
-		err = DeleteBucket(ctx, c.store, c.purger, b)
-	} else {
+	var heldAt *v1.AddonObject
+	switch o := obj.(type) {
+	case *v1.Bucket:
+		err = DeleteBucket(ctx, c.store, c.purger, o)
+	case *v1.AddonObject:
+		if o.DeletionTime != nil { // held already: its Function's answer removes it
+			return nil
+		}
+		heldAt, err = DeleteAddonObject(ctx, c.store, o)
+	default:
 		err = c.store.Delete(ctx, gvk, m.Namespace, m.Name, m.ResourceVersion)
 	}
-	if err == nil {
+	switch {
+	case err == nil && heldAt != nil:
+		c.log.InfoContext(ctx, "held at its deletion", "kind", heldAt.Spec.Kind, "namespace", m.Namespace, "name", m.Name, "ownerKind", ref.Kind, "owner", ref.Name)
+	case err == nil:
 		c.log.InfoContext(ctx, "collected", "kind", gvk.Kind, "namespace", m.Namespace, "name", m.Name, "ownerKind", ref.Kind, "owner", ref.Name)
 	}
 	return err

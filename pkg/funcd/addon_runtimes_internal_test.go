@@ -1,8 +1,10 @@
 package funcd
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -136,4 +138,112 @@ func TestScenarioAddonEngineUnchanged(t *testing.T) {
 	require.Equal(t, at.Readiness.Path, spec.Readiness.Path)
 	require.Equal(t, at.Storage.Path, spec.Storage.Path)
 	require.Equal(t, "https://login.example.com/auth/v1", spec.Env["PUB_URL"], "its env renders over the object's config")
+}
+
+// infraStackAddon is the Addon infrastack, whose engineless kind InfraStack its Function infrastack-reconciler
+// reconciles (ADR-0345 Decision 1).
+func infraStackAddon() *v1.Addon {
+	a := &v1.Addon{TypeMeta: tmeta(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "infrastack"}}
+	a.Spec.Runtimes = []v1.ShippedRuntime{{Name: "infrastack", Workloads: []v1.Workload{v1.WorkloadEngineless},
+		Attributes: &v1.AddonAttributes{Kind: "InfraStack",
+			Config:   json.RawMessage(`{"type":"object","properties":{"job":{"type":"string"}},"additionalProperties":false}`),
+			Function: &v1.AddonSettingsFunction{Ref: "infrastack-reconciler"}}}}
+	return a
+}
+
+// scenario: engineless-shape-refused — an Engineless entry with an image, an engine's attribute, settings, no
+// function, or another workload beside it, and an object's spec.functions that names a kind that is neither a settings
+// kind of its Addon nor its own engineless kind, are each refused 400, naming the field.
+func TestScenarioEnginelessShapeRefused(t *testing.T) {
+	t.Parallel()
+	e := startAddons(t)
+	for name, c := range map[string]struct {
+		edit  func(rt *v1.ShippedRuntime)
+		field string
+	}{
+		"an image": {func(rt *v1.ShippedRuntime) { rt.Image = "ghcr.io/example/stack" + addonDigest }, "spec.runtimes[0].image"},
+		"a port":   {func(rt *v1.ShippedRuntime) { rt.Attributes.Port = 8080 }, "spec.runtimes[0].attributes.port"},
+		"settings": {func(rt *v1.ShippedRuntime) {
+			rt.Attributes.Settings = rauthySettingsAddon("x").Spec.Runtimes[0].Attributes.Settings
+		}, "spec.runtimes[0].attributes.settings"},
+		"no function":      {func(rt *v1.ShippedRuntime) { rt.Attributes.Function = nil }, "spec.runtimes[0].attributes.function.ref"},
+		"another workload": {func(rt *v1.ShippedRuntime) { rt.Workloads = append(rt.Workloads, v1.WorkloadJob) }, "spec.runtimes[0].workloads"},
+	} {
+		a := infraStackAddon()
+		c.edit(&a.Spec.Runtimes[0])
+		status, detail := e.send(t, http.MethodPost, addonsPath, addonAdminToken, a)
+		require.Equal(t, http.StatusBadRequest, status, "%s: %s", name, detail)
+		require.Contains(t, detail, c.field, name)
+		e.requireNoAddon(t, "infrastack")
+	}
+
+	e.apply(t, e.admin, infraStackAddon())
+	stacks := "/apis/funcd.io/v1alpha1/namespaces/default/infrastacks"
+	own := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: "InfraStack"}}
+	own.Name, own.Namespace, own.ResourceGroup = "bunny-edge", "default", "rg1"
+	own.Spec.Functions = []v1.AddonObjectFunction{{Kind: "InfraStack", Ref: "bunny-edge-reconciler"}}
+	require.Eventually(t, func() bool {
+		status, _ := e.send(t, http.MethodPost, stacks, addonDevToken, own)
+		return status == http.StatusOK
+	}, 5*time.Second, 20*time.Millisecond, "an object names its own Function for its engineless kind")
+	other := *own
+	other.Name, other.Spec.Functions = "site", []v1.AddonObjectFunction{{Kind: "IdentityProvider", Ref: "x"}}
+	status, detail := e.send(t, http.MethodPost, stacks, addonDevToken, &other)
+	require.Equal(t, http.StatusBadRequest, status, detail)
+	require.Contains(t, detail, "spec.functions[0].kind")
+}
+
+// An Addon's kind keeps its workload: each object keeps how it runs, so a replace that moves the kind's entry between
+// Engine and Engineless is refused, as a change of the kind is (ADR-0344 Decision 10).
+func TestEnginelessKindKeepsItsWorkload(t *testing.T) {
+	t.Parallel()
+	e := startAddons(t)
+	e.apply(t, e.admin, infraStackAddon())
+	moved := infraStackAddon()
+	moved.Spec.Runtimes = rauthyAddon("infrastack").Spec.Runtimes
+	moved.Spec.Runtimes[0].Attributes.Kind = "InfraStack"
+	status, detail := e.send(t, http.MethodPut, addonsPath+"/infrastack", addonAdminToken, moved)
+	require.Equal(t, http.StatusBadRequest, status, detail)
+	require.Contains(t, detail, "cannot change between Engine and Engineless")
+
+	e.apply(t, e.admin, rauthyAddon("rauthy"))
+	back := infraStackAddon()
+	back.Name, back.Spec.Runtimes[0].Name, back.Spec.Runtimes[0].Attributes.Kind = "rauthy", "rauthy", "IdentityProvider"
+	status, detail = e.send(t, http.MethodPut, addonsPath+"/rauthy", addonAdminToken, back)
+	require.Equal(t, http.StatusBadRequest, status, detail)
+	require.Contains(t, detail, "cannot change between Engine and Engineless")
+}
+
+// ADR-0345 Decision 6: the DELETE of a held stack answers 202 with it, again 202 while it is held; a write to it is
+// stored and leaves it deleting.
+func TestEnginelessDeleteAnswersHeld(t *testing.T) {
+	t.Parallel()
+	e := startAddons(t)
+	e.apply(t, e.admin, infraStackAddon())
+	stacks := "/apis/funcd.io/v1alpha1/namespaces/default/infrastacks"
+	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: "InfraStack"}}
+	o.Name, o.Namespace, o.ResourceGroup, o.Spec.Deletion = "bunny-edge", "default", "rg1", v1.DeletionDelete
+	require.Eventually(t, func() bool {
+		status, _ := e.send(t, http.MethodPost, stacks, addonDevToken, o)
+		return status == http.StatusOK
+	}, 5*time.Second, 20*time.Millisecond, "the kind is served")
+	require.Eventually(t, func() bool {
+		stored, ok := e.object(t, "default", "bunny-edge")
+		return ok && stored.Status.Workload == v1.WorkloadEngineless
+	}, 5*time.Second, 10*time.Millisecond, "its first pass stores the mark")
+	for range 2 {
+		status, body := e.send(t, http.MethodDelete, stacks+"/bunny-edge", addonDevToken, nil)
+		require.Equal(t, http.StatusAccepted, status, body)
+	}
+	stored, ok := e.object(t, "default", "bunny-edge")
+	require.True(t, ok)
+	require.NotNil(t, stored.DeletionTime)
+	edited := *stored
+	edited.TypeMeta, edited.ResourceVersion = v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: "InfraStack"}, ""
+	edited.Spec.Kind, edited.Spec.Config = "", json.RawMessage(`{"job":"other"}`)
+	status, detail := e.send(t, http.MethodPut, stacks+"/bunny-edge", addonDevToken, &edited)
+	require.Equal(t, http.StatusOK, status, detail)
+	stored, _ = e.object(t, "default", "bunny-edge")
+	require.NotNil(t, stored.DeletionTime, "a write keeps it deleting")
+	require.JSONEq(t, `{"job":"other"}`, string(stored.Spec.Config))
 }

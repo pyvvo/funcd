@@ -16,6 +16,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/contract"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/runtime/embedimg"
 	addonsvc "github.com/pyvvo/funcd/internal/services/addon"
 	"github.com/pyvvo/funcd/internal/store"
@@ -172,11 +173,15 @@ func (a addonRules) Admit(_ context.Context, req admission.Request) (v1.Object, 
 	if !ok {
 		return req.Object, nil
 	}
-	if old, ok := req.Old.(*v1.Addon); ok && old.Spec.Kind() != "" && old.Spec.Kind() != ad.Spec.Kind() {
-		if ad.Spec.Kind() == "" {
+	if old, ok := req.Old.(*v1.Addon); ok && old.Spec.Kind() != "" {
+		switch {
+		case ad.Spec.Kind() == "":
 			return nil, fault.Invalidf(op, "the kind %q cannot go: an Addon keeps the kind it gained", old.Spec.Kind())
+		case old.Spec.Kind() != ad.Spec.Kind():
+			return nil, fault.Invalidf(op, "the kind cannot change from %q to %q: a new kind needs a new Addon", old.Spec.Kind(), ad.Spec.Kind())
+		case old.Spec.Engineless() != ad.Spec.Engineless():
+			return nil, fault.Invalidf(op, "the kind %q cannot change between Engine and Engineless: its objects keep how they run", ad.Spec.Kind())
 		}
-		return nil, fault.Invalidf(op, "the kind cannot change from %q to %q: a new kind needs a new Addon", old.Spec.Kind(), ad.Spec.Kind())
 	}
 	for i, rt := range ad.Spec.Runtimes {
 		field := fmt.Sprintf("spec.runtimes[%d]", i)
@@ -185,6 +190,8 @@ func (a addonRules) Admit(_ context.Context, req admission.Request) (v1.Object, 
 			return nil, fault.Invalidf(op, "%s.name %q is one of funcd's own runtimes (%s)", field, rt.Name, strings.Join(embedimg.Runtimes(), ", "))
 		case slices.Contains(a.Overrides, string(rt.Name)):
 			return nil, fault.Invalidf(op, "%s.name %q is a key of runtime.containerd.imageOverride", field, rt.Name)
+		case rt.Image == "":
+			continue // an Engineless entry runs no image (ADR-0345 Decision 1)
 		}
 		registries := a.Registries
 		if host, _ := addonImageHost(rt.Image); a.AnyRegistry {
@@ -399,6 +406,13 @@ type addonDelete struct {
 	Name      v1.ObjectName    `path:"name" doc:"The object's name."`
 }
 
+// addonDeleteOutput is a delete's answer: 202 with the object an engineless kind holds at its deletion, else 204 with
+// no body (ADR-0345 Decision 6).
+type addonDeleteOutput struct {
+	Status int
+	Body   *v1.AddonObject
+}
+
 type addonCreate struct {
 	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace" doc:"The object's namespace."`
@@ -447,8 +461,15 @@ func registerAddonObjects(api huma.API, h Handlers) {
 		}
 		return addonRespond(h.ReplaceAddonObject(withDryRun(ctx, in.DryRun), in.Namespace, in.Plural, in.Name, in.Body))
 	})
-	huma.Register(api, ops.remove, func(ctx context.Context, in *addonDelete) (*struct{}, error) {
-		return nil, wrapFaultError(h.DeleteAddonObject(ctx, in.Namespace, in.Plural, in.Name, in.rv))
+	huma.Register(api, ops.remove, func(ctx context.Context, in *addonDelete) (*addonDeleteOutput, error) {
+		held, err := h.DeleteAddonObject(ctx, in.Namespace, in.Plural, in.Name, in.rv)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		if held == nil {
+			return &addonDeleteOutput{Status: http.StatusNoContent}, nil
+		}
+		return &addonDeleteOutput{Status: http.StatusAccepted, Body: held}, nil
 	})
 }
 
@@ -520,6 +541,10 @@ func addonObjectOperations() restOperations {
 	ops.get = Describe(ops.get, "Read an object of an add-on's kind", v.get()...)
 	ops.replace = Describe(ops.replace, "Replace an object of an add-on's kind", v.replace(writes)...)
 	ops.remove = Describe(ops.remove, "Delete an object of an add-on's kind", v.remove(nil)...)
+	// An engineless kind's object with deletion: delete stays, deleting, until its Function has destroyed what it
+	// holds: 202 with it; any other object goes, 204 (ADR-0345 Decision 6).
+	ops.remove.DefaultStatus = http.StatusAccepted
+	ops.remove.Responses["204"] = &huma.Response{Description: "The object is deleted."}
 	return ops
 }
 
@@ -683,13 +708,16 @@ func engineFields(k servedKind, s v1.AddonObjectSpec) error {
 	return nil
 }
 
-// settingsFunctions checks a target's own Functions (ADR-0341 Decision 3): each entry names a settings kind of the
-// target's Addon as it is now, once. engineFields refuses them on a settings object.
+// settingsFunctions checks an object's own Functions (ADR-0341 Decision 3, ADR-0345 Decision 3): each entry names a
+// settings kind of the object's Addon as it is now, or the object's own kind when that kind is engineless, once.
+// engineFields refuses them on a settings object.
 func settingsFunctions(k servedKind, fns []v1.AddonObjectFunction) error {
 	const op = "controlplane.addonObject"
 	for i, f := range fns {
-		if k.addon.Spec.SettingsKind(f.Kind) == nil {
-			return fault.Invalidf(op, "spec.functions[%d].kind %q is no settings kind of Addon %q", i, f.Kind, k.addon.Name)
+		own := k.settings == nil && k.addon.Spec.Engineless() && v1.SameAddonKind(f.Kind, k.addon.Spec.Kind())
+		if k.addon.Spec.SettingsKind(f.Kind) == nil && !own {
+			return fault.Invalidf(op, "spec.functions[%d].kind %q is neither a settings kind of Addon %q nor the object's own engineless kind",
+				i, f.Kind, k.addon.Name)
 		}
 		for j := range i {
 			if v1.SameAddonKind(fns[j].Kind, f.Kind) {
@@ -776,11 +804,31 @@ func (h *storeHandlers) ReplaceAddonObject(ctx context.Context, ns v1.NamespaceN
 	}))
 }
 
-func (h *storeHandlers) DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name v1.ObjectName, rv string) error {
-	return h.deleteGuarded(ctx, v1.KindAddonObject, ns, name, rv, func(_ context.Context, old v1.Object) error {
+// DeleteAddonObject removes the object through gc.DeleteAddonObject, which holds an engineless one with deletion:
+// delete and returns it, deleting, as again for one held already (ADR-0345 Decision 6). If-Match is checked as for any
+// delete.
+func (h *storeHandlers) DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name v1.ObjectName, rv string) (*v1.AddonObject, error) {
+	var held *v1.AddonObject
+	err := h.deleteWith(ctx, v1.KindAddonObject, ns, name, rv, func(_ context.Context, old v1.Object) error {
 		if _, ok := ofPlural(old, plural); !ok {
 			return notOfPlural(ns, plural, name)
 		}
 		return nil
+	}, func(ctx context.Context, old v1.Object) error {
+		o, ok := old.(*v1.AddonObject)
+		if !ok {
+			return fault.Internalf("controlplane.addonObject", "%T is not an AddonObject", old)
+		}
+		var err error
+		held, err = gc.DeleteAddonObject(ctx, h.store, o)
+		return err
 	})
+	if err != nil || held == nil {
+		return nil, err
+	}
+	shownHeld, err := shown(held, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &shownHeld, nil
 }

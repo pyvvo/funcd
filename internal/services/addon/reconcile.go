@@ -35,7 +35,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	obj, err := r.store.Get(ctx, req.GVK, req.Namespace, req.Name)
 	if fault.KindOf(err) == fault.NotFound {
 		r.forgetTarget(req.Namespace, req.Name)
-		return controller.Result{}, r.deleted(ctx, req.Namespace, req.Name)
+		if err := r.deleted(ctx, req.Namespace, req.Name); err != nil {
+			return controller.Result{}, err
+		}
+		return controller.Result{}, r.partGone(ctx, req.Namespace, req.Name)
 	}
 	if err != nil {
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "get add-on object")
@@ -49,11 +52,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	} else if st != nil {
 		return r.settingsObject(ctx, sa, st, o) // a settings object runs no engine (ADR-0340 Decision 3)
 	}
-	if err := r.remember(ctx, o); err != nil {
-		return controller.Result{}, err
-	}
 	a, err := r.addonOf(ctx, o.Spec.Kind)
 	if err != nil {
+		return controller.Result{}, err
+	}
+	if (a != nil && a.Spec.Engineless()) || (a == nil && o.Status.Workload == v1.WorkloadEngineless) {
+		return r.enginelessObject(ctx, a, o) // an engineless object runs no engine (ADR-0345)
+	}
+	if err := r.remember(ctx, o); err != nil {
 		return controller.Result{}, err
 	}
 	if a == nil {

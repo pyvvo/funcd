@@ -132,6 +132,70 @@ func TestAddonShapeRefusals(t *testing.T) {
 	}
 }
 
+// infraStackAddon runs the engineless kind InfraStack, which the Function infrastack-reconciler of each object's
+// namespace reconciles.
+func infraStackAddon() *Addon {
+	return &Addon{
+		TypeMeta:   typeMetaFor(KindAddon),
+		ObjectMeta: ObjectMeta{Name: "infrastack"},
+		Spec: AddonSpec{Runtimes: []ShippedRuntime{{Name: "infrastack", Workloads: []Workload{WorkloadEngineless},
+			Attributes: &AddonAttributes{Kind: "InfraStack", Config: json.RawMessage(`{"type":"object"}`),
+				Function: &AddonSettingsFunction{Ref: "infrastack-reconciler"}}}}},
+	}
+}
+
+// ADR-0345 Decision 1: an Engineless entry runs its kind with no image, stands alone, and takes only its kind, config,
+// function, which it requires, and resync, from 1s to 24h, 10m unset; each refusal names the field.
+func TestAddonEnginelessRefusals(t *testing.T) {
+	a := infraStackAddon()
+	require.NoError(t, a.Validate())
+	require.True(t, a.Spec.Engineless())
+	require.False(t, rauthyAddon().Spec.Engineless())
+	require.Equal(t, "InfraStack", a.Spec.Kind())
+	require.Equal(t, 10*time.Minute, engine(a).EffectiveResync())
+	engine(a).Resync = Duration(time.Hour)
+	require.Equal(t, time.Hour, engine(a).EffectiveResync())
+	a.Spec.Runtimes = append(a.Spec.Runtimes, denoAddon().Spec.Runtimes...)
+	require.NoError(t, a.Validate(), "an engineless kind beside a runtime for Functions and Jobs")
+
+	for name, c := range map[string]struct {
+		edit  func(rt *ShippedRuntime)
+		field string
+	}{
+		"an image":              {func(rt *ShippedRuntime) { rt.Image = "ghcr.io/example/stack@" + testDigest }, "spec.runtimes[0].image"},
+		"a Function beside it":  {func(rt *ShippedRuntime) { rt.Workloads = append(rt.Workloads, WorkloadFunction) }, "spec.runtimes[0].workloads"},
+		"Engine beside it":      {func(rt *ShippedRuntime) { rt.Workloads = append(rt.Workloads, WorkloadEngine) }, "spec.runtimes[0].workloads"},
+		"no attributes":         {func(rt *ShippedRuntime) { rt.Attributes = nil }, "spec.runtimes[0].attributes"},
+		"no kind":               {func(rt *ShippedRuntime) { rt.Attributes.Kind = "" }, "spec.runtimes[0].attributes.kind"},
+		"funcd's own kind":      {func(rt *ShippedRuntime) { rt.Attributes.Kind = "Job" }, "spec.runtimes[0].attributes.kind"},
+		"no function":           {func(rt *ShippedRuntime) { rt.Attributes.Function = nil }, "spec.runtimes[0].attributes.function.ref"},
+		"an empty function":     {func(rt *ShippedRuntime) { rt.Attributes.Function = &AddonSettingsFunction{} }, "spec.runtimes[0].attributes.function.ref"},
+		"a function no name":    {func(rt *ShippedRuntime) { rt.Attributes.Function.Ref = "Infra_Stack" }, "spec.runtimes[0].attributes.function.ref"},
+		"a resync under 1s":     {func(rt *ShippedRuntime) { rt.Attributes.Resync = Duration(500 * time.Millisecond) }, "spec.runtimes[0].attributes.resync"},
+		"a resync over 24h":     {func(rt *ShippedRuntime) { rt.Attributes.Resync = Duration(25 * time.Hour) }, "spec.runtimes[0].attributes.resync"},
+		"a config not a schema": {func(rt *ShippedRuntime) { rt.Attributes.Config = json.RawMessage(`[]`) }, "spec.runtimes[0].attributes.config"},
+		"a port":                {func(rt *ShippedRuntime) { rt.Attributes.Port = 8080 }, "spec.runtimes[0].attributes.port"},
+		"a readiness":           {func(rt *ShippedRuntime) { rt.Attributes.Readiness.Path = "/ping" }, "spec.runtimes[0].attributes.readiness"},
+		"settings": {func(rt *ShippedRuntime) {
+			rt.Attributes.Settings = []AddonSettings{{Kind: "StackPolicy"}}
+		}, "spec.runtimes[0].attributes.settings"},
+	} {
+		a := infraStackAddon()
+		c.edit(&a.Spec.Runtimes[0])
+		err := a.Validate()
+		require.Error(t, err, name)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+		require.Contains(t, err.Error(), c.field, name)
+	}
+
+	r := rauthyAddon()
+	engine(r).Function = &AddonSettingsFunction{Ref: "infrastack-reconciler"}
+	require.ErrorContains(t, r.Validate(), "spec.runtimes[0].attributes.function", "an Engine entry takes no function")
+	r = rauthyAddon()
+	engine(r).Resync = Duration(time.Hour)
+	require.ErrorContains(t, r.Validate(), "spec.runtimes[0].attributes.resync", "nor a resync")
+}
+
 // ADR-0344 Decision 4: a Function on an Addon's runtime is a cloudevent one. No Addon ships a name of the node family,
 // and protocol http needs one, so an http Function on deno2 is refused 400.
 func TestAddonRuntimeFunctionIsCloudEvent(t *testing.T) {
