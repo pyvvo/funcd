@@ -1,5 +1,5 @@
 // Package langmod locates the repos funcd pins as Go modules (ADR-0141): a pinned module's root, for the
-// committed example builds and the example Apps of funcd-functions, and the embedded
+// committed example builds, the example Apps of funcd-functions and the add-ons of funcd-addons, and the embedded
 // Node and Python shims written to a temp dir, for the tests that exec them.
 package langmod
 
@@ -12,17 +12,20 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	addons "github.com/pyvvo/funcd-addons"
 	functions "github.com/pyvvo/funcd-functions"
 	shimpython "github.com/pyvvo/funcd-python/shim"
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 )
 
-// The modules funcd pins in go.mod: the two language repos and the example repo. The add-ons repo tests its add-ons
-// itself, with funcd's lane harness.
+// The modules funcd pins in go.mod: the two language repos, the example repo and the add-ons repo (ADR-0332). No lane
+// of funcd runs an add-on: the add-ons repo runs its own lanes with funcd's harness, and funcd pins it for its guide's
+// includes and for the folders those lanes run, which the guide's Examples links may name.
 const (
 	TypeScript = "github.com/pyvvo/funcd-typescript"
 	Python     = "github.com/pyvvo/funcd-python"
 	Functions  = functions.Module
+	Addons     = addons.Module
 )
 
 // Dir returns module mod's root as the go command resolves it: the pinned module-cache dir, or a
