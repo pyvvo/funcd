@@ -1273,8 +1273,8 @@ func pruneStale(ctx context.Context, c, admin *sdk.Client, desired []v1.Object, 
 	}
 	var addonKinds []v1.Kind
 	for _, a := range addons {
-		if ad, ok := a.(*v1.Addon); ok {
-			addonKinds = append(addonKinds, v1.Kind(ad.Spec.Kind))
+		if ad, ok := a.(*v1.Addon); ok && ad.Spec.Kind() != "" {
+			addonKinds = append(addonKinds, v1.Kind(ad.Spec.Kind()))
 		}
 	}
 	prev := devManaged(addons)

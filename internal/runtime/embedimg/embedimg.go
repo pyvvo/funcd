@@ -18,6 +18,8 @@ import (
 	"compress/gzip"
 	"embed"
 	"io"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/distribution/reference"
@@ -47,6 +49,10 @@ var tarFile = map[string]string{
 	"duckdb":    "duckdb.tar",
 	"rqlite":    "rqlite.tar",
 }
+
+// Runtimes are the names of funcd's own runtimes, those whose images it embeds, sorted: no Addon may ship a runtime of
+// one of these names (ADR-0344 Decision 4). It reads no image, so a binary that calls only it embeds none.
+func Runtimes() []string { return slices.Sorted(maps.Keys(tarFile)) }
 
 // Tar returns the embedded OCI image tar for a runtime ("nodejs22"/"python314") as a fresh,
 // UNCOMPRESSED reader ready for containerd's client.Import (which reads a raw tar stream, not a

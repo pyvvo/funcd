@@ -1,0 +1,15 @@
+# ADR-0344: a Function on jscopy22, the Addon's runtime: its worker runs the copy of nodejs22's image, whose shim runs
+# the handler as nodejs22's would.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: copy-echo
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: jscopy22
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:addon-runtime-echo
+  replicas: 1
+  scaling:
+    minReplicas: 1

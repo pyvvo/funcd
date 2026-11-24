@@ -41,21 +41,21 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`App.spec.addons[].bindings`](#appspecaddonsbindings) | What the object's engine uses. |
-| `config` | any JSON value | The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object. |
-| `deletion` | string, one of `retain`, `delete` | What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. |
-| `functions` | array of [`App.spec.addons[].functions[]`](#appspecaddonsfunctions) | The object's own Function for a settings kind of its Addon, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none. |
-| `ingress` | object, [`App.spec.addons[].ingress`](#appspecaddonsingress) | Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused. |
+| `bindings` | object, [`App.spec.addons[].bindings`](#appspecaddonsbindings) | What the object's engine uses. An object of a settings or an engineless kind, which runs no engine, takes none. |
+| `config` | any JSON value | The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object. |
+| `deletion` | string, one of `retain`, `delete` | What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it. |
+| `functions` | array of [`App.spec.addons[].functions[]`](#appspecaddonsfunctions) | The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none. |
+| `ingress` | object, [`App.spec.addons[].ingress`](#appspecaddonsingress) | Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused. An object of a settings or an engineless kind takes none. |
 | `kind` | string | The add-on's kind: one that an Addon registers, as the Addon writes it. A ref entry leaves it unset. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine. |
+| `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine. An object of a settings or an engineless kind takes none. |
 
 ### `App.spec.addons[].bindings`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `secret` | array of string values, each a DNS-1123 label | Secrets of the namespace whose keys, those that the Addon's spec.secretKeys lists, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine. |
+| `secret` | array of string values, each a DNS-1123 label | Secrets of the namespace whose keys, those that its Addon's kind entry lists in secretKeys, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine. |
 
 ### `App.spec.addons[].functions[]`
 
@@ -250,7 +250,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 | `replicas` | integer, 0 to 15 | How many workers run while the Function is awake: at least 1 once a call wakes it, and at least scaling.minReplicas. Every call goes to the lowest listening replica, and the others are spares. With minReplicas 0, replicas above 0 also starts workers before the first call, but not after a sleep. A local volume allows at most 1. |
 | `resources` | object, [`App.spec.addons[].resources`](#appspecaddonsresources) | The CPU and memory caps of each of the Function's workers; a field left empty takes functions.defaultResources. Only the containerd runtime enforces them, and they cannot be set with pooling.worker. |
-| `runtime` | string, a DNS-1123 label | The runtime that runs the code, such as nodejs22 or python314. A Function without one fails with ShapeInvalid, and one whose runtime this node cannot run fails with RuntimeUnavailable. |
+| `runtime` | string, a DNS-1123 label | The runtime that runs the code, such as nodejs22 or python314, or one that an Addon ships for Functions. A Function without one fails with ShapeInvalid, and one whose runtime this node cannot run fails with RuntimeUnavailable. |
 | `scaling` | object, [`App.spec.functions[].scaling`](#appspecfunctionsscaling) | Scale to zero: with minReplicas 0, the default, and an idleTimeout, a Function with no traffic goes Idle and its workers stop until the next call wakes it. |
 | `secrets` | array of [`App.spec.functions[].secrets[]`](#appspecfunctionssecrets) | The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Function waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key. An App's part declares none and binds those that the App declares. |
 | `sql` | array of [`App.spec.functions[].sql[]`](#appspecfunctionssql) | The SQLDatabases the Function declares: by name it creates and owns one, and a database of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.sql binds only a declared database, and a database with no owner gets the Function as its owner. An App's part declares none and binds those that the App declares. |

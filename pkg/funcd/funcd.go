@@ -127,8 +127,8 @@ const (
 	defaultBucketsPerNamespace = 100
 	// defaultSQLDatabasesPerNamespace is the per-namespace SQLDatabase count cap when unset (ADR-0232).
 	defaultSQLDatabasesPerNamespace = 20
-	// defaultAddonObjectsPerNamespace is the per-namespace cap on the add-on objects that run an engine when unset
-	// (ADR-0332 Decision 2); defaultAddonSettingsPerNamespace the cap on settings objects (ADR-0340 Decision 6).
+	// defaultAddonObjectsPerNamespace is the per-namespace cap on the add-on objects of engine and engineless kinds when
+	// unset (ADR-0332 Decision 2); defaultAddonSettingsPerNamespace the cap on settings objects (ADR-0340 Decision 6).
 	defaultAddonObjectsPerNamespace  = 20
 	defaultAddonSettingsPerNamespace = 200
 	// The workflow engine tunables when WithWorkflow is not given: the daemon config's workflow.* defaults
@@ -337,10 +337,12 @@ type config struct {
 	lakeProvider provider.Runtime
 	// sqlProvider overrides the SQLDatabase engine runtime (ADR-0232); nil ⇒ the production runtime.
 	sqlProvider provider.Runtime
-	// addonRuntime overrides the add-on engines' runtime, and addonModes are the runtime.mode values it serves
-	// (ADR-0332 Decision 3, ADR-0334); nil ⇒ the production runtime, serving containerd on a containerd server.
+	// addonRuntime overrides the add-on engines' runtime, which runs images (ADR-0334, ADR-0344 Decision 9); nil ⇒ the
+	// production runtime, which runs them on a containerd server and none on a process server.
 	addonRuntime provider.Runtime
-	addonModes   []string
+	// imageOverrides are the runtime names runtime.containerd.imageOverride maps, which no Addon may ship (ADR-0344
+	// Decision 4).
+	imageOverrides []string
 	// addonRegistries are addons.registries, the registries an Addon's image may come from (ADR-0332 Decision 6);
 	// addonMaxObjects is addons.maxObjectsPerNamespace, 0 ⇒ the default (20), negative disables the cap;
 	// addonMaxSettings is addons.maxSettingsPerNamespace, 0 ⇒ the default (200) (ADR-0340 Decision 6).
@@ -866,8 +868,16 @@ func (p *Platform) buildControlPlane() error {
 		routes: edgeAgg, s3: p.blob.injection, ctrl: ctrl, engineLine: p.exec.keepDevEngineLine}); err != nil {
 		return err
 	}
+	// the collector is built below, before any pass runs: an App's last engineless part asks it for a namespace pass
+	collect := func(ctx context.Context, ns v1.NamespaceName) error {
+		if p.collector == nil {
+			return nil
+		}
+		return p.collector.CollectNamespace(ctx, ns)
+	}
 	if err := p.addon.build(addonDeps{secrets: p.secrets.resolver, routes: edgeAgg, ctrl: ctrl,
-		indexEngines: p.exec.indexAddonEngines, authz: cedarPDP, master: master, engineLine: p.exec.keepDevEngineLine}); err != nil {
+		indexEngines: p.exec.indexAddonEngines, authz: cedarPDP, master: master, engineLine: p.exec.keepDevEngineLine,
+		collect: collect}); err != nil {
 		return err
 	}
 	p.exec.addonNamespaces = p.addon.engineNamespaces
@@ -974,6 +984,9 @@ func (p *Platform) buildControlPlane() error {
 	jobs := fnReconciler.Jobs()
 	ctrl.Register(v1.KindJob.GVK(), jobs)
 	ctrl.Watches(v1.KindJobRun.GVK(), jobs.MapRun)
+	// ADR-0344 Decisions 7 and 11: an Addon's change requeues the Functions and Jobs whose runtime an Addon may ship
+	ctrl.Watches(v1.KindAddon.GVK(), fnReconciler.MapAddon)
+	ctrl.Watches(v1.KindAddon.GVK(), jobs.MapAddon)
 	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
 	ctrl.Watches(v1.KindRevision.GVK(), fnReconciler.MapRevision)
 	ctrl.Watches(v1.KindRestore.GVK(), fnReconciler.MapRestore) // a Restore into a volume clears DataMissing (ADR-0262)
@@ -1148,6 +1161,12 @@ func (p *Platform) buildControlPlane() error {
 			Protocol: protocolOf(c.store), Client: workerClient(calls, 0), Chain: callChain, Caller: invoke.AddonSettings}},
 			ctrl.Enqueue, c.addonSettingsTimeout)
 		ctrl.Watches(v1.KindFunction.GVK(), rec.MapFunction)
+		// ADR-0345: an engineless kind's Function gets each group's list the same way; a Function's change requeues the
+		// objects it reconciles, and a JobRun's end makes its namespace's groups due
+		rec.SetObjectsCaller(addonObjectsCaller{inv: &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act,
+			Protocol: protocolOf(c.store), Client: workerClient(calls, 0), Chain: callChain, Caller: invoke.AddonObjects}})
+		ctrl.Watches(v1.KindFunction.GVK(), rec.MapEnginelessFunction)
+		ctrl.Watches(v1.KindJobRun.GVK(), rec.MapJobRun)
 	}
 	for _, pair := range gc.Pairs() {
 		if pair.Owner == v1.KindApp && pair.Child != v1.KindAppRevision { // a record, not a part (ADR-0200)

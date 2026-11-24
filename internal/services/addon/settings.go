@@ -76,6 +76,7 @@ const (
 	causeChange = "change"
 	causeRetry  = "retry"
 	causeResync = "resync"
+	causeRun    = "run" // a JobRun of the namespace ended (ADR-0345 Decision 4)
 )
 
 // DefaultSettingsTimeout is addons.settingsTimeout unset (Decision 8); maxSettingsBackoff is the longest wait before a
@@ -110,13 +111,55 @@ type settingsKey struct {
 	kind   string
 }
 
-// settingsState is what this process knows of a key's calls, in memory only, so a start sends again (Decision 7).
+// settingsState is what this process knows of a key's calls, in memory only, so a start sends again (Decision 7). An
+// engineless kind's group keeps the same state (ADR-0345 Decision 2), and run, a JobRun's end in its namespace that no
+// call has answered yet (ADR-0345 Decision 4).
 type settingsState struct {
 	sent     string // the digest of the last call that ended
 	ended    time.Time
 	inflight bool
 	failures int
 	retryAt  time.Time
+	run      bool
+}
+
+// due names the cause of a call that is due now for s, which this process knew (known), the first of start, change,
+// run, retry and resync that holds, and marks it in flight; else how long until one is due, 0 while a call runs, whose
+// end requeues the call's objects. A JobRun's end is due at once, before a failed call's backoff ends.
+func (s *settingsState) due(known bool, now time.Time, digest string, resync time.Duration) (string, time.Duration) {
+	var cause string
+	switch {
+	case s.inflight:
+		return "", 0
+	case !known:
+		cause = causeStart
+	case digest != s.sent:
+		cause = causeChange
+	case s.run:
+		cause = causeRun
+	case s.failures > 0 && now.Before(s.retryAt):
+		return "", s.retryAt.Sub(now)
+	case s.failures > 0:
+		cause = causeRetry
+	case now.Before(s.ended.Add(resync)):
+		return "", s.ended.Add(resync).Sub(now)
+	default:
+		cause = causeResync
+	}
+	s.inflight, s.run = true, false
+	return cause, 0
+}
+
+// done records a call's end at now: the digest it sent and, after a failure, when it is due again: 1 s, then twice as
+// long after each failure, at most 5 min or the resync (Decision 5).
+func (s *settingsState) done(now time.Time, digest string, resync time.Duration, err error) {
+	s.inflight, s.sent, s.ended = false, digest, now
+	if err == nil {
+		s.failures = 0
+		return
+	}
+	s.failures++
+	s.retryAt = s.ended.Add(min(time.Second<<min(s.failures-1, 20), maxSettingsBackoff, resync))
 }
 
 // targetSeen is whether a target was Ready at its last pass, and how many times it turned Ready.
@@ -197,7 +240,7 @@ func (r *Reconciler) function(ctx context.Context, ns v1.NamespaceName, name v1.
 func (r *Reconciler) syncSettings(ctx context.Context, a *v1.Addon, o *v1.AddonObject) (time.Duration, error) {
 	const op = "services.addon.syncSettings"
 	epoch := r.seeTarget(o.Namespace, o.Name, true)
-	if a == nil || len(a.Spec.Settings) == 0 {
+	if a == nil || len(a.Spec.KindAttributes().Settings) == 0 {
 		return 0, nil
 	}
 	list, err := r.store.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{Namespace: o.Namespace})
@@ -205,8 +248,8 @@ func (r *Reconciler) syncSettings(ctx context.Context, a *v1.Addon, o *v1.AddonO
 		return 0, fault.Wrapf(err, fault.KindOf(err), op, "list the add-on objects of %s", o.Namespace)
 	}
 	var next time.Duration
-	for i := range a.Spec.Settings {
-		st := &a.Spec.Settings[i]
+	for i := range a.Spec.KindAttributes().Settings {
+		st := &a.Spec.KindAttributes().Settings[i]
 		fn, err := r.function(ctx, o.Namespace, functionFor(st, o))
 		if err != nil {
 			return 0, err
@@ -223,7 +266,7 @@ func (r *Reconciler) syncSettings(ctx context.Context, a *v1.Addon, o *v1.AddonO
 		digest := settingsDigest(epoch, o.Status.Address, fn, alias, objs)
 		cause, wait := r.settingsDue(key, digest, st.EffectiveResync())
 		if cause != "" {
-			call := SettingsCall{Kind: st.Kind, Cause: cause, Target: SettingsTarget{Kind: a.Spec.Kind, Name: o.Name, Alias: alias},
+			call := SettingsCall{Kind: st.Kind, Cause: cause, Target: SettingsTarget{Kind: a.Spec.Kind(), Name: o.Name, Alias: alias},
 				Objects: make([]SettingsObject, len(objs))}
 			for j, so := range objs {
 				call.Objects[j] = SettingsObject{Name: so.Name, UID: so.UID, Generation: so.Generation, Config: configOf(so)}
@@ -270,34 +313,22 @@ func settingsDigest(epoch int, address string, fn *v1.Function, alias string, ob
 func (r *Reconciler) settingsDue(key settingsKey, digest string, resync time.Duration) (string, time.Duration) {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	if r.caller == nil {
+	return dueLocked(r.settings, r.caller != nil, key, r.now(), digest, resync)
+}
+
+// dueLocked is due for key's state in states, under settingsMu, a new key's state made unknown: nothing is due without
+// a caller (calls false).
+func dueLocked[K comparable](states map[K]*settingsState, calls bool, key K, now time.Time, digest string,
+	resync time.Duration) (string, time.Duration) {
+	if !calls {
 		return "", 0
 	}
-	now := r.now()
-	s, known := r.settings[key]
+	s, known := states[key]
 	if !known {
 		s = &settingsState{}
-		r.settings[key] = s
+		states[key] = s
 	}
-	var cause string
-	switch {
-	case s.inflight:
-		return "", 0
-	case !known:
-		cause = causeStart
-	case digest != s.sent:
-		cause = causeChange
-	case s.failures > 0 && now.Before(s.retryAt):
-		return "", s.retryAt.Sub(now)
-	case s.failures > 0:
-		cause = causeRetry
-	case now.Before(s.ended.Add(resync)):
-		return "", s.ended.Add(resync).Sub(now)
-	default:
-		cause = causeResync
-	}
-	s.inflight = true
-	return cause, 0
+	return s.due(known, now, digest, resync)
 }
 
 // startCall calls fn with call on a goroutine bounded by addons.settingsTimeout. Once it ends it writes each sent
@@ -392,17 +423,9 @@ func (r *Reconciler) writeResult(ctx context.Context, ns v1.NamespaceName, sent 
 func (r *Reconciler) settingsDone(key settingsKey, digest string, resync time.Duration, err error) {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	s, ok := r.settings[key]
-	if !ok {
-		return
+	if s, ok := r.settings[key]; ok {
+		s.done(r.now(), digest, resync, err)
 	}
-	s.inflight, s.sent, s.ended = false, digest, r.now()
-	if err == nil {
-		s.failures = 0
-		return
-	}
-	s.failures++
-	s.retryAt = s.ended.Add(min(time.Second<<min(s.failures-1, 20), maxSettingsBackoff, resync))
 }
 
 // settingsObject is the pass of a settings object, which runs no engine (Decision 4). While its calls miss something it
@@ -444,12 +467,12 @@ func (r *Reconciler) settingsWait(ctx context.Context, a *v1.Addon, st *v1.Addon
 	obj, err := r.store.Get(ctx, v1.KindAddonObject.GVK(), o.Namespace, name)
 	t, isObj := obj.(*v1.AddonObject)
 	switch {
-	case fault.KindOf(err) == fault.NotFound || (err == nil && (!isObj || !v1.SameAddonKind(t.Spec.Kind, a.Spec.Kind))):
-		return reasonTargetNotFound, fmt.Sprintf("the namespace holds no %s %q", a.Spec.Kind, name), nil
+	case fault.KindOf(err) == fault.NotFound || (err == nil && (!isObj || !v1.SameAddonKind(t.Spec.Kind, a.Spec.Kind()))):
+		return reasonTargetNotFound, fmt.Sprintf("the namespace holds no %s %q", a.Spec.Kind(), name), nil
 	case err != nil:
 		return "", "", fault.Wrapf(err, fault.KindOf(err), "services.addon.settingsWait", "get the target %s/%s", o.Namespace, name)
 	case t.Status.Phase != v1.PhaseReady:
-		return reasonTargetNotReady, fmt.Sprintf("%s %q is not Ready", a.Spec.Kind, name), nil
+		return reasonTargetNotReady, fmt.Sprintf("%s %q is not Ready", a.Spec.Kind(), name), nil
 	}
 	fnName := functionFor(st, t)
 	fn, err := r.function(ctx, o.Namespace, fnName)
@@ -458,11 +481,11 @@ func (r *Reconciler) settingsWait(ctx context.Context, a *v1.Addon, st *v1.Addon
 		return "", "", err
 	case fn == nil:
 		return reasonFunctionNotFound, fmt.Sprintf("the namespace holds no Function %q, which applies the %s objects of %s %q",
-			fnName, st.Kind, a.Spec.Kind, name), nil
+			fnName, st.Kind, a.Spec.Kind(), name), nil
 	}
 	if _, bound := aliasOf(fn, name); !bound {
 		return reasonFunctionNotBound, fmt.Sprintf("the Function %q does not bind %s %q in spec.bindings.addon", fnName,
-			a.Spec.Kind, name), nil
+			a.Spec.Kind(), name), nil
 	}
 	return "", "", nil
 }
@@ -492,11 +515,11 @@ func (r *Reconciler) MapSettings(ctx context.Context, obj v1.Object) []controlle
 			}
 			return nil
 		}
-		if v1.SameAddonKind(a.Spec.Kind, o.Spec.Kind) {
+		if v1.SameAddonKind(a.Spec.Kind(), o.Spec.Kind) {
 			owner = a
 		}
 	}
-	if owner == nil || len(owner.Spec.Settings) == 0 {
+	if owner == nil || len(owner.Spec.KindAttributes().Settings) == 0 {
 		return nil
 	}
 	return r.objects(ctx, o.Namespace, func(so *v1.AddonObject) bool {
@@ -521,7 +544,7 @@ func (r *Reconciler) MapFunction(ctx context.Context, obj v1.Object) []controlle
 	}
 	var withSettings []*v1.Addon
 	for _, item := range addons.Items {
-		if a, ok := item.(*v1.Addon); ok && len(a.Spec.Settings) > 0 {
+		if a, ok := item.(*v1.Addon); ok && len(a.Spec.KindAttributes().Settings) > 0 {
 			withSettings = append(withSettings, a)
 		}
 	}
@@ -549,9 +572,9 @@ func (r *Reconciler) MapFunction(ctx context.Context, obj v1.Object) []controlle
 	}
 	for _, o := range targets {
 		for _, a := range withSettings {
-			if v1.SameAddonKind(a.Spec.Kind, o.Spec.Kind) {
-				for i := range a.Spec.Settings {
-					if functionFor(&a.Spec.Settings[i], o) == m.Name {
+			if v1.SameAddonKind(a.Spec.Kind(), o.Spec.Kind) {
+				for i := range a.Spec.KindAttributes().Settings {
+					if functionFor(&a.Spec.KindAttributes().Settings[i], o) == m.Name {
 						add(o.Name)
 					}
 				}

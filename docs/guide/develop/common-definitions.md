@@ -11,7 +11,7 @@ Every kind shares these definitions, and each Spec page links to them.
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `creationTimestamp` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When funcd created the object. |
-| `deletionTimestamp` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | funcd does not set it. |
+| `deletionTimestamp` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When funcd held the object at its deletion: an object of an Engineless add-on kind with deletion: delete stays, deleting, until its Function has destroyed what it holds. funcd sets it on no other object, and a write keeps it. |
 | `finalizers` | array of string values | funcd does not read it. |
 | `generateName` | string, matching `^[a-z0-9][a-z0-9-]{0,62}$` | A prefix from which funcd makes the name, adding a random suffix, when a create leaves name empty. |
 | `generation` | integer | Set by funcd: 1 when the object is created, then one more each time its spec changes. |

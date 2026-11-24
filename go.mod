@@ -47,7 +47,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/parquet-go/parquet-go v0.32.1
-	github.com/pyvvo/funcd-addons v0.2.0
+	github.com/pyvvo/funcd-addons v0.3.0
 	github.com/pyvvo/funcd-functions v0.27.0
 	github.com/pyvvo/funcd-python v0.30.0
 	github.com/pyvvo/funcd-typescript v0.35.0

@@ -353,6 +353,7 @@ lima-example name:
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/funcd"    ./cmd/funcd
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/funcdctl" ./cmd/funcdctl
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/cniadd"   ./e2e/cniadd
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/laneregistry" ./e2e/laneregistry
     # host driver: run the lane's `build`, stage lane.tgz (files + registry + LANE marker), print its suite.
     suite="$(python3 scripts/lane.py "$name" "$deps")"
     trap "limactl stop -f '$vm' >/dev/null 2>&1 || true; limactl delete -f '$vm' >/dev/null 2>&1 || true" EXIT
@@ -396,7 +397,7 @@ lima-example-all:
     deps='{{lima_deps}}'; vm='{{lima_name}}-shared'
     just ARCH={{ARCH}} build-runtime-images || exit 1
     mkdir -p "$deps" || exit 1
-    for pkg in cmd/funcd cmd/funcdctl e2e/cniadd; do
+    for pkg in cmd/funcd cmd/funcdctl e2e/cniadd e2e/laneregistry; do
         CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/${pkg##*/}" "./$pkg" || exit 1
     done
     cp scripts/lane-provision.sh scripts/lane-ready.sh scripts/lane-reset.sh scripts/lane-leakcheck.sh "$deps/" || exit 1

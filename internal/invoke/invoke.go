@@ -29,6 +29,7 @@ const (
 	AddonSettings                   // a settings kind's Function, called from its target's pass (ADR-0341)
 	JobRun                          // a JobRun's one call to its worker (ADR-0347)
 	JobPreview                      // a JobRun's preview call, before its approval (ADR-0348)
+	AddonObjects                    // an engineless kind's Function, called with one group's list (ADR-0345)
 )
 
 // String names the caller in logs and test failures.
@@ -50,6 +51,8 @@ func (c Caller) String() string {
 		return "JobRun"
 	case JobPreview:
 		return "JobPreview"
+	case AddonObjects:
+		return "AddonObjects"
 	}
 	return "Caller(?)"
 }

@@ -42,15 +42,20 @@ kind: Addon
 metadata:
   name: whoami
 spec:
-  kind: EchoService
-  image: ` + whoamiImage + `
-  port: 80
-  readiness:
-    path: /health
-  storage:
-    path: /data
-    uid: 10001
-    gid: 10001
+  runtimes:
+    - name: echoservice
+      image: ` + whoamiImage + `
+      workloads:
+        - Engine
+      attributes:
+        kind: EchoService
+        port: 80
+        readiness:
+          path: /health
+        storage:
+          path: /data
+          uid: 10001
+          gid: 10001
 `
 
 const echoObject = `apiVersion: funcd.io/v1alpha1
@@ -66,48 +71,51 @@ kind: Addon
 metadata:
   name: rauthy
 spec:
-  kind: IdentityProvider
-  image: ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d
   runtimes:
-    - containerd
-  port: 8080
-  basePath: /auth/v1
-  privatePaths:
-    - /auth/v1/clients_dyn
-  readiness:
-    path: /auth/v1/ping
-  storage:
-    path: /app/data
-    uid: 10001
-    gid: 10001
-  config:
-    type: object
-    additionalProperties: false
-    properties:
-      publicHost:
-        type: string
-      rpId:
-        type: string
-      origin:
-        type: string
-    required:
-      - publicHost
-      - rpId
-      - origin
-  env:
-    HQL_NODE_ID: "1"
-    LISTEN_SCHEME: http
-    COOKIE_MODE: danger-insecure
-    PUB_URL: ${{ config.publicHost }}
-    RP_ID: ${{ config.rpId }}
-    RP_ORIGIN: ${{ config.origin }}
-  secretKeys:
-    - HQL_SECRET_RAFT
-    - HQL_SECRET_API
-    - ENC_KEYS
-    - ENC_KEY_ACTIVE
-    - BOOTSTRAP_ADMIN_EMAIL
-    - BOOTSTRAP_ADMIN_PASSWORD_PLAIN
+    - name: identityprovider
+      image: ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d
+      workloads:
+        - Engine
+      attributes:
+        kind: IdentityProvider
+        port: 8080
+        basePath: /auth/v1
+        privatePaths:
+          - /auth/v1/clients_dyn
+        readiness:
+          path: /auth/v1/ping
+        storage:
+          path: /app/data
+          uid: 10001
+          gid: 10001
+        config:
+          type: object
+          additionalProperties: false
+          properties:
+            publicHost:
+              type: string
+            rpId:
+              type: string
+            origin:
+              type: string
+          required:
+            - publicHost
+            - rpId
+            - origin
+        env:
+          HQL_NODE_ID: "1"
+          LISTEN_SCHEME: http
+          COOKIE_MODE: danger-insecure
+          PUB_URL: ${{ config.publicHost }}
+          RP_ID: ${{ config.rpId }}
+          RP_ORIGIN: ${{ config.origin }}
+        secretKeys:
+          - HQL_SECRET_RAFT
+          - HQL_SECRET_API
+          - ENC_KEYS
+          - ENC_KEY_ACTIVE
+          - BOOTSTRAP_ADMIN_EMAIL
+          - BOOTSTRAP_ADMIN_PASSWORD_PLAIN
 `
 
 const rauthyLogin = `apiVersion: funcd.io/v1alpha1
@@ -367,8 +375,8 @@ func TestScenarioDevAddonRegister(t *testing.T) {
 	requireRegistered(t, inst)
 
 	second := filepath.Join(t.TempDir(), "second.yaml")
-	require.NoError(t, os.WriteFile(second, []byte(strings.ReplaceAll(strings.ReplaceAll(echoAddon, "name: whoami", "name: whoami-2"),
-		"kind: EchoService", "kind: EchoServiceTwo")), 0o600))
+	require.NoError(t, os.WriteFile(second, []byte(strings.NewReplacer("name: whoami", "name: whoami-2", "name: echoservice",
+		"name: echoservice-two", "kind: EchoService", "kind: EchoServiceTwo").Replace(echoAddon)), 0o600))
 	apply := func(token string) (string, error) {
 		var out bytes.Buffer
 		root := newRootCmd(&out)
@@ -655,7 +663,7 @@ func TestScenarioAddonTemplateDev(t *testing.T) {
 		if err != nil {
 			return ""
 		}
-		return obj.(*v1.Addon).Spec.Readiness.Path
+		return obj.(*v1.Addon).Spec.Runtimes[0].Attributes.Readiness.Path
 	}
 	require.Equal(t, "/health", readiness(), "the template's Addon is registered before the App")
 	require.Eventually(t, func() bool {

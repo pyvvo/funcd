@@ -37,13 +37,9 @@ func loginEngine() provider.ProviderRef {
 // rauthy's hiqlite does; timeout 0 is restore.timeout unset.
 func fakeAddon(name v1.ObjectName, kind string, timeout v1.Duration) *v1.Addon {
 	a := &v1.Addon{TypeMeta: tmeta(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: name}}
-	a.Spec = v1.AddonSpec{
-		Kind: kind, Image: "ghcr.io/pyvvo/funcd-fake" + addonDigest, Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"},
-		Storage:  &v1.AddonStorage{Path: "/app/data", UID: os.Geteuid(), GID: os.Getegid()},
-		Snapshot: &v1.AddonSnapshot{Path: fakeSnapshots},
-		Restore: &v1.AddonRestore{Path: fakeRestore, Timeout: timeout,
-			Env: map[string]string{fakeaddon.RestoreEnv: `${{ "file:" + restore.file }}`}},
-	}
+	a.Spec = v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: v1.RuntimeName(strings.ToLower(kind)), Image: "ghcr.io/pyvvo/funcd-fake" + addonDigest, Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: kind, Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"}, Storage: &v1.AddonStorage{Path: "/app/data", UID: os.Geteuid(), GID: os.Getegid()}, Snapshot: &v1.AddonSnapshot{Path: fakeSnapshots}, Restore: &v1.AddonRestore{Path: fakeRestore, Timeout: timeout,
+			Env: map[string]string{fakeaddon.RestoreEnv: `${{ "file:" + restore.file }}`}}}}}}
 	return a
 }
 
@@ -67,7 +63,7 @@ func clientObject(name v1.ObjectName, kind string) *v1.AddonObject {
 func addonRig(t *testing.T, timeout v1.Duration) (*wbRig, *fakeaddon.Runtime) {
 	t.Helper()
 	rt := fakeaddon.New(t)
-	r := newWBRig(t, wbOptions{opts: []Option{WithAddonRuntime(rt, v1.AddonRuntimeContainerd)}, setup: func(r *wbRig) {
+	r := newWBRig(t, wbOptions{opts: []Option{WithAddonRuntime(rt)}, setup: func(r *wbRig) {
 		r.seed(fakeAddon("fake", "IdentityProvider", timeout), addonObject("login", "IdentityProvider"))
 	}})
 	r.waitAddon("login", func(o *v1.AddonObject) bool { return o.Status.Phase == v1.PhaseReady })
@@ -201,9 +197,9 @@ func TestScenarioAddonBackupNoSnapshot(t *testing.T) {
 func TestScenarioAddonBackupGroupScope(t *testing.T) {
 	t.Parallel()
 	rt := fakeaddon.New(t)
-	whoami := &v1.Addon{TypeMeta: tmeta(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "whoami"}, Spec: v1.AddonSpec{
-		Kind: "EchoService", Image: "ghcr.io/pyvvo/whoami" + addonDigest, Port: 80, Readiness: v1.AddonReadiness{Path: "/ping"}}}
-	r := newWBRig(t, wbOptions{opts: []Option{WithAddonRuntime(rt, v1.AddonRuntimeContainerd)}, setup: func(r *wbRig) {
+	whoami := &v1.Addon{TypeMeta: tmeta(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "whoami"}, Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "echoservice", Image: "ghcr.io/pyvvo/whoami" + addonDigest, Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: "EchoService", Port: 80, Readiness: v1.AddonReadiness{Path: "/ping"}}}}}}
+	r := newWBRig(t, wbOptions{opts: []Option{WithAddonRuntime(rt)}, setup: func(r *wbRig) {
 		r.seed(fakeAddon("fake", "IdentityProvider", 0), whoami, addonObject("login", "IdentityProvider"), addonObject("echo", "EchoService"))
 	}})
 	for _, name := range []v1.ObjectName{"login", "echo"} {

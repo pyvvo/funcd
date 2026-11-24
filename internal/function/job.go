@@ -24,9 +24,10 @@ type ContractInspector interface {
 }
 
 // JobReconciler is the reconciler of the Job kind (ADR-0347 Decision 2), on the Function reconciler's deps, stamp and
-// workload hooks: it stamps a Revision per generation, reads its contract by digest into status.contract, sets Ready
-// once the checks a Function passes before its first worker pass, and deletes the Revisions that neither the current
-// spec nor a run that has not ended pins.
+// workload hooks: it stamps a Revision per generation, which records the image of the Addon runtime that serves it
+// (ADR-0344 Decision 11), reads its contract by digest into status.contract, sets Ready once the checks a Function
+// passes before its first worker pass, and deletes the Revisions that neither the current spec nor a run that has not
+// ended pins.
 type JobReconciler struct{ r *Reconciler }
 
 // Jobs returns the reconciler of the Job kind.
@@ -68,12 +69,17 @@ func (j *JobReconciler) pass(ctx context.Context, job *v1.Job) (time.Duration, e
 	// status.contract is the current revision's, so a pass that stops before reading it leaves none (ADR-0347 Decision 2)
 	job.Status.ObservedGeneration, job.Status.Contract = job.Generation, nil
 	w := jobWorkload(job)
-	pinned, err := r.stamp(ctx, stampSubject{
-		w:          w,
-		revision:   v1.JobRevisionName(job.Name, job.Generation),
-		current:    job.Status.CurrentRevision,
-		setCurrent: func(rev v1.ObjectName) { job.Status.CurrentRevision = rev },
-		judge:      func(rev *v1.Revision) revisionOwner { return jobRevisionOf(rev, job) },
+	sh, err := r.shippedRuntime(ctx, job.Spec.Runtime)
+	if err != nil {
+		return 0, err
+	}
+	rev, err := r.stamp(ctx, stampSubject{
+		w:            w,
+		runtimeImage: sh.imageFor(w),
+		revision:     v1.JobRevisionName(job.Name, job.Generation),
+		current:      job.Status.CurrentRevision,
+		setCurrent:   func(rev v1.ObjectName) { job.Status.CurrentRevision = rev },
+		judge:        func(rev *v1.Revision) revisionOwner { return jobRevisionOf(rev, job) },
 	})
 	switch {
 	case errors.Is(err, errArtifactUnresolved):
@@ -85,6 +91,7 @@ func (j *JobReconciler) pass(ctx context.Context, job *v1.Job) (time.Duration, e
 	case err != nil:
 		return 0, err
 	}
+	pinned := rev.Spec.ImageDigest
 	if err := j.collectRevisions(ctx, job); err != nil {
 		return 0, err
 	}
@@ -98,8 +105,14 @@ func (j *JobReconciler) pass(ctx context.Context, job *v1.Job) (time.Duration, e
 	if verr := r.validator.Validate(ctx, w.fn()); verr != nil {
 		return notReady(job, gateFailure{reason: "ShapeInvalid", message: verr.Error(), phase: v1.PhaseFailed}), nil
 	}
-	if msg, missing := r.runtimeUnavailable(w.fn()); missing {
-		return notReady(job, gateFailure{reason: reasonRuntimeUnavailable, message: msg, phase: v1.PhaseFailed}), nil
+	// a revision stamped before its Addon's runtime served Jobs records its image before any run starts on it (ADR-0344
+	// Decisions 8 and 11)
+	recorded, err := r.fillRuntimeImage(ctx, w, rev, sh)
+	if err != nil {
+		return 0, err
+	}
+	if g, failed := r.runtimeGate(w, sh, recorded); failed {
+		return notReady(job, g), nil
 	}
 	if g := resourcesGate(w.fn()); g != nil {
 		return notReady(job, *g), nil

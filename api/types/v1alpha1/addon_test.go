@@ -16,50 +16,60 @@ func rauthyAddon() *Addon {
 	return &Addon{
 		TypeMeta:   typeMetaFor(KindAddon),
 		ObjectMeta: ObjectMeta{Name: "rauthy"},
-		Spec: AddonSpec{
-			Kind:         "IdentityProvider",
-			Image:        "ghcr.io/pyvvo/funcd-rauthy@" + testDigest,
-			Port:         8080,
-			BasePath:     "/auth/v1",
-			PrivatePaths: []string{"/auth/v1/clients_dyn"},
-			Readiness:    AddonReadiness{Path: "/auth/v1/ping"},
-			Storage:      &AddonStorage{Path: "/app/data", UID: 10001, GID: 10001},
-			Config:       json.RawMessage(`{"type":"object","properties":{"issuer":{"type":"string"}},"additionalProperties":false}`),
-			Env:          map[string]string{"PUB_URL": "${{ config.issuer }}"},
-			SecretKeys:   []string{"ENC_KEYS"},
-		},
+		Spec: AddonSpec{Runtimes: []ShippedRuntime{{
+			Name: "rauthy", Image: "ghcr.io/pyvvo/funcd-rauthy@" + testDigest, Workloads: []Workload{WorkloadEngine},
+			Attributes: &AddonAttributes{
+				Kind: "IdentityProvider", Port: 8080, BasePath: "/auth/v1", PrivatePaths: []string{"/auth/v1/clients_dyn"},
+				Readiness: AddonReadiness{Path: "/auth/v1/ping"}, Storage: &AddonStorage{Path: "/app/data", UID: 10001, GID: 10001},
+				Config: json.RawMessage(`{"type":"object","properties":{"issuer":{"type":"string"}},"additionalProperties":false}`),
+				Env:    map[string]string{"PUB_URL": "${{ config.issuer }}"}, SecretKeys: []string{"ENC_KEYS"},
+			},
+		}}},
+	}
+}
+
+// engine is the attributes of a's one entry, its engine's.
+func engine(a *Addon) *AddonAttributes { return a.Spec.Runtimes[0].Attributes }
+
+// denoAddon ships deno2 for Functions and Jobs, and runs no kind.
+func denoAddon() *Addon {
+	return &Addon{
+		TypeMeta:   typeMetaFor(KindAddon),
+		ObjectMeta: ObjectMeta{Name: "deno"},
+		Spec: AddonSpec{Runtimes: []ShippedRuntime{{Name: "deno2", Image: "ghcr.io/example/deno@" + testDigest,
+			Workloads: []Workload{WorkloadFunction, WorkloadJob}}}},
 	}
 }
 
 func TestAddonValidate(t *testing.T) {
 	require.NoError(t, rauthyAddon().Validate())
 
-	for name, edit := range map[string]func(s *AddonSpec){
-		"a kind in lower case":         func(s *AddonSpec) { s.Kind = "identityProvider" },
-		"funcd's own kind":             func(s *AddonSpec) { s.Kind = "Function" },
-		"funcd's kind in another case": func(s *AddonSpec) { s.Kind = "Sqldatabase" },
-		"an image by tag":              func(s *AddonSpec) { s.Image = "ghcr.io/pyvvo/funcd-rauthy:0.1.1" },
-		"a tag beside the digest":      func(s *AddonSpec) { s.Image = "ghcr.io/pyvvo/funcd-rauthy:0.1.1@" + testDigest },
-		"a process runtime":            func(s *AddonSpec) { s.Runtimes = []string{"process"} },
-		"no port":                      func(s *AddonSpec) { s.Port = 0 },
-		"a base path ending in /":      func(s *AddonSpec) { s.BasePath = "/auth/v1/" },
-		"a base path with ..":          func(s *AddonSpec) { s.BasePath = "/auth/../v1" },
-		"the edge's own path":          func(s *AddonSpec) { s.BasePath = "/.auth" },
-		"a base path under /.auth":     func(s *AddonSpec) { s.BasePath = "/.auth/v1" },
-		"a private path outside":       func(s *AddonSpec) { s.PrivatePaths = []string{"/admin"} },
-		"a private path beside":        func(s *AddonSpec) { s.PrivatePaths = []string{"/auth/v10"} },
-		"a private path spelled //":    func(s *AddonSpec) { s.PrivatePaths = []string{"/auth/v1//clients_dyn"} },
-		"a relative readiness path":    func(s *AddonSpec) { s.Readiness.Path = "ping" },
-		"a relative storage path":      func(s *AddonSpec) { s.Storage.Path = "data" },
-		"a config that is no object":   func(s *AddonSpec) { s.Config = json.RawMessage(`true`) },
-		"an env key that is no name":   func(s *AddonSpec) { s.Env = map[string]string{"A=B": "x"} },
-		"a secret key that is no name": func(s *AddonSpec) { s.SecretKeys = []string{"a-b"} },
+	for name, edit := range map[string]func(at *AddonAttributes){
+		"a kind in lower case":         func(at *AddonAttributes) { at.Kind = "identityProvider" },
+		"funcd's own kind":             func(at *AddonAttributes) { at.Kind = "Function" },
+		"funcd's kind in another case": func(at *AddonAttributes) { at.Kind = "Sqldatabase" },
+		"no kind":                      func(at *AddonAttributes) { at.Kind = "" },
+		"no port":                      func(at *AddonAttributes) { at.Port = 0 },
+		"no readiness":                 func(at *AddonAttributes) { at.Readiness = AddonReadiness{} },
+		"a base path ending in /":      func(at *AddonAttributes) { at.BasePath = "/auth/v1/" },
+		"a base path with ..":          func(at *AddonAttributes) { at.BasePath = "/auth/../v1" },
+		"the edge's own path":          func(at *AddonAttributes) { at.BasePath = "/.auth" },
+		"a base path under /.auth":     func(at *AddonAttributes) { at.BasePath = "/.auth/v1" },
+		"a private path outside":       func(at *AddonAttributes) { at.PrivatePaths = []string{"/admin"} },
+		"a private path beside":        func(at *AddonAttributes) { at.PrivatePaths = []string{"/auth/v10"} },
+		"a private path spelled //":    func(at *AddonAttributes) { at.PrivatePaths = []string{"/auth/v1//clients_dyn"} },
+		"a relative readiness path":    func(at *AddonAttributes) { at.Readiness.Path = "ping" },
+		"a relative storage path":      func(at *AddonAttributes) { at.Storage.Path = "data" },
+		"a config that is no object":   func(at *AddonAttributes) { at.Config = json.RawMessage(`true`) },
+		"an env key that is no name":   func(at *AddonAttributes) { at.Env = map[string]string{"A=B": "x"} },
+		"a secret key that is no name": func(at *AddonAttributes) { at.SecretKeys = []string{"a-b"} },
 	} {
 		a := rauthyAddon()
-		edit(&a.Spec)
+		edit(engine(a))
 		err := a.Validate()
 		require.Error(t, err, name)
 		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+		require.Contains(t, err.Error(), "spec.runtimes[0].attributes", name)
 	}
 
 	a := rauthyAddon()
@@ -67,20 +77,164 @@ func TestAddonValidate(t *testing.T) {
 	require.Error(t, a.Validate(), "an Addon is cluster-scoped")
 
 	a = rauthyAddon()
-	a.Spec.Runtimes, a.Spec.BasePath, a.Spec.PrivatePaths = []string{AddonRuntimeContainerd}, "", []string{"/x"}
+	engine(a).BasePath, engine(a).PrivatePaths = "", []string{"/x"}
 	require.NoError(t, a.Validate(), "an empty basePath is /, under which every private path lies")
 	require.Equal(t, "/", a.Spec.AddonBasePath())
-	a.Spec.Image = "localhost:5000/funcd-rauthy@" + testDigest
+	a.Spec.Runtimes[0].Image = "localhost:5000/funcd-rauthy@" + testDigest
 	require.NoError(t, a.Validate(), "a registry's port is no tag")
 }
 
-func TestAddonRuntime(t *testing.T) {
-	var s AddonSpec
-	require.True(t, s.Runtime("containerd"), "no runtimes is containerd")
-	require.False(t, s.Runtime("process"))
-	s.Runtimes = []string{"containerd"}
-	require.True(t, s.Runtime("containerd"))
-	require.False(t, s.Runtime("process"))
+// The structural refusals of an Addon's runtimes (ADR-0344 Decisions 2 to 5): each names the field, 400.
+func TestAddonShapeRefusals(t *testing.T) {
+	both := func() *Addon {
+		a := rauthyAddon()
+		a.Spec.Runtimes = append(a.Spec.Runtimes, denoAddon().Spec.Runtimes...)
+		return a
+	}
+	require.NoError(t, both().Validate(), "an engine entry beside a runtime for Functions and Jobs")
+	require.NoError(t, denoAddon().Validate(), "an Addon that runs no kind")
+
+	for name, c := range map[string]struct {
+		edit  func(a *Addon)
+		field string
+	}{
+		"no runtimes": {func(a *Addon) { a.Spec.Runtimes = nil }, "spec.runtimes"},
+		"two entries that run a kind": {func(a *Addon) {
+			a.Spec.Runtimes = append(a.Spec.Runtimes, a.Spec.Runtimes[0])
+			a.Spec.Runtimes[2].Name = "rauthy-copy"
+		}, "spec.runtimes[2]"},
+		"an entry with no image":   {func(a *Addon) { a.Spec.Runtimes[1].Image = "" }, "spec.runtimes[1].image"},
+		"an engine with no image":  {func(a *Addon) { a.Spec.Runtimes[0].Image = "" }, "spec.runtimes[0].image"},
+		"an image by tag":          {func(a *Addon) { a.Spec.Runtimes[1].Image = "ghcr.io/example/deno:2" }, "spec.runtimes[1].image"},
+		"a tag beside the digest":  {func(a *Addon) { a.Spec.Runtimes[0].Image = "ghcr.io/pyvvo/funcd-rauthy:0.1.1@" + testDigest }, "spec.runtimes[0].image"},
+		"Engine beside a workload": {func(a *Addon) { a.Spec.Runtimes[0].Workloads = []Workload{WorkloadEngine, WorkloadJob} }, "spec.runtimes[0].workloads"},
+		"no workload":              {func(a *Addon) { a.Spec.Runtimes[1].Workloads = nil }, "spec.runtimes[1].workloads"},
+		"a workload twice":         {func(a *Addon) { a.Spec.Runtimes[1].Workloads = []Workload{WorkloadJob, WorkloadJob} }, "spec.runtimes[1].workloads[1]"},
+		"an unknown workload":      {func(a *Addon) { a.Spec.Runtimes[1].Workloads = []Workload{"Service"} }, "spec.runtimes[1].workloads[0]"},
+		"a port on a Function's":   {func(a *Addon) { a.Spec.Runtimes[1].Attributes = &AddonAttributes{Port: 8080} }, "spec.runtimes[1].attributes.port"},
+		"a kind on a Job's":        {func(a *Addon) { a.Spec.Runtimes[1].Attributes = &AddonAttributes{Kind: "Deno"} }, "spec.runtimes[1].attributes.kind"},
+		"settings outside an engine": {func(a *Addon) {
+			a.Spec.Runtimes[1].Attributes = &AddonAttributes{Settings: []AddonSettings{{Kind: "DenoPolicy"}}}
+		}, "spec.runtimes[1].attributes.settings"},
+		"an engine with no attributes": {func(a *Addon) { a.Spec.Runtimes[0].Attributes = nil }, "spec.runtimes[0].attributes"},
+		"a name that is no label":      {func(a *Addon) { a.Spec.Runtimes[1].Name = "Deno_2" }, "spec.runtimes[1].name"},
+		"a name of node's family":      {func(a *Addon) { a.Spec.Runtimes[1].Name = "node24" }, "spec.runtimes[1].name"},
+		"a name of funcd's runtime":    {func(a *Addon) { a.Spec.Runtimes[1].Name = "nodejs22" }, "spec.runtimes[1].name"},
+		"a name of python's family":    {func(a *Addon) { a.Spec.Runtimes[1].Name = "python-tofu" }, "spec.runtimes[1].name"},
+		"two entries of one name":      {func(a *Addon) { a.Spec.Runtimes[1].Name = "rauthy" }, "spec.runtimes[1].name"},
+	} {
+		a := both()
+		c.edit(a)
+		err := a.Validate()
+		require.Error(t, err, name)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+		require.Contains(t, err.Error(), c.field, name)
+	}
+}
+
+// infraStackAddon runs the engineless kind InfraStack, which the Function infrastack-reconciler of each object's
+// namespace reconciles.
+func infraStackAddon() *Addon {
+	return &Addon{
+		TypeMeta:   typeMetaFor(KindAddon),
+		ObjectMeta: ObjectMeta{Name: "infrastack"},
+		Spec: AddonSpec{Runtimes: []ShippedRuntime{{Name: "infrastack", Workloads: []Workload{WorkloadEngineless},
+			Attributes: &AddonAttributes{Kind: "InfraStack", Config: json.RawMessage(`{"type":"object"}`),
+				Function: &AddonSettingsFunction{Ref: "infrastack-reconciler"}}}}},
+	}
+}
+
+// ADR-0345 Decision 1: an Engineless entry runs its kind with no image, stands alone, and takes only its kind, config,
+// function, which it requires, and resync, from 1s to 24h, 10m unset; each refusal names the field.
+func TestAddonEnginelessRefusals(t *testing.T) {
+	a := infraStackAddon()
+	require.NoError(t, a.Validate())
+	require.True(t, a.Spec.Engineless())
+	require.False(t, rauthyAddon().Spec.Engineless())
+	require.Equal(t, "InfraStack", a.Spec.Kind())
+	require.Equal(t, 10*time.Minute, engine(a).EffectiveResync())
+	engine(a).Resync = Duration(time.Hour)
+	require.Equal(t, time.Hour, engine(a).EffectiveResync())
+	a.Spec.Runtimes = append(a.Spec.Runtimes, denoAddon().Spec.Runtimes...)
+	require.NoError(t, a.Validate(), "an engineless kind beside a runtime for Functions and Jobs")
+
+	for name, c := range map[string]struct {
+		edit  func(rt *ShippedRuntime)
+		field string
+	}{
+		"an image":              {func(rt *ShippedRuntime) { rt.Image = "ghcr.io/example/stack@" + testDigest }, "spec.runtimes[0].image"},
+		"a Function beside it":  {func(rt *ShippedRuntime) { rt.Workloads = append(rt.Workloads, WorkloadFunction) }, "spec.runtimes[0].workloads"},
+		"Engine beside it":      {func(rt *ShippedRuntime) { rt.Workloads = append(rt.Workloads, WorkloadEngine) }, "spec.runtimes[0].workloads"},
+		"no attributes":         {func(rt *ShippedRuntime) { rt.Attributes = nil }, "spec.runtimes[0].attributes"},
+		"no kind":               {func(rt *ShippedRuntime) { rt.Attributes.Kind = "" }, "spec.runtimes[0].attributes.kind"},
+		"funcd's own kind":      {func(rt *ShippedRuntime) { rt.Attributes.Kind = "Job" }, "spec.runtimes[0].attributes.kind"},
+		"no function":           {func(rt *ShippedRuntime) { rt.Attributes.Function = nil }, "spec.runtimes[0].attributes.function.ref"},
+		"an empty function":     {func(rt *ShippedRuntime) { rt.Attributes.Function = &AddonSettingsFunction{} }, "spec.runtimes[0].attributes.function.ref"},
+		"a function no name":    {func(rt *ShippedRuntime) { rt.Attributes.Function.Ref = "Infra_Stack" }, "spec.runtimes[0].attributes.function.ref"},
+		"a resync under 1s":     {func(rt *ShippedRuntime) { rt.Attributes.Resync = Duration(500 * time.Millisecond) }, "spec.runtimes[0].attributes.resync"},
+		"a resync over 24h":     {func(rt *ShippedRuntime) { rt.Attributes.Resync = Duration(25 * time.Hour) }, "spec.runtimes[0].attributes.resync"},
+		"a config not a schema": {func(rt *ShippedRuntime) { rt.Attributes.Config = json.RawMessage(`[]`) }, "spec.runtimes[0].attributes.config"},
+		"a port":                {func(rt *ShippedRuntime) { rt.Attributes.Port = 8080 }, "spec.runtimes[0].attributes.port"},
+		"a readiness":           {func(rt *ShippedRuntime) { rt.Attributes.Readiness.Path = "/ping" }, "spec.runtimes[0].attributes.readiness"},
+		"settings": {func(rt *ShippedRuntime) {
+			rt.Attributes.Settings = []AddonSettings{{Kind: "StackPolicy"}}
+		}, "spec.runtimes[0].attributes.settings"},
+	} {
+		a := infraStackAddon()
+		c.edit(&a.Spec.Runtimes[0])
+		err := a.Validate()
+		require.Error(t, err, name)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+		require.Contains(t, err.Error(), c.field, name)
+	}
+
+	r := rauthyAddon()
+	engine(r).Function = &AddonSettingsFunction{Ref: "infrastack-reconciler"}
+	require.ErrorContains(t, r.Validate(), "spec.runtimes[0].attributes.function", "an Engine entry takes no function")
+	r = rauthyAddon()
+	engine(r).Resync = Duration(time.Hour)
+	require.ErrorContains(t, r.Validate(), "spec.runtimes[0].attributes.resync", "nor a resync")
+}
+
+// ADR-0344 Decision 4: a Function on an Addon's runtime is a cloudevent one. No Addon ships a name of the node family,
+// and protocol http needs one, so an http Function on deno2 is refused 400.
+func TestAddonRuntimeFunctionIsCloudEvent(t *testing.T) {
+	fn := &Function{TypeMeta: typeMetaFor(KindFunction), ObjectMeta: ObjectMeta{Name: "web", Namespace: "default", ResourceGroup: "rg1"}}
+	fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image, fn.Spec.Protocol = "deno2", "handle", "registry.example.com/web:1", ProtocolHTTP
+	err := fn.Validate()
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, "needs a node runtime")
+	fn.Spec.Protocol = ""
+	require.NoError(t, fn.Validate())
+}
+
+// The accessors read through the entry that runs the kind (ADR-0344 Contracts): an Addon that runs none adds no kind.
+func TestAddonKindRuntime(t *testing.T) {
+	a := rauthyAddon()
+	a.Spec.Runtimes = append(denoAddon().Spec.Runtimes, a.Spec.Runtimes...)
+	rt, ok := a.Spec.KindRuntime()
+	require.True(t, ok)
+	require.Equal(t, RuntimeName("rauthy"), rt.Name)
+	require.Equal(t, "IdentityProvider", a.Spec.Kind())
+	require.Equal(t, []string{"IdentityProvider"}, a.Spec.Kinds())
+	require.Equal(t, "/auth/v1", a.Spec.AddonBasePath())
+	deno, ok := a.Spec.Shipped("deno2")
+	require.True(t, ok)
+	require.True(t, deno.Serves(WorkloadJob))
+	require.False(t, deno.Serves(WorkloadEngine))
+	_, ok = a.Spec.Shipped("ruby3")
+	require.False(t, ok)
+
+	d := denoAddon()
+	_, ok = d.Spec.KindRuntime()
+	require.False(t, ok)
+	require.Empty(t, d.Spec.Kind())
+	require.Empty(t, d.Spec.Kinds())
+	require.Equal(t, "/", d.Spec.AddonBasePath())
+	require.Nil(t, d.Spec.SettingsKind("RauthyPasswordPolicy"))
+	require.Equal(t, WorkloadFunction, WorkloadOf(KindFunction))
+	require.Equal(t, WorkloadJob, WorkloadOf(KindJob))
+	require.Empty(t, WorkloadOf(KindLake))
 }
 
 func TestAddonPluralAndKindRules(t *testing.T) {
@@ -145,8 +299,8 @@ func TestAddonObjectValidate(t *testing.T) {
 // rauthyCopies is rauthy's Addon with hiqlite's snapshot and restore folders (ADR-0333 Decision 1).
 func rauthyCopies() *Addon {
 	a := rauthyAddon()
-	a.Spec.Snapshot = &AddonSnapshot{Path: "/app/data/state_machine/backups"}
-	a.Spec.Restore = &AddonRestore{Path: "/app/data/restore", Env: map[string]string{"HQL_BACKUP_RESTORE": `${{ "file:" + restore.file }}`}}
+	engine(a).Snapshot = &AddonSnapshot{Path: "/app/data/state_machine/backups"}
+	engine(a).Restore = &AddonRestore{Path: "/app/data/restore", Env: map[string]string{"HQL_BACKUP_RESTORE": `${{ "file:" + restore.file }}`}}
 	return a
 }
 
@@ -155,44 +309,45 @@ func rauthyCopies() *Addon {
 func TestAddonValidateCopies(t *testing.T) {
 	a := rauthyCopies()
 	require.NoError(t, a.Validate())
-	require.Equal(t, "state_machine/backups", a.Spec.StorageDir(a.Spec.Snapshot.Path))
-	require.Equal(t, "restore", a.Spec.StorageDir(a.Spec.Restore.Path))
-	require.Equal(t, 10*time.Minute, a.Spec.Restore.EffectiveTimeout())
+	at := engine(a)
+	require.Equal(t, "state_machine/backups", at.StorageDir(at.Snapshot.Path))
+	require.Equal(t, "restore", at.StorageDir(at.Restore.Path))
+	require.Equal(t, 10*time.Minute, at.Restore.EffectiveTimeout())
 	for _, d := range []Duration{MinAddonRestoreTimeout, MaxAddonRestoreTimeout} {
-		a.Spec.Restore.Timeout = d
+		at.Restore.Timeout = d
 		require.NoError(t, a.Validate(), "%s is a bound", d)
-		require.Equal(t, time.Duration(d), a.Spec.Restore.EffectiveTimeout())
+		require.Equal(t, time.Duration(d), at.Restore.EffectiveTimeout())
 	}
 
-	for name, edit := range map[string]func(s *AddonSpec){
-		"a snapshot without storage":     func(s *AddonSpec) { s.Storage, s.Restore = nil, nil },
-		"a restore without storage":      func(s *AddonSpec) { s.Storage, s.Snapshot = nil, nil },
-		"a snapshot at storage.path":     func(s *AddonSpec) { s.Snapshot.Path = "/app/data" },
-		"a snapshot outside storage":     func(s *AddonSpec) { s.Snapshot.Path = "/var/backups" },
-		"a snapshot beside storage":      func(s *AddonSpec) { s.Snapshot.Path = "/app/data2/backups" },
-		"a snapshot ending in /":         func(s *AddonSpec) { s.Snapshot.Path = "/app/data/backups/" },
-		"a relative snapshot":            func(s *AddonSpec) { s.Snapshot.Path = "backups" },
-		"a restore with ..":              func(s *AddonSpec) { s.Restore.Path = "/app/data/../restore" },
-		"one folder for both":            func(s *AddonSpec) { s.Restore.Path = s.Snapshot.Path },
-		"a restore inside the snapshot":  func(s *AddonSpec) { s.Restore.Path = s.Snapshot.Path + "/restore" },
-		"a snapshot inside the restore":  func(s *AddonSpec) { s.Snapshot.Path = s.Restore.Path + "/backups" },
-		"a restore.env key that is bad":  func(s *AddonSpec) { s.Restore.Env = map[string]string{"A=B": "x"} },
-		"a restore.timeout under 1s":     func(s *AddonSpec) { s.Restore.Timeout = Duration(500 * time.Millisecond) },
-		"a restore.timeout over 1h":      func(s *AddonSpec) { s.Restore.Timeout = Duration(2 * time.Hour) },
-		"a negative restore.timeout":     func(s *AddonSpec) { s.Restore.Timeout = -Duration(time.Second) },
-		"a storage.path a copy is under": func(s *AddonSpec) { s.Storage.Path = "/app/data/state_machine" },
+	for name, edit := range map[string]func(s *AddonAttributes){
+		"a snapshot without storage":     func(s *AddonAttributes) { s.Storage, s.Restore = nil, nil },
+		"a restore without storage":      func(s *AddonAttributes) { s.Storage, s.Snapshot = nil, nil },
+		"a snapshot at storage.path":     func(s *AddonAttributes) { s.Snapshot.Path = "/app/data" },
+		"a snapshot outside storage":     func(s *AddonAttributes) { s.Snapshot.Path = "/var/backups" },
+		"a snapshot beside storage":      func(s *AddonAttributes) { s.Snapshot.Path = "/app/data2/backups" },
+		"a snapshot ending in /":         func(s *AddonAttributes) { s.Snapshot.Path = "/app/data/backups/" },
+		"a relative snapshot":            func(s *AddonAttributes) { s.Snapshot.Path = "backups" },
+		"a restore with ..":              func(s *AddonAttributes) { s.Restore.Path = "/app/data/../restore" },
+		"one folder for both":            func(s *AddonAttributes) { s.Restore.Path = s.Snapshot.Path },
+		"a restore inside the snapshot":  func(s *AddonAttributes) { s.Restore.Path = s.Snapshot.Path + "/restore" },
+		"a snapshot inside the restore":  func(s *AddonAttributes) { s.Snapshot.Path = s.Restore.Path + "/backups" },
+		"a restore.env key that is bad":  func(s *AddonAttributes) { s.Restore.Env = map[string]string{"A=B": "x"} },
+		"a restore.timeout under 1s":     func(s *AddonAttributes) { s.Restore.Timeout = Duration(500 * time.Millisecond) },
+		"a restore.timeout over 1h":      func(s *AddonAttributes) { s.Restore.Timeout = Duration(2 * time.Hour) },
+		"a negative restore.timeout":     func(s *AddonAttributes) { s.Restore.Timeout = -Duration(time.Second) },
+		"a storage.path a copy is under": func(s *AddonAttributes) { s.Storage.Path = "/app/data/state_machine" },
 	} {
 		a := rauthyCopies()
-		edit(&a.Spec)
+		edit(engine(a))
 		err := a.Validate()
 		require.Error(t, err, name)
 		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
 	}
 
 	a = rauthyCopies()
-	a.Spec.Storage.Path = "/app/data/"
+	engine(a).Storage.Path = "/app/data/"
 	require.NoError(t, a.Validate(), "a storage.path ending in / holds the same folders")
-	require.Equal(t, "restore", a.Spec.StorageDir(a.Spec.Restore.Path))
+	require.Equal(t, "restore", engine(a).StorageDir(engine(a).Restore.Path))
 }
 
 func TestAddonObjectDeletion(t *testing.T) {
@@ -220,7 +375,7 @@ func TestIsAddonFile(t *testing.T) {
 func TestAddonValidateSettings(t *testing.T) {
 	withSettings := func() *Addon {
 		a := rauthyAddon()
-		a.Spec.Settings = []AddonSettings{{
+		engine(a).Settings = []AddonSettings{{
 			Kind: "RauthyPasswordPolicy", Target: "spec.config.provider", Resync: Duration(time.Minute),
 			Function: AddonSettingsFunction{Ref: "rauthy-settings"},
 			Schema:   json.RawMessage(`{"type":"object","properties":{"provider":{"type":"string"}},"required":["provider"]}`),
@@ -251,14 +406,14 @@ func TestAddonValidateSettings(t *testing.T) {
 		"a rule with no message":         func(s *AddonSettings) { s.Constraints.Rules[0].Message = "" },
 	} {
 		a := withSettings()
-		edit(&a.Spec.Settings[0])
+		edit(&engine(a).Settings[0])
 		err := a.Validate()
 		require.Error(t, err, name)
 		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
 	}
 
 	a := withSettings()
-	a.Spec.Settings = append(a.Spec.Settings, a.Spec.Settings[0])
-	a.Spec.Settings[1].Kind = "RAUTHYPASSWORDPOLICY"
+	engine(a).Settings = append(engine(a).Settings, engine(a).Settings[0])
+	engine(a).Settings[1].Kind = "RAUTHYPASSWORDPOLICY"
 	require.Error(t, a.Validate(), "two settings kinds of one plural")
 }

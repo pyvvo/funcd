@@ -10,7 +10,8 @@
 #             github.com/pyvvo/funcd-python or github.com/pyvvo/funcd-functions (the example Apps), resolved
 #             by scripts/moddir.sh (module cache or go.work). Absent = the funcd repo root. The language
 #             repos commit their example builds.
-#   dir     — the example directory, relative to the module root; source of the staged files.
+#   dir     — the example directory, relative to the module root; source of the staged files. Absent = a lane
+#             that runs no example: it stages funcd's own fixtures, each a {from} entry, with no build or copy.
 #   copy    — true = build in a writable copy (the module cache is read-only): the whole module goes to
 #             .modcopy/lane/<module>, so the example's relative references still resolve.
 #   build   — host shell commands (run in the lane's dir, in order, with FUNCD_ROOT set to the funcd checkout) that
@@ -954,6 +955,32 @@ addon-rauthy-restore:
     developer: addon-rauthy-restore-lane-developer
   # Only an admin registers an Addon and restores in place, so the suite applies every manifest itself.
   venom: e2e/addon-rauthy-restore.venom.yml
+
+addon-runtime:
+  description: A Function on an Addon's runtime on real containerd (ADR-0344) — an admin's Addon ships jscopy22, a copy of funcd's nodejs22 image that a registry in the VM serves over TLS, for Functions; a developer's Function on jscopy22 pulls the image by digest from that registry, which addons.registries lists, turns Ready, records the image in its Revision and answers through the data plane.
+  # The copy is the nodejs22 image that `just build-runtime-images` embeds, served by e2e/laneregistry, which the lane
+  # recipes build into the VM's deps beside funcd; its certificate is made at its start, and the suite trusts it.
+  stage:
+    - from: internal/runtime/embedimg/nodejs22.tar
+      to: nodejs22.tar
+    - from: e2e/fixtures/addon-runtime-funcdconfig.yaml
+      to: funcdconfig.yaml
+    - from: e2e/fixtures/addon-runtime-addon.yaml
+      to: addon.yaml
+    - from: e2e/fixtures/addon-runtime-function.yaml
+      to: function.yaml
+    - from: e2e/fixtures/addon-runtime-echo.mjs
+      to: addon-runtime-echo.mjs
+    - from: e2e/fixtures/addon-runtime-echo.contract.json
+      to: addon-runtime-echo.contract.json
+  tokens:
+    admin: addon-runtime-lane-admin
+    developer: addon-runtime-lane-developer
+  push:
+    - artifact: addon-runtime-echo.mjs
+      ref: addon-runtime-echo
+  # Only an admin registers an Addon, and the Addon's digest is the registry's, so the suite applies both manifests.
+  venom: e2e/addon-runtime.venom.yml
 
 job:
   description: A Job's runs on real containerd (ADR-0347) — the job-report examples of funcd-typescript and funcd-python each report on a month, a run that ends Succeeded with no container left, a cancel that stops the run's container within the grace, and a funcd crash during a run that leaves it Interrupted with no container; and a run of a Job without approval.bypass, in each language, that previews and runs once funcdctl job approve names its digest (ADR-0348); and the job-planner example's Function, in each language, which starts one run of its bound Job through ctx.job for a month and reads it back (ADR-0349).

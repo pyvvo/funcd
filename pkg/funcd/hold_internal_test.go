@@ -270,7 +270,7 @@ func TestEveryReclaimHasHoldEvidence(t *testing.T) {
 	ctx := context.Background()
 	addons := fakeaddon.New(t)
 	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithSQLProviderRuntime(newSQLRuntime(t, sqlRef("gone"))),
-		WithAddonRuntime(addons, v1.AddonRuntimeContainerd))
+		WithAddonRuntime(addons))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = p.Shutdown(ctx) })
 	evidence := map[string]reclaimEvidence{

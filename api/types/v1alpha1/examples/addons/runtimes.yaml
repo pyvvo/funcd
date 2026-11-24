@@ -1,0 +1,26 @@
+# region addon
+apiVersion: funcd.io/v1alpha1
+kind: Addon
+metadata:
+  name: deno
+spec:
+  runtimes:
+    - name: deno2
+      image: ghcr.io/example/funcd-deno@sha256:4f8a0d36f8a17c0a2a0d2b6c55a6e5e1f06d1a3e6cf3b0f1d0e8e5f6a7b8c9d0
+      workloads:
+        - Function
+        - Job
+# endregion addon
+---
+# region function
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: greeter
+  namespace: default
+  resourceGroup: default
+spec:
+  runtime: deno2
+  handler: handle
+  image: registry.example.com/greeter:1.0.0
+# endregion function

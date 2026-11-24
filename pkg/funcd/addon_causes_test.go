@@ -77,11 +77,11 @@ func addonCauseEnv(t *testing.T, held bool, timeout, delay time.Duration) *cause
 	t.Helper()
 	hd, err := hold.Open(t.TempDir())
 	require.NoError(t, err)
-	p := answersPlatform(t, funcd.WithAddonRuntime(newAddonEngines(t, delay), v1.AddonRuntimeContainerd),
+	p := answersPlatform(t, funcd.WithAddonRuntime(newAddonEngines(t, delay)),
 		funcd.WithAddonRegistries("ghcr.io"), funcd.WithAddonCallLimits(timeout, 1024), funcd.WithHold(hd))
 	c, base := answersClient(), "http://"+p.Addr()
 	echo := addonFixture("echo", "EchoService")
-	echo.Spec.BasePath, echo.Spec.PrivatePaths = "", []string{"/private"}
+	echo.Spec.Runtimes[0].Attributes.BasePath, echo.Spec.Runtimes[0].Attributes.PrivatePaths = "", []string{"/private"}
 	for _, a := range []*v1.Addon{addonFixture("rauthy", "IdentityProvider"), echo} {
 		ask{what: "the Addon " + string(a.Name), method: http.MethodPost, path: addonsPath, token: answersAdmin,
 			body: jsonOf(t, a), status: http.StatusOK}.run(t, c, base)

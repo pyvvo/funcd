@@ -6,12 +6,15 @@ kind: Addon
 metadata:
   name: whoami
 spec:
-  kind: EchoService
-  image: docker.io/traefik/whoami@sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c
   runtimes:
-    - containerd
-  port: 80
-  privatePaths:
-    - /private
-  readiness:
-    path: /health
+    - name: whoami
+      image: docker.io/traefik/whoami@sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c
+      workloads:
+        - Engine
+      attributes:
+        kind: EchoService
+        port: 80
+        privatePaths:
+          - /private
+        readiness:
+          path: /health

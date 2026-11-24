@@ -23,9 +23,10 @@ import (
 
 // Reconcile converges one add-on object (ADR-0332 Decision 3). It reads the Addon of the object's kind on each pass and
 // holds the object Pending, with no engine and no edge entry, while that Addon is gone, its config breaks the Addon's
-// schema, the Addon runs on none of the runtime's modes, its env does not evaluate, or a bound Secret is missing or
-// forbidden. Otherwise it converges one engine with the Addon's image, port, probe and storage and the object's
-// resources, fenced with no endpoint and admitting only funcd, and programs the object's edge entry once it is Ready.
+// schema, the provider runtime runs no image (ADR-0344 Decision 9), its env does not evaluate, or a bound Secret is
+// missing or forbidden. Otherwise it converges one engine with the kind entry's image, port, probe and storage and the
+// object's resources, fenced with no endpoint and admitting only funcd, and programs the object's edge entry once it is
+// Ready.
 // While an in-place Restore's mark stands, it starts the engine with restore.env, removes the copy once that engine is
 // Ready, then starts it without restore.env and clears the mark once that one is Ready (ADR-0333 Decision 4). A
 // deleted object loses its entry, its engine and then its storage.
@@ -34,7 +35,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	obj, err := r.store.Get(ctx, req.GVK, req.Namespace, req.Name)
 	if fault.KindOf(err) == fault.NotFound {
 		r.forgetTarget(req.Namespace, req.Name)
-		return controller.Result{}, r.deleted(ctx, req.Namespace, req.Name)
+		if err := r.deleted(ctx, req.Namespace, req.Name); err != nil {
+			return controller.Result{}, err
+		}
+		return controller.Result{}, r.partGone(ctx, req.Namespace, req.Name)
 	}
 	if err != nil {
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "get add-on object")
@@ -48,11 +52,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	} else if st != nil {
 		return r.settingsObject(ctx, sa, st, o) // a settings object runs no engine (ADR-0340 Decision 3)
 	}
-	if err := r.remember(ctx, o); err != nil {
-		return controller.Result{}, err
-	}
 	a, err := r.addonOf(ctx, o.Spec.Kind)
 	if err != nil {
+		return controller.Result{}, err
+	}
+	if (a != nil && a.Spec.Engineless()) || (a == nil && o.Status.Workload == v1.WorkloadEngineless) {
+		return r.enginelessObject(ctx, a, o) // an engineless object runs no engine (ADR-0345)
+	}
+	if err := r.remember(ctx, o); err != nil {
 		return controller.Result{}, err
 	}
 	if a == nil {
@@ -68,15 +75,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if ph != nil {
 		return r.hold(ctx, o, ph.reason, ph.message, 0)
 	}
-	if !slices.ContainsFunc(r.modes, a.Spec.Runtime) {
-		return r.hold(ctx, o, reasonRuntimeUnavailable, r.unavailable(a), 0)
+	if !r.runsImages {
+		return r.hold(ctx, o, reasonRuntimeUnavailable, unavailable(a), 0)
 	}
 	if msg, err := configBreaks(a, o); err != nil {
 		return controller.Result{}, err
 	} else if msg != "" {
 		return r.hold(ctx, o, reasonConfigInvalid, msg, 0)
 	}
-	env, err := RenderEnv(a.Spec.Env, map[string]json.RawMessage{configDoc: configOf(o)}, schemas(a.Spec.Config))
+	env, err := RenderEnv(a.Spec.KindAttributes().Env, map[string]json.RawMessage{configDoc: configOf(o)}, schemas(a.Spec.KindAttributes().Config))
 	if err != nil {
 		return r.hold(ctx, o, reasonEnvInvalid, err.Error(), 0)
 	}
@@ -115,7 +122,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if !st.Ready {
 		r.seeTarget(o.Namespace, o.Name, false)
 	}
-	o.Status.Address = st.Address
+	o.Status.Address, o.Status.Workload = st.Address, v1.WorkloadEngine // the mark outlives the Addon (ADR-0345 Decision 1)
 	o.Status.Phase, o.Status.ObservedGeneration = v1.PhasePending, o.Generation
 	if st.Ready {
 		o.Status.Phase = v1.PhaseReady
@@ -182,32 +189,25 @@ func (r *Reconciler) addonOf(ctx context.Context, kind string) (*v1.Addon, error
 		return nil, fault.Wrapf(err, fault.KindOf(err), "services.addon.addonOf", "list Addons")
 	}
 	for _, item := range list.Items {
-		if a, ok := item.(*v1.Addon); ok && v1.SameAddonKind(a.Spec.Kind, kind) {
+		if a, ok := item.(*v1.Addon); ok && v1.SameAddonKind(a.Spec.Kind(), kind) {
 			return a, nil
 		}
 	}
 	return nil, nil
 }
 
-// unavailable names the add-on's runtimes and the modes this server runs add-on engines on (ADR-0149's reason).
-func (r *Reconciler) unavailable(a *v1.Addon) string {
-	runtimes := a.Spec.Runtimes
-	if len(runtimes) == 0 {
-		runtimes = []string{v1.AddonRuntimeContainerd}
-	}
-	runs := "runs no add-on engine"
-	if len(r.modes) > 0 {
-		runs = "runs add-on engines on " + strings.Join(r.modes, " or ")
-	}
-	return fmt.Sprintf("the add-on runs on %s, and this server, of runtime.mode %s, %s", strings.Join(runtimes, " or "),
-		cmp.Or(r.serverMode, "process"), runs)
+// unavailable is why a's engines do not run on a process server (ADR-0344 Decision 9, ADR-0149's reason): its
+// provider runtime is the process driver's, which runs no image.
+func unavailable(a *v1.Addon) string {
+	return fmt.Sprintf("the engine of Addon %s is an image, and this server runs its workers on the process driver, which "+
+		"runs no image: an engine needs runtime.mode containerd", a.Name)
 }
 
 // configBreaks names how the object's config breaks its Addon's current schema, "" when it fits: an Addon change applies
 // to the next writes, so a stored object may no longer fit (ADR-0332 Decision 1).
 func configBreaks(a *v1.Addon, o *v1.AddonObject) (string, error) {
 	const op = "services.addon.configBreaks"
-	v, err := contract.Compile(a.Spec.Config)
+	v, err := contract.Compile(a.Spec.KindAttributes().Config)
 	if err != nil {
 		return "spec.config of Addon " + string(a.Name) + " is no longer a schema: " + err.Error(), nil
 	}
@@ -218,7 +218,7 @@ func configBreaks(a *v1.Addon, o *v1.AddonObject) (string, error) {
 	if len(parts) == 0 {
 		return "", nil
 	}
-	return fmt.Sprintf("the config does not fit the %s schema of Addon %s: %s", a.Spec.Kind, a.Name, strings.Join(parts, "; ")), nil
+	return fmt.Sprintf("the config does not fit the %s schema of Addon %s: %s", a.Spec.Kind(), a.Name, strings.Join(parts, "; ")), nil
 }
 
 // Breaks names each way config, an empty object when unset, breaks the schema v: "spec.config.<path>: <message>", in
@@ -255,27 +255,30 @@ func (r *Reconciler) secretEnv(ctx context.Context, a *v1.Addon, o *v1.AddonObje
 	if err != nil {
 		return nil, err
 	}
-	maps.DeleteFunc(resolved, func(k, _ string) bool { return !slices.Contains(a.Spec.SecretKeys, k) })
+	maps.DeleteFunc(resolved, func(k, _ string) bool { return !slices.Contains(a.Spec.KindAttributes().SecretKeys, k) })
 	return resolved, nil
 }
 
-// engineSpec is the object's engine: its Addon's image, port, probe and storage, the object's resources, one replica,
-// fenced with no endpoint until an egress list exists, and reached only from funcd (ADR-0332 Decision 3).
+// engineSpec is the object's engine: its Addon's kind entry's image, port, probe and storage (ADR-0344 Decision 3), the
+// object's resources, one replica, fenced with no endpoint until an egress list exists, and reached only from funcd
+// (ADR-0332 Decision 3).
 func (r *Reconciler) engineSpec(a *v1.Addon, o *v1.AddonObject, env map[string]string) provider.ProviderSpec {
 	fence, _ := provider.EgressTo("")
+	entry, _ := a.Spec.KindRuntime()
+	at := a.Spec.KindAttributes()
 	spec := provider.ProviderSpec{
 		Ref:        provider.ProviderRef{Namespace: o.Namespace, Name: o.Name},
-		ServedKind: v1.Kind(a.Spec.Kind),
-		Image:      a.Spec.Image,
-		Port:       a.Spec.Port,
+		ServedKind: v1.Kind(at.Kind),
+		Image:      entry.Image,
+		Port:       at.Port,
 		Env:        env,
-		Readiness:  provider.ReadinessProbe{Path: a.Spec.Readiness.Path, ExpectStatus: expectStatus},
+		Readiness:  provider.ReadinessProbe{Path: at.Readiness.Path, ExpectStatus: expectStatus},
 		Replicas:   1,
 		Resources:  provider.ResourceSpec{CPU: o.Spec.Resources.CPU, Memory: o.Spec.Resources.Memory},
 		EgressOnly: fence,
 		HostOnly:   true,
 	}
-	if s := a.Spec.Storage; s != nil {
+	if s := at.Storage; s != nil {
 		spec.Storage = &provider.StorageSpec{Path: s.Path, UID: s.UID, GID: s.GID}
 	}
 	return spec
@@ -308,7 +311,7 @@ func (r *Reconciler) syncEntry(ctx context.Context, a *v1.Addon, o *v1.AddonObje
 		OIDC:      router.OIDCOf(in.Stance()),
 		Enabled:   &enabled,
 		Rules: []router.CompiledRule{{
-			Path: a.Spec.AddonBasePath(), Upstream: "http://" + st.Address, KeepPath: true, PrivatePaths: a.Spec.PrivatePaths,
+			Path: a.Spec.AddonBasePath(), Upstream: "http://" + st.Address, KeepPath: true, PrivatePaths: a.Spec.KindAttributes().PrivatePaths,
 		}},
 		Owner: router.Owner{Kind: v1.KindAddonObject, Namespace: o.Namespace, Name: o.Name},
 	}

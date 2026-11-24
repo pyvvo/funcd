@@ -1,7 +1,13 @@
 # ADR-0345: A Function reconciles an engineless kind's objects, and a deletion waits for its destroy
 
-- **Status**: Accepted (2026-11-23), by the decider, after five rounds of an independent judge, every Blocker and
-  Major folded
+- **Status**: Implemented (2026-11-24), review passed in its third round, over the code and the amendment of
+  2026-11-24, its one wording Minor since fixed ([report](../reviews/adr-0345-implementation-claude-opus-5-5-3.md)); Reviewing
+  (2026-11-24, implemented); Accepted (2026-11-23), by the decider, after five rounds of an independent judge, every
+  Blocker and Major folded
+- **Amended in place**: 2026-11-24, on the decider's delegation ("shouldn't left anything open", then "Accept"), after
+  the implementation review routed four rulings: a kind keeps its workload on an Addon created again, an engine
+  object's mark (Decision 1); an engineless object takes no engine field (Decision 3); a later event of an ended
+  JobRun (Decision 4); the forced ResourceGroup delete holds too (Decision 6); the object quota (Decision 9)
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, reconcile, functions, deletion, apps
@@ -94,7 +100,10 @@ calls over a stream; a general finalizer mechanism.
    `resync` (1s to 24h, unset 10m, as a settings kind's). An image or any other attribute is refused, 400 naming it.
    An engineless object pins its AddonRevision as an engine's object does (ADR-0339 Decisions 2 and 3), and its
    Function and resync come from that revision. Its first pass stores `status.workload: Engineless`, and no call
-   carries it before that write is stored.
+   carries it before that write is stored. An engine object's pass stores `Engine` once funcd has tried to start its
+   engine, which may already have made its storage. The mark
+   outlives the Addon: a replace that moves the kind between `Engine` and `Engineless` is refused 400, and the create
+   of an Addon for a kind whose stored object is marked the other way 409, naming it (amended 2026-11-24).
 2. **The call.** An engineless object's group is its namespace, its kind and its Function: the `ref` of its
    `spec.functions` entry for its own kind, else the kind's `function.ref`. In the object's pass, the list is every
    object of the group, sorted by name, deleting ones included, and a call is due as in ADR-0341 Decision 1: no call
@@ -116,10 +125,14 @@ calls over a stream; a general finalizer mechanism.
    the call (ADR-0243 Decision 5). An object's `spec.functions` may hold one entry for its own kind when that kind is
    engineless; ADR-0341 Decision 3's other refusals stand, and in an App's part the `ref` names a Function the App
    declares. The Function binds no object: the call carries the objects' config, and what it starts it reaches through
-   its own bindings (F137, F140). It must accept a cause it does not know.
+   its own bindings (F137, F140). It must accept a cause it does not know. An engineless object, which runs no engine,
+   takes no `spec.bindings`, `spec.ingress` or `spec.resources`, refused 400 as on a settings object (ADR-0340
+   Decision 3) (amended 2026-11-24).
 4. **A run's end.** The end of any JobRun (F137, built before this ADR) in a namespace makes every group of that
    namespace due, cause `run`, at once, or when its call in flight ends: the add-on reconciler watches JobRuns. It
-   needs no binding: the Function reads from its own state which run ended.
+   needs no binding: the Function reads from its own state which run ended. The watch sees the run, not the event, so
+   a later write or the deletion of an ended run makes the groups due too; a call carries the full list, so it changes
+   nothing (amended 2026-11-24).
 5. **The status.** As ADR-0341 Decision 4, with no target: `ok: true` is Ready at the generation sent; `ok: false` is
    its reason, such as `Planning`, `AwaitingApproval` or `Destroying`, else `ReconcileFailed`; a result left out is
    `NoResult`; a failed call makes each object `ReconcileFailed`, a call into a namespace held for its data (ADR-0290)
@@ -127,9 +140,10 @@ calls over a stream; a general finalizer mechanism.
    Addon, pinned revision or Function is missing is `Pending` with `AddonNotFound`, `AddonRevisionNotFound` (ADR-0339)
    or `FunctionNotFound`, and no call carries it.
 6. **The hold.** An object whose `status.workload` is `Engineless` and whose `spec.deletion` is `delete` is held at
-   its deletion, whether or not a call has carried it yet: the API's DELETE, the owner garbage collector and an App's
-   prune remove it through
-   `DeleteAddonObject`, which sets its `metadata.deletionTimestamp` instead. The DELETE answers 202 with the object,
+   its deletion, whether or not a call has carried it yet: the API's DELETE, the owner garbage collector, an App's
+   prune and a forced ResourceGroup delete, which then answers 409 naming it as for a refused member (ADR-0170 Decision
+   8) (amended 2026-11-24), remove it through `DeleteAddonObject`, which sets its `metadata.deletionTimestamp`
+   instead. The DELETE answers 202 with the object,
    with `If-Match` checked as today, and 202 again for a deleting object. A write to a deleting object is stored, and
    it stays deleting. Its group's lists carry it with `deleting: true`. Only an ok answer to a call that carried it so,
    at its uid, removes it; a call sent before its deletion removes nothing. Any other answer writes its status, Ready
@@ -143,6 +157,9 @@ calls over a stream; a general finalizer mechanism.
    once none remains. An App's prune keeps each part it drops, `InUse: <kind>/<name>`, while an engineless part it
    drops still exists. When an App's last engineless part goes, the add-on reconciler asks the collector to pass over
    its namespace (`gc.CollectNamespace`), so the rest goes then, not at the next sweep.
+9. **The quota** (amended 2026-11-24). Engineless objects count under `addons.maxObjectsPerNamespace` with the
+   objects that run an engine, since each drives its Function's calls and the runs they start; settings objects keep
+   their own cap (ADR-0340 Decision 6).
 
 ## Design model
 
@@ -221,7 +238,8 @@ type CallObject struct {
 	Config     json.RawMessage `json:"config"`
 }
 
-// AddonObjectStatus gains the workload of the object's kind, stored at its first pass (Decision 1).
+// AddonObjectStatus gains the workload of the object's kind, stored at its first pass: Engineless, or Engine once funcd
+// has tried to start its engine (Decision 1, amended 2026-11-24).
 Workload Workload `json:"workload,omitempty"`
 
 // DeleteAddonObject removes obj, or holds it as Decision 6 says and returns it (internal/gc).
@@ -259,7 +277,10 @@ DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name 
 
 - [ ] No pass waits on a call; one call at most runs per group, with its whole list, sent again at a start.
 - [ ] A held object goes only on an ok to a call that carried it with `deleting: true`, at its uid, or on `retain`.
-- [ ] Every delete path (the API, the collector, an App's prune) holds through `DeleteAddonObject`.
+- [ ] Every delete path (the API, the collector, an App's prune, a forced ResourceGroup delete) holds through
+  `DeleteAddonObject` (amended 2026-11-24).
+- [ ] An Addon created again for a kind whose stored object is marked the other way gets 409; an engineless object
+  with an engine field gets 400 (amended 2026-11-24).
 - [ ] An App's other parts outlive its engineless parts, on a deletion and on a prune.
 - [ ] A call carries an object only once its `status.workload` is stored.
 - [ ] A write to a deleting object keeps it deleting; a second DELETE answers 202 with the object.

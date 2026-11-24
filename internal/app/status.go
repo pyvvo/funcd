@@ -37,6 +37,7 @@ const (
 	reasonRefNotFound   = "RefNotFound"
 	reasonInUse         = "InUse"
 	reasonRunHeld       = "RunHeld"
+	reasonDeleting      = "Deleting" // a dropped engineless part held at its deletion (ADR-0345 Decision 6)
 	reasonStepNotReady  = "StepNotReady"
 )
 

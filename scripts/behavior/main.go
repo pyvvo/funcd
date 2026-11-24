@@ -63,6 +63,7 @@ func chapters() []chapter {
 		{"Calls", []string{"internal/edge", "internal/gateway", "internal/dataplane", "internal/activator", "internal/invoke", "internal/route", "internal/site"}, []string{"server", "invoke", "site"}},
 		{"Services", []string{"internal/kvstore", "internal/blob", "internal/sql", "internal/lake", "internal/services", "internal/provider"}, []string{"kvstore", "blob", "s3gateway", "lake", "sql"}},
 		{"Addons", []string{"internal/services/addon"}, []string{"addons"}},
+		{"Engineless kinds", nil, nil},
 		{"Eventing", []string{"internal/bus", "internal/eventing", "internal/sensor", "internal/workflow", "internal/expr"}, []string{"workflow", "eventing"}},
 		{"Jobs", nil, nil},
 		{"Apps", []string{"internal/app"}, []string{"app"}},

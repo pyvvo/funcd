@@ -1,0 +1,127 @@
+# Venom e2e suite for the addon-runtime containerd lane (ADR-0344): an admin's Addon ships jscopy22, a copy of funcd's
+# nodejs22 image that e2e/laneregistry serves over TLS in the VM, for Functions; a developer's Function on jscopy22
+# pulls it by digest from that registry, which addons.registries lists, as an engine's image is pulled, and turns Ready
+# on containerd; its Revision records the image, its worker runs it, and it answers through the data plane. Each apply
+# and check runs in the VM, beside the daemon, by one exec step; the call hits the VM's forwarded data plane.
+#
+# It proves on a real funcd the scenario addon-runtime-function: the gate resolves jscopy22 to the Addon's runtime,
+# the containerd driver pulls the Addon's image from a listed registry, and the image's shim runs the handler.
+name: addon-runtime — a Function on an Addon's runtime on containerd (ADR-0344, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081   # funcd data plane, forwarded from the Lima guest
+  # the lane's `tokens` in scripts/lanes.yaml, listed in auth.credentials (e2e/fixtures/addon-runtime-funcdconfig.yaml)
+  devtoken: addon-runtime-lane-developer
+  admintoken: addon-runtime-lane-admin
+  ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
+
+testcases:
+  - name: the lane's registry serves a copy of nodejs22's image over TLS, which the guest trusts
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo bash -c '
+            set -e
+            systemctl stop lane-registry 2>/dev/null || true
+            systemctl reset-failed lane-registry 2>/dev/null || true
+            rm -f /opt/lane/jscopy.digest
+            systemd-run --unit lane-registry /mnt/funcd-deps/laneregistry /opt/lane/nodejs22.tar funcd/jscopy \
+              127.0.0.1:5443 /opt/lane/registry.crt /opt/lane/jscopy.digest
+            for i in $(seq 60); do [ -s /opt/lane/jscopy.digest ] && break; sleep 1; done
+            install -m 0644 /opt/lane/registry.crt /usr/local/share/ca-certificates/funcd-lane-registry.crt
+            update-ca-certificates >/dev/null
+            curl -sf -o /dev/null https://127.0.0.1:5443/v2/ && echo TRUSTED
+            cat /opt/lane/jscopy.digest'
+        info: "registry → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring TRUSTED
+          - result.systemout ShouldContainSubstring "sha256:"
+      # funcd reads the guest's trust store once, at its first dial over TLS, so its restart takes the new certificate.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo bash -c '
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo && echo RESTARTED'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring RESTARTED
+
+  - name: an admin's Addon ships jscopy22 from that registry, pinned by digest
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo bash -c '
+            sed "s/DIGEST/$(cat /opt/lane/jscopy.digest)/" /opt/lane/addon.yaml |
+              FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} funcdctl apply -f -'
+        info: "admin apply → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied Addon/jscopy"
+
+  - name: a Function on jscopy22 turns Ready, its Revision records the Addon's image, and its worker runs it
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            funcdctl apply -f /opt/lane/function.yaml
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied Function/copy-echo"
+      # The first worker pulls the image from the lane's registry, so the retry waits up to 2 min.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get function copy-echo -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];r=([c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"Ready\"] or [{}])[0];print(\"PHASE=\"+s.get(\"phase\",\"\")+\",READY=\"+r.get(\"reason\",\"\")+\",MESSAGE=\"+r.get(\"message\",\"\"))"'
+        retry: 60
+        delay: 2
+        info: "status of copy-echo → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith PHASE=Ready,
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo bash -c '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            want="127.0.0.1:5443/funcd/jscopy@$(cat /opt/lane/jscopy.digest)"
+            got=$(funcdctl get revision copy-echo-1 -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"spec\"].get(\"runtimeImage\",\"\"))")
+            [ "$got" = "$want" ] && echo RECORDED
+            {{.ctr}} containers ls | grep copy-echo | grep -q funcd/jscopy && echo RUNS'
+        info: "revision and worker → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring RECORDED
+          - result.systemout ShouldContainSubstring RUNS
+
+  - name: copy-echo answers through the data plane
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/copy-echo"
+        headers:
+          content-type: application/json
+        body: '{"data":{"name":"venom"}}'
+        retry: 10
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.echo.name ShouldEqual venom
+
+  - name: the Function and the Addon go, the registry stops and the guest no longer trusts it
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo bash -c '
+            export FUNCD_SERVER=http://127.0.0.1:8080
+            FUNCD_TOKEN={{.devtoken}} funcdctl delete function copy-echo -n default
+            FUNCD_TOKEN={{.admintoken}} funcdctl delete addon jscopy
+            systemctl stop lane-registry
+            rm -f /usr/local/share/ca-certificates/funcd-lane-registry.crt
+            update-ca-certificates --fresh >/dev/null && echo CLEARED'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring CLEARED

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"net"
 	"os"
@@ -414,6 +415,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		funcd.WithKVStoreQuota(cfg.Kvstore.MaxStoresPerNamespace),
 		funcd.WithSQLDatabaseQuota(cfg.SQL.MaxDatabasesPerNamespace),
 		funcd.WithAddonRegistries(cfg.Addons.Registries...),
+		funcd.WithImageOverrides(slices.Sorted(maps.Keys(cfg.Runtime.Containerd.ImageOverride))...),
 		funcd.WithAddonObjectQuota(cfg.Addons.MaxObjectsPerNamespace),
 		funcd.WithAddonSettingsQuota(cfg.Addons.MaxSettingsPerNamespace),
 		funcd.WithNestedInFlightCap(cfg.Invoke.MaxNestedInFlight),

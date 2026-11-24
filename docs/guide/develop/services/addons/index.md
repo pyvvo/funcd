@@ -1,13 +1,14 @@
 ---
 title: Add-ons
-description: Register an add-on built outside funcd, such as rauthy, declare its objects, call their engines from a Function, apply their settings, back them up and sign users in through them.
+description: Register an add-on built outside funcd, such as rauthy, declare its objects, run Functions and Jobs on the runtimes it ships, call their engines from a Function, apply their settings, reconcile an engineless kind's objects, back them up and sign users in through them.
 ---
 
 ## Usage
 
-An add-on is an engine built outside funcd that an admin registers on a running funcd. Its users then declare objects
-of the kind it adds, as they declare a Lake: funcd runs one engine per object, serves it at the object's host, and
-copies its data into the namespace's backups. The [Platform page](../../../platform/services/addons.md) explains how.
+An add-on is built outside funcd, and an admin registers it on a running funcd. It ships runtimes: images that
+Functions and Jobs run on, or that run one engine per object of the kind it adds. Its users then declare objects of
+that kind, as they declare a Lake: funcd runs one engine per object, serves it at the object's host, and copies its
+data into the namespace's backups. The [Platform page](../../../platform/services/addons.md) explains how.
 The add-ons funcd ships live in [pyvvo/funcd-addons](https://github.com/pyvvo/funcd-addons). This page uses rauthy, an
 OpenID Connect provider of kind `IdentityProvider`.
 
@@ -15,11 +16,12 @@ The server's `addons.registries` must list the registry of the add-on's image, `
 registers the add-on from a release, piping its manifest to `funcdctl apply -f -`:
 
 ```sh
-curl -fsSL https://github.com/pyvvo/funcd-addons/releases/download/v0.2.0/rauthy.yaml | funcdctl apply -f -
+curl -fsSL https://github.com/pyvvo/funcd-addons/releases/download/v0.3.0/rauthy.yaml | funcdctl apply -f -
 ```
 
-The Addon names the kind, the engine's image pinned by digest, its port and readiness path, its storage, and the schema
-of its objects' `spec.config`; this one is shortened from rauthy's
+The Addon lists the runtimes the add-on ships, each with its image pinned by digest. rauthy's one entry serves the
+workload `Engine`: one engine of its image runs per object of the kind its attributes name, with its port and readiness
+path, its storage, and the schema of its objects' `spec.config`. This one is shortened from rauthy's
 ([complete file](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/addons/addon.yaml)):
 
 ::include[../../../../../api/types/v1alpha1/examples/addons/addon.yaml#addon]
@@ -37,6 +39,25 @@ funcdctl get identityproviders -n default
 
 funcd checks `spec.config` against the add-on's schema when the object is applied. The object turns `Ready` once its
 engine answers on its readiness path, and the edge then serves it at `login.example.com` under `/auth/v1`.
+
+## Run Functions and Jobs on its runtime
+
+An entry whose workloads hold `Function` or `Job` is a runtime that Functions or Jobs name in `spec.runtime`, as they
+name `nodejs22`. Its name is none of funcd's runtimes, does not start with `node` or `python`, and is shipped by no
+other Addon. The Addon `deno` ships `deno2` for both, and the Function `greeter` runs on it
+([complete file](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/addons/runtimes.yaml)):
+
+::include[../../../../../api/types/v1alpha1/examples/addons/runtimes.yaml#addon]
+
+::include[../../../../../api/types/v1alpha1/examples/addons/runtimes.yaml#function]
+
+funcd resolves `spec.runtime` to one of its own runtimes first, then to an Addon's, then to the operator's
+`runtime.containerd.imageOverride`. A Revision records the image of the Addon's runtime that serves it in
+`spec.runtimeImage`, and its workers run that image, pulled by digest as an engine's is: an upgrade of the Addon moves
+no Revision, and only a change of the Function's spec makes a Revision that runs the new image. A Function applied
+before its Addon turns `Ready` once the Addon ships its runtime for Functions. Such a worker runs on containerd; on a
+process server, and under `funcdctl dev`, it is `RuntimeUnavailable`. A Function on such a runtime is a cloudevent
+one, with the bindings its image's shim builds in.
 
 ## Call its engine from a Function
 
@@ -86,6 +107,39 @@ policy with rauthy's API key `settings`, which `funcdctl rauthy keys` has rauthy
 A target may name its own Function for a kind in `spec.functions`, in place of the kind's, so two copies of an App
 template in one namespace each apply their own.
 
+## Reconcile objects with a Function
+
+An Addon whose kind entry serves `Engineless` adds a kind whose objects run no engine, such as stacks that a Job
+applies outside funcd: a Function of each object's namespace reconciles them, the one the entry's `function.ref` names
+or the one an object names for its own kind in `spec.functions`
+([complete file](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/addons/engineless.yaml)):
+
+::include[../../../../../api/types/v1alpha1/examples/addons/engineless.yaml#addon]
+
+::include[../../../../../api/types/v1alpha1/examples/addons/engineless.yaml#stack]
+
+funcd sends the Function the list of the namespace's objects it reconciles, deleting ones included, at each change of
+the list, after a failed call's backoff, at the kind's `resync`, 10 minutes when unset, and once a JobRun of the
+namespace ends. An object is `Pending` with `Progressing` until the Function answers for its generation, then `Ready`
+on an ok, or with the Function's reason, such as `AwaitingApproval`. [Build an add-on](build.md#engineless-kinds) shows
+the call and its answer.
+
+An object with `deletion: delete` stays at its deletion until its Function has destroyed what it holds. The DELETE
+answers 202 with the object, which keeps `metadata.deletionTimestamp`, the reason `Deleting` until the Function's first
+answer, and its later writes. Only the Function's ok to a call that carried it as deleting removes it. With `retain`,
+the default, the object goes at once and the Function forgets it, leaving what it manages in place; setting `retain`
+on a deleting object lets it go at its next pass. A deleting object whose Addon or Function is gone waits until they
+are back or `retain` is set:
+
+```sh
+funcdctl delete InfraStack bunny-edge -n default
+funcdctl get infrastacks bunny-edge -n default -o json
+```
+
+`funcdctl delete` prints `deleting InfraStack/bunny-edge` for an object it holds. An App's deletion and a revision that
+drops such an object wait the same way: the App's other parts, its Function and its Jobs among them, stay until its
+engineless parts are gone.
+
 ## Ship it with an App
 
 An App template can carry the add-on with the Functions, values and hooks that run beside it: its `addon.yaml` holds the
@@ -134,7 +188,9 @@ add-on](build.md) shows what an engine must do and how rauthy's parts are writte
 
 ## Access
 
-Only an admin registers, changes or deletes an Addon, and only an admin reads its AddonRevisions. A developer of a
+Only an admin registers, changes or deletes an Addon, and only an admin reads its AddonRevisions. An Addon's runtime is
+trusted as its engine is: an admin's, pinned by digest and from a listed registry. Its workers' egress is governed as
+funcd's own runtimes' is. A developer of a
 namespace declares the objects of an add-on's kind there.
 
 A Function calls the engines of the objects it binds with no role. For each call, funcd asks Cedar whether the Function
@@ -151,13 +207,15 @@ with 403. An alias the Function does not bind, and a proxy request with no token
 
 ## Limits and quotas
 
-- A namespace holds at most `addons.maxObjectsPerNamespace` objects that run an engine, 20 by default, all add-ons
-  together, and at most `addons.maxSettingsPerNamespace` settings objects, 200 by default.
+- A namespace holds at most `addons.maxObjectsPerNamespace` objects of add-on kinds, settings kinds apart, 20 by
+  default, all add-ons together, an engineless kind's objects too, and at most `addons.maxSettingsPerNamespace`
+  settings objects, 200 by default.
 - A call of an engine waits `addons.callTimeout` for the answer, 10 seconds by default, then fails with 503. Its request
   body and its answer body hold at most `addons.callPayloadLimit` bytes each, 1 MiB by default, or the call fails with
   413.
-- A call of a settings kind's Function waits `addons.settingsTimeout`, 30 seconds by default, then fails, and funcd
-  calls again after 1 second, then twice as long after each failure, at most 5 minutes or the kind's resync.
+- A call of a settings or an engineless kind's Function waits `addons.settingsTimeout`, 30 seconds by default, then
+  fails, and funcd calls again after 1 second, then twice as long after each failure, at most 5 minutes or the kind's
+  resync.
 
 ## Status
 
@@ -176,11 +234,16 @@ funcdctl logs identityprovider/login -n default
 | | `AddonNotFound` | No Addon registers its kind |
 | | `ConfigInvalid`, `EnvInvalid` | Its config no longer fits the Addon's schema, or its env does not evaluate |
 | | `SecretNotFound`, `BindingResolveFailed` | A bound Secret is missing or forbidden |
-| | `RuntimeUnavailable` | The server runs no engine of the add-on's runtime |
+| | `RuntimeUnavailable` | The server's add-on runtime runs no image, as on a process server |
 | A settings object | `Progressing` | No answer of its Function for its generation yet |
 | | `ReconcileFailed`, `NoResult` | The call failed, or its answer left the object out; the Function's own reason when it gives one |
 | | `TargetNotFound`, `TargetNotReady` | Its target is missing or not Ready |
 | | `FunctionNotFound`, `FunctionNotBound` | Its Function is missing, or does not bind its target |
+| An engineless object | `Progressing` | No answer of its Function for its generation yet |
+| | `ReconcileFailed`, `NoResult` | The call failed, or its answer left the object out; the Function's own reason when it gives one |
+| | `AddonNotFound`, `AddonRevisionNotFound`, `FunctionNotFound` | Its Addon, its pinned revision or its Function is missing, and no call carries it |
+| | `Deleting` | Held at its deletion: its Function has not answered a call that carried it as deleting yet |
+| A Function or a Job on its runtime | `RuntimeUnavailable` | The entry does not serve the workload, no worker driver of the server runs an image, or the Addon that shipped the Revision's image is gone |
 | A Function that binds an object | `AddonObjectNotFound` | The object does not exist |
 | | `DependencyNotReady` | A worker is not ready: the object's engine is not Ready |
 

@@ -120,7 +120,9 @@ type Handlers interface {
 	CreateAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, o v1.AddonObject) (v1.AddonObject, error)
 	GetAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name v1.ObjectName) (v1.AddonObject, error)
 	ReplaceAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name v1.ObjectName, o v1.AddonObject) (v1.AddonObject, error)
-	DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name v1.ObjectName, rv string) error
+	// DeleteAddonObject removes the object, or holds it at its deletion and returns it (ADR-0345 Decision 6): the route
+	// answers 202 with a held object, else 204.
+	DeleteAddonObject(ctx context.Context, ns v1.NamespaceName, plural string, name v1.ObjectName, rv string) (*v1.AddonObject, error)
 
 	// RuntimeClass (cluster-scoped)
 	GetRuntimeClass(ctx context.Context, name v1.ObjectName) (v1.RuntimeClass, error)

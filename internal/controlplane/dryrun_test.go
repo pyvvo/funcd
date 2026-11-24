@@ -160,8 +160,8 @@ func sample(k v1.Kind, name v1.ObjectName) v1.Object {
 		x.Spec = v1.RestoreSpec{Backup: "b", Source: v1.RestoreSource{CredentialsSecret: "c", IdentitySecret: "i"},
 			Members: []v1.RestoreMember{{Kind: v1.KindKVStore, Name: "s", As: "t"}}}
 	case *v1.Addon:
-		x.Spec = v1.AddonSpec{Kind: "EchoService", Image: "docker.io/traefik/whoami@sha256:" + strings.Repeat("a", 64), Port: 80,
-			Readiness: v1.AddonReadiness{Path: "/"}}
+		x.Spec = v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "echoservice", Image: "docker.io/traefik/whoami@sha256:" + strings.Repeat("a", 64), Workloads: []v1.Workload{v1.WorkloadEngine},
+			Attributes: &v1.AddonAttributes{Kind: "EchoService", Port: 80, Readiness: v1.AddonReadiness{Path: "/"}}}}}
 	}
 	return o
 }

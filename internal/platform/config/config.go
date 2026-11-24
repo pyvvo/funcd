@@ -462,12 +462,12 @@ type Config struct {
 
 	// Addons is the add-ons an admin registers (ADR-0332): Registries lists the registries an Addon's image may come
 	// from, its host after docker.io normalization, the empty default refusing every Addon (Decision 6);
-	// MaxObjectsPerNamespace is the per-namespace cap on the add-on objects that run an engine, at admission, 0 ⇒ the
+	// MaxObjectsPerNamespace is the per-namespace cap on the add-on objects of engine and engineless kinds, at admission, 0 ⇒ the
 	// default (20), a negative value no cap (Decision 2); MaxSettingsPerNamespace the cap on the settings objects of
 	// every kind together, 0 ⇒ 200 (ADR-0340 Decision 6).
 	Addons struct {
 		Registries              []string `json:"registries,omitempty" env:"FUNCD_ADDONS_REGISTRIES" envSeparator:"," doc:"The registries that an Addon's image may come from, each the image's host, such as ghcr.io, with docker.io for an image that names none. Empty, the default, refuses every Addon. A registry taken out of the list stops no engine, and refuses the Addon's next change."`
-		MaxObjectsPerNamespace  int      `json:"maxObjectsPerNamespace,omitempty" env:"FUNCD_ADDONS_MAX_OBJECTS_PER_NAMESPACE" doc:"The most objects of add-ons' kinds that run an engine that one namespace may hold, all add-ons together: a create past it gets 400. Settings objects do not count. 0 means 20, and a negative value means no cap."`
+		MaxObjectsPerNamespace  int      `json:"maxObjectsPerNamespace,omitempty" env:"FUNCD_ADDONS_MAX_OBJECTS_PER_NAMESPACE" doc:"The most objects of add-ons' engine and engineless kinds that one namespace may hold, all add-ons together: a create past it gets 400. Settings objects do not count. 0 means 20, and a negative value means no cap."`
 		MaxSettingsPerNamespace int      `json:"maxSettingsPerNamespace,omitempty" env:"FUNCD_ADDONS_MAX_SETTINGS_PER_NAMESPACE" doc:"The most settings objects that one namespace may hold, of every settings kind together: a create past it gets 400. 0 means 200, and a negative value means no cap."`
 		// CallTimeout and CallPayloadLimit bound a Function's call of an add-on object's engine (ADR-0338 Decision 4).
 		CallTimeout      string `json:"callTimeout,omitempty" env:"FUNCD_ADDONS_CALL_TIMEOUT" doc:"How long a Function's call of an add-on object's engine waits for the answer, through ctx.addon.fetch or the add-on proxy, as a positive duration such as 10s; a call past it gets 503. Empty means 10s."`

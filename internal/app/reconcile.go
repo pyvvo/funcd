@@ -686,11 +686,25 @@ func (r reader) dropped(ctx context.Context, a *v1.App, ents []entry) ([]v1.Obje
 	return out, nil
 }
 
-// prune deletes each dropped object at its resourceVersion, a Bucket through gc.DeleteBucket (Decision 6). It keeps a
-// Function an open run holds (RunHeld) and then, counting kept objects as not deleted, anything an object it does not
+// prune deletes each dropped object at its resourceVersion, a Bucket through gc.DeleteBucket and an add-on object
+// through gc.DeleteAddonObject, which holds an engineless one with deletion: delete (Decision 6, ADR-0345 Decision 6).
+// It keeps a Function an open run holds (RunHeld), every other dropped part while a dropped engineless part still
+// exists (InUse, ADR-0345 Decision 8), and then, counting kept objects as not deleted, anything an object it does not
 // delete still uses (InUse). It returns the objects left, as Pruning children.
 func (r *Reconciler) prune(ctx context.Context, a *v1.App, dropped []v1.Object) ([]v1.AppChild, error) {
 	kept := make(map[v1.ObjectRef]string)
+	engineless, err := gc.EnginelessParts(ctx, r.store, dropped)
+	if err != nil {
+		return nil, err
+	}
+	if len(engineless) > 0 {
+		first := partName(v1.ObjectRef{Kind: v1.Kind(engineless[0].Spec.Kind), Name: engineless[0].Name})
+		for _, o := range dropped {
+			if !slices.ContainsFunc(engineless, func(e *v1.AddonObject) bool { return keyOf(e) == keyOf(o) }) {
+				kept[keyOf(o)] = fmt.Sprintf("%s: %s", reasonInUse, first)
+			}
+		}
+	}
 	var holds revhold.Holds
 	for _, o := range dropped {
 		if _, ok := o.(*v1.Function); !ok {
@@ -734,9 +748,13 @@ func (r *Reconciler) prune(ctx context.Context, a *v1.App, dropped []v1.Object) 
 			out = append(out, pruningChild(o, reason))
 			continue
 		}
-		err := r.remove(ctx, o)
+		held, err := r.remove(ctx, o)
 		switch fault.KindOf(err) {
 		case "", fault.NotFound:
+			if held {
+				out = append(out, pruningChild(o, reasonDeleting))
+				continue
+			}
 			r.log.InfoContext(ctx, "pruned", "kind", k.Kind, "namespace", k.Namespace, "name", k.Name, "app", a.Name)
 		case fault.Conflict:
 			out = append(out, pruningChild(o, "")) // changed since it was listed: judged again on the requeue
@@ -747,12 +765,18 @@ func (r *Reconciler) prune(ctx context.Context, a *v1.App, dropped []v1.Object) 
 	return out, nil
 }
 
-func (r *Reconciler) remove(ctx context.Context, o v1.Object) error {
-	if b, ok := o.(*v1.Bucket); ok {
-		return gc.DeleteBucket(ctx, r.store, r.purger, b)
+// remove deletes o, a dropped part; an engineless add-on object with deletion: delete is held and stays a Pruning
+// child until its Function has destroyed what it holds (ADR-0345 Decision 6).
+func (r *Reconciler) remove(ctx context.Context, o v1.Object) (bool, error) {
+	switch x := o.(type) {
+	case *v1.Bucket:
+		return false, gc.DeleteBucket(ctx, r.store, r.purger, x)
+	case *v1.AddonObject:
+		held, err := gc.DeleteAddonObject(ctx, r.store, x)
+		return held != nil, err
 	}
 	m := o.GetObjectMeta()
-	return r.store.Delete(ctx, o.GroupVersionKind(), m.Namespace, m.Name, m.ResourceVersion)
+	return false, r.store.Delete(ctx, o.GroupVersionKind(), m.Namespace, m.Name, m.ResourceVersion)
 }
 
 func pruningChild(o v1.Object, reason string) v1.AppChild {

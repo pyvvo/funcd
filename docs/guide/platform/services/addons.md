@@ -1,20 +1,29 @@
 ---
 title: Add-ons
-description: Engines built outside funcd that an admin registers, one engine per object, reached only through funcd.
+description: Runtimes and engines built outside funcd that an admin registers: Functions and Jobs on an add-on's runtime, one engine per object, reached only through funcd.
 ---
 
 ![An admin's Addon registers a kind, and each change of it is an AddonRevision. A developer's add-on object, such as an IdentityProvider, pins a revision and runs one fenced engine, which the edge serves at its host and a Function that binds it reaches through funcd's facet or proxy, Cedar's addon::call checked on each call. A settings object runs no engine: its target's list goes to the kind's Function. Backups copy the engine's own snapshot](../../assets/addons.drawio.svg)
 
-An add-on is an engine built outside funcd, such as rauthy, an OpenID Connect provider. An admin registers it with an
-Addon: the kind it adds, its engine's image pinned by digest from a registry that `addons.registries` lists, the port
-and readiness path of the engine, the storage it keeps, and the schema of its objects' `spec.config`. Users then declare
-objects of that kind as they declare a Lake, at the kind's plural, and funcd checks each object's config against the
-schema when it is written.
+An add-on is built outside funcd, such as rauthy, an OpenID Connect provider. An admin registers it with an Addon: the
+runtimes it ships, each an image pinned by digest from a registry that `addons.registries` lists and the workloads it
+serves. An entry for `Function` and `Job` is a runtime that Functions and Jobs name; one entry for `Engine` runs the
+kind the add-on adds, with the port and readiness path of the engine, the storage it keeps, and the schema of its
+objects' `spec.config`. Users then declare objects of that kind as they declare a Lake, at the kind's plural, and funcd
+checks each object's config against the schema when it is written.
+
+## Runtimes for Functions and Jobs
+
+A Function's or a Job's `spec.runtime` resolves to one of funcd's own runtimes, else to an Addon's of that name, else to
+the operator's image. The gate reads the Addons on each pass, and an Addon's change requeues every Function and Job on
+a runtime that is none of funcd's, so one applied before its Addon recovers. A Revision records the image of the
+Addon's runtime that serves it, and its workers run that image on containerd: an upgrade of the Addon moves no
+Revision, and a deleted Addon fails its Functions at their next pass while their serving workers keep serving.
 
 ## One engine per object
 
-funcd runs one engine per object on its add-on runtime, on containerd, with the object's resources, as it runs a Lake's
-engine. The engine is fenced: it reaches no endpoint, and it admits new connections only from loopback and funcd's
+funcd runs one engine per object on its add-on runtime, on containerd, from the image of the Addon's kind entry, with the
+object's resources, as it runs a Lake's engine. A process server runs no engine. The engine is fenced: it reaches no endpoint, and it admits new connections only from loopback and funcd's
 bridge address. The edge serves it at the object's `ingress.host` under the Addon's `basePath`, with the path kept, and
 refuses the Addon's private paths however they are spelled. A held object has no engine and no edge entry.
 
@@ -48,6 +57,16 @@ sends each target's full list of objects to the kind's Function, or to one that 
 at each change of the list, after a failed call's backoff, and at the kind's resync. The Function applies the list
 through its binding of the target, and its answer writes each object's status. funcd keeps what it knows of the calls in
 memory, so a start sends each list again.
+
+## Engineless kinds
+
+An Addon's kind entry may serve `Engineless`: its objects run no engine and no image, and a Function of each object's
+namespace reconciles them, called with its group's full list as a settings kind's Function is, at each change, after a
+failed call's backoff, at the kind's resync, and once a JobRun of the namespace ends. An object's first pass stores
+`status.workload: Engineless` before any call carries it, and from then on an object with `deletion: delete` is held at
+its deletion: the API's DELETE, the owner collector and an App's prune set its `metadata.deletionTimestamp` instead of
+removing it, and only its Function's ok to a call that carried it as deleting removes it. An App's other parts outlive
+its engineless parts, so the Function and the Jobs that destroy a stack are still there to do it.
 
 ## Backups
 

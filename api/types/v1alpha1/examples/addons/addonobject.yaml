@@ -3,25 +3,30 @@ kind: Addon
 metadata:
   name: rauthy
 spec:
-  kind: IdentityProvider
-  image: ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d
-  port: 8080
-  basePath: /auth/v1
-  readiness:
-    path: /auth/v1/ping
-  config:
-    type: object
-    additionalProperties: false
-    properties:
-      publicHost:
-        type: string
-      https:
-        type: boolean
-    required:
-      - publicHost
-      - https
-  secretKeys:
-    - ENC_KEYS
+  runtimes:
+    - name: rauthy
+      image: ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d
+      workloads:
+        - Engine
+      attributes:
+        kind: IdentityProvider
+        port: 8080
+        basePath: /auth/v1
+        readiness:
+          path: /auth/v1/ping
+        config:
+          type: object
+          additionalProperties: false
+          properties:
+            publicHost:
+              type: string
+            https:
+              type: boolean
+          required:
+            - publicHost
+            - https
+        secretKeys:
+          - ENC_KEYS
 ---
 apiVersion: funcd.io/v1alpha1
 kind: Secret

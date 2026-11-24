@@ -1091,6 +1091,6 @@ func (s *StubHandlers) ReplaceAddonObject(_ context.Context, ns v1.NamespaceName
 	return stubPut(s, s.addonObjects, "AddonObject", nsKey(ns, name), o, true)
 }
 
-func (s *StubHandlers) DeleteAddonObject(_ context.Context, ns v1.NamespaceName, _ string, name v1.ObjectName, _ string) error {
-	return stubDelete(s, s.addonObjects, "AddonObject", nsKey(ns, name))
+func (s *StubHandlers) DeleteAddonObject(_ context.Context, ns v1.NamespaceName, _ string, name v1.ObjectName, _ string) (*v1.AddonObject, error) {
+	return nil, stubDelete(s, s.addonObjects, "AddonObject", nsKey(ns, name))
 }

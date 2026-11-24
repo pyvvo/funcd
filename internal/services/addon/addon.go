@@ -61,11 +61,9 @@ type Deps struct {
 	Secrets provider.SecretResolver
 	// Routes takes each object's edge entry (ADR-0138); nil programs none.
 	Routes router.EntrySetter
-	// Modes are the runtime.mode values whose engines this runtime runs: containerd on a containerd server and under
-	// funcdctl dev, none on a process server (ADR-0332 Decision 3). ServerMode is the server's runtime.mode, which a
-	// RuntimeUnavailable message names.
-	Modes      []string
-	ServerMode string
+	// RunsImages is whether Provider runs images, as it does on containerd and under funcdctl dev: on a process server
+	// it runs none, and each object waits Pending, RuntimeUnavailable, naming the process driver (ADR-0344 Decision 9).
+	RunsImages bool
 	Logger     *slog.Logger
 	// SupervisionPeriod requeues a Ready object, so a dead engine is re-created (ADR-0142); 0 ⇒
 	// controller.SupervisionPeriod. ReferentPollInterval re-checks a wait no watch ends, a lifted forbid (ADR-0163);
@@ -86,6 +84,9 @@ type Deps struct {
 	// FollowCurrent makes every object follow its Addon's current revision, as funcdctl dev runs one developer's
 	// loop with no other namespace to protect (ADR-0339 Decision 7).
 	FollowCurrent bool
+	// Collect runs the owner garbage collector over a namespace (gc.CollectNamespace): once an App's last engineless
+	// part goes, the App's other parts go then, not at the next sweep (ADR-0345 Decision 8). nil collects nothing.
+	Collect func(ctx context.Context, ns v1.NamespaceName) error
 }
 
 // Reconciler is the controller.Reconciler for AddonObject.
@@ -94,8 +95,7 @@ type Reconciler struct {
 	prov          provider.Runtime
 	secrets       provider.SecretResolver
 	routes        router.EntrySetter
-	modes         []string
-	serverMode    string
+	runsImages    bool
 	logger        *slog.Logger
 	period        time.Duration
 	referentPoll  time.Duration
@@ -106,9 +106,12 @@ type Reconciler struct {
 	quarantine    time.Duration
 	now           func() time.Time
 	followCurrent bool
+	collect       func(ctx context.Context, ns v1.NamespaceName) error
 
-	mu   sync.Mutex
-	seen map[provider.ProviderRef]seenObject // each object's UID and deletion policy at its last pass
+	mu       sync.Mutex
+	seen     map[provider.ProviderRef]seenObject // each object's UID and deletion policy at its last pass
+	parts    map[provider.ProviderRef]v1.UID     // the App of each engineless part at its last pass (ADR-0345 Decision 8)
+	answered map[v1.UID]bool                     // the held objects a deleting call's answer wrote (ADR-0345 Decision 6)
 
 	// The settings step (ADR-0341): the caller of the settings Functions, the controller's Enqueue, each call's bound,
 	// and what this process knows of each target's calls.
@@ -118,6 +121,10 @@ type Reconciler struct {
 	settingsTimeout time.Duration
 	settings        map[settingsKey]*settingsState
 	targets         map[provider.ProviderRef]targetSeen
+	// The engineless step (ADR-0345): the caller of the engineless kinds' Functions and what this process knows of each
+	// group's calls.
+	objectsCaller ObjectsCaller
+	groups        map[groupKey]*settingsState
 }
 
 // seenObject is what a pass saw of an object that its deletion needs once the object is gone.
@@ -149,13 +156,17 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	}
 	return &Reconciler{
 		store: d.Store, prov: d.Provider, secrets: d.Secrets, routes: d.Routes,
-		modes: d.Modes, serverMode: d.ServerMode, logger: logger.With("component", "services.addon.reconciler"),
+		runsImages: d.RunsImages, logger: logger.With("component", "services.addon.reconciler"),
 		period:       period,
 		referentPoll: orDefault(d.ReferentPollInterval, defaultPollInterval),
 		enginePoll:   min(orDefault(d.EnginePollInterval, defaultPollInterval), period),
 		files:        d.Files, volumes: d.Volumes, gate: gate, quarantine: d.QuarantinePeriod, now: now,
 		followCurrent:   d.FollowCurrent,
+		collect:         d.Collect,
 		seen:            map[provider.ProviderRef]seenObject{},
+		parts:           map[provider.ProviderRef]v1.UID{},
+		answered:        map[v1.UID]bool{},
+		groups:          map[groupKey]*settingsState{},
 		settingsTimeout: DefaultSettingsTimeout,
 		settings:        map[settingsKey]*settingsState{},
 		targets:         map[provider.ProviderRef]targetSeen{},

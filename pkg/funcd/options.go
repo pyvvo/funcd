@@ -74,13 +74,19 @@ func WithSQLChangeFeedPort(port int) Option {
 	return func(c *config) error { c.sqlChangeFeedPort = port; return nil }
 }
 
-// WithAddonRuntime runs the add-on engines on r, which serves the runtime.mode values modes (ADR-0332 Decision 3,
-// ADR-0334): an object whose Addon runs on none of them waits Pending, RuntimeUnavailable. Without it the production
-// runtime runs them on a containerd server, and a process server runs none. Tests and funcdctl dev inject theirs. An r
-// that is also workload.AddonFiles copies and places the engines' files, and one that is also provider.Volumes
-// reclaims or quarantines a deleted object's storage (ADR-0333).
-func WithAddonRuntime(r provider.Runtime, modes ...string) Option {
-	return func(c *config) error { c.addonRuntime, c.addonModes = r, modes; return nil }
+// WithAddonRuntime runs the add-on engines on r, the provider runtime that runs their images (ADR-0087, ADR-0344
+// Decision 9). Without it the production runtime runs them on a containerd server, and on a process server, whose
+// provider runtime runs no image, each object waits Pending, RuntimeUnavailable, naming the process driver. Tests and
+// funcdctl dev inject theirs. An r that is also workload.AddonFiles copies and places the engines' files, and one that
+// is also provider.Volumes reclaims or quarantines a deleted object's storage (ADR-0333).
+func WithAddonRuntime(r provider.Runtime) Option {
+	return func(c *config) error { c.addonRuntime = r; return nil }
+}
+
+// WithImageOverrides names the runtimes that runtime.containerd.imageOverride maps to an image: no Addon may ship a
+// runtime of one of these names (ADR-0344 Decision 4).
+func WithImageOverrides(runtimes ...string) Option {
+	return func(c *config) error { c.imageOverrides = runtimes; return nil }
 }
 
 // WithAddonRegistries sets addons.registries, the registries an Addon's image may come from (ADR-0332 Decision 6);

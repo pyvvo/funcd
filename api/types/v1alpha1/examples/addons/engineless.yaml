@@ -1,0 +1,58 @@
+# region addon
+apiVersion: funcd.io/v1alpha1
+kind: Addon
+metadata:
+  name: infrastack
+spec:
+  runtimes:
+    - name: infrastack
+      workloads:
+        - Engineless
+      attributes:
+        kind: InfraStack
+        resync: 30m
+        function:
+          ref: infrastack-reconciler
+        config:
+          type: object
+          additionalProperties: false
+          properties:
+            job:
+              type: string
+            variables:
+              type: object
+              additionalProperties: false
+              properties:
+                zone:
+                  type: string
+          required:
+            - job
+# endregion addon
+---
+# region function
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: infrastack-reconciler
+  namespace: default
+  resourceGroup: default
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/infrastack-reconciler:1.0.0
+# endregion function
+---
+# region stack
+apiVersion: funcd.io/v1alpha1
+kind: InfraStack
+metadata:
+  name: bunny-edge
+  namespace: default
+  resourceGroup: default
+spec:
+  deletion: delete
+  config:
+    job: bunny-edge
+    variables:
+      zone: funcd-tunnel
+# endregion stack

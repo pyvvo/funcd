@@ -574,7 +574,7 @@ func (a *cli) deployAddon(ctx context.Context, c *sdk.Client, want *v1.Addon, ns
 	const op = "funcdctl app deploy"
 	objs, err := c.List(ctx, v1.KindAddon, "")
 	if fault.KindOf(err) == fault.Forbidden {
-		_, err = c.List(ctx, v1.Kind(want.Spec.Kind), ns)
+		_, err = c.List(ctx, v1.Kind(want.Spec.Kind()), ns)
 		if fault.KindOf(err) == fault.NotFound {
 			return false, fault.Invalidf(op, "Addon %s is not registered: an admin deploys this template first", want.Name)
 		}
@@ -585,7 +585,7 @@ func (a *cli) deployAddon(ctx context.Context, c *sdk.Client, want *v1.Addon, ns
 	}
 	var cur *v1.Addon
 	for _, o := range objs {
-		if x, ok := o.(*v1.Addon); ok && v1.SameAddonKind(x.Spec.Kind, want.Spec.Kind) {
+		if x, ok := o.(*v1.Addon); ok && v1.SameAddonKind(x.Spec.Kind(), want.Spec.Kind()) {
 			cur = x
 		}
 	}

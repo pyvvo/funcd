@@ -55,7 +55,7 @@ type FunctionSpec struct {
 	Scaling Scaling `json:"scaling,omitempty" doc:"Scale to zero: with minReplicas 0, the default, and an idleTimeout, a Function with no traffic goes Idle and its workers stop until the next call wakes it."`
 	// Runtime is the runtime class / language image (e.g. "nodejs22", "python312") — F13/ADR-0020.
 	// Typed RuntimeName so its DNS-1123 constraint reaches the OpenAPI schema (ADR-0048).
-	Runtime RuntimeName `json:"runtime,omitempty" doc:"The runtime that runs the code, such as nodejs22 or python314. A Function without one fails with ShapeInvalid, and one whose runtime this node cannot run fails with RuntimeUnavailable."`
+	Runtime RuntimeName `json:"runtime,omitempty" doc:"The runtime that runs the code, such as nodejs22 or python314, or one that an Addon ships for Functions. A Function without one fails with ShapeInvalid, and one whose runtime this node cannot run fails with RuntimeUnavailable."`
 	// Handler is the entrypoint the shim resolves at materialization (e.g. "app.handler") — F13.
 	Handler string `json:"handler,omitempty" pattern:"^[A-Za-z_][A-Za-z0-9_.]*$" doc:"The name of the export that the shim calls in the code, such as handle. A Function without one, or whose code has no such export, fails with ShapeInvalid."`
 	// Protocol is how the shim calls the code (ADR-0243): "cloudevent", the default, or "http", an http(app) export

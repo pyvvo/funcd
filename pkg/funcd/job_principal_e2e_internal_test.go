@@ -153,7 +153,7 @@ func newJobRig(t *testing.T, s3 bool) *jobRig {
 	opts := []Option{InMemory(), WithoutLogCompaction(), WithRuntimeShim(node, langmod.NodeShim(t)),
 		WithArtifactStore(dir), WithMasterSecret([]byte(jobMaster)),
 		WithLakeProviderRuntime(&toggleEngine{addr: strings.TrimPrefix(engine.URL, "http://")}),
-		WithAddonRuntime(newAddonRuntime(t), "containerd"), WithAddonRegistries("ghcr.io"),
+		WithAddonRuntime(newAddonRuntime(t)), WithAddonRegistries("ghcr.io"),
 		WithCredentials(Credential{Token: addonAdminToken, Role: "admin"}), WithPacing(asleepPacing(50 * time.Millisecond))}
 	r := &jobRig{layout: t.TempDir()}
 	if s3 {

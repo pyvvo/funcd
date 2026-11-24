@@ -110,8 +110,9 @@ func Load(dir string) (*Template, error) {
 	return t, nil
 }
 
-// readAddon reads addon.yaml: exactly one document, an Addon that names no namespace. Its ${{ }} are the Addon's own,
-// left as written: the Addon's admission checks them (ADR-0332 Decision 4).
+// readAddon reads addon.yaml: exactly one document, an Addon that names no namespace and adds a kind, since app deploy
+// finds the template's Addon by its kind (ADR-0344 Decision 10). Its ${{ }} are the Addon's own, left as written: the
+// Addon's admission checks them (ADR-0332 Decision 4).
 func readAddon(path string) (*v1.Addon, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // a file of the template directory
 	if err != nil {
@@ -130,6 +131,9 @@ func readAddon(path string) (*v1.Addon, error) {
 	}
 	if a.Namespace != "" {
 		return nil, fault.Invalidf(loadOp, "%s: an Addon is cluster-scoped, so it names no namespace", AddonFile)
+	}
+	if a.Spec.Kind() == "" {
+		return nil, fault.Invalidf(loadOp, "%s: its Addon adds no kind, and app deploy finds a template's Addon by its kind", AddonFile)
 	}
 	return a, nil
 }

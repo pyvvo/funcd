@@ -15,6 +15,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
+	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -397,6 +398,13 @@ func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.Nam
 // guard reads Old, so the delete is conditional on Old's version.
 func (h *storeHandlers) deleteGuarded(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string,
 	guard func(context.Context, v1.Object) error) error {
+	return h.deleteWith(ctx, kind, ns, name, rv, guard, nil)
+}
+
+// deleteWith is deleteGuarded whose last step is del, given Old, in place of the store's Delete at Old's version, when
+// del is set: an add-on object may be held instead (ADR-0345 Decision 6). del is conditional on Old's version too.
+func (h *storeHandlers) deleteWith(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string,
+	guard func(context.Context, v1.Object) error, del func(context.Context, v1.Object) error) error {
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
 	}
@@ -408,7 +416,7 @@ func (h *storeHandlers) deleteGuarded(ctx context.Context, kind v1.Kind, ns v1.N
 		return err
 	}
 	defer unlock()
-	if guard == nil && !h.admit.Handles(kind.GVK(), admission.Delete) {
+	if guard == nil && del == nil && !h.admit.Handles(kind.GVK(), admission.Delete) {
 		return h.store.Delete(ctx, kind.GVK(), ns, name, rv)
 	}
 	_, err = retryOwnRead(func() (v1.Object, bool, error) {
@@ -430,7 +438,11 @@ func (h *storeHandlers) deleteGuarded(ctx context.Context, kind v1.Kind, ns v1.N
 		}); err != nil {
 			return nil, false, err
 		}
-		err = h.store.Delete(ctx, kind.GVK(), ns, name, old.GetObjectMeta().ResourceVersion)
+		if del != nil {
+			err = del(ctx, old)
+		} else {
+			err = h.store.Delete(ctx, kind.GVK(), ns, name, old.GetObjectMeta().ResourceVersion)
+		}
 		return nil, rv == "" && fault.KindOf(err) == fault.Conflict, err
 	})
 	return err
@@ -497,7 +509,7 @@ func (h *storeHandlers) forceDeleteResourceGroup(ctx context.Context, ns v1.Name
 // resourceVersion if it is still a member; gone or moved is skipped. It reports whether it deleted it.
 func (h *storeHandlers) deleteMember(ctx context.Context, m v1.Object, group v1.ResourceGroupName) (bool, error) {
 	kind, meta := m.GroupVersionKind().Kind, m.GetObjectMeta()
-	err := h.deleteObjIf(ctx, kind, meta.Namespace, meta.Name, meta.ResourceVersion)
+	err := h.deleteMemberAt(ctx, kind, meta.Namespace, meta.Name, meta.ResourceVersion)
 	if err == nil {
 		return true, nil
 	}
@@ -519,11 +531,35 @@ func (h *storeHandlers) deleteMember(ctx context.Context, m v1.Object, group v1.
 	if _, owned := v1.ControllerOf(cm.OwnerReferences); cm.ResourceGroup != group || owned {
 		return false, nil
 	}
-	err = h.deleteObjIf(ctx, kind, cm.Namespace, cm.Name, cm.ResourceVersion)
+	err = h.deleteMemberAt(ctx, kind, cm.Namespace, cm.Name, cm.ResourceVersion)
 	if fault.KindOf(err) == fault.NotFound {
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// deleteMemberAt deletes one member at rv as its own DELETE does: an add-on object goes through gc.DeleteAddonObject,
+// and one that it holds at its deletion (ADR-0345 Decision 6) stops the force with a 409 naming it, as a member whose
+// delete is refused does (ADR-0170 Decision 8).
+func (h *storeHandlers) deleteMemberAt(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	if kind != v1.KindAddonObject {
+		return h.deleteObjIf(ctx, kind, ns, name, rv)
+	}
+	var held *v1.AddonObject
+	err := h.deleteWith(ctx, kind, ns, name, rv, nil, func(ctx context.Context, old v1.Object) error {
+		o, ok := old.(*v1.AddonObject)
+		if !ok {
+			return fault.Internalf("controlplane.deleteMemberAt", "%T is not an AddonObject", old)
+		}
+		var err error
+		held, err = gc.DeleteAddonObject(ctx, h.store, o)
+		return err
+	})
+	if err != nil || held == nil {
+		return err
+	}
+	return fault.Conflictf("controlplane.deleteMemberAt", "%s %q is held at its deletion until its Function has destroyed "+
+		"what it holds (deletion: delete); delete the group again once it is gone", held.Spec.Kind, name)
 }
 
 func boolRank(b bool) int {

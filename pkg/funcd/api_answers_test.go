@@ -682,7 +682,8 @@ func (r answerRow) caseOf(t *testing.T, cases map[caseKey]documentedCase) caseKe
 	t.Helper()
 	var found []caseKey
 	for k, c := range cases {
-		if k.op == r.op && (r.when == "") == (k.index < 0) && strings.Contains(c.when, r.when) {
+		// a success row names its status when the operation has two (an add-on object's delete: 202 held, 204 gone)
+		if k.op == r.op && (r.when == "") == (k.index < 0) && strings.Contains(c.when, r.when) && (r.ask.status == 0 || r.ask.status == k.status) {
 			found = append(found, k)
 		}
 	}

@@ -68,7 +68,7 @@ func devAddonOptions(ctx context.Context, stateDir string, cfg devConfig, inst *
 	}
 	inst.addons = rt
 	inst.cleanup = append(inst.cleanup, rt.StopAll)
-	return []funcd.Option{funcd.WithAddonRuntime(rt, v1.AddonRuntimeContainerd), funcd.WithAnyAddonRegistry(),
+	return []funcd.Option{funcd.WithAddonRuntime(rt), funcd.WithAnyAddonRegistry(),
 		funcd.WithAddonsFollowingCurrent()}, nil
 }
 
