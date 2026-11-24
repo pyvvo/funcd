@@ -311,27 +311,11 @@ func laneFolders(t *testing.T) map[string]bool {
 	// The add-ons run their lanes in their own repository, with funcd's harness: what the pinned add-ons repo's lanes
 	// run, an Examples link may name too.
 	data, err := os.ReadFile(filepath.Join(langmod.Dir(t, langmod.Addons), "e2e", "lanes.yaml"))
-	if err != nil {
-		for _, folder := range movedLaneFolders() {
-			run[folder] = true
-		}
-		return run
-	}
-	require.Empty(t, movedLaneFolders(), "the pinned funcd-addons runs its own lanes: empty movedLaneFolders")
+	require.NoError(t, err, "the pinned funcd-addons holds its own lanes")
 	var lanes map[string]laneSpec
 	require.NoError(t, yaml.Unmarshal(data, &lanes))
 	addLaneFolders(run, lanes, langmod.Addons)
 	return run
-}
-
-// movedLaneFolders are run by pyvvo/funcd-addons' own lanes, which moved there after the funcd-addons release that
-// go.mod pins (v0.6.0), so that release holds no e2e/lanes.yaml to read them from. A temporary list: laneFolders fails
-// once the pinned release holds one, and the entries go then.
-func movedLaneFolders() []string {
-	return []string{
-		"github.com/pyvvo/funcd-addons rauthy",
-		"github.com/pyvvo/funcd-functions apps/addon-caller",
-	}
 }
 
 // addLaneFolders records each folder the lanes run: a lane's dir, a staged file's folder in the module it names, and,
