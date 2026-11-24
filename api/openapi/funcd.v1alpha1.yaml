@@ -1718,7 +1718,7 @@ components:
                 $ref: "#/components/schemas/ResourceSpec"
                 description: The CPU and memory caps of each run's worker; a field left empty takes functions.defaultResources. Only the containerd runtime enforces them.
               runtime:
-                description: The runtime that runs the code, such as nodejs22 or python314. A Job without one is not Ready, with ShapeInvalid, and one whose runtime this node cannot run is not Ready, with RuntimeUnavailable.
+                description: The runtime that runs the code, such as nodejs22 or python314, or one that an Addon ships for Jobs. A Job without one is not Ready, with ShapeInvalid, and one whose runtime this node cannot run is not Ready, with RuntimeUnavailable.
                 maxLength: 63
                 minLength: 1
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
