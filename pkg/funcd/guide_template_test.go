@@ -1,6 +1,7 @@
 package funcd_test
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -122,6 +123,51 @@ func TestLaneFoldersHoldAnExampleStagedWhole(t *testing.T) {
 	run := laneFolders(t)
 	require.True(t, run["github.com/pyvvo/funcd-functions apps/site-config"])
 	require.False(t, run["github.com/pyvvo/funcd-functions apps/site-config/app"], "a folder inside an example is not one")
+}
+
+// The docs site's build fails on a page whose header is not YAML, such as one whose unquoted description holds ": ",
+// and on a page with no title.
+func TestGuidePagesHaveAHeader(t *testing.T) {
+	t.Parallel()
+	pages := 0
+	err := filepath.WalkDir(filepath.Join("..", "..", "docs", "guide"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || (filepath.Ext(path) != ".md" && filepath.Ext(path) != ".mdx") {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		pages++
+		require.NoError(t, headerError(string(data)), path)
+		return nil
+	})
+	require.NoError(t, err)
+	require.NotZero(t, pages, "no page")
+	require.ErrorContains(t, headerError("# Add-ons\n"), "no header")
+	require.ErrorContains(t, headerError("---\ntitle: Add-ons\n"), "no header")
+	require.ErrorContains(t, headerError("---\ndescription: Engines that an admin registers\n---\n"), "no title")
+	require.ErrorContains(t, headerError("---\ntitle: Add-ons\ndescription: Engines that an admin registers: one per object\n---\n"), "yaml")
+	require.NoError(t, headerError("---\ntitle: Add-ons\ndescription: \"Engines that an admin registers: one per object\"\n---\n"))
+}
+
+// headerError reports what is wrong with the header that page starts with.
+func headerError(page string) error {
+	rest, opened := strings.CutPrefix(page, "---\n")
+	text, _, closed := strings.Cut(rest, "\n---\n")
+	if !opened || !closed {
+		return errors.New("the page has no header")
+	}
+	var header struct {
+		Title string `json:"title"`
+	}
+	if err := yaml.Unmarshal([]byte(text), &header); err != nil {
+		return err
+	}
+	if header.Title == "" {
+		return errors.New("the header has no title")
+	}
+	return nil
 }
 
 func readTemplate(t *testing.T) pageTemplate {

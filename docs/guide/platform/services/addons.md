@@ -1,6 +1,6 @@
 ---
 title: Add-ons
-description: Runtimes and engines built outside funcd that an admin registers: Functions and Jobs on an add-on's runtime, one engine per object, reached only through funcd.
+description: Runtimes and engines built outside funcd that an admin registers. Functions and Jobs run on an add-on's runtime, and funcd runs one engine per object, reached only through funcd.
 ---
 
 ![An admin's Addon registers a kind, and each change of it is an AddonRevision. A developer's add-on object, such as an IdentityProvider, pins a revision and runs one fenced engine, which the edge serves at its host and a Function that binds it reaches through funcd's facet or proxy, Cedar's addon::call checked on each call. A settings object runs no engine: its target's list goes to the kind's Function. Backups copy the engine's own snapshot](../../assets/addons.drawio.svg)
