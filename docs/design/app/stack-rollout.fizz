@@ -9,7 +9,8 @@
 # writes the outputs. Environment: the controller runs one pass of an App at a time, so a pass is one step; the
 # Secret's and the parts' watches bring a pass after each write (fair); a written part turns ready within BOOT ticks,
 # runtime.bootTimeout, less than the deadline's DEADLINE, app.upgradeTimeout (ADR-0200 Decision 10); the clock is Tick.
-# Left out: the parts funcd runs, judged by ADR-0199 as before; tests hold them.
+# A stop or a Conflict between a pass's writes is not modeled: the next pass reads the end of a wait from the stored App
+# status (ADR-0357 Decision 3). Left out: the parts funcd runs, judged by ADR-0199 as before; tests hold them.
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
