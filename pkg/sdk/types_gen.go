@@ -138,9 +138,11 @@ func genPyi(in, out typeSchema, b v1.FunctionBindings, names typeNames) []byte {
 	buf.WriteString("\n")
 	buf.WriteString(pyiBindings(names.pyBindings, b))
 	if names.job {
+		// the Python shim's RunInfo and Approval, keys in snake case (ADR-0347 Decision 9, ADR-0348 Decision 6)
 		buf.WriteString("\n\nclass RunInfo(TypedDict):\n")
 		buf.WriteString("    name: str\n    job: str\n    revision: str\n    phase: Literal[\"run\", \"preview\"]\n    started_by: str\n")
-		buf.WriteString("\n\nclass JobContext:\n    run: RunInfo\n")
+		buf.WriteString("\n\nclass Approval(TypedDict):\n    approved_by: str\n    digest: str\n    preview: object\n")
+		buf.WriteString("\n\nclass JobContext:\n    run: RunInfo\n    approval: Approval | None\n")
 	}
 	return []byte(buf.String())
 }
@@ -230,7 +232,8 @@ func genDts(in, out typeSchema, b v1.FunctionBindings, names typeNames) []byte {
 	if names.job {
 		buf.WriteString("\nexport interface RunInfo {\n")
 		buf.WriteString("  name: string;\n  job: string;\n  revision: string;\n  phase: \"run\" | \"preview\";\n  startedBy: string;\n}\n")
-		buf.WriteString("\nexport interface JobContext {\n  run: RunInfo;\n}\n")
+		buf.WriteString("\nexport interface Approval {\n  approvedBy: string;\n  digest: string;\n  preview: unknown;\n}\n")
+		buf.WriteString("\nexport interface JobContext {\n  run: RunInfo;\n  approval: Approval | null;\n}\n")
 	}
 	return []byte(buf.String())
 }

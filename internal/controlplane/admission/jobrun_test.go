@@ -267,3 +267,44 @@ func TestJobRunApprovalAdmission(t *testing.T) {
 	require.True(t, admission.JobRunApproves(stale, stale), "keeping an unrecorded approval approves anew")
 	require.False(t, admission.JobRunApproves(recorded, recorded))
 }
+
+// onlyAllows is an authorizer that allows one verb on one kind, and records each request it got.
+type onlyAllows struct {
+	verb auth.Verb
+	kind v1.Kind
+	got  *[]auth.Request
+}
+
+func (a onlyAllows) Authorize(_ context.Context, req auth.Request) (auth.Decision, error) {
+	*a.got = append(*a.got, req)
+	if req.Verb == a.verb && req.Kind == a.kind {
+		return auth.Decision{Allowed: true}, nil
+	}
+	return auth.Decision{Reason: "not that verb on that kind"}, nil
+}
+
+// ADR-0348 Decision 3: the approver's right is update on the run's Job, in the run's namespace, and not update on the
+// JobRun, which the API server checked before admission.
+func TestJobRunApprovalAsksUpdateOnTheJob(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := "sha256:" + strings.Repeat("2", 64)
+	old := jobRun("")
+	old.Status.Phase, old.Status.Preview = v1.JobRunAwaitingApproval, &v1.JobRunPreview{Digest: d, Document: json.RawMessage(`{}`)}
+	approved := *old
+	approved.Status.Preview = nil
+	approved.Spec.Approve = d
+	for _, c := range []struct {
+		kind v1.Kind
+		want fault.Kind
+	}{{v1.KindJob, ""}, {v1.KindJobRun, fault.Forbidden}} {
+		var got []auth.Request
+		a := admission.NewJobRunApprovalAdmission(onlyAllows{verb: auth.VerbUpdate, kind: c.kind, got: &got})
+		_, err := a.Admit(ctx, admission.Request{Operation: admission.Update, GVK: v1.KindJobRun.GVK(), Object: &approved, Old: old,
+			Identity: auth.Identity{Subject: "bob"}})
+		require.Equal(t, c.want, fault.KindOf(err), "update allowed on %s: %v", c.kind, err)
+		require.Len(t, got, 1)
+		require.Equal(t, auth.Request{Identity: auth.Identity{Subject: "bob"}, Verb: auth.VerbUpdate, Kind: v1.KindJob,
+			Namespace: "default"}, got[0])
+	}
+}
