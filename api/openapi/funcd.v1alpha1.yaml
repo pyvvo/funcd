@@ -3303,6 +3303,13 @@ components:
           type:
             - array
             - "null"
+        job:
+          description: The Jobs whose runs the code starts with ctx.job.start and reads with ctx.job.get, each under its alias. The binding grants both, and a namespace Policy that forbids job::start or job::read to the Function revokes one. A run that the code starts passes the checks of a run that a person starts, and a Job's own spec refuses this list.
+          items:
+            $ref: "#/components/schemas/FunctionJob"
+          type:
+            - array
+            - "null"
         kv:
           description: The KV tables the code reaches through ctx.kv, each under its alias. The binding grants reads; only the table's owner and the writers that a RolesAssignment names may write. A store or table that does not exist yet holds the Function in Pending with KVStoreNotFound.
           items:
@@ -3363,6 +3370,23 @@ components:
         - alias
         - bucket
         - prefix
+      type: object
+    FunctionJob:
+      additionalProperties: false
+      properties:
+        alias:
+          description: The name that the code passes to ctx.job.start and ctx.job.get. Unique in the list.
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        job:
+          description: "A Job of the Function's namespace. A missing Job grants nothing that runs: a start or a read on its alias answers 404."
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - alias
+        - job
       type: object
     FunctionKV:
       additionalProperties: false

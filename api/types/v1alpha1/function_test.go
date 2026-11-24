@@ -140,3 +140,31 @@ func TestFunctionRootEntriesValidate(t *testing.T) {
 		}
 	}
 }
+
+// ADR-0349 Decision 1: a Function's job bindings each have a DNS-1123 alias, unique in the list, and name a Job by a
+// DNS-1123 name; a Job's spec refuses the list.
+func TestFunctionJobBindingValidate(t *testing.T) {
+	t.Parallel()
+	withJobs := func(jobs ...FunctionJob) *Function {
+		return fnWith(FunctionSpec{Bindings: FunctionBindings{Job: jobs}})
+	}
+	require.NoError(t, withJobs(FunctionJob{Alias: "stack", Job: "tofu"}, FunctionJob{Alias: "backfill", Job: "tofu"}).Validate(),
+		"two aliases may bind one Job")
+	for name, c := range map[string]struct {
+		jobs []FunctionJob
+		want string
+	}{
+		"alias not a label": {[]FunctionJob{{Alias: "Stack", Job: "tofu"}}, `spec.bindings.job alias "Stack" is not a valid DNS-1123 label`},
+		"alias duplicated":  {[]FunctionJob{{Alias: "stack", Job: "tofu"}, {Alias: "stack", Job: "other"}}, `spec.bindings.job alias "stack" is duplicated`},
+		"job not a name":    {[]FunctionJob{{Alias: "stack", Job: "Tofu"}}, `spec.bindings.job[stack].job "Tofu" is not a valid Job name`},
+		"job empty":         {[]FunctionJob{{Alias: "stack"}}, `spec.bindings.job[stack].job "" is not a valid Job name`},
+	} {
+		err := withJobs(c.jobs...).Validate()
+		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+		require.ErrorContains(t, err, c.want, name)
+	}
+	j := job(func(s *JobSpec) { s.Bindings.Job = []FunctionJob{{Alias: "stack", Job: "tofu"}} })
+	err := j.Validate()
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, "spec.bindings.job: a Job starts no run of a Job")
+}

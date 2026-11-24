@@ -207,6 +207,9 @@ func resourceUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
 		return secretUID(res.Namespace, res.Name), nil
 	case v1.KindAddonObject:
 		return addonObjectUID(res.Namespace, res.Name), nil
+	case v1.KindJob:
+		// ADR-0349 Decision 1: the job::start and job::read resource, byte-matching a Function's jobBindings members.
+		return jobUID(res.Namespace, res.Name), nil
 	case v1.KindNetDestination:
 		// ADR-0117 (F81): the egress destination — its UID is the Path's "<ip>:<port>" prefix,
 		// byte-matching what EgressCapability.Resource emits (mirroring principalUID's S3Identity case).

@@ -35,6 +35,9 @@ var builtinAddonPolicies string
 //go:embed builtin_sql.cedar
 var builtinSQLPolicies string
 
+//go:embed builtin_job.cedar
+var builtinJobPolicies string
+
 // --- Cedar UID builders (the entity ID encodes the resource's namespaced identity) ----------------
 // Shared by the capability materializers below and by principalUID/resourceUID (the driver's request
 // path in cedar.go).
@@ -566,9 +569,40 @@ func addonResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (ce
 	}, true, nil
 }
 
+// JobCapability is the job::start and job::read capability (ADR-0349 Decision 1): spec.bindings.job → the
+// `jobBindings` Set of Job entity-refs (binding-as-grant of both actions); the resource is the bound Job, which ADR-0351
+// also makes a principal. Like addon::call it owns no writable resource: no WriterLister, and a missing Job still
+// yields an evaluable entity.
+func JobCapability() Capability {
+	return Capability{
+		Name:            "job",
+		Actions:         []auth.Action{auth.ActionJobStart, auth.ActionJobRead},
+		EmitsEntityType: entityTypeJob,
+		Resource:        jobResource,
+		PrincipalBinding: PrincipalBinding{
+			Attr: "jobBindings",
+			Bind: bindFunction(func(b *v1.FunctionBindings) []v1.FunctionJob { return b.Job },
+				func(ns v1.NamespaceName, b v1.FunctionJob) cedartypes.EntityUID { return jobUID(ns, b.Job) }),
+		},
+		Builtin: builtinJobPolicies,
+	}
+}
+
+// jobResource materializes the Job a job::start or job::read targets as a bare entity with its namespace attr, as
+// addonResource does. ok==false for another resource.
+func jobResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
+	if resource.Type != v1.KindJob {
+		return nil, false, nil
+	}
+	uid := jobUID(resource.Namespace, resource.Name)
+	return cedartypes.EntityMap{
+		uid: {UID: uid, Attributes: cedartypes.NewRecord(cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)})},
+	}, true, nil
+}
+
 // bindFunction is a PrincipalBinding.Bind over a Function's or a Job's bindings, one entity per binding; any other
 // principal contributes nothing.
-func bindFunction[B v1.FunctionSQL | v1.FunctionLake | v1.FunctionLink | v1.FunctionAddon](bindings func(*v1.FunctionBindings) []B, uid func(v1.NamespaceName, B) cedartypes.EntityUID) func(v1.NamespaceName, PrincipalObject) []cedartypes.EntityUID {
+func bindFunction[B v1.FunctionSQL | v1.FunctionLake | v1.FunctionLink | v1.FunctionAddon | v1.FunctionJob](bindings func(*v1.FunctionBindings) []B, uid func(v1.NamespaceName, B) cedartypes.EntityUID) func(v1.NamespaceName, PrincipalObject) []cedartypes.EntityUID {
 	return func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
 		all, ok := workloadBindings(src)
 		if !ok {

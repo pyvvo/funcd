@@ -24,7 +24,7 @@ func Endpoints() []Endpoint {
 	var list endpointList
 	logger := slog.New(slog.DiscardHandler)
 	for _, f := range []Facet{KVFacet(nil), BlobFacet(nil), SQLFacet(nil), SecretFacet(nil), AddonFacet(nil, AddonLimits{}),
-		JobFacet(nil)} {
+		JobFacet(nil, nil, nil)} {
 		f.register(&list, Ref{}, logger)
 	}
 	registerInvoke(&list, logger, Ref{}, auth.Identity{}, nil, nil, nil)

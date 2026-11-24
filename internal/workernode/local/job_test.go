@@ -29,7 +29,7 @@ func (r runsByRef) Run(_ context.Context, ref local.Ref) (v1.JobRun, error) {
 
 func jobHandler(ref local.Ref, runs local.JobRunReader) http.Handler {
 	return local.NewHandler(ref, &fakeResolver{}, fakeInvoker{}, nil, nil, slog.New(slog.DiscardHandler),
-		local.WithFacets(local.JobFacet(runs)))
+		local.WithFacets(local.JobFacet(runs, nil, nil)))
 }
 
 func readRun(t *testing.T, h http.Handler) (int, local.JobRunInfo, string) {
@@ -76,7 +76,7 @@ func TestGetJobRunAnswersTheCallersOwnRun(t *testing.T) {
 // The Job facet's one endpoint declares its one cause (ADR-0330), and its segment passes CheckFacets.
 func TestJobFacetIsDescribed(t *testing.T) {
 	t.Parallel()
-	require.NoError(t, local.CheckFacets(local.JobFacet(nil)))
+	require.NoError(t, local.CheckFacets(local.JobFacet(nil, nil, nil)))
 	var found bool
 	for _, e := range local.Endpoints() {
 		if e.Pattern == "GET /job/run" {

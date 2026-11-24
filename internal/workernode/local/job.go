@@ -23,10 +23,12 @@ var ErrNotAJobWorker = fault.NewKnownCause(fault.Forbidden, "job.not-a-job-worke
 	"Read the run only from a Job's handler, as context.approval and context.run do.")
 
 // JobFacet serves GET /job/run over runs (ADR-0348 Decision 6): a Job's worker reads its own run, with the approval
-// that its handler's context carries.
-func JobFacet(runs JobRunReader) Facet {
+// that its handler's context carries. It also serves a Function's start and read of the runs of the Jobs it binds,
+// POST /job/{alias} and GET /job/{alias}/{run}, over grants and starter (ADR-0349 Decisions 2 to 4).
+func JobFacet(runs JobRunReader, starter JobRunStarter, grants JobGrants) Facet {
 	return Facet{segment: "job", register: func(mux facetMux, caller Ref, logger *slog.Logger) {
 		registerJob(mux, caller, runs, logger)
+		registerJobStart(mux, caller, starter, grants, logger)
 	}}
 }
 

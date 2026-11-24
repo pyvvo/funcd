@@ -82,10 +82,14 @@ func (j *Job) GetStatus() *Status { return &j.Status.Status }
 
 // Validate runs the envelope check, the Function's checks over the fields a Job shares with it, and the bounds of the
 // Job's own: spec.timeout 0s to 168h, and spec.concurrency 1 to 15, at most 1 with a local volume (ADR-0347 Decision 1).
+// A Job's spec refuses bindings.job (ADR-0349 Decision 1).
 func (j *Job) Validate() error {
 	const op = "Job.Validate"
 	if err := validateMeta(j.TypeMeta, &j.ObjectMeta, KindJob); err != nil {
 		return err
+	}
+	if len(j.Spec.Bindings.Job) > 0 {
+		return fault.Invalidf(op, "spec.bindings.job: a Job starts no run of a Job, only a Function's bindings.job does")
 	}
 	shared := j.Spec.FunctionSpec()
 	if err := validateNestedLakes(op, "spec.lakes", "a Job", shared.Lakes); err != nil {

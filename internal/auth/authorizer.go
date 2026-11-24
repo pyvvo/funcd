@@ -97,6 +97,12 @@ const (
 	// ActionSecretWrite is the Cedar action for a write of one key of a Secret (ADR-0327): permitted only to the Secret's
 	// writers, its owner plus writer-role grants, as kv::write is. Resource = a Secret.
 	ActionSecretWrite Action = "secret::write"
+	// ActionJobStart is the Cedar action for a Function's start of a Job's run (ADR-0349 Decision 1): a declared
+	// spec.bindings.job binding grants it; a namespace Policy forbid revokes it. Resource = a Job.
+	ActionJobStart Action = "job::start"
+	// ActionJobRead is the Cedar action for a Function's read of a Job's run (ADR-0349 Decision 1), granted and revoked
+	// as job::start. Resource = a Job.
+	ActionJobRead Action = "job::read"
 )
 
 // Identity is an authenticated principal (resolved by authn from a token / API key).

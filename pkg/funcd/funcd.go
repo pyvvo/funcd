@@ -560,6 +560,10 @@ type Platform struct {
 	workflowRetention time.Duration           // terminal-run retention horizon (0 ⇒ no sweep)
 
 	jobRuns *function.JobRunReconciler // the JobRun reconciler (ADR-0347): Boot, the retention sweep, the executors
+	// jobStarts and jobGrants are the Job facet's start and its binding and Cedar check (ADR-0349), set before the
+	// Executor is built.
+	jobStarts *jobRunStarter
+	jobGrants jobGrants
 
 	eventStore *eventstore.Store // eventing's durable store (ADR-0201): dead letters + seen lists; closed on shutdown
 	phases     *lifecycle.Phases // the providers in boot order, the Executor first
@@ -734,7 +738,7 @@ func (p *Platform) buildControlPlane() error {
 		// PEP proxy that calls it is not yet wired here — see TODO(ADR-0137) in internal/services/lake/reconcile.go.
 		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.LakeCapability(),
 			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapabilityWithWriters(writerLister),
-			cedarauth.AddonCapability()},
+			cedarauth.AddonCapability(), cedarauth.JobCapability()},
 		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.JobPrincipalSource(),
 			cedarauth.LakePrincipalSource(), cedarauth.AddonObjectPrincipalSource()},
 	)
@@ -879,7 +883,9 @@ func (p *Platform) buildControlPlane() error {
 		nestedCap = defaultNestedInFlightCap
 	}
 	invoker := local.NewNestedCapInvoker(local.NewInvoker(dpHolder), nestedCap, invokeMeter(c.telemetry))
-	// The Executor is built once the providers are: a worker's local API serves their facets, in list order (ADR-0310).
+	// The Executor is built once the providers are: a worker's local API serves their facets, in list order (ADR-0310),
+	// the Job facet last, whose starter gets the control plane's admissions once they are built, below (ADR-0349).
+	p.jobStarts, p.jobGrants = &jobRunStarter{store: c.store}, jobGrants{store: c.store, authz: cedarPDP}
 	if err := p.exec.build(execDeps{authz: cedarPDP, floor: p.floor, invoker: invoker, checks: deps,
 		facets: p.facets()}); err != nil {
 		return err
@@ -1199,6 +1205,11 @@ func (p *Platform) buildControlPlane() error {
 		)
 	}
 
+	cpAdmissions := append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store}),
+		app.NewRequiresAdmission(storeReader{c.store}))
+	// ADR-0349 Decision 2: a run that a Function starts passes the admission of a person's create, the control plane's.
+	p.jobStarts.admit = admission.NewPipeline(append([]admission.Admission{admission.NewValidateAdmission()}, cpAdmissions...)...)
+
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
 	// whenever a blob substrate is — nil leaves the route unregistered. ADR-0106: the run-scoped querier
 	// (GET …/workflowruns/{name}/logs) reuses the same reader + the metastore (to resolve status.traceId) + the
@@ -1236,8 +1247,7 @@ func (p *Platform) buildControlPlane() error {
 			Hold: c.hold, Store: c.store, DeadLetters: p.eventing.deadLetters, Platform: holdPlatform{p},
 		}),
 		// ADR-0219: app-requires runs after app-parts.
-		Admissions: append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store}),
-			app.NewRequiresAdmission(storeReader{c.store})),
+		Admissions: cpAdmissions,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build control-plane server")

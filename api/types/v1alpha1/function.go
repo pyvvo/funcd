@@ -114,6 +114,13 @@ type FunctionAddon struct {
 	Object ObjectName `json:"object" doc:"An add-on object of the Function's namespace, declared by its App when an App holds the Function. A missing one holds the Function in Pending with AddonObjectNotFound."`
 }
 
+// FunctionJob binds an alias to a Job of the Function's namespace whose runs the code starts and reads (ADR-0349
+// Decision 1): the binding is the grant of job::start and job::read on that Job.
+type FunctionJob struct {
+	Alias string     `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The name that the code passes to ctx.job.start and ctx.job.get. Unique in the list."`
+	Job   ObjectName `json:"job" doc:"A Job of the Function's namespace. A missing Job grants nothing that runs: a start or a read on its alias answers 404."`
+}
+
 // FunctionLake binds this function to a Lake it consumes (ADR-0091, F61). Declaring the
 // binding is the grant: funcd injects FUNCD_LAKE_<ALIAS>_URL/_TOKEN, and (V2) grants egress.
 type FunctionLake struct {
@@ -401,6 +408,15 @@ func (s *FunctionSpec) validateBindings(op, prefix string) error {
 		objs = append(objs, [2]string{b.Alias, string(b.Object)})
 	}
 	if err := checkAliasTargets(op, prefix, "addon", "object", "add-on object", objs); err != nil {
+		return err
+	}
+	// Job binding structural rules (ADR-0349 Decision 1): alias a DNS-1123 label, unique within Job; job a DNS-1123
+	// name. A missing Job answers 404 on a call, never at apply.
+	jobs := make([][2]string, 0, len(s.Bindings.Job))
+	for _, b := range s.Bindings.Job {
+		jobs = append(jobs, [2]string{b.Alias, string(b.Job)})
+	}
+	if err := checkAliasTargets(op, prefix, "job", "job", "Job", jobs); err != nil {
 		return err
 	}
 	// Config binding structural rules (ADR-0093): each names a ConfigMap in this namespace and
