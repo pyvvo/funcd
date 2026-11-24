@@ -150,8 +150,10 @@ func (r *Reconciler) imageWorkerSpec(spec runtime.WorkerSpec, w workload, rev v1
 	spec.Mounts = []runtime.Mount{{Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true}}
 	spec.Env = r.shimWorkerEnv(w, wo, filepath.Join(containerArtifactDir, filepath.Base(artifactPath)), containerArtifactDir, "", we, nil)
 	// A container worker takes no host path, and dev's extension folder is one: no containerd worker gets it either
-	// (the decider, 2026-11-24).
-	delete(spec.Env, lakeExtensionDirEnv)
+	// (the decider, 2026-11-24). A bound config key of that name is the developer's and stays (ADR-0306 Decision 3).
+	if r.lakeExtensionDir != "" && spec.Env[lakeExtensionDirEnv] == r.lakeExtensionDir {
+		delete(spec.Env, lakeExtensionDirEnv)
+	}
 	host := r.endpointHost()
 	if r.invokeSockets != nil {
 		id := runtime.NewInstanceID(w.meta().Namespace, wo.name, rev, wo.replica)
