@@ -36,6 +36,8 @@ The manifest's `resourceGroup` names the [resource group](../../../platform/tena
 Job within its namespace, [`timeout`](spec.md#jobspec) bounds each run's call, and [`concurrency`](spec.md#jobspec)
 lets two runs of the Job hold a worker at once. [`approval.bypass`](spec.md#jobspecapproval) makes each run run at once;
 a Job without it previews each run and waits for a person's approval, as [Approve a run](approval.md) shows.
+A Function starts runs through its `spec.bindings.job`, as [Start a run from a Function](start-from-a-function.md)
+shows.
 
 After the apply, repeat `get` until `status.phase` is `Ready`. [`funcdctl job run`](../../tools/funcdctl/spec.md#funcdctl-job-run)
 starts a run and prints its name; without a name, funcd names the run after its Job with a suffix. Repeat
