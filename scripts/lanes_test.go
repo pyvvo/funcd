@@ -1,7 +1,11 @@
 package scripts_test
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -745,4 +749,60 @@ func logicalLines(text string) []line {
 // verified reports whether a checksum check (sha256sum -c and its kin) runs on the first line or a later one.
 func verified(lines []line) bool {
 	return slices.ContainsFunc(lines, func(l line) bool { return checksumCheck.MatchString(l.text) })
+}
+
+// Another repository runs its own lanes with this harness: lane.py reads the lanes file FUNCD_LANES names, resolves
+// those lanes' paths and suites against FUNCD_LANES_ROOT, stages their section for the VM, lists only them, and
+// refuses one that reuses a funcd lane's name.
+func TestLaneRunsAnotherRepositorysLanes(t *testing.T) {
+	ext := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(ext, "fixture.txt"), []byte("from the other repository"), 0o600))
+	lanesFile := filepath.Join(ext, "lanes.yaml")
+	require.NoError(t, os.WriteFile(lanesFile, []byte("other-lane:\n  stage:\n    - from: fixture.txt\n      to: fixture.txt\n  venom: suite.venom.yml\n"), 0o600))
+	env := append(os.Environ(), "FUNCD_LANES="+lanesFile, "FUNCD_LANES_ROOT="+ext)
+
+	list := exec.Command("python3", "lane.py", "--venom-lanes")
+	list.Env = env
+	out, err := list.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Equal(t, "other-lane", strings.TrimSpace(string(out)), "only the other repository's lanes are listed")
+
+	deps := t.TempDir()
+	run := exec.Command("python3", "lane.py", "other-lane", deps)
+	run.Env = env
+	var stdout strings.Builder
+	run.Stdout = &stdout
+	require.NoError(t, run.Run())
+	require.Equal(t, filepath.Join(ext, "suite.venom.yml"), strings.TrimSpace(stdout.String()), "its suite is under its root")
+
+	files := map[string]string{}
+	f, err := os.Open(filepath.Join(deps, "lane.tgz"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, f.Close()) })
+	gz, err := gzip.NewReader(f)
+	require.NoError(t, err)
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		b, err := io.ReadAll(tr)
+		require.NoError(t, err)
+		files[filepath.Base(h.Name)] = string(b)
+	}
+	require.Equal(t, "from the other repository", files["fixture.txt"], "a path with no module resolves against its root")
+	require.Equal(t, "other-lane", files["LANE"])
+	var staged map[string]yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte(files["lanes.yaml"]), &staged))
+	require.Contains(t, staged, "other-lane", "the VM reads the lane's section from the staged registry")
+	require.Contains(t, staged, "env-echo", "funcd's own lanes stay in it")
+
+	require.NoError(t, os.WriteFile(lanesFile, []byte("env-echo:\n  venom: suite.venom.yml\n"), 0o600))
+	clash := exec.Command("python3", "lane.py", "--venom-lanes")
+	clash.Env = env
+	out, err = clash.CombinedOutput()
+	require.Error(t, err)
+	require.Contains(t, string(out), "names lanes that scripts/lanes.yaml has: env-echo")
 }

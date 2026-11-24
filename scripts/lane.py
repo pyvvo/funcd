@@ -27,11 +27,17 @@ import yaml
 
 REGISTRY = "scripts/lanes.yaml"
 MODCOPY = ".modcopy"
+# Another repository, such as pyvvo/funcd-addons, runs its own lanes with this harness: FUNCD_LANES names its lanes
+# file, and FUNCD_LANES_ROOT the root that those lanes' paths and suites resolve against. Only its lanes are listed then.
+EXTERNAL, EXTERNAL_ROOT = os.environ.get("FUNCD_LANES", ""), os.environ.get("FUNCD_LANES_ROOT", "")
 
 
-def module_root(module: str | None, roots: dict[str, str]) -> str:
-    """The root a lane path resolves against: the funcd repo root, or a pinned module's root."""
+def module_root(module: str | None, roots: dict[str, str], base: str = "") -> str:
+    """The root a lane path resolves against: base (the funcd repo root unless the lane is another repository's), or a
+    pinned module's root."""
     if not module:
+        if base:
+            return base
         return "."
     if module not in roots:
         out = subprocess.run(["scripts/moddir.sh", module], check=True, capture_output=True, text=True)
@@ -53,10 +59,20 @@ def main() -> None:
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo root (scripts/..)
     os.chdir(root)
     lanes = yaml.safe_load(open(REGISTRY, encoding="utf-8"))
+    external: dict = {}
+    if EXTERNAL:
+        if not EXTERNAL_ROOT:
+            sys.exit("FUNCD_LANES needs FUNCD_LANES_ROOT, the root its lanes' paths resolve against")
+        external = yaml.safe_load(open(EXTERNAL, encoding="utf-8")) or {}
+        clash = sorted(set(external) & set(lanes))
+        if clash:
+            sys.exit(f"{EXTERNAL} names lanes that {REGISTRY} has: {', '.join(clash)}")
+        lanes = {**lanes, **external}
     if sys.argv[1:] == ["--venom-lanes"]:
-        venom = [k for k, v in lanes.items() if isinstance(v, dict) and v.get("venom") and not v.get("optional")]
+        listed = external if EXTERNAL else lanes
+        venom = [k for k, v in listed.items() if isinstance(v, dict) and v.get("venom") and not v.get("optional")]
         if not venom:
-            sys.exit(f"{REGISTRY} lists no venom lane")
+            sys.exit(f"{EXTERNAL or REGISTRY} lists no venom lane")
         print(" ".join(venom))
         return
     if len(sys.argv) != 3:
@@ -65,18 +81,19 @@ def main() -> None:
     if name not in lanes:
         sys.exit(f"lane {name!r} is not in {REGISTRY} (have: {', '.join(sorted(lanes))})")
     spec = lanes[name]
+    base = EXTERNAL_ROOT if name in external else ""
     roots: dict[str, str] = {}
     module = spec.get("module")
     if "dir" not in spec and (
         spec.get("copy") or spec.get("build") or not all(isinstance(f, dict) for f in spec["stage"])
     ):
         sys.exit(f"lane {name!r} has no dir, so each stage entry must be a {{from}} mapping, with no build or copy")
-    example_dir = os.path.join(module_root(module, roots), spec.get("dir", ""))
+    example_dir = os.path.join(module_root(module, roots, base), spec.get("dir", ""))
     if spec.get("copy"):
         # A module lane copies its WHOLE module, so the example's relative references (a uv path dep on
         # ../../shim) still resolve. Lane copies live apart from the dev copies scripts/example-copy.sh
         # keeps, so a lane refresh never wipes `funcdctl dev` state.
-        src = module_root(module, roots) if module else example_dir
+        src = module_root(module, roots, base) if module else example_dir
         copy = os.path.join(MODCOPY, "lane", os.path.basename(module) if module else spec["dir"])
         shutil.rmtree(copy, ignore_errors=True)
         os.makedirs(os.path.dirname(copy), exist_ok=True)
@@ -101,14 +118,19 @@ def main() -> None:
             # mapping form pulls a file from ANY dir of funcd (or of `module`) into a chosen (possibly
             # nested, e.g. `py/…`) tgz path.
             if isinstance(f, dict):
-                src = os.path.join(module_root(f.get("module"), roots), f["from"])
+                src = os.path.join(module_root(f.get("module"), roots, base), f["from"])
                 dst = os.path.join(stage, f["to"])
             else:
                 src = os.path.join(example_dir, f)
                 dst = os.path.join(stage, f)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             writable_copy(src, dst)
-        shutil.copy2(REGISTRY, os.path.join(stage, "lanes.yaml"))
+        if base:
+            # the VM reads the lane's section from the staged registry, so another repository's lanes are staged too
+            with open(os.path.join(stage, "lanes.yaml"), "w", encoding="utf-8") as fh:
+                yaml.safe_dump(lanes, fh, default_flow_style=False, sort_keys=False)
+        else:
+            shutil.copy2(REGISTRY, os.path.join(stage, "lanes.yaml"))
         with open(os.path.join(stage, "LANE"), "w", encoding="utf-8") as fh:
             fh.write(name)
         tgz = os.path.join(deps, "lane.tgz")
@@ -120,7 +142,7 @@ def main() -> None:
         shutil.rmtree(stage, ignore_errors=True)
 
     # the recipe reads stdout for the (absolute) Venom suite to run.
-    print(os.path.join(root, spec["venom"]))
+    print(os.path.join(base or root, spec["venom"]))
 
 
 if __name__ == "__main__":
