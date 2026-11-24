@@ -217,6 +217,41 @@ func TestANodesCopyIsTheControlPlanesObject(t *testing.T) {
 	require.Equal(t, []store.EventType{store.Added, store.Deleted, store.Added}, types, "the node sees a delete, so it drops the old one's data")
 }
 
+// A control plane restored to a point before the node's last reports shows them again, though nothing changed on the node
+// since.
+func TestANodeReportsEverythingAgainAfterASnapshot(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t)
+	defer n.start(t)()
+	kv := &v1.KVStore{TypeMeta: meta(v1.KindKVStore)}
+	kv.Name, kv.Namespace, kv.ResourceGroup = "kv1", "e1", "rg1"
+	_, err := n.cp.Create(ctx, kv)
+	require.NoError(t, err)
+	onNode(t, n, v1.KindKVStore, "kv1", "the KVStore reaches the node", func(*v1.KVStore) bool { return true })
+	update(t, n.node, v1.KindKVStore, "kv1", func(k *v1.KVStore) { k.Status.Phase = v1.PhaseReady })
+	child := configMap("e1", "child", "1")
+	child.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindKVStore, Name: "kv1"}, UID: "u"}}
+	_, err = n.node.Create(ctx, child)
+	require.NoError(t, err)
+	ready := func(k *v1.KVStore) bool { return k.Status.Phase == v1.PhaseReady }
+	onCP(t, n, v1.KindKVStore, "kv1", "its status comes back", ready)
+	onCP(t, n, v1.KindConfigMap, "child", "so does the child", func(*v1.ConfigMap) bool { return true })
+
+	quiet := store.WithoutChangeLog(ctx) // as a restore from a backup: nothing of it reaches the node as a change
+	obj, err := n.cp.Get(ctx, v1.KindKVStore.GVK(), "e1", "kv1")
+	require.NoError(t, err)
+	old := obj.(*v1.KVStore)
+	old.Status = v1.KVStoreStatus{}
+	_, err = n.cp.Update(quiet, old)
+	require.NoError(t, err)
+	require.NoError(t, n.cp.Delete(quiet, v1.KindConfigMap.GVK(), "e1", "child", ""))
+	n.agent.ResyncForTest()
+	_, err = n.cp.Create(ctx, configMap("e1", "next", "1")) // which ends the poll
+	require.NoError(t, err)
+	onCP(t, n, v1.KindKVStore, "kv1", "the status comes back again", ready)
+	onCP(t, n, v1.KindConfigMap, "child", "and the child", func(*v1.ConfigMap) bool { return true })
+}
+
 func TestAPersonsDecisionOnARunReachesItsNode(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)

@@ -61,6 +61,8 @@ type Agent struct {
 	backupSent string
 	// unsent are the deletes the control plane did not take yet
 	unsent map[string]url.Values
+	// resynced asks the report for every status and child again, after a snapshot
+	resynced chan struct{}
 }
 
 // New loads the node's identity from cfg.Dir.
@@ -80,7 +82,8 @@ func New(cfg Config) (*Agent, error) {
 		cfg.Logger = slog.Default()
 	}
 	a := &Agent{cfg: cfg, id: id, log: cfg.Logger.With("component", "node-agent", "node", id.name),
-		mine: map[v1.NamespaceName]bool{}, keys: keys, pushed: map[string]string{}, unsent: map[string]url.Values{}}
+		mine: map[v1.NamespaceName]bool{}, keys: keys, pushed: map[string]string{}, unsent: map[string]url.Values{},
+		resynced: make(chan struct{}, 1)}
 	if b, err := os.ReadFile(filepath.Join(cfg.Dir, cursorFile)); err == nil { //nolint:gosec // the node's own directory
 		if f := strings.Fields(string(b)); len(f) == 2 {
 			a.timeline = f[0]
@@ -308,6 +311,7 @@ func (a *Agent) syncAll(ctx context.Context) error {
 		a.prune(ctx, ns, seen)
 	}
 	a.pruneClusterKinds(ctx, seen)
+	a.reportAgain()
 	a.saveCursor(snap.Timeline, snap.Rev)
 	a.log.InfoContext(ctx, "node agent: synced from a snapshot", "rev", snap.Rev, "objects", len(snap.Objects), "namespaces", len(placed))
 	return nil

@@ -35,11 +35,25 @@ func (a *Agent) report(ctx context.Context) {
 			return
 		case ev := <-events:
 			a.push(ctx, ev.Type, ev.Object)
+		case <-a.resynced:
+			a.resyncReports(ctx)
 		case <-t.C:
 			a.resendDeletes(ctx)
 			a.resyncReports(ctx)
 			a.reportBackup(ctx)
 		}
+	}
+}
+
+// reportAgain makes the node report every status and child it holds again: a control plane it takes a snapshot of may
+// have been restored to a point before the last reports.
+func (a *Agent) reportAgain() {
+	a.mu.Lock()
+	a.pushed = map[string]string{}
+	a.mu.Unlock()
+	select {
+	case a.resynced <- struct{}{}:
+	default:
 	}
 }
 
