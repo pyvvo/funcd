@@ -1451,7 +1451,7 @@ components:
           $ref: "#/components/schemas/AppHooks"
           description: "Functions of this App that funcd calls for each new revision whose spec has them: preApply before the revision's parts change, postApply once it is current. Each call is recorded in the revision's status.hooks; a call that ends during a stop of funcd, a hold or a pause is not recorded and is made again, so a hook must be safe to repeat."
         jobs:
-          description: "The Jobs that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret it binds is one that the App's lists of those names declare. A Job part is Ready when its Job is, and its runs count for nothing in the App's readiness: an upgrade waits for no run, and a run that has not ended keeps the revision it pinned. Deleting the App, or dropping the entry, deletes the Job, which cancels its runs that have not ended."
+          description: "The Jobs that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret it binds is one that the App's lists of those names declare. A Job part is Ready when its Job is, and its runs count for nothing in the App's readiness: an upgrade waits for no run, and a run that has not ended keeps the revision it pinned. Deleting the App, or dropping the entry, deletes the Job, which ends its runs that have not ended as deleting a Job does."
           items:
             additionalProperties: false
             properties:

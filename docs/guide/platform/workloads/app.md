@@ -18,4 +18,5 @@ Invocation, a read-only record that belongs to the AppRevision and goes away wit
 names that record and its error.
 `funcdctl app history` lists the revisions, and `funcdctl app rollback` applies an earlier one again as a new
 revision. Deleting the App deletes its parts. The runs of an App's Jobs are no parts: a rollout waits for no run, and a
-run keeps the Revision of its Job that it started on, but deleting the App ends each run of its Jobs that has not ended.
+run keeps the Revision of its Job that it started on, but deleting the App deletes its Jobs, which ends their runs as
+deleting a Job does.

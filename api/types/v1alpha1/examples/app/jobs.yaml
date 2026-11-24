@@ -8,7 +8,7 @@ metadata:
 spec:
   version: 1.0.0
   jobs:
-    - name: report
+    - name: monthly
       runtime: nodejs22
       handler: handle
       image: registry.example.com/report:1.0.0
