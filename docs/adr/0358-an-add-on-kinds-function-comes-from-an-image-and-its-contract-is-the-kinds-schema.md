@@ -12,7 +12,8 @@
   image's Function: Decision 2) and 4 (two more reasons);
   [ADR-0345](0345-a-function-reconciles-an-engineless-kind-and-a-deletion-waits-for-its-destroy.md) Decisions 1
   (`config` goes), 2 (an image's group is one object), 3 (an image's Function, an object's bindings) and 5 (two more
-  reasons); [ADR-0338](0338-a-function-calls-an-add-on-objects-engine.md) Decision 1 (what uses an object).
+  reasons); [ADR-0338](0338-a-function-calls-an-add-on-objects-engine.md) Decision 1 (what uses an object);
+  [ADR-0337](0337-an-app-template-carries-its-add-on.md) Decision 3 (the schema that a part's config fits).
 - **Relates to**: [ADR-0096](0096-engine-native-builtin-steps.md) (a step's `image` and `ref`) ·
   [ADR-0094](0094-workflow-engine-core.md) (the Function a Workflow creates) ·
   [ADR-0303](0303-funcd-checks-every-call-against-its-contract.md) ·
@@ -45,14 +46,17 @@ the Secret `rauthy-keys`, unless a scenario says otherwise.
   is back; *when* `login` is deleted, *Then* it goes; *given* a user's Function of that name, *Then* it is left as it
   is, and `strict` is `Pending` with `FunctionNotOwned`.
 - `scenario: addon-function-own` — *When* `login` names its own Function for the kind in `spec.functions`, *Then* that
-  one is called, and funcd's own goes.
+  one is called, funcd's own goes, and a write is checked as a `ref`'s.
 - `scenario: addon-function-ref` — *Given* `function.ref`, *Then* funcd creates nothing, a write of `strict` is checked
   against no schema, and a call off that Function's contract fails, `ReconcileFailed` naming the path.
 - `scenario: addon-contract-is-the-schema` — *When* `strict` sets a property that the contract's `config` lacks, or a
   value of another type, *Then* it gets 422 naming the property, as today.
 - `scenario: addon-contract-of-the-pin` — *Given* a newer revision whose contract adds `maxAge`, *When* `strict` sets
   it, *Then* 422 while `login` pins the former one, and stored once an edit of `login` moved it; an App's upgrade whose
-  parts are both passes.
+  parts are both is admitted.
+- `scenario: addon-kind-not-in-the-pin` — *Given* an admin adds the kind to a live Addon, *When* `strict` names `login`,
+  which pins an older revision, *Then* it is `Pending` with `FunctionNotFound` and nothing is called, until an edit of
+  `login` moves its pin.
 - `scenario: addon-image-unread` — *When* the image cannot be read, *Then* the Addon is `Ready=False` with
   `ArtifactNotReady`, `login`'s engine runs, and `strict` is stored and `Pending` with `ArtifactNotReady`, until it can.
 - `scenario: addon-constraint-unfit` — *When* a rule or a constraint names a field that the contract lacks, *Then* the
@@ -119,31 +123,37 @@ kind that needs KV, a Bucket or SQL names a `ref`); publishing an add-on's image
    - an engineless object's `bindings.job` (new), as a Function's (ADR-0349 Decision 1).
 
    An engineless object may set these two bindings only when its kind's Function is an image. A Function that an object
-   controls is no user of it: an App's prune and the collector leave it out. A Function of that name without the
-   object's marker is left as it is, and the objects it would serve wait with `FunctionNotOwned`, the Workflow's reason.
-   An image's group, for an engineless kind's call, is its one object.
+   controls is no user of it, so an App's prune can drop the object. A Function of that name without the object's marker
+   is left as it is, and the objects it would serve wait with `FunctionNotOwned`, the Workflow's reason, where a missing
+   `ref` reads `FunctionNotFound` (ADR-0341 Decision 4). An image's group, for an engineless kind's call, is its one
+   object.
 3. **The schema.** A settings kind has no `schema`, and an Engineless entry no `config`. A kind's schema is what its
    image's contract says of one object's `config`: in `input`, the schema at `objects[].config`, or that of the member
    whose `kind` is this kind when `input` is a union discriminated by `kind`; a contract that says nothing of it, such
    as `{}`, checks nothing. The call's data keeps its shape (ADR-0341 Decision 2, ADR-0345 Decision 2): a closed
    contract refuses a new field, so a change of that shape is a new event type.
-4. **Reading an image.** An Addon is stored and its revision stamped as today. Its pass then reads, for each of its
-   revisions, the contract and the runtime of each image, by digest and from registry metadata as a Job's contract
-   (ADR-0347 Decision 2), into `AddonRevision.status.contracts`, once; what it cannot read it tries again each
-   `runtime.supervisionPeriod`. The Addon then reports `Ready`, a condition it lacks today: True once the images of its
-   current revision are read and its constraints fit their schemas, else False with `ArtifactNotReady` or
-   `SettingsInvalid` (new), naming the kind. Nothing waits for it: engines start and objects are stored, and only an
-   object whose image is not read yet waits, with `ArtifactNotReady`. A contract that does not compile fails its
+4. **Reading an image.** An Addon is stored and its revision stamped as today. Its pass reads the contract and the
+   runtime of each image, by digest and from registry metadata as a Job's contract (ADR-0347 Decision 2), into
+   `AddonRevision.status.contracts`: once before it names a new revision current, whatever comes of it, so that a
+   deploy's App is checked against them, and again each `runtime.supervisionPeriod` for what it could not read. The
+   Addon then reports `Ready`, a condition it lacks today: True once the images of its current revision are read and its
+   constraints fit their schemas, else False with `ArtifactNotReady` or `SettingsInvalid` (new), naming the kind.
+   Nothing waits for it: engines start and objects are stored, and only an object whose image is not read waits, with
+   `ArtifactNotReady`, after `TargetNotReady`. A contract that does not compile checks nothing at a write, and fails its
    Function, as any (ADR-0303 Decision 3). A kind with a `ref` takes no rules (400), which need a schema to type them.
 5. **One revision per target.** A settings kind that the Addon declares is read whole, its Function, contract,
    constraints and resync, from the revision its target pins, or from the current one while the target does not exist or
    pins none, no longer from the Addon as it is now (ADR-0341 Decision 1). A replace of the Addon may not change a
    kind's `target` (400), so one field finds an object's target in every revision. A write of an object, alone or as an
    App's part, is checked against that contract, 422, or an App's 400, naming the property, and against those
-   constraints; an engineless object's against the current revision's, which it then pins. A contract that is not read
-   yet checks nothing, nor do its rules, as a JobRun's input before its Job's contract is read (ADR-0347 Decision 3). At
-   the call, the contract is checked as any Function's (ADR-0303): a list with an object that does not fit, as when its
-   target moved, is refused before the Function runs, and each of its objects is `ReconcileFailed`, naming the path.
+   constraints; a target that is a part of the same App counts as pinning none, and an engineless object's write is
+   checked against the current revision. While the pinned revision lacks the kind, an object has no Function and no
+   call, and waits with `FunctionNotFound`, or with `Progressing` before the first revision; its write is checked
+   against the current revision, or against the Addon's other constraints while none has the kind. A contract that is
+   not read checks nothing, nor do its rules, as a JobRun's input before its Job's contract is read (ADR-0347 Decision
+   3). At the call, the contract is checked as any Function's (ADR-0303): a list with an object that does not fit, as
+   when its target moved, is refused before the Function runs, and each of its objects is `ReconcileFailed`, naming the
+   path.
 
 ## Design model
 
@@ -167,12 +177,13 @@ kind that needs KV, a Bucket or SQL names a `ref`); publishing an add-on's image
 ## Behavior rows
 
 - **addons.md**: "An entry's attributes", "An object's config", "A settings object's write" and "An Addon's config and
-  env" (the schema's source, the pin's contract), "A settings object that cannot be applied" (`FunctionNotOwned`,
-  `ArtifactNotReady`) and "A target's own Function for a settings kind"; new rows "An add-on kind's Function from an
+  env" (the schema's source, the pin's contract), "An Addon changed or deleted" (when a kind's change applies), "A
+  settings object that cannot be applied" (`FunctionNotOwned`, `ArtifactNotReady`, a kind that the pin lacks) and "A
+  target's own Function for a settings kind"; new rows "An add-on kind's Function from an
   image", "An Addon's images and constraints" (`Ready`) and "A list off its Function's contract".
 - **engineless-kinds.md**: "An engineless object's Function", "An engineless object's engine fields", "An engineless
-  object that cannot be called" and "An engineless kind's call". **apps.md**: "A dropped part". **funcdctl-dev.md**: the
-  folder mode's images.
+  object that cannot be called" and "An engineless kind's call". **apps.md**: "A dropped part" and "An `addons` entry
+  refused". **funcdctl-dev.md**: the folder mode's images.
 
 ## Temporary workarounds
 
@@ -226,10 +237,12 @@ func KindSchema(contract v1.WorkflowContract, kind string) json.RawMessage
   `revisions.go` (the read), `settings.go`, `objects.go` (the pin's kinds, `self`), `settings_kinds.go` (`KindSchema`).
   `internal/controlplane`: the checks of a write, the App's part included. `internal/ownedstore`, `internal/gc`:
   AddonObject, the pair, the in-use rule. `pkg/funcd`: the registry's reader, in dev too, whose images are no builds of
-  the session. `cmd/funcdctl`: in folder mode, an image that is no build is pulled as a server's.
+  the session. `cmd/funcdctl`: in folder mode, an image that is no build is pulled as a server's; `app delete`'s walk
+  notes the Functions that an object controls.
 - pyvvo/funcd-addons: rauthy-settings and infrastack-reconciler export `handle`, throw when an empty list cannot be
   applied, and carry their contracts; their images are published first, beside the old `addon.yaml`, which then names
-  them once funcd's release has this. pyvvo/funcd-functions' frp-bunny keeps its own Function, or drops it.
+  them once funcd's release has this. InfraStack's `config.job` goes: its handler and `funcdctl infra` read the binding
+  `stack`, so a stack names its Job once. pyvvo/funcd-functions' frp-bunny drops its Function for the image.
 - Docs: the add-ons pages, `api/types/v1alpha1/examples/addons`, the behavior rows, the blueprint's add-on paragraph.
 - Tests: one per Scenario, named after it, and the oracle markers. Done: `just ci`, `just check-specs` and
   `just check-behavior` green; funcd-addons' `addon-rauthy` and `addon-infrastack` lanes pass with the images.
@@ -262,4 +275,5 @@ None.
 ## References
 
 - FEAT-0019 (the feature issue is filed at acceptance); #1516 and #1558, which added the two schemas; #1574, the rule.
-- The decider's choices of 2026-11-24: the contract is the schema (A); `image`, for settings and engineless kinds alike.
+- The decider's choices of 2026-11-24: the contract is the schema (A); `image`, for settings and engineless kinds alike;
+  a stack names its Job in `bindings.job` alone.
