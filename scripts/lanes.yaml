@@ -956,7 +956,7 @@ addon-rauthy-restore:
   venom: e2e/addon-rauthy-restore.venom.yml
 
 job:
-  description: A Job's runs on real containerd (ADR-0347) — the job-report examples of funcd-typescript and funcd-python each report on a month, a run that ends Succeeded with no container left, a cancel that stops the run's container within the grace, and a funcd crash during a run that leaves it Interrupted with no container.
+  description: A Job's runs on real containerd (ADR-0347) — the job-report examples of funcd-typescript and funcd-python each report on a month, a run that ends Succeeded with no container left, a cancel that stops the run's container within the grace, and a funcd crash during a run that leaves it Interrupted with no container; and a run of a Job without approval.bypass, in each language, that previews and runs once funcdctl job approve names its digest (ADR-0348).
   module: github.com/pyvvo/funcd-typescript
   dir: examples/job-report
   # The Python example needs no third-party package, so its src/main.py is pushed as one file, pyreport.py beside its
@@ -988,6 +988,8 @@ job:
       to: job-input-month.json
     - from: e2e/fixtures/job-funcdconfig.yaml
       to: funcdconfig.yaml
+    - from: e2e/fixtures/job-report-approved.yaml
+      to: job-report-approved.yaml
   push:
     - artifact: report.mjs
       ref: report
@@ -999,11 +1001,14 @@ job:
     - report.yaml
     - py/report.yaml
     - job-sleep.yaml
+    - job-report-approved.yaml
   ready:
     kind: job
     names:
       - report
       - pyreport
       - sleeper
+      - report-approved
+      - pyreport-approved
     tries: 60
   venom: e2e/job.venom.yml
