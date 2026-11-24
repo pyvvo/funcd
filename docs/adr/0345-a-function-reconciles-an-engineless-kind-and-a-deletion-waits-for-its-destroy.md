@@ -1,9 +1,9 @@
 # ADR-0345: A Function reconciles an engineless kind's objects, and a deletion waits for its destroy
 
-- **Status**: Implemented (2026-11-24), review passed in its second round, one Minor open on a ruling of 2026-11-24
-  outside the ADR's text ([report](../reviews/adr-0345-implementation-claude-opus-5-5-2.md)); Reviewing (2026-11-24,
-  implemented); Accepted (2026-11-23), by the decider, after five rounds of an independent judge, every Blocker and
-  Major folded
+- **Status**: Implemented (2026-11-24), review passed in its third round, over the code and the amendment of
+  2026-11-24, one wording Minor open ([report](../reviews/adr-0345-implementation-claude-opus-5-5-3.md)); Reviewing
+  (2026-11-24, implemented); Accepted (2026-11-23), by the decider, after five rounds of an independent judge, every
+  Blocker and Major folded
 - **Amended in place**: 2026-11-24, on the decider's delegation ("shouldn't left anything open", then "Accept"), after
   the implementation review routed four rulings: a kind keeps its workload on an Addon created again, an engine
   object's mark (Decision 1); an engineless object takes no engine field (Decision 3); a later event of an ended
