@@ -144,15 +144,17 @@ func TestGenerateTypesNode(t *testing.T) {
 	require.Contains(t, string(files["funcd.d.ts"]), "export interface FuncBindings {\n}\n", "the I/O types only")
 }
 
-// ADR-0347 Decision 9: a Job's contract file emits JobInput and JobOutput, its binding context and a JobContext whose
-// run is the RunInfo of its run.
+// ADR-0347 Decision 9 and ADR-0348 Decision 6: a Job's contract file emits JobInput and JobOutput, its binding context
+// and a JobContext whose run is the RunInfo of its call, in phase run or preview, and whose approval is the Approval it
+// runs under, with each shim's key names.
 func TestGenerateJobTypes(t *testing.T) {
 	t.Parallel()
 	files, err := sdk.GenerateJobTypes(counterFile(t, "nodejs22"), counterBindings())
 	require.NoError(t, err)
 	ts := string(files["funcd.d.ts"])
 	for _, want := range []string{"export interface JobInput", "export interface JobOutput", `export interface JobBindings {
-  kv: "pycounters";`, `phase: "run" | "preview";`, "startedBy: string;", "export interface JobContext {\n  run: RunInfo;\n}"} {
+  kv: "pycounters";`, `phase: "run" | "preview";`, "startedBy: string;", "export interface Approval {\n  approvedBy: string;",
+		"export interface JobContext {\n  run: RunInfo;\n  approval: Approval | null;\n}"} {
 		require.Contains(t, ts, want)
 	}
 	require.NotContains(t, ts, "FuncInput")
@@ -160,7 +162,8 @@ func TestGenerateJobTypes(t *testing.T) {
 	require.NoError(t, err)
 	py := string(files["funcd_types.py"])
 	for _, want := range []string{"class JobInput(TypedDict)", "class JobOutput(TypedDict)", `kv: Literal["pycounters"]`,
-		"class RunInfo(TypedDict):", `phase: Literal["run", "preview"]`, "started_by: str", "class JobContext:\n    run: RunInfo"} {
+		"class RunInfo(TypedDict):", `phase: Literal["run", "preview"]`, "started_by: str", "class Approval(TypedDict):\n    approved_by: str",
+		"class JobContext:\n    run: RunInfo\n    approval: Approval | None"} {
 		require.Contains(t, py, want)
 	}
 }

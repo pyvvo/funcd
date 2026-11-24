@@ -1,0 +1,31 @@
+# region job
+apiVersion: funcd.io/v1alpha1
+kind: Job
+metadata:
+  name: report-approved
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/report:1.0.0
+  timeout: 10m
+  approval:
+    expiry: 1h
+# endregion job
+---
+# region pyjob
+apiVersion: funcd.io/v1alpha1
+kind: Job
+metadata:
+  name: pyreport-approved
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: python314
+  handler: handle
+  image: registry.example.com/pyreport:1.0.0
+  timeout: 10m
+  approval:
+    expiry: 1h
+# endregion pyjob

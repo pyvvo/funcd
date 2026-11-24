@@ -60,7 +60,8 @@ func callsOf(t *testing.T, calls string) int {
 	return len(b)
 }
 
-// deployJob pushes src, with the {input, output} contract ("" is {}), as funcdctl push does and applies Job name.
+// deployJob pushes src, with the {input, output} contract ("" is {}), as funcdctl push does and applies Job name with
+// approval.bypass, so its runs run unattended, unless edit turns it off (ADR-0348 Decision 1).
 func (h *shimRig) deployJob(t *testing.T, name, src, input string, edit func(*v1.JobSpec)) {
 	t.Helper()
 	ref, digest := funcd.PushJob(t, h.layout, name, src, input)
@@ -70,6 +71,7 @@ func (h *shimRig) deployJob(t *testing.T, name, src, input string, edit func(*v1
 			ObjectMeta: v1.ObjectMeta{Name: v1.ObjectName(name), Namespace: "default", ResourceGroup: "rg1"}}
 	}
 	job.Spec.Runtime, job.Spec.Handler, job.Spec.Image, job.Spec.ImageDigest = "nodejs22", "handle", ref, digest
+	job.Spec.Approval.Bypass = true
 	if edit != nil {
 		edit(&job.Spec)
 	}

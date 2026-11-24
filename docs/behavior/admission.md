@@ -93,8 +93,12 @@ New words: Schema, Refused, DryRun, Store.
 | `MaxTimerInterval` | 24h | `api/types/v1alpha1/function.go` |
 | `MaxWorkflowTimeout` | 168h | `api/types/v1alpha1/function.go` |
 | `MinTimerInterval` | 100ms | `api/types/v1alpha1/function.go` |
+| `DefaultJobApprovalExpiry` | 24h | `api/types/v1alpha1/job.go` |
+| `MaxJobApprovalExpiry` | 168h | `api/types/v1alpha1/job.go` |
 | `MaxJobConcurrency` | 15 | `api/types/v1alpha1/job.go` |
 | `MaxJobTimeout` | `MaxWorkflowTimeout` | `api/types/v1alpha1/job.go` |
+| `MinJobApprovalExpiry` | 1m | `api/types/v1alpha1/job.go` |
+| `MaxJobRunRejectReason` | 512 | `api/types/v1alpha1/jobrun.go` |
 | `DefaultMaxKeyBytes` | 1024 | `api/types/v1alpha1/kvstore.go` |
 | `DefaultMaxValueBytes` | 1MiB | `api/types/v1alpha1/kvstore.go` |
 | `MaxKeyBytesLimit` | 64000 | `api/types/v1alpha1/kvstore.go` |

@@ -495,6 +495,8 @@ testcases:
             runtime: nodejs22
             handler: handle
             image: oci-layout:///mnt/funcd-deps/registry:egress-probe
+            approval:
+              bypass: true
           YAML
             cat >/tmp/egresspolicy-job.yaml <<"YAML"
           apiVersion: funcd.io/v1alpha1

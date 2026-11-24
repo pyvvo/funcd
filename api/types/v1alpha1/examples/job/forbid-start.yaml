@@ -1,0 +1,15 @@
+# region policy
+apiVersion: funcd.io/v1alpha1
+kind: Policy
+metadata:
+  name: no-planner-start
+  namespace: default
+  resourceGroup: rg1
+spec:
+  cedar: |
+    forbid(
+      principal == Function::"default/planner",
+      action == Action::"job::start",
+      resource == Job::"default/report"
+    );
+# endregion policy

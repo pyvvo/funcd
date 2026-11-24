@@ -15,6 +15,7 @@ func grantFixtures() map[string]PrincipalObject {
 	fn.Spec.Bindings.Links = []v1.FunctionLink{{Alias: "billing", Target: "billing"}}
 	fn.Spec.Bindings.Config = []v1.ObjectName{"settings"}
 	fn.Spec.Bindings.Secret = []v1.ObjectName{"api-keys"}
+	fn.Spec.Bindings.Job = []v1.FunctionJob{{Alias: "stack", Job: "tofu"}}
 
 	cs := &v1.Lake{TypeMeta: v1.TypeMeta{APIVersion: v1.KindLake.GVK().APIVersion(), Kind: v1.KindLake}}
 	cs.Name, cs.Namespace = "lake", "team"

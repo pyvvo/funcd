@@ -84,6 +84,8 @@ func (e *executor) Descriptors() []provider.Descriptor {
 	return []provider.Descriptor{
 		{Name: "egress", Kind: provider.Builtin, Summary: "egress gateway (default-deny + audit)"},
 		{Name: "log-ingest", Kind: provider.Builtin, Summary: "function-telemetry side channel + funclog read path (ADR-0081/0084)"},
+		{Name: "job", Kind: provider.Builtin, Bindings: []string{"spec.bindings.job"},
+			Summary: "a Function's start and read of its bound Jobs' runs, on a worker's local API (ADR-0349)"},
 	}
 }
 

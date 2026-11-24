@@ -84,6 +84,30 @@ func TestHTTPFunctionsAreNotChecked(t *testing.T) {
 	}
 }
 
+// A run's preview call has its input checked, and its answer, a preview and no result, is not (ADR-0348 Decision 2).
+func TestAPreviewAnswerIsNotChecked(t *testing.T) {
+	t.Parallel()
+	ch := chainOf(t, plugintest.EmailInput, `{"type": "object", "required": ["count"]}`)
+	call := func(caller invoke.Caller, body string) *invoke.Call {
+		return &invoke.Call{Caller: caller, Request: httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))}
+	}
+	answer := func() *invoke.Answer {
+		return invoke.NewAnswer(&http.Response{StatusCode: http.StatusOK, Header: http.Header{},
+			Body: io.NopCloser(strings.NewReader(`{"plan": "2 to add"}`))})
+	}
+	rf := ch.Before(context.Background(), call(invoke.JobPreview, `{"data": {"email": "a b@example.com"}}`))
+	require.NotNil(t, rf, "the preview's input is checked")
+	require.Equal(t, http.StatusUnprocessableEntity, rf.Status)
+
+	preview := call(invoke.JobPreview, `{"data": {"email": "ops@localhost"}}`)
+	require.Nil(t, ch.Before(context.Background(), preview))
+	require.Nil(t, ch.After(context.Background(), preview, answer()), "a preview off the output schema passes")
+
+	run := call(invoke.JobRun, `{"data": {"email": "ops@localhost"}}`)
+	require.Nil(t, ch.Before(context.Background(), run))
+	require.NotNil(t, ch.After(context.Background(), run, answer()), "a run's result is checked")
+}
+
 // funcd answers #1339's cases before any shim, whatever the Function's runtime.
 func TestTheAnswerDoesNotDependOnTheRuntime(t *testing.T) {
 	t.Parallel()

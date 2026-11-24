@@ -45,6 +45,16 @@ const jobMaster = "e2e-job-principal-master-0123456789"
 // principalHandler runs the ops of its event's data in order and answers what each gave: a value, or its error's
 // message. A run's ops are its input, a Function's its call's body.
 const principalHandler = `import { existsSync, writeFileSync } from 'node:fs';
+import { request } from 'node:http';
+const ownRun = () => new Promise((resolve, reject) => {
+  const req = request({ socketPath: process.env.FUNCD_INVOKE_SOCKET, path: '/job/run' }, (res) => {
+    let body = '';
+    res.on('data', (c) => { body += c; });
+    res.on('end', () => (res.statusCode === 200 ? resolve(JSON.parse(body).name) : reject(new Error(res.statusCode + ' ' + body))));
+  });
+  req.on('error', reject);
+  req.end();
+});
 export async function handle(ctx, event) {
   const out = [];
   for (const o of (event.data && event.data.ops) || []) {
@@ -63,6 +73,7 @@ export async function handle(ctx, event) {
           writeFileSync(o.key + '/' + ctx.run.name, JSON.stringify({ run: ctx.run.name, socket: process.env.FUNCD_INVOKE_SOCKET }));
           break;
         case 'wait': while (!existsSync(o.key)) await new Promise((r) => setTimeout(r, 20)); break;
+        case 'self': v = await ownRun(); break;
       }
       out.push({ ok: true, value: v });
     } catch (e) { out.push({ error: String((e && e.message) || e) }); }
@@ -182,6 +193,7 @@ func (r *jobRig) job(t *testing.T, edit func(*v1.JobSpec)) {
 	ref, digest := PushJob(t, r.layout, "tofu", principalHandler, "")
 	job := &v1.Job{TypeMeta: tmeta(v1.KindJob), ObjectMeta: v1.ObjectMeta{Name: "tofu", Namespace: "default", ResourceGroup: "rg1"}}
 	job.Spec.Runtime, job.Spec.Handler, job.Spec.Image, job.Spec.ImageDigest = "nodejs22", "handle", ref, digest
+	job.Spec.Approval.Bypass = true // a run runs unattended (ADR-0348 Decision 1)
 	if edit != nil {
 		edit(&job.Spec)
 	}
@@ -466,16 +478,17 @@ func TestScenarioJobWriterRole(t *testing.T) {
 
 // The scenario's GET /job/run assertion joins this test with ADR-0348's implementation (ruling: https://github.com/pyvvo/funcd/issues/1018#issuecomment-7116120716).
 // scenario: job-runs-have-their-own-sockets — two Running runs of a Job with concurrency 2 hold two different local API
-// sockets, and each run's ctx.run names that run (ADR-0351 Decision 2).
+// sockets, each run's ctx.run names that run (ADR-0351 Decision 2), and each run's GET /job/run, read while both are
+// Running, answers its own run (ADR-0348 Decision 6).
 func TestScenarioJobRunsHaveTheirOwnSockets(t *testing.T) {
 	t.Parallel()
 	r := newJobRig(t, false)
 	r.job(t, func(s *v1.JobSpec) { s.Concurrency = 2 })
 
 	dir := t.TempDir()
-	gate := filepath.Join(dir, "open")
-	runs := []v1.ObjectName{r.start(t, jobOp{"op": "mark", "key": dir}, jobOp{"op": "wait", "key": gate}),
-		r.start(t, jobOp{"op": "mark", "key": dir}, jobOp{"op": "wait", "key": gate})}
+	gate, both := filepath.Join(dir, "open"), filepath.Join(dir, "both")
+	ops := []jobOp{{"op": "mark", "key": dir}, {"op": "wait", "key": both}, {"op": "self"}, {"op": "wait", "key": gate}}
+	runs := []v1.ObjectName{r.start(t, ops...), r.start(t, ops...)}
 	sockets := map[string]v1.ObjectName{}
 	for _, run := range runs {
 		var mark struct {
@@ -491,8 +504,15 @@ func TestScenarioJobRunsHaveTheirOwnSockets(t *testing.T) {
 		sockets[mark.Socket] = run
 	}
 	require.Len(t, sockets, 2, "the two runs hold two sockets: %v", sockets)
+	for _, run := range runs {
+		require.Equal(t, v1.JobRunRunning, r.get(t, v1.KindJobRun, run).(*v1.JobRun).Status.Phase, "%s is Running", run)
+	}
+	require.NoError(t, os.WriteFile(both, nil, 0o600)) // both runs read GET /job/run while both are Running
 	require.NoError(t, os.WriteFile(gate, nil, 0o600))
 	for _, run := range runs {
-		r.result(t, run)
+		out := r.result(t, run)
+		require.Len(t, out, 4)
+		require.True(t, out[2].OK, "run %s read GET /job/run: %s", run, out[2].Error)
+		require.Equal(t, string(run), out[2].text(), "each run's GET /job/run answers its own run")
 	}
 }

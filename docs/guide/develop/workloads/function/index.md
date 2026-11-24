@@ -146,6 +146,9 @@ declared under [`spec.bindings.links`](spec.md#functionspecbindingslinks): an `a
 - An add-on object's engine is called through funcd, under an alias of
   [`spec.bindings.addon`](spec.md#functionspecbindings), with `ctx.addon.fetch`:
   [Call its engine from a Function](../../services/addons/index.md#call-its-engine-from-a-function).
+- A run of a Job is started and read through funcd, under an alias of
+  [`spec.bindings.job`](spec.md#functionspecbindingsjob), with `ctx.job.start` and `ctx.job.get`:
+  [Start a run from a Function](../job/start-from-a-function.md).
 
 In the TypeScript example fn-to-fn, `front` calls `greeter` over this link
 ([complete file](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/function/link.yaml)); the Python

@@ -65,6 +65,13 @@ func TestJobValidate(t *testing.T) {
 		"secret declaration check": {func(s *JobSpec) {
 			s.SecretDeclarations = []SecretDeclaration{{Name: "creds"}}
 		}, "spec.secrets[0].keys is empty"},
+		// ADR-0348 Decision 1: approval.expiry is 1m to 168h, unset 24h; bypass alone is valid.
+		"bypass":           {func(s *JobSpec) { s.Approval.Bypass = true }, ""},
+		"expiry 1m":        {func(s *JobSpec) { s.Approval.Expiry = MinJobApprovalExpiry }, ""},
+		"expiry 168h":      {func(s *JobSpec) { s.Approval.Expiry = MaxJobApprovalExpiry }, ""},
+		"expiry under 1m":  {func(s *JobSpec) { s.Approval.Expiry = Duration(59 * time.Second) }, "spec.approval.expiry 59s is out of bounds"},
+		"expiry past 168h": {func(s *JobSpec) { s.Approval.Expiry = MaxJobApprovalExpiry + Duration(time.Hour) }, "spec.approval.expiry 169h is out of bounds"},
+		"expiry negative":  {func(s *JobSpec) { s.Approval.Expiry = Duration(-time.Minute) }, "spec.approval.expiry"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -97,6 +104,52 @@ func TestJobRunValidate(t *testing.T) {
 	wrongKind := run("hello")
 	wrongKind.Kind = KindWorkflowRun
 	require.ErrorContains(t, wrongKind.Validate(), "does not match")
+
+	// ADR-0348 Contracts: spec.approve is a preview's digest, and spec.rejectReason fits 512 bytes.
+	approved := run("hello")
+	approved.Spec.Approve, approved.Spec.Reject, approved.Spec.RejectReason = "sha256:"+strings.Repeat("a", 64), true, strings.Repeat("x", MaxJobRunRejectReason)
+	require.NoError(t, approved.Validate())
+	for _, bad := range []string{"sha256:" + strings.Repeat("A", 64), "sha256:abc", strings.Repeat("a", 64), "md5:" + strings.Repeat("a", 64)} {
+		r := run("hello")
+		r.Spec.Approve = bad
+		require.ErrorContains(t, r.Validate(), "spec.approve", "%q", bad)
+	}
+	long := run("hello")
+	long.Spec.RejectReason = strings.Repeat("x", MaxJobRunRejectReason+1)
+	require.ErrorContains(t, long.Validate(), "spec.rejectReason is 513 bytes, more than 512")
+}
+
+// ADR-0348 Decision 1: an unset expiry is 24h.
+func TestJobApprovalExpiryDefaults(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, Duration(24*time.Hour), JobApproval{}.ExpiryOrDefault())
+	require.Equal(t, Duration(time.Hour), JobApproval{Expiry: Duration(time.Hour)}.ExpiryOrDefault())
+}
+
+// ADR-0348 Decision 3: a run is approved only once admission recorded an approval that names its current preview.
+func TestJobRunApproved(t *testing.T) {
+	t.Parallel()
+	d1, d2 := "sha256:"+strings.Repeat("1", 64), "sha256:"+strings.Repeat("2", 64)
+	at := NewTimestamp(time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC))
+	for name, c := range map[string]struct {
+		approve string
+		preview *JobRunPreview
+		at      Timestamp
+		want    bool
+	}{
+		"recorded":                {d1, &JobRunPreview{Digest: d1}, at, true},
+		"not recorded":            {d1, &JobRunPreview{Digest: d1}, Timestamp{}, false},
+		"another preview":         {d1, &JobRunPreview{Digest: d2}, at, false},
+		"no preview":              {d1, nil, at, false},
+		"no approval":             {"", &JobRunPreview{Digest: d1}, at, false},
+		"no approval, no preview": {"", nil, Timestamp{}, false},
+	} {
+		r := &JobRun{Spec: JobRunSpec{Approve: c.approve}, Status: JobRunStatus{Preview: c.preview, ApprovedAt: c.at}}
+		require.Equal(t, c.want, r.Approved(), name)
+	}
+	require.True(t, JobRunRejected.Ended())
+	require.False(t, JobRunPreviewing.Ended())
+	require.False(t, JobRunAwaitingApproval.Ended())
 }
 
 // ADR-0347 Decision 2: exactly one of spec.function and spec.job names a Revision's subject.

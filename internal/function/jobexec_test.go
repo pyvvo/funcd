@@ -2,6 +2,8 @@ package function_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net"
@@ -78,13 +80,15 @@ func (h *execRig) createdFor(name string, rev v1.ObjectName) []runtime.WorkerSpe
 	return out
 }
 
-// readyJob creates Job hello on the harness's artifact and passes it, so it is Ready at hello-v1.
+// readyJob creates Job hello on the harness's artifact with approval.bypass, which edit may turn off, and passes it,
+// so it is Ready at hello-v1.
 func (h *execRig) readyJob(t *testing.T, edit func(*v1.JobSpec)) *v1.Job {
 	t.Helper()
 	obj, _ := v1.NewObject(v1.KindJob)
 	job := obj.(*v1.Job)
 	job.Name, job.Namespace, job.ResourceGroup = "hello", "default", "rg1"
-	job.Spec = v1.JobSpec{Runtime: "nodejs22", Handler: "handle", Image: "file://" + h.artifact}
+	job.Spec = v1.JobSpec{Runtime: "nodejs22", Handler: "handle", Image: "file://" + h.artifact,
+		Approval: v1.JobApproval{Bypass: true}}
 	if edit != nil {
 		edit(&job.Spec)
 	}
@@ -634,4 +638,90 @@ func (s *countingStore) revisions() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.got
+}
+
+// ADR-0348 Decision 2: a run of a Job without approval.bypass first calls a worker of its pin with the event type
+// funcd.job.preview; a 2xx JSON answer within job.payloadLimit is its preview, digest sha256: of the answer's bytes and
+// an empty answer the document null, and its worker is removed; an approval then calls a second worker of the same
+// revision, in the same trace, with funcd.job.run.
+func TestJobRunExecutorPreviewsThenApplies(t *testing.T) {
+	t.Parallel()
+	h := newExecRig(t, 1<<10)
+	h.readyJob(t, func(s *v1.JobSpec) { s.Approval.Bypass = false })
+	run := h.run(t, "hello-a", `{"name":"Ada"}`, nil)
+	worker := &answering{status: http.StatusOK, body: `{"summary":"greet Ada"}`}
+	h.serveRun(t, "hello-a", worker.ServeHTTP)
+	previewing := h.pass(t, "hello-a")
+	require.Equal(t, v1.JobRunPreviewing, previewing.Status.Phase)
+	awaiting := h.end(t, "hello-a")
+	require.Equal(t, v1.JobRunAwaitingApproval, awaiting.Status.Phase)
+	sum := sha256.Sum256([]byte(`{"summary":"greet Ada"}`))
+	require.Equal(t, "sha256:"+hex.EncodeToString(sum[:]), awaiting.Status.Preview.Digest)
+	require.JSONEq(t, `{"summary":"greet Ada"}`, string(awaiting.Status.Preview.Document))
+	require.True(t, h.rt.wasRemoved(runID("hello-a")), "the preview's worker stops")
+	calls := worker.calls()
+	require.Len(t, calls, 1)
+	require.JSONEq(t, `{"specversion":"1.0","type":"funcd.job.preview","source":"funcd://default/job/hello","id":"`+
+		string(run.UID)+`","data":{"name":"Ada"}}`, string(calls[0].body))
+
+	worker.body = `{"greeting":"hi Ada"}`
+	ctx := context.Background()
+	obj, err := h.st.Get(ctx, v1.KindJobRun.GVK(), "default", "hello-a")
+	require.NoError(t, err)
+	approved := obj.(*v1.JobRun)
+	approved.Spec.Approve, approved.Status.ApprovedBy = awaiting.Status.Preview.Digest, "bob"
+	approved.Status.ApprovedAt = awaiting.Status.Preview.PreviewedAt
+	_, err = h.st.Update(ctx, approved)
+	require.NoError(t, err)
+	require.Equal(t, v1.JobRunRunning, h.pass(t, "hello-a").Status.Phase)
+	ended := h.end(t, "hello-a")
+	requireEnd(t, ended, v1.JobRunSucceeded, "")
+	require.JSONEq(t, `{"greeting":"hi Ada"}`, string(ended.Status.Result))
+	calls = worker.calls()
+	require.Len(t, calls, 2, "one preview call, one apply call")
+	require.Contains(t, string(calls[1].body), `"type":"funcd.job.run"`)
+	for _, c := range calls {
+		require.True(t, strings.HasPrefix(c.header.Get("traceparent"), "00-"+previewing.Status.TraceID+"-"), "one trace")
+	}
+	require.Len(t, h.createdFor("hello-a", "hello-v1"), 2, "a worker for the preview and one for the apply, of one revision")
+}
+
+// ADR-0348 Decision 2: a preview that answers an error ends the run Failed with PreviewFailed, a larger one with
+// PayloadLimitExceeded, a 2xx that is no JSON PreviewFailed; an empty answer is the document null.
+func TestJobRunExecutorPreviewAnswers(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		status       int
+		body         string
+		phase        v1.JobRunPhase
+		reason, says string
+		document     string
+	}{
+		"ok":       {status: http.StatusOK, body: `[1,2]`, phase: v1.JobRunAwaitingApproval, document: `[1,2]`},
+		"empty":    {status: http.StatusNoContent, phase: v1.JobRunAwaitingApproval, document: `null`},
+		"over":     {status: http.StatusOK, body: `"` + strings.Repeat("x", 40) + `"`, phase: v1.JobRunFailed, reason: v1.JobRunPayloadLimitExceeded, says: "the preview exceeds job.payloadLimit 32"},
+		"not-json": {status: http.StatusOK, body: `hi`, phase: v1.JobRunFailed, reason: v1.JobRunPreviewFailed, says: "the answer is not JSON"},
+		"thrown":   {status: http.StatusInternalServerError, body: `{"error":"boom\nat preview"}`, phase: v1.JobRunFailed, reason: v1.JobRunPreviewFailed, says: "the preview answered 500: boom"},
+		"refused":  {status: http.StatusUnprocessableEntity, body: `{"error":"event data does not match the input contract"}`, phase: v1.JobRunFailed, reason: v1.JobRunPreviewFailed, says: "422"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newExecRig(t, 32)
+			h.readyJob(t, func(s *v1.JobSpec) { s.Approval.Bypass = false })
+			h.run(t, "hello-a", `{}`, nil)
+			h.serveRun(t, "hello-a", (&answering{status: tc.status, body: tc.body}).ServeHTTP)
+			require.Equal(t, v1.JobRunPreviewing, h.pass(t, "hello-a").Status.Phase)
+			ended := h.end(t, "hello-a")
+			require.Equal(t, tc.phase, ended.Status.Phase)
+			if tc.document != "" {
+				require.JSONEq(t, tc.document, string(ended.Status.Preview.Document))
+				return
+			}
+			c := requireEnd(t, ended, tc.phase, tc.reason)
+			require.Contains(t, c.Message, tc.says)
+			require.NotContains(t, c.Message, "\n", "a message is one line")
+			require.Nil(t, ended.Status.Preview)
+			require.True(t, h.rt.wasRemoved(runID("hello-a")))
+		})
+	}
 }

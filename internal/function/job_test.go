@@ -332,39 +332,51 @@ func TestJobPlatformGate(t *testing.T) {
 
 // A platform with no materializer runs no worker of its own: its Functions get a stand-in worker that serves no call,
 // and a run of a Job ends Failed with StartFailed, saying that this platform runs no workers, rather than crashing its
-// executor.
+// executor: from its preview, or at once with approval.bypass (ADR-0348 Decision 2).
 func TestJobRunOnAPlatformThatRunsNoWorkers(t *testing.T) {
 	t.Parallel()
-	h := newJobHarness(t)
-	h.createJob(t, "hello", nil)
-	h.reconcileJob(t, "hello")
-	require.Equal(t, v1.ConditionTrue, readyOf(t, h.getJob(t, "hello")).Status)
-	ended := make(chan v1.ObjectName, 4)
-	runs := h.r.Runs(function.RunsConfig{MaxRunning: 4, PayloadLimit: 1 << 10, Retention: time.Hour,
-		Enqueue: func(req controller.Request) { ended <- req.Name }})
-	t.Cleanup(runs.Close)
-	obj, _ := v1.NewObject(v1.KindJobRun)
-	run := obj.(*v1.JobRun)
-	run.Name, run.Namespace, run.ResourceGroup, run.Spec.Job = "hello-a", "default", "rg1", "hello"
-	_, err := h.st.Create(context.Background(), run)
-	require.NoError(t, err)
-	pass := func() *v1.JobRun {
-		_, err := runs.Reconcile(context.Background(), controller.Request{GVK: v1.KindJobRun.GVK(), Namespace: "default", Name: "hello-a"})
-		require.NoError(t, err)
-		got, err := h.st.Get(context.Background(), v1.KindJobRun.GVK(), "default", "hello-a")
-		require.NoError(t, err)
-		return got.(*v1.JobRun)
+	for _, tc := range []struct {
+		name   string
+		bypass bool
+		first  v1.JobRunPhase
+	}{
+		{"preview", false, v1.JobRunPreviewing},
+		{"bypass", true, v1.JobRunRunning},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newJobHarness(t)
+			h.createJob(t, "hello", func(s *v1.JobSpec) { s.Approval.Bypass = tc.bypass })
+			h.reconcileJob(t, "hello")
+			require.Equal(t, v1.ConditionTrue, readyOf(t, h.getJob(t, "hello")).Status)
+			ended := make(chan v1.ObjectName, 4)
+			runs := h.r.Runs(function.RunsConfig{MaxRunning: 4, PayloadLimit: 1 << 10, Retention: time.Hour,
+				Enqueue: func(req controller.Request) { ended <- req.Name }})
+			t.Cleanup(runs.Close)
+			obj, _ := v1.NewObject(v1.KindJobRun)
+			run := obj.(*v1.JobRun)
+			run.Name, run.Namespace, run.ResourceGroup, run.Spec.Job = "hello-a", "default", "rg1", "hello"
+			_, err := h.st.Create(context.Background(), run)
+			require.NoError(t, err)
+			pass := func() *v1.JobRun {
+				_, err := runs.Reconcile(context.Background(), controller.Request{GVK: v1.KindJobRun.GVK(), Namespace: "default", Name: "hello-a"})
+				require.NoError(t, err)
+				got, err := h.st.Get(context.Background(), v1.KindJobRun.GVK(), "default", "hello-a")
+				require.NoError(t, err)
+				return got.(*v1.JobRun)
+			}
+			require.Equal(t, tc.first, pass().Status.Phase)
+			select {
+			case <-ended:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the run's executor did not end")
+			}
+			got := pass()
+			require.Equal(t, v1.JobRunFailed, got.Status.Phase)
+			c, ok := got.Status.Conditions.Get("Ready")
+			require.True(t, ok)
+			require.Equal(t, v1.JobRunStartFailed, c.Reason)
+			require.Contains(t, c.Message, "runs no workers")
+		})
 	}
-	require.Equal(t, v1.JobRunRunning, pass().Status.Phase)
-	select {
-	case <-ended:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the run's executor did not end")
-	}
-	got := pass()
-	require.Equal(t, v1.JobRunFailed, got.Status.Phase)
-	c, ok := got.Status.Conditions.Get("Ready")
-	require.True(t, ok)
-	require.Equal(t, v1.JobRunStartFailed, c.Reason)
-	require.Contains(t, c.Message, "runs no workers")
 }
