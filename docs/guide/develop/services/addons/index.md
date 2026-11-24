@@ -1,13 +1,14 @@
 ---
 title: Add-ons
-description: Register an add-on built outside funcd, such as rauthy, declare its objects, call their engines from a Function, apply their settings, back them up and sign users in through them.
+description: Register an add-on built outside funcd, such as rauthy, declare its objects, run Functions and Jobs on the runtimes it ships, call their engines from a Function, apply their settings, back them up and sign users in through them.
 ---
 
 ## Usage
 
-An add-on is an engine built outside funcd that an admin registers on a running funcd. Its users then declare objects
-of the kind it adds, as they declare a Lake: funcd runs one engine per object, serves it at the object's host, and
-copies its data into the namespace's backups. The [Platform page](../../../platform/services/addons.md) explains how.
+An add-on is built outside funcd, and an admin registers it on a running funcd. It ships runtimes: images that
+Functions and Jobs run on, or that run one engine per object of the kind it adds. Its users then declare objects of
+that kind, as they declare a Lake: funcd runs one engine per object, serves it at the object's host, and copies its
+data into the namespace's backups. The [Platform page](../../../platform/services/addons.md) explains how.
 The add-ons funcd ships live in [pyvvo/funcd-addons](https://github.com/pyvvo/funcd-addons). This page uses rauthy, an
 OpenID Connect provider of kind `IdentityProvider`.
 
@@ -18,8 +19,9 @@ registers the add-on from a release, piping its manifest to `funcdctl apply -f -
 curl -fsSL https://github.com/pyvvo/funcd-addons/releases/download/v0.2.0/rauthy.yaml | funcdctl apply -f -
 ```
 
-The Addon names the kind, the engine's image pinned by digest, its port and readiness path, its storage, and the schema
-of its objects' `spec.config`; this one is shortened from rauthy's
+The Addon lists the runtimes the add-on ships, each with its image pinned by digest. rauthy's one entry serves the
+workload `Engine`: one engine of its image runs per object of the kind its attributes name, with its port and readiness
+path, its storage, and the schema of its objects' `spec.config`. This one is shortened from rauthy's
 ([complete file](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/addons/addon.yaml)):
 
 ::include[../../../../../api/types/v1alpha1/examples/addons/addon.yaml#addon]
@@ -37,6 +39,25 @@ funcdctl get identityproviders -n default
 
 funcd checks `spec.config` against the add-on's schema when the object is applied. The object turns `Ready` once its
 engine answers on its readiness path, and the edge then serves it at `login.example.com` under `/auth/v1`.
+
+## Run Functions and Jobs on its runtime
+
+An entry whose workloads hold `Function` or `Job` is a runtime that Functions or Jobs name in `spec.runtime`, as they
+name `nodejs22`. Its name is none of funcd's runtimes, does not start with `node` or `python`, and is shipped by no
+other Addon. The Addon `deno` ships `deno2` for both, and the Function `greeter` runs on it
+([complete file](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/addons/runtimes.yaml)):
+
+::include[../../../../../api/types/v1alpha1/examples/addons/runtimes.yaml#addon]
+
+::include[../../../../../api/types/v1alpha1/examples/addons/runtimes.yaml#function]
+
+funcd resolves `spec.runtime` to one of its own runtimes first, then to an Addon's, then to the operator's
+`runtime.containerd.imageOverride`. A Revision records the image of the Addon's runtime that serves it in
+`spec.runtimeImage`, and its workers run that image, pulled by digest as an engine's is: an upgrade of the Addon moves
+no Revision, and only a change of the Function's spec makes a Revision that runs the new image. A Function applied
+before its Addon turns `Ready` once the Addon ships its runtime for Functions. Such a worker runs on containerd; on a
+process server, and under `funcdctl dev`, it is `RuntimeUnavailable`. A Function on such a runtime is a cloudevent
+one, with the bindings its image's shim builds in.
 
 ## Call its engine from a Function
 
@@ -134,7 +155,9 @@ add-on](build.md) shows what an engine must do and how rauthy's parts are writte
 
 ## Access
 
-Only an admin registers, changes or deletes an Addon, and only an admin reads its AddonRevisions. A developer of a
+Only an admin registers, changes or deletes an Addon, and only an admin reads its AddonRevisions. An Addon's runtime is
+trusted as its engine is: an admin's, pinned by digest and from a listed registry. Its workers' egress is governed as
+funcd's own runtimes' is. A developer of a
 namespace declares the objects of an add-on's kind there.
 
 A Function calls the engines of the objects it binds with no role. For each call, funcd asks Cedar whether the Function
@@ -176,11 +199,12 @@ funcdctl logs identityprovider/login -n default
 | | `AddonNotFound` | No Addon registers its kind |
 | | `ConfigInvalid`, `EnvInvalid` | Its config no longer fits the Addon's schema, or its env does not evaluate |
 | | `SecretNotFound`, `BindingResolveFailed` | A bound Secret is missing or forbidden |
-| | `RuntimeUnavailable` | The server runs no engine of the add-on's runtime |
+| | `RuntimeUnavailable` | The server's add-on runtime runs no image, as on a process server |
 | A settings object | `Progressing` | No answer of its Function for its generation yet |
 | | `ReconcileFailed`, `NoResult` | The call failed, or its answer left the object out; the Function's own reason when it gives one |
 | | `TargetNotFound`, `TargetNotReady` | Its target is missing or not Ready |
 | | `FunctionNotFound`, `FunctionNotBound` | Its Function is missing, or does not bind its target |
+| A Function or a Job on its runtime | `RuntimeUnavailable` | The entry does not serve the workload, no worker driver of the server runs an image, or the Addon that shipped the Revision's image is gone |
 | A Function that binds an object | `AddonObjectNotFound` | The object does not exist |
 | | `DependencyNotReady` | A worker is not ready: the object's engine is not Ready |
 
