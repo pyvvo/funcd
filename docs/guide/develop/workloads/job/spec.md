@@ -345,7 +345,7 @@ This page lists the spec and status fields of Job and JobRun, each with its type
 | `rejectedBy` | string | The subject of the credential that rejected the run, which funcd sets; empty with none. |
 | `result` | any JSON value | The handler's answer, once the run Succeeded. |
 | `startedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the run started running. |
-| `startedBy` | string | The subject of the credential that created the run, which funcd sets; empty when there was none. It records who started the run and grants nothing. |
+| `startedBy` | string | Who started the run, which funcd sets: the subject of the credential that created it, empty when there was none, or, for a run that a Function started through its spec.bindings.job, the Function's Cedar principal, such as Function::"default/planner". It records who started the run and grants nothing. |
 | `traceId` | string | The run's W3C trace ID, 32 lowercase hex characters, the same for its preview and its run. funcdctl job logs reads the run's logs by it. |
 
 ### `JobRun.status.preview`

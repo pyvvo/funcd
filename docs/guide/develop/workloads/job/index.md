@@ -43,7 +43,8 @@ After the apply, repeat `get` until `status.phase` is `Ready`. [`funcdctl job ru
 starts a run and prints its name; without a name, funcd names the run after its Job with a suffix. Repeat
 [`funcdctl job describe`](../../tools/funcdctl/spec.md#funcdctl-job-describe) until the phase is `Succeeded`, `Failed`
 or `Cancelled`. The run pinned the Job's current **Revision** when it started, and keeps it to its end; `started by`
-is the subject of the credential that created the run, which grants nothing. An input off the contract, such as
+is the subject of the credential that created the run, or the Function that started it, as
+[Start a run from a Function](start-from-a-function.md) shows, and it grants nothing. An input off the contract, such as
 `{"day":1}`, is refused with 422 `InputSchemaMismatch`, naming `body.spec.input.day` and `body.spec.input.month`.
 
 [`funcdctl job logs`](../../tools/funcdctl/spec.md#funcdctl-job-logs) prints the run's records: its worker's output

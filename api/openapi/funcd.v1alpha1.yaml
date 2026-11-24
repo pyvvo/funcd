@@ -4284,7 +4284,7 @@ components:
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         startedBy:
-          description: The subject of the credential that created the run, which funcd sets; empty when there was none. It records who started the run and grants nothing.
+          description: "Who started the run, which funcd sets: the subject of the credential that created it, empty when there was none, or, for a run that a Function started through its spec.bindings.job, the Function's Cedar principal, such as Function::\"default/planner\". It records who started the run and grants nothing."
           type: string
         traceId:
           description: The run's W3C trace ID, 32 lowercase hex characters, the same for its preview and its run. funcdctl job logs reads the run's logs by it.

@@ -37,7 +37,7 @@ type JobRunStatus struct {
 	JobRevision ObjectName      `json:"jobRevision,omitempty" doc:"The Revision of the Job that the run runs, pinned when it starts: an edit of the Job during the run changes nothing for it."`
 	JobUID      UID             `json:"jobUID,omitempty" doc:"The UID of the run's Job, set when the run is created if the Job exists, else when it starts. A run whose Job is deleted, or re-created under a new UID, is cancelled."`
 	ImageDigest string          `json:"imageDigest,omitempty" doc:"The digest of the image of the pinned Revision."`
-	StartedBy   string          `json:"startedBy,omitempty" doc:"The subject of the credential that created the run, which funcd sets; empty when there was none. It records who started the run and grants nothing."`
+	StartedBy   string          `json:"startedBy,omitempty" doc:"Who started the run, which funcd sets: the subject of the credential that created it, empty when there was none, or, for a run that a Function started through its spec.bindings.job, the Function's Cedar principal, such as Function::\"default/planner\". It records who started the run and grants nothing."`
 	StartedAt   Timestamp       `json:"startedAt,omitzero" doc:"When the run started running."`
 	EndedAt     Timestamp       `json:"endedAt,omitzero" doc:"When the run ended."`
 	Result      json.RawMessage `json:"result,omitempty" doc:"The handler's answer, once the run Succeeded."`
