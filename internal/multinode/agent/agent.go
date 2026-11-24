@@ -57,6 +57,7 @@ type Agent struct {
 	cursor   uint64
 	timeline string      // the control plane metastore's timeline the cursor belongs to; "" ⇒ the store holds no copy yet
 	local    string      // the timeline of the node's own store, which the saved cursor names too
+	restored bool        // the cursor is of before the control plane's restore, and the store holds what the node ran since
 	resync   atomic.Bool // a namespace's snapshot failed: the next poll starts from a whole snapshot
 	mine     map[v1.NamespaceName]bool
 	keys     map[v1.NamespaceName]multinode.NamespaceKey
@@ -92,7 +93,11 @@ func New(cfg Config) (*Agent, error) {
 		a.local = cl.Timeline()
 	}
 	if b, err := os.ReadFile(filepath.Join(cfg.Dir, cursorFile)); err == nil { //nolint:gosec // the node's own directory
-		if f := strings.Fields(string(b)); len(f) == 3 && f[2] == a.local {
+		switch f := strings.Fields(string(b)); {
+		case len(f) != 3 || f[2] != a.local:
+		case f[0] == restoredMark:
+			a.restored = true
+		default:
 			a.timeline = f[0]
 			a.cursor, _ = strconv.ParseUint(f[1], 10, 64)
 		}
@@ -112,14 +117,19 @@ func (a *Agent) SetLogs(logs multinode.LogReader, runLogs multinode.RunLogReader
 // platform built them.
 func (a *Agent) SetCommands(c multinode.Commands) { a.cfg.Commands = c }
 
-// Run follows, reports and answers until ctx ends.
+// Run follows, reports and answers until ctx ends, or until the control plane turns out to be restored from a backup
+// (ErrRestored).
 func (a *Agent) Run(ctx context.Context) error {
 	if err := a.Prepare(ctx); err != nil {
 		return err
 	}
 	a.log.InfoContext(ctx, "node agent starting", "server", a.id.server, "since", a.cursor)
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
 	var wg sync.WaitGroup
-	for _, loop := range []func(context.Context){a.follow, a.report, a.serveCalls} {
+	var err error
+	for _, loop := range []func(context.Context){
+		func(ctx context.Context) { err = a.follow(ctx); stop() }, a.report, a.serveCalls} {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -127,7 +137,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}()
 	}
 	wg.Wait()
-	return nil
+	return err
 }
 
 // loadMine reads back which namespaces the node runs, from the Namespace objects of its local store.
@@ -160,6 +170,14 @@ func sleep(ctx context.Context, d time.Duration) {
 	case <-t.C:
 	}
 }
+
+// ErrRestored is a control plane that was restored from a backup since the node last followed it: the node's platform
+// starts again, and takes the restored state before it runs anything, so no running reconciler drops the data of what the
+// backup does not know (ADR-0206, ADR-0288).
+var ErrRestored = fault.Conflictf("agent.follow", "the control plane was restored from a backup: the node starts again on its state")
+
+// restoredMark is the timeline a cursor carries from ErrRestored to the node's next start.
+const restoredMark = "restored"
 
 // errGone is a feed revision older than the change log: the node starts again from a snapshot.
 var errGone = fault.PreconditionFailedf("agent.feed", "the change log no longer holds the node's revision")
@@ -217,7 +235,7 @@ func detail(answer []byte) string {
 
 // follow keeps the local copy with the feed, from the saved revision; one the change log no longer holds starts again
 // from a snapshot.
-func (a *Agent) follow(ctx context.Context) {
+func (a *Agent) follow(ctx context.Context) error {
 	backoff, failing, resync := retryMin, false, false
 	fail := func(what string, err error) {
 		if !failing {
@@ -229,7 +247,10 @@ func (a *Agent) follow(ctx context.Context) {
 	}
 	for ctx.Err() == nil {
 		if resync || a.resync.Swap(false) {
-			if err := a.syncAll(ctx); err != nil {
+			if err := a.syncAll(ctx); errors.Is(err, ErrRestored) {
+				a.saveCursor(restoredMark, 0)
+				return err
+			} else if err != nil {
 				fail("node agent: snapshot", err)
 				continue
 			}
@@ -240,7 +261,7 @@ func (a *Agent) follow(ctx context.Context) {
 			"&wait=" + pollWait.String()
 		if _, err := a.do(ctx, http.MethodGet, path, nil, &feed); err != nil {
 			if ctx.Err() != nil {
-				return
+				return nil
 			}
 			if errors.Is(err, errGone) {
 				resync = true
@@ -258,12 +279,13 @@ func (a *Agent) follow(ctx context.Context) {
 		}
 		a.fetchMissingKeys(ctx)
 		if ctx.Err() != nil {
-			return // a change cut short is applied again after the restart
+			return nil // a change cut short is applied again after the restart
 		}
 		if feed.Rev > a.cursor {
 			a.saveCursor(a.timeline, feed.Rev)
 		}
 	}
+	return nil
 }
 
 func (a *Agent) saveCursor(timeline string, rev uint64) {
@@ -274,11 +296,18 @@ func (a *Agent) saveCursor(timeline string, rev uint64) {
 	}
 }
 
-// syncAll replaces the local copy with a snapshot of every namespace placed on the node.
+// syncAll replaces the local copy with a snapshot of every namespace placed on the node. The runs and records the node
+// made go to the control plane first, so the snapshot holds them, unless the store is new or restored to an older point.
 func (a *Agent) syncAll(ctx context.Context) error {
+	if a.timeline != "" || a.restored {
+		a.pushMade(ctx)
+	}
 	var snap multinode.Snapshot
 	if _, err := a.do(ctx, http.MethodGet, multinode.PathSnapshot, nil, &snap); err != nil {
 		return err
+	}
+	if a.timeline != "" && snap.Timeline != a.timeline {
+		return ErrRestored
 	}
 	placed := map[v1.NamespaceName]bool{}
 	seen := map[string]bool{}

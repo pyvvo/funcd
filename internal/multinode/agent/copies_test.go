@@ -66,7 +66,7 @@ func (n *joinedNode) forgetTimeline(t *testing.T) {
 	require.NoError(t, err)
 	f := strings.Fields(string(b))
 	require.Len(t, f, 3, "the cursor names its timeline, its revision and the store's timeline")
-	require.NoError(t, os.WriteFile(cursor, []byte("an-older-timeline "+f[1]+" "+f[2]+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(cursor, []byte("restored 0 "+f[2]+"\n"), 0o600))
 }
 
 // onNode waits until the node holds kind name of e1 as cond wants it, and returns it.

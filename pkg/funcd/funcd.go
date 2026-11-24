@@ -838,7 +838,7 @@ func (p *Platform) buildControlPlane() error {
 	if c.cluster != nil {
 		cl, cerr := multinode.New(multinode.Config{Store: c.store, Logger: p.logger, Dir: c.cluster.Dir,
 			ListenAddr: c.cluster.ListenAddr, Hosts: c.cluster.Hosts, LocalNode: c.localNode, LocalRuns: c.cluster.LocalRuns,
-			Master: master, Secrets: p.secrets.facade})
+			Master: master, Secrets: p.secrets.facade, Held: p.heldByRestore})
 		if cerr != nil {
 			return fault.Wrapf(cerr, fault.KindOf(cerr), op, "build the node API")
 		}
@@ -1621,9 +1621,15 @@ func (p *Platform) Run(ctx context.Context) error {
 			}
 		}()
 	}
+	var restored atomic.Bool
 	if p.agent != nil {
 		go func() {
-			if err := p.agent.Run(ctx); err != nil {
+			err := p.agent.Run(ctx)
+			switch {
+			case errors.Is(err, agent.ErrRestored):
+				restored.Store(true)
+				cancelLoops() // the platform stops, and starts again on the restored state
+			case err != nil:
 				p.logger.ErrorContext(ctx, "node agent stopped", "error", err)
 			}
 		}()
@@ -1641,7 +1647,11 @@ func (p *Platform) Run(ctx context.Context) error {
 	wg.Wait() // drain controller + eventing + activator before closing ports
 	closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), p.closeTimeout())
 	defer cancelClose()
-	return p.Shutdown(closeCtx)
+	err := p.Shutdown(closeCtx)
+	if restored.Load() {
+		return errors.Join(ErrControlPlaneRestored, err)
+	}
+	return err
 }
 
 // closeTimeout is Shutdown's own bound when Run stops or aborts (ADR-0277): the runtime's stop grace plus closeMargin, so

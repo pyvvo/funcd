@@ -14,19 +14,24 @@ import (
 
 // Prepare makes the node's store a copy of the control plane's before the node's platform runs anything (FEAT-0002
 // F251). A store other than the one the saved revision is of is new, or restored from a backup: it takes its namespaces
-// whole, with the children the node made that it does not hold, and Prepare waits for the control plane. Any other is
-// ready as it is, so a node restarts while the control plane is away.
+// whole, with the children the node made that it does not hold, and Prepare waits for the control plane. So does a store
+// that followed the control plane before its restore, with the runs it made since. Any other is ready as it is, so a node
+// restarts while the control plane is away.
 func (a *Agent) Prepare(ctx context.Context) error {
 	if err := a.loadMine(ctx); err != nil {
 		return err
 	}
 	backoff, failing := retryMin, false
 	for a.timeline == "" && ctx.Err() == nil {
-		err := a.adoptChildren(ctx)
+		var err error
+		if !a.restored {
+			err = a.adoptChildren(ctx)
+		}
 		if err == nil {
 			err = a.syncAll(ctx)
 		}
 		if err == nil {
+			a.restored = false
 			return nil
 		}
 		if !failing && ctx.Err() == nil {

@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -99,6 +101,29 @@ func (a *Agent) resyncReports(ctx context.Context) {
 			}
 			for _, obj := range res.Items {
 				a.push(ctx, store.Modified, obj)
+			}
+		}
+	}
+}
+
+// pushMade writes back the objects the node made with no owner that the control plane does not hold yet.
+func (a *Agent) pushMade(ctx context.Context) {
+	a.mu.Lock()
+	namespaces := slices.Collect(maps.Keys(a.mine))
+	a.mu.Unlock()
+	for _, ns := range namespaces {
+		for _, k := range v1.AllKinds() {
+			if !k.Namespaced() || !multinode.WrittenBack(k, false) {
+				continue
+			}
+			res, err := a.cfg.Store.List(ctx, k.GVK(), store.ListOptions{Namespace: ns})
+			if err != nil {
+				continue
+			}
+			for _, obj := range res.Items {
+				if len(obj.GetObjectMeta().OwnerReferences) == 0 {
+					a.push(ctx, store.Modified, obj)
+				}
 			}
 		}
 	}

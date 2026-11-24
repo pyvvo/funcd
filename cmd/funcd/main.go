@@ -153,8 +153,18 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 	return serveAs(parent, configPath, memoryFlag, out, roleAll)
 }
 
-// serveAs is serve for role r: the all-in-one, the control plane alone (funcd server) or a worker node (funcd node).
-func serveAs(parent context.Context, configPath string, memoryFlag *bool, out io.Writer, r role) (err error) {
+// serveAs is serve for role r: the all-in-one, the control plane alone (funcd server) or a worker node (funcd node). A
+// worker node whose control plane was restored from a backup serves again, on the restored state.
+func serveAs(parent context.Context, configPath string, memoryFlag *bool, out io.Writer, r role) error {
+	for {
+		err := serveOnce(parent, configPath, memoryFlag, out, r)
+		if parent.Err() != nil || !errors.Is(err, funcd.ErrControlPlaneRestored) {
+			return err
+		}
+	}
+}
+
+func serveOnce(parent context.Context, configPath string, memoryFlag *bool, out io.Writer, r role) (err error) {
 	// Locate + load funcdconfig.yaml into the effective config (file + env + default, validated; ADR-0062).
 	path, err := config.Locate(configPath)
 	if err != nil {
@@ -195,7 +205,10 @@ func serveAs(parent context.Context, configPath string, memoryFlag *bool, out io
 	}
 	root := logger.Root()
 	defer func() {
-		if err != nil {
+		switch {
+		case errors.Is(err, funcd.ErrControlPlaneRestored):
+			root.WarnContext(parent, "funcd", "restart", err)
+		case err != nil:
 			root.ErrorContext(parent, "funcd", "error", err)
 			err = loggedError{err}
 		}
@@ -219,7 +232,7 @@ func serveAs(parent context.Context, configPath string, memoryFlag *bool, out io
 		return nil
 	}
 	defer func() {
-		if err != nil {
+		if err != nil && !errors.Is(err, funcd.ErrControlPlaneRestored) {
 			if ferr := start.Failed(err); ferr != nil {
 				root.Warn("funcd: safe mode: record the failed start", "error", ferr)
 			}
@@ -272,6 +285,9 @@ func serveAs(parent context.Context, configPath string, memoryFlag *bool, out io
 	})
 	runErr := platform.Run(ctx)
 	stable.Stop()
+	if errors.Is(runErr, funcd.ErrControlPlaneRestored) {
+		return errors.Join(runErr, start.Clean())
+	}
 	if runErr != nil {
 		return fmt.Errorf("run: %w", runErr)
 	}

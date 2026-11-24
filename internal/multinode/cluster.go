@@ -30,6 +30,7 @@ type Config struct {
 	LocalRuns  bool          // false on a control plane alone (funcd server), which runs no namespace
 	Master     []byte        // the control plane's master secret, the root of the namespace keys; nil ⇒ none
 	Secrets    SecretWriter  // makes the Secret writes of the nodes' workloads; nil ⇒ none
+	Held       func() bool   // the control plane is held after its restore, so no node follows it; nil ⇒ never
 	Version    string        // the control plane's release, which no node may be newer than; "" ⇒ this binary's
 	NodeFields FieldVersions // the spec fields a newer node API brings; nil ⇒ this release's
 	Now        func() time.Time
@@ -76,7 +77,7 @@ func New(cfg Config) (*Cluster, error) {
 		keys = NewNamespaceKeys(cfg.Store, cfg.Master)
 	}
 	c.server, err = NewServer(ServerConfig{Store: cfg.Store, CA: ca, Placement: c.placement, Liveness: c.liveness,
-		Calls: c.calls, Keys: keys, Secrets: cfg.Secrets, Logger: cfg.Logger, Version: cfg.Version, Now: cfg.Now}, cfg.ListenAddr, cfg.Hosts)
+		Calls: c.calls, Keys: keys, Secrets: cfg.Secrets, Held: cfg.Held, Logger: cfg.Logger, Version: cfg.Version, Now: cfg.Now}, cfg.ListenAddr, cfg.Hosts)
 	if err != nil {
 		return nil, err
 	}

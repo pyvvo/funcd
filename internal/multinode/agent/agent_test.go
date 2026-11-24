@@ -307,45 +307,6 @@ func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {
 	require.ErrorIs(t, err, fs.ErrNotExist)
 }
 
-func TestANodeTakesASnapshotAfterTheControlPlaneIsRestored(t *testing.T) {
-	ctx := context.Background()
-	r := startCP(t)
-	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
-	require.NoError(t, err)
-	dir := t.TempDir()
-	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
-	require.NoError(t, err)
-	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
-	ns.Name, ns.Spec.Node = "e1", "vm1"
-	_, err = r.cp.Create(ctx, ns)
-	require.NoError(t, err)
-	run := func() func() {
-		a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
-		require.NoError(t, err)
-		actx, stop := context.WithCancel(ctx)
-		done := make(chan struct{})
-		go func() { _ = a.Run(actx); close(done) }()
-		return func() { stop(); <-done }
-	}
-	stop := run()
-	eventually(t, "the node follows e1", func() bool {
-		_, err := r.node.Get(ctx, v1.KindNamespace.GVK(), "", "e1")
-		return err == nil
-	})
-	stop()
-
-	// A write the change log never holds reaches a node only through a snapshot: one comes when the node's saved
-	// revision is of another timeline of the metastore, as after a restore from a backup.
-	_, err = r.cp.Create(store.WithoutChangeLog(ctx), configMap("e1", "probe", "restored"))
-	require.NoError(t, err)
-	(&joinedNode{dir: dir}).forgetTimeline(t)
-	defer run()()
-	eventually(t, "the node takes a new snapshot", func() bool {
-		obj, err := r.node.Get(ctx, v1.KindConfigMap.GVK(), "e1", "probe")
-		return err == nil && obj.(*v1.ConfigMap).Spec.Data["n"] == "restored"
-	})
-}
-
 func TestANodeOnANewerReleaseThanTheControlPlaneIsRefused(t *testing.T) {
 	ctx := context.Background()
 	r := startCP(t, func(c *multinode.Config) { c.Version = "v0.40.0" })

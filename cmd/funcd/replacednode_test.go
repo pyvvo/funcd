@@ -13,11 +13,15 @@ import (
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/blob/s3gateway"
+	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/upgrade"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -173,5 +177,75 @@ func TestANodeThatLostItsMetastoreKeepsItsData(t *testing.T) {
 	defer func() { _ = b.Close() }()
 	data, err := b.Get(ctx, "s3/team/inbox/a.txt")
 	require.NoError(t, err, "the Bucket keeps its object")
+	require.Equal(t, "a", string(data))
+}
+
+// TestARestoredControlPlaneLosesNoDataOfItsNodes restores the control plane to a point before a Bucket of its node
+// (FEAT-0002 F251, ADR-0288): the node keeps serving it while the control plane is held; after the release the node starts
+// again on the restored state, and the Bucket's object goes into the node's quarantine, which returns it once the Bucket
+// is applied again.
+//
+// Serial: it reopens both Badger directories, which a parallel test's forked child can hold locked (#1178).
+func TestARestoredControlPlaneLosesNoDataOfItsNodes(t *testing.T) {
+	ctx := context.Background()
+	cluster := freeAddr(t)
+	cp := newNode(t, upgradeKey(), backupYAML(t.TempDir())+fmt.Sprintf("cluster:\n  listenAddr: %q\n", cluster))
+	cp.role = roleServer
+	admin, stopCP := cp.start(t)
+	applyAll(t, admin, teamOnNode("vm1")...)
+	vm := newNode(t, nil, restorePacing)
+	vm.joined(t, admin, cluster, "vm1")
+	local, _ := vm.start(t)
+	bucket := func(name string) *v1.Bucket { return &v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: om(name)} }
+	onNode := func(name v1.ObjectName) func() bool {
+		return func() bool {
+			obj, err := local.Get(ctx, v1.KindBucket, "team", name)
+			return err == nil && obj.(*v1.Bucket).Status.Phase == v1.PhaseReady
+		}
+	}
+	applyAll(t, admin, bucket("inbox"))
+	require.Eventually(t, onNode("inbox"), 10*time.Second, 50*time.Millisecond)
+	stopCP()
+	cfg, err := config.Load(cp.cfgPath, config.Flags{})
+	require.NoError(t, err)
+	_, err = upgrade.Snapshot(ctx, cfg) // the backup the control plane is restored from
+	require.NoError(t, err)
+	admin, stopCP = cp.start(t)
+	applyAll(t, admin, bucket("later"))
+	require.Eventually(t, onNode("later"), 10*time.Second, 50*time.Millisecond)
+	b, err := gocloud.Open(ctx, gocloud.FileURL(filepath.Join(vm.dataDir, "blob")))
+	require.NoError(t, err)
+	defer func() { _ = b.Close() }()
+	const key = "s3/team/later/a.txt"
+	require.NoError(t, b.Put(ctx, key, []byte("a"), blob.PutOptions{}))
+	stopCP()
+	for _, dir := range []string{cfg.Storage.MetastoreDir, cfg.Workflow.DataDir, cfg.Eventing.EventStore.DataDir} {
+		require.NoError(t, os.RemoveAll(dir))
+	}
+	escrowDir := t.TempDir()
+	master, err := os.ReadFile(s3gateway.MasterPath("", cp.dataDir))
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(escrowDir, "master"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(escrowDir, "master", "node.key"), master, 0o600))
+	_, err = cp.restore("run", "pre-upgrade", "--escrow", escrowDir)
+	require.NoError(t, err)
+
+	admin, _ = cp.start(t)
+	_, err = admin.Get(ctx, v1.KindBucket, "team", "later")
+	require.Equal(t, fault.NotFound, fault.KindOf(err), "the backup does not know the Bucket")
+	time.Sleep(time.Second)
+	require.True(t, onNode("later")(), "the node runs it while the control plane is held")
+	require.NoError(t, admin.ReleaseHold(ctx, nil))
+	require.Eventually(t, func() bool {
+		ev, err := local.HoldStatus(ctx)
+		return err == nil && len(ev.Quarantine) == 1 && ev.Quarantine[0].Name == "later"
+	}, 20*time.Second, 50*time.Millisecond, "the node starts again and keeps the Bucket's data aside: %s", vm.logs.String())
+	require.Eventually(t, onNode("inbox"), 10*time.Second, 50*time.Millisecond)
+
+	applyAll(t, admin, bucket("later"))
+	require.Eventually(t, onNode("later"), 10*time.Second, 50*time.Millisecond)
+	require.NoError(t, admin.ReturnQuarantined(ctx, hold.QuarantineReturn{Kind: v1.KindBucket, Namespace: "team", Name: "later"}))
+	data, err := b.Get(ctx, key)
+	require.NoError(t, err)
 	require.Equal(t, "a", string(data))
 }

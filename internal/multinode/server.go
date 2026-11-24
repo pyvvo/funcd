@@ -42,6 +42,7 @@ type ServerConfig struct {
 	Calls     *Calls
 	Keys      *NamespaceKeys
 	Secrets   SecretWriter
+	Held      func() bool // the control plane is held after its restore; nil ⇒ never
 	Logger    *slog.Logger
 	Version   string // the control plane's release (decision 12)
 	Now       func() time.Time
@@ -275,6 +276,16 @@ func (s *Server) placedOn(ctx context.Context, ns v1.NamespaceName, node v1.Obje
 	return err == nil && at == node && node != ""
 }
 
+// mayFollow refuses a node that follows while the control plane is held after its restore (ADR-0206): the metastore is at
+// an older point until a person releases it, and the node runs on what it holds.
+func (s *Server) mayFollow() error {
+	if s.cfg.Held != nil && s.cfg.Held() {
+		return fault.Unavailablef("multinode.follow", "the control plane is held after its restore: its nodes follow it "+
+			"again once `funcdctl hold release` releases it")
+	}
+	return nil
+}
+
 // mustBePlacedOn refuses a call about a namespace that is not placed on node.
 func (s *Server) mustBePlacedOn(ctx context.Context, op string, ns v1.NamespaceName, node v1.ObjectName) error {
 	if !s.placedOn(ctx, ns, node) {
@@ -324,6 +335,9 @@ type snapshotOutput struct{ Body Snapshot }
 // snapshot answers GET …/snapshot[?namespace=]: every object of the node's namespaces (or the one asked), and the
 // cluster-scoped ones that concern it, at the revision it follows the feed after. The node's own children are left out.
 func (s *Server) snapshot(ctx context.Context, in *snapshotInput) (*snapshotOutput, error) {
+	if err := s.mayFollow(); err != nil {
+		return nil, err
+	}
 	node := nodeOf(ctx)
 	head, err := s.cl.Head(ctx)
 	if err != nil {
@@ -457,6 +471,9 @@ type feedOutput struct{ Body Feed }
 // sees placements come and go, but not the ones it wrote itself. A since older than the change log, or of another
 // timeline of the metastore (one restored from a backup since), is 410: the node starts again from a snapshot.
 func (s *Server) feed(ctx context.Context, in *feedInput) (*feedOutput, error) {
+	if err := s.mayFollow(); err != nil {
+		return nil, err
+	}
 	node, since := nodeOf(ctx), in.Since
 	if in.Timeline != s.cl.Timeline() {
 		return nil, huma.Error410Gone("the revision is of another timeline of the metastore, which was restored since")

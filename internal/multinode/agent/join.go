@@ -129,8 +129,24 @@ func Join(ctx context.Context, server, token, dir, version, platform string) (v1
 			return "", fault.Wrapf(err, fault.Internal, op, "write %s", name)
 		}
 	}
-	_ = os.Remove(filepath.Join(dir, cursorFile))
+	joinedAgain(dir)
 	return tok.Node, nil
+}
+
+// joinedAgain makes a node that joins anew start from a whole snapshot; its store, if it still has it, keeps the runs the
+// node made, which the control plane takes back.
+func joinedAgain(dir string) {
+	cursor := filepath.Join(dir, cursorFile)
+	b, err := os.ReadFile(cursor) //nolint:gosec // the node's own cluster directory
+	if err != nil {
+		return
+	}
+	if f := strings.Fields(string(b)); len(f) == 3 {
+		if os.WriteFile(cursor, []byte(restoredMark+" 0 "+f[2]+"\n"), 0o600) == nil {
+			return
+		}
+	}
+	_ = os.Remove(cursor)
 }
 
 // verifyChain checks the presented leaf against the pinned CA, for host.
