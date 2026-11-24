@@ -27,11 +27,14 @@ the path; and a run that only plans answers what would change, for F141's drift 
 
 ## Scenarios
 
-- `scenario: infra-push-builds-index`: Given a module folder; when `funcdctl infra push <module> <ref>` runs; then it
-  prints `<ref>@sha256:…`, an image index with a `linux/amd64` and a `linux/arm64` manifest, and `funcdctl inspect
-  <ref>` prints the contract made from the module's variables and outputs.
+- `scenario: infra-push-builds-index`: Given a module folder whose `main.tf` calls the local child module `./sub`;
+  when `funcdctl infra push <module> <ref>` runs; then it prints `<ref>@sha256:…`, an image index with a `linux/amd64`
+  and a `linux/arm64` manifest, and `funcdctl inspect <ref>` prints the contract made from its variables and outputs.
+- `scenario: infra-remote-module-refused`: Given a module that calls `hashicorp/consul/aws`, or `../shared`; when
+  `funcdctl infra push` runs; then it pushes nothing and names the call.
 - `scenario: infra-run-downloads-nothing`: Given a bundle that the plugin built; when the OpenTofu runtime plans and
-  applies it with no network; then both succeed, with the providers the bundle carries.
+  applies it on an internal Docker network (`docker network create --internal`) that reaches only the state's S3
+  engine; then both succeed, with the providers the bundle carries.
 - `scenario: infra-provider-mismatch`: Given a bundle whose provider package matches no hash of its lock file; when
   the runtime previews it; then the preview fails, naming the provider, and nothing is applied.
 - `scenario: infra-variables-refused`: Given a module with the string variable `prefix`; when a stack's Function starts
@@ -42,8 +45,9 @@ the path; and a run that only plans answers what would change, for F141's drift 
 - `scenario: infra-plan-run`: Given a module whose one resource is `random_pet.name`, applied with `prefix: a`; when a
   run with action `plan` and `prefix: b` runs; then it applies nothing and answers `{"plan": {"add": 0, "change": 0,
   "destroy": 0, "replace": 1, "resources": ["random_pet.name"]}}`.
-- `scenario: infra-module-pushed-by-hand`: Given a module pushed by `funcdctl push`, with no provider folder; when its
-  run starts; then it installs the runtime image's providers, as before.
+- `scenario: infra-module-pushed-by-hand`: Given a module pushed by `funcdctl push` with a contract of Decision 3's
+  shape and no provider folder; when its run applies; then it installs the runtime image's providers and answers
+  `{"outputs": …}`.
 
 ## Scope
 
@@ -56,6 +60,9 @@ where the runtime installs providers from.
   row's why (decided on the decider's delegation of 2026-11-24).
 - F141's drift schedule: when the add-on's Function starts a `plan` run and how it reports drift. A `plan` run of a Job
   without `approval.bypass` previews and waits for an approval, as every run does (ADR-0348 Decision 2).
+- A child module from a registry, git or a URL, which a run's `init` would fetch, or a local one outside the module's
+  folder, which the bundle would not hold: the push refuses both, and vendoring one into the bundle is not built
+  (decided on the delegation of 2026-11-24).
 - Installing the plugin: ADR-0319 has no install command, so each add-on release ships the file.
 - Signatures of providers and modules: a digest pins them, as ADR-0344 pins a runtime.
 - What the outputs become: ADR-0356.
@@ -73,8 +80,8 @@ where the runtime installs providers from.
 
 - **Providers in the runtime image only** (today): a module gets the image's three, at their versions, and a new one
   waits for an add-on release. Rejected by F143.
-- **One bundle with both platforms' providers**: every node would pull the other platform's packages too. Rejected:
-  ADR-0145's index gives each node its own.
+- **One bundle with both platforms' providers**: every node would pull the other platform's packages too, though
+  `funcdctl dev` on a Mac could pull it (Consequences). Rejected: ADR-0145's index gives each node its own.
 - **`tofu init` against a mirror that funcd serves**: a run would depend on a new service. Rejected: a run downloads
   nothing.
 - **An HCL parser in the plugin**: a new dependency for what `tofu show -json -module=<dir>` prints (checked with the
@@ -85,21 +92,28 @@ where the runtime installs providers from.
 
 ## Decision
 
-1. **The plugin.** The InfraStack add-on ships `funcdctl-infra`, a Python 3 script that uses only its standard library,
-   in each release beside its Addon; on PATH, funcdctl runs it as `funcdctl infra` (ADR-0319). It runs OpenTofu in the
-   image of its Addon's `opentofu1` runtime, by that digest, on the first of `docker` and `nerdctl` on PATH, and copies
-   files in and out with `<engine> cp`, with no bind mount, as funcd-bundle's container steps do (ADR-0144). It calls
-   funcd only through `$FUNCDCTL` (ADR-0319 Decision 4). Decided on the decider's delegation of 2026-11-24: a script
-   needs no build of its own, and the image gives it the add-on's OpenTofu.
+1. **The plugin.** The InfraStack add-on ships `funcdctl-infra`, a script for Python 3.9 or later that uses only its
+   standard library, in each release beside its Addon; on PATH, funcdctl runs it as `funcdctl infra` (ADR-0319). It
+   runs OpenTofu in the add-on's runtime image, by the digest that each release pins in the script as in its Addon's
+   `opentofu1` runtime, or in the image that `INFRASTACK_OPENTOFU_IMAGE` names, as the add-on's CI and lanes do for one
+   not yet released. It uses the first of `docker` and `nerdctl` on PATH, and copies files in and out with
+   `<engine> cp`, with no bind mount, as funcd-bundle's container steps do (ADR-0144). It calls funcd only through
+   `$FUNCDCTL` (ADR-0319 Decision 4). Decided on the decider's delegation of 2026-11-24: a script needs no build of its
+   own, and the image gives it the add-on's OpenTofu.
 2. **`funcdctl infra push <module> <ref>`.** `<ref>` names a tag, `<registry>/<repo>:<tag>` or
    `oci-layout://<dir>:<tag>`. In order, stopping at the first failure with OpenTofu's or funcdctl's message:
-   1. `tofu show -json -module=<module>` reads the module's variables and outputs;
-   2. `tofu providers lock -platform=linux_amd64 -platform=linux_arm64` records both platforms' hashes in the module's
-      `.terraform.lock.hcl`, created when absent and copied back into the module's folder, to commit;
-   3. for each of `linux/amd64` and `linux/arm64`, a copy of the module's folder without `.terraform/` gets
-      `.funcd-providers/`, filled by `tofu providers mirror -platform=linux_<arch>`, and the contract of Decision 3 as
-      its `<folder>.contract.yaml` (ADR-0247); `$FUNCDCTL push <copy> <ref>-linux-<arch> --entry <its first .tf file by
-      name> --platform linux/<arch>` pushes it, and the runtime reads the folder, not the entry;
+   1. `<module>` must be a folder that holds a `.tf` file, else the plugin names the path; `tofu show -json
+      -module=<module>` reads its variables, outputs and module calls, and refuses, naming it, a call whose `source` is
+      not a relative path that stays inside the folder; each local child is read and checked the same way;
+   2. `tofu get` installs the local child modules, and `tofu providers lock -platform=linux_amd64
+      -platform=linux_arm64` records both platforms' hashes in the module's `.terraform.lock.hcl`, created when absent
+      and copied back into the module's folder, to commit;
+   3. for each of `linux/amd64` and `linux/arm64`, `tofu providers mirror -platform=linux_<arch> .funcd-providers`
+      fills a fresh `.funcd-providers/` in the engine's copy of the module, and a build folder of the module's files,
+      without `.terraform/` and without the contract file the module holds (`<folder>.contract.yaml` or `.json`,
+      ADR-0247 Decision 1), takes it with Decision 3's contract as `<folder>.contract.yaml`. Then
+      `$FUNCDCTL push <build> <ref>-linux-<arch> --entry <first> --platform linux/<arch>` pushes it, `<first>` being
+      its first `.tf` file by name, since the runtime reads the folder, not the entry;
    4. `$FUNCDCTL index <ref> <ref>-linux-amd64 <ref>-linux-arm64` writes the index, and the plugin prints its
       `<ref>@<digest>`.
    The build reaches the providers' registries; a run reaches none.
@@ -108,7 +122,9 @@ where the runtime installs providers from.
    ones those with no default. A sensitive variable is left out, so no run's input holds it: its value comes from a
    bound Secret's `TF_VAR_<name>` key, which the runtime gives OpenTofu already. Its output is a closed record of two
    optional members: `outputs`, a closed record of the module's outputs that are not sensitive, each any value, none
-   required; and `plan`, Decision 5's finding. A record that would have no member is the empty schema `{}`.
+   required; and `plan`, Decision 5's finding. A record that would have no member is the empty schema `{}`. The
+   runtime answers in this shape: an apply `{"outputs": {…}}`, a destroy `{}`, a `plan` run `{"plan": {…}}`; so a
+   contract written by hand for this runtime takes it too.
 4. **The run's providers.** The runtime runs `tofu init -plugin-dir=<module>/.funcd-providers` when the module holds
    that folder, else with its image's folder, as today. OpenTofu then installs each provider from there only, and only
    when it matches a hash of the lock file: with no network, a packed mirror installs and a package off the lock fails
@@ -142,10 +158,11 @@ None.
 
 ## Contracts
 
-Each platform's bundle under the index (new) holds the module's files, its `.terraform.lock.hcl`, the contract files
-(`<module>.contract.yaml`, and the `__funcd_contract.json` that push writes) and `.funcd-providers/`, that platform's
-packages in OpenTofu's packed mirror layout:
-`<host>/<namespace>/<type>/terraform-provider-<type>_<version>_linux_<arch>.zip`.
+Each platform's bundle under the index (new) holds the module's files with its local child modules, its
+`.terraform.lock.hcl`, the contract files (`<folder>.contract.yaml`, and the `__funcd_contract.json` that push writes)
+and `.funcd-providers/`: that platform's packages in OpenTofu's packed mirror layout,
+`<host>/<namespace>/<type>/terraform-provider-<type>_<version>_linux_<arch>.zip`, beside the JSON index files that
+`providers mirror` writes and `init` ignores.
 
 The contract of a module with the string variable `prefix` and the plain output `name` (new):
 
@@ -218,7 +235,9 @@ No default and no description: OpenTofu applies its own defaults.
 
 ```python
 # infrastack/plugin/funcdctl-infra (new)
-def main(argv: list[str]) -> int: ...          # funcdctl infra push <module> <ref>
+IMAGE = "ghcr.io/pyvvo/funcd-opentofu@sha256:<the release's>"  # the Addon's opentofu1 image (Decision 1)
+IMAGE_ENV = "INFRASTACK_OPENTOFU_IMAGE"       # names another image (Decision 1)
+def module_calls(shown: dict) -> list[str]: ...  # Decision 2's step 1: the calls it refuses, by name
 def contract(shown: dict) -> dict: ...        # Decision 3, from `tofu show -json -module`
 def schema(tofu_type: object) -> dict: ...    # the table above
 def push(module: Path, ref: str) -> str: ...  # Decision 2; returns "<ref>@<digest>"
@@ -234,29 +253,35 @@ def plan_finding(shown: dict) -> dict: ...    # new: Decision 5's record, from `
 | `tofu show -json -module`, `providers lock`, `providers mirror`, `init -plugin-dir` | consumes | the runtime image's OpenTofu 1.13.9 |
 | `$FUNCDCTL push --platform`, `$FUNCDCTL index` | consumes | ADR-0145 Decisions 1 and 2 |
 | `docker` or `nerdctl` | consumes | `create`, `cp`, `start`, `rm` |
+| `INFRASTACK_OPENTOFU_IMAGE` | consumes | an image reference in place of the pinned one (new) |
 | the input's `action: plan`; the result's `outputs` and `plan` | exposes | Decision 3's contract |
 
 ## Implementation plan
 
 In pyvvo/funcd-addons, on the InfraStack add-on; funcd's code does not change:
 1. `infrastack/plugin/funcdctl-infra` and `plugin_test.py`, with a fake engine and a fake funcdctl that record their
-   argv; the release workflow attaches the script to each release.
-2. `infrastack/runtime/handler.py`: Decisions 4 and 5, with `handler_test.py`; `image_check.py` gains a module that
-   carries `.funcd-providers`, made from the image's own providers, run with `--network none`, and a package off its
-   lock file.
-3. A test that the plugin's image digest is its Addon's `opentofu1` image; the README's module and run sections.
+   argv; the release workflow attaches the script to each release and pins its `IMAGE` with the Addon's digest.
+2. `infrastack/runtime/handler.py`: Decision 3's answers, so an apply answers `{"outputs": …}`, and Decisions 4 and 5,
+   with `handler_test.py`; `image_check.py` gains a module that carries `.funcd-providers`, made from the image's own
+   providers, run on an internal Docker network that reaches only versitygw, and a package off its lock file.
+3. Decision 3's shape in the README's contract and run sections and in
+   `infrastack/examples/random-stack/random-stack.contract.yaml`; in pyvvo/funcd-functions, in
+   `apps/frp-bunny/infra/bunny/bunny.contract.yaml` and `apps/frp-bunny/infra/fake/fake.contract.yaml`.
+4. A test that the plugin's `IMAGE` is its Addon's `opentofu1` image.
 
-Tests, each written to pass: the type table, row by row, in `plugin_test.py`; `infra-push-builds-index` with the
-fakes, and in the add-on's CI against an OCI layout with real OpenTofu; `infra-run-downloads-nothing`,
-`infra-provider-mismatch`, `infra-plan-run` and `infra-module-pushed-by-hand` in `image_check.py`;
-`infra-variables-refused` and `infra-sensitive-variable-refused` as cases of the InfraStack lane that F141's work adds
-to funcd's `e2e/` (`addon-infrastack.venom.yml`), on a module the plugin pushed. Done when `just test-infrastack`,
-`just opentofu-image-check` and that lane pass.
+Tests, each written to pass: the type table, row by row, and `infra-remote-module-refused` in `plugin_test.py`;
+`infra-push-builds-index` with the fakes, and in the add-on's CI against an OCI layout with real OpenTofu;
+`infra-run-downloads-nothing`, `infra-provider-mismatch`, `infra-plan-run` and `infra-module-pushed-by-hand` in
+`image_check.py`; `infra-variables-refused` and `infra-sensitive-variable-refused` as cases of the InfraStack lane that
+F141's work adds to funcd's `e2e/` (`addon-infrastack.venom.yml`), on a module the plugin pushed. Done when
+`just test-infrastack`, `just opentofu-image-check` and that lane pass.
 
 ## Review checklist
 
 - [ ] Every scenario has its named, passing test.
-- [ ] The plugin calls funcd only through `$FUNCDCTL` and runs OpenTofu only in its Addon's image, by digest.
+- [ ] The plugin calls funcd only through `$FUNCDCTL`, and runs OpenTofu only in its Addon's image, by digest, or in
+  the image `INFRASTACK_OPENTOFU_IMAGE` names.
+- [ ] The push refuses a child module outside the folder, and each platform's bundle holds only its own packages.
 - [ ] Each row of the type table has a test, and no generated input schema holds a sensitive variable.
 - [ ] A `plan` run writes no output and keeps no saved plan.
 
@@ -265,6 +290,9 @@ to funcd's `e2e/` (`addon-infrastack.venom.yml`), on a module the plugin pushed.
 - A module may use any provider its lock file pins, with no add-on release; the image's providers serve only a module
   pushed without the plugin.
 - A bundle grows by its platform's provider packages; a node pulls only its own.
+- A provider with no build for one of the two platforms fails the push at its lock step.
+- Under `funcdctl dev` on a Mac, which pulls for its own platform (ADR-0145 Decision 6), the index has no darwin entry,
+  so a pushed module does not materialize there.
 - A typo in a stack's variables fails at its run's creation, naming the path, and nothing reaches the cloud.
 - A `plan` run of a Job without `bypass` asks a person to approve a run that changes nothing.
 
