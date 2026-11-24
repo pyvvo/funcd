@@ -41,6 +41,7 @@ func methodTable() map[string]map[string]methodEndpoint {
 		secretKey, secret = "GET /secret/{key}", "GET /secret"
 		secretPut, secDel = "PUT /secret/{binding}/{key}", "DELETE /secret/{binding}/{key}"
 		addonCall         = "/addon/{alias}/{path...}"
+		jobStart, jobGet  = "POST /job/{alias}", "GET /job/{alias}/{run}"
 	)
 	conditions := []*fault.KnownCause{local.ErrKeyAbsent, local.ErrVersionMismatch, local.ErrIfMatchRepeated}
 	writes := slices.Concat(conditions, []*fault.KnownCause{local.ErrIfNoneMatchRepeated, local.ErrConditionsBoth,
@@ -86,6 +87,7 @@ func methodTable() map[string]map[string]methodEndpoint {
 			"config.get": {}, "config.list": {},
 			"secret.get": secretRead, "secret.list": at(secret), "secret.put": secretWrite, "secret.del": at(secDel),
 			"lake.get": {}, "addon.fetch": sent(addonCall),
+			"job.start": sent(jobStart), "job.get": at(jobGet),
 		},
 		"Python": {
 			"log": {}, "invoke": sent("POST /invoke/{alias}"), "remaining_ms": {},
@@ -98,6 +100,7 @@ func methodTable() map[string]map[string]methodEndpoint {
 			"config.get": {}, "config.list": {},
 			"secret.get": secretRead, "secret.list": at(secret), "secret.put": secretWrite, "secret.delete": at(secDel),
 			"lake.get": {}, "addon.fetch": sent(addonCall),
+			"job.start": sent(jobStart), "job.get": at(jobGet),
 		},
 	}
 }
