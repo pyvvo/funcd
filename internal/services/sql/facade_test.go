@@ -26,7 +26,7 @@ import (
 // staticResolver binds alias "app" to todo-db.
 type staticResolver struct{}
 
-func (staticResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.ObjectName, alias string) (v1.ObjectName, error) {
+func (staticResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.WorkloadRef, alias string) (v1.ObjectName, error) {
 	if alias != "app" {
 		return "", fault.Forbiddenf("test", "%s has no SQL binding %q", fn, alias)
 	}
@@ -72,19 +72,19 @@ func TestFacadeQueryAndExecute(t *testing.T) {
 	f := facade(t, pdp, engine.Addr(), &bytes.Buffer{}, 0)
 	ctx := context.Background()
 
-	ex, err := f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[["INSERT INTO todos(title, done) VALUES(:t, :d)", {"t": "milk", "d": 0}]]`))
+	ex, err := f.Execute(ctx, "default", v1.FunctionOwner("todo-api"), "app", stmts(t, `[["INSERT INTO todos(title, done) VALUES(:t, :d)", {"t": "milk", "d": 0}]]`))
 	require.NoError(t, err)
 	require.Equal(t, []local.ExecResult{{RowsAffected: 1, LastInsertID: 1}}, ex)
 	require.Equal(t, []auth.Action{auth.ActionSQLRead, auth.ActionSQLWrite}, pdp.asked, "execute asks read and write")
 
 	pdp.asked = nil
-	q, err := f.Query(ctx, "default", "todo-api", "app", stmts(t, `[["SELECT id, title FROM todos"]]`))
+	q, err := f.Query(ctx, "default", v1.FunctionOwner("todo-api"), "app", stmts(t, `[["SELECT id, title FROM todos"]]`))
 	require.NoError(t, err)
 	require.Equal(t, []string{"id", "title"}, q[0].Columns)
 	require.Len(t, q[0].Values, 1)
 	require.Equal(t, []auth.Action{auth.ActionSQLRead}, pdp.asked, "query asks read only")
 
-	ret, err := f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[["UPDATE todos SET done = 1 RETURNING id, title"]]`))
+	ret, err := f.Execute(ctx, "default", v1.FunctionOwner("todo-api"), "app", stmts(t, `[["UPDATE todos SET done = 1 RETURNING id, title"]]`))
 	require.NoError(t, err)
 	require.Equal(t, []string{"id", "title"}, ret[0].Columns, "RETURNING rows come back")
 	require.Equal(t, []string{"/db/execute?db_timeout=30s&transaction=", "/db/query?db_timeout=30s", "/db/execute?db_timeout=30s&transaction="}, engine.Paths())
@@ -94,7 +94,7 @@ func TestFacadeRefusals(t *testing.T) {
 	engine := fakesql.New(t, sqlsvc.EnginePassword([]byte(masterKey), "default", "todo-db"))
 	ctx := context.Background()
 	run := func(f *sqlsvc.Facade, alias, raw string) error {
-		_, err := f.Execute(ctx, "default", "todo-api", alias, stmts(t, raw))
+		_, err := f.Execute(ctx, "default", v1.FunctionOwner("todo-api"), alias, stmts(t, raw))
 		return err
 	}
 	ok := facade(t, &recordingPDP{}, engine.Addr(), &bytes.Buffer{}, 0)
@@ -109,17 +109,17 @@ func TestFacadeRefusals(t *testing.T) {
 	err := run(noEngine, "app", `[["DELETE FROM todos"]]`)
 	require.Equal(t, fault.Unavailable, fault.KindOf(err))
 	require.ErrorIs(t, err, local.ErrEngineNotReady)
-	require.ErrorIs(t, noEngine.CheckRead(ctx, "default", "todo-api", "app"), local.ErrEngineNotReady)
-	require.EqualError(t, noEngine.CheckRead(ctx, "default", "todo-api", "app"),
+	require.ErrorIs(t, noEngine.CheckRead(ctx, "default", v1.FunctionOwner("todo-api"), "app"), local.ErrEngineNotReady)
+	require.EqualError(t, noEngine.CheckRead(ctx, "default", v1.FunctionOwner("todo-api"), "app"),
 		`sql.CheckRead: the engine of SQLDatabase "todo-db" is not Ready: the database's engine is not ready`,
 		"the text that a dependency report carries")
-	require.NoError(t, ok.CheckRead(ctx, "default", "todo-api", "app"))
+	require.NoError(t, ok.CheckRead(ctx, "default", v1.FunctionOwner("todo-api"), "app"))
 }
 
 func TestFacadeEngineFailures(t *testing.T) {
 	ctx := context.Background()
 	query := func(f *sqlsvc.Facade) error {
-		_, err := f.Query(ctx, "default", "todo-api", "app", stmts(t, `[["SELECT id, title FROM todos"]]`))
+		_, err := f.Query(ctx, "default", v1.FunctionOwner("todo-api"), "app", stmts(t, `[["SELECT id, title FROM todos"]]`))
 		return err
 	}
 	var logs bytes.Buffer
@@ -182,17 +182,17 @@ func TestScenarioSQLDeleteAtCap(t *testing.T) {
 	ctx := context.Background()
 	insert := `["INSERT INTO todos(title, done) VALUES(?, ?)", "jam", 0]`
 
-	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[`+insert+`]`))
+	_, err = f.Execute(ctx, "default", v1.FunctionOwner("todo-api"), "app", stmts(t, `[`+insert+`]`))
 	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
 	require.ErrorContains(t, err, "sqldatabase default/todo-db holds 300 of its 300 bytes (spec.quota): delete to make room")
-	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[["DELETE FROM todos"], `+insert+`]`))
+	_, err = f.Execute(ctx, "default", v1.FunctionOwner("todo-api"), "app", stmts(t, `[["DELETE FROM todos"], `+insert+`]`))
 	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "a DELETE beside an INSERT is a write: %v", err)
 	require.Len(t, engine.Rows(), 3, "a refused Execute reaches no engine")
 
-	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[["DELETE FROM todos"]]`))
+	_, err = f.Execute(ctx, "default", v1.FunctionOwner("todo-api"), "app", stmts(t, `[["DELETE FROM todos"]]`))
 	require.NoError(t, err, "only deletes run at the cap")
 	book.Refresh(ctx)
-	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[`+insert+`]`))
+	_, err = f.Execute(ctx, "default", v1.FunctionOwner("todo-api"), "app", stmts(t, `[`+insert+`]`))
 	require.NoError(t, err, "the next measure sees the room")
 	require.Len(t, engine.Rows(), 1)
 }
@@ -210,12 +210,12 @@ func TestFloorRefusesSQLWrite(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[["INSERT INTO todos(title, done) VALUES(?, ?)", "jam", 0]]`))
+	_, err = f.Execute(ctx, "default", v1.FunctionOwner("todo-api"), "app", stmts(t, `[["INSERT INTO todos(title, done) VALUES(?, ?)", "jam", 0]]`))
 	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
 	require.Len(t, engine.Rows(), 2, "a refused Execute reaches no engine")
-	_, err = f.Query(ctx, "default", "todo-api", "app", stmts(t, `[["SELECT id, title FROM todos"]]`))
+	_, err = f.Query(ctx, "default", v1.FunctionOwner("todo-api"), "app", stmts(t, `[["SELECT id, title FROM todos"]]`))
 	require.NoError(t, err, "a query is not a write")
-	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[["DELETE FROM todos"]]`))
+	_, err = f.Execute(ctx, "default", v1.FunctionOwner("todo-api"), "app", stmts(t, `[["DELETE FROM todos"]]`))
 	require.NoError(t, err, "a delete is admitted below the floor")
 	require.Empty(t, engine.Rows())
 }

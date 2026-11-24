@@ -10,7 +10,7 @@ so statements use SQLite's dialect. A Function binds the database and sends stat
 [`ctx.sql`](spec.md#handler-api).
 
 The first example, sql-notes in TypeScript or sql-orders in Python, creates the tables with a migration Function, then
-adds and lists rows through the database's **owner**, the Function that can write it. The migration Function writes
+adds and lists rows through the database's **owner**, the Function that can write it, named by its kind and name. The migration Function writes
 through the role `SQL Data Writer`, given in `grant.yaml`. Each Function declares the database under
 [`spec.sql`](../../workloads/function/spec.md#functionspecsql) and binds it under
 [`spec.bindings.sql`](../../workloads/function/spec.md#functionspecbindingssql), which allows reading; the handler

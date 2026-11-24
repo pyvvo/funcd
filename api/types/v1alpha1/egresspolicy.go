@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"fmt"
 	"net/netip"
 	"strings"
 
@@ -34,12 +35,19 @@ const (
 //	  namespace: acme
 //	  resourceGroup: rg1
 //	spec:
-//	  appliesTo: [etl]        # optional; omit ⇒ every Function in the namespace
+//	  appliesTo:
+//	    - kind: Function
+//	      name: etl
 //	  rules:
 //	    - to:
-//	        domains: ["api.x.com", "*.x.com"]
-//	        cidrs:   ["10.0.0.0/8"]
-//	      ports: [443, 5432]
+//	        domains:
+//	          - api.x.com
+//	          - "*.x.com"
+//	        cidrs:
+//	          - 10.0.0.0/8
+//	      ports:
+//	        - 443
+//	        - 5432
 type EgressPolicy struct {
 	TypeMeta   `json:",inline"`
 	ObjectMeta `json:"metadata"`
@@ -50,8 +58,9 @@ type EgressPolicy struct {
 type EgressPolicySpec struct {
 	// Rules is the allow-list; each grants egress to its `to` on its `ports`. At least one required.
 	Rules []EgressRule `json:"rules" doc:"One to 64 rules, each allowing outbound TCP connections; the rules of every EgressPolicy of the namespace add up. With server.network.egress on, on Linux with containerd, a connection that nothing allows is refused; otherwise the rules change nothing."`
-	// AppliesTo scopes every rule to these Functions (by name, this namespace); empty ⇒ the whole namespace.
-	AppliesTo []ObjectName `json:"appliesTo,omitempty" doc:"The Functions of the namespace, by name, that the rules apply to; empty applies them to every Function of the namespace."`
+	// AppliesTo scopes every rule to these Functions and Jobs of the namespace, each named with its kind (ADR-0351
+	// Decision 6); empty ⇒ every Function of the namespace, and no Job.
+	AppliesTo []WorkloadRef `json:"appliesTo,omitempty" doc:"The Functions and Jobs of the namespace that the rules apply to, each named with its kind; empty applies them to every Function of the namespace and to no Job."`
 }
 
 // EgressRule permits egress to a destination set on a port set.
@@ -112,9 +121,12 @@ func (ep *EgressPolicy) Validate() error {
 			}
 		}
 	}
-	for i, name := range ep.Spec.AppliesTo {
-		if err := name.Validate(); err != nil {
-			return fault.Invalidf(op, "spec.appliesTo[%d] %q is not a valid function name: %v", i, name, err)
+	for i, ref := range ep.Spec.AppliesTo {
+		if ref.IsZero() {
+			return fault.Invalidf(op, "spec.appliesTo[%d] names no workload", i)
+		}
+		if err := ref.validate(op, fmt.Sprintf("spec.appliesTo[%d]", i), KindFunction, KindJob); err != nil {
+			return err
 		}
 	}
 	return nil

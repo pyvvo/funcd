@@ -34,7 +34,9 @@ func newManager(t *testing.T, o Options) *manager {
 	return m.(*manager)
 }
 
-func local(fn, name v1.ObjectName) ID { return ID{Namespace: "shop", Function: fn, Name: name} }
+func local(fn, name v1.ObjectName) ID {
+	return ID{Namespace: "shop", Kind: v1.KindFunction, Workload: fn, Name: name}
+}
 
 // TestScenarioCapacityNotOvercommitted: with 10 units of capacity and 9 reserved, a 2-unit booking is refused
 // VolumeCapacity; an emptyDir that does not fit fails its Reserve the same way.
@@ -49,7 +51,7 @@ func TestScenarioCapacityNotOvercommitted(t *testing.T) {
 	if fault.KindOf(err) != fault.Conflict || !errors.Is(err, ErrCapacity) {
 		t.Fatalf("Book over capacity = %v, want Conflict VolumeCapacity", err)
 	}
-	emptyDir := ID{Namespace: "shop", Function: "thumbs", Name: "cache", Worker: "w1"}
+	emptyDir := ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "thumbs", Name: "cache", Worker: "w1"}
 	if _, err := m.Reserve(ctx, emptyDir, "", 2, ""); !errors.Is(err, ErrCapacity) {
 		t.Fatalf("emptyDir Reserve over capacity = %v, want VolumeCapacity", err)
 	}
@@ -70,7 +72,7 @@ func TestScenarioNamespaceBudget(t *testing.T) {
 	if fault.KindOf(err) != fault.Conflict || !errors.Is(err, ErrBudget) {
 		t.Fatalf("Book over budget = %v, want Conflict VolumeBudget", err)
 	}
-	other := ID{Namespace: "lab", Function: "etl", Name: "state"}
+	other := ID{Namespace: "lab", Kind: v1.KindFunction, Workload: "etl", Name: "state"}
 	if err := m.Book(ctx, other, 2); err != nil {
 		t.Fatalf("another namespace's booking = %v", err)
 	}
@@ -121,7 +123,7 @@ func TestDeclaredBookingOutlivesTheTTL(t *testing.T) {
 	declared := map[v1.ObjectName]error{"cart": nil, "flaky": errors.New("store down")}
 	m := newManager(t, Options{CapacityBytes: 10, BookingTTL: time.Minute, Clock: func() time.Time { return now },
 		Declared: func(_ context.Context, id ID) (bool, error) {
-			err, ok := declared[id.Function]
+			err, ok := declared[id.Workload]
 			return ok && err == nil, err
 		}})
 	for fn, size := range map[v1.ObjectName]int64{"cart": 4, "flaky": 3, "ghost": 3} {
@@ -144,7 +146,7 @@ func TestDeclaredBookingOutlivesTheTTL(t *testing.T) {
 func TestScenarioRetainedNotTakenOver(t *testing.T) {
 	ctx := t.Context()
 	holder := v1.UID("old")
-	m := newManager(t, Options{Holder: func(context.Context, v1.NamespaceName, v1.ObjectName) (v1.UID, bool, error) {
+	m := newManager(t, Options{Holder: func(context.Context, v1.NamespaceName, v1.Kind, v1.ObjectName) (v1.UID, bool, error) {
 		return holder, holder != "", nil
 	}})
 	id := local("cart", "state")
@@ -225,7 +227,7 @@ func TestLeafRefusesSymlink(t *testing.T) {
 func TestEmptyDirLeaves(t *testing.T) {
 	ctx := t.Context()
 	m := newManager(t, Options{})
-	a := ID{Namespace: "shop", Function: "thumbs", Name: "cache", Worker: "w1"}
+	a := ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "thumbs", Name: "cache", Worker: "w1"}
 	b := a
 	b.Worker = "w2"
 	da, err := m.Reserve(ctx, a, "", 1, "")
@@ -321,7 +323,7 @@ func TestScenarioDevMeasures(t *testing.T) {
 	}
 	m.measure()
 	got := logs.String()
-	for _, want := range []string{"volume past its size", "function=cart", "volume=state", "sizeBytes=4", "usedBytes=10"} {
+	for _, want := range []string{"volume past its size", "kind=Function", "workload=cart", "volume=state", "sizeBytes=4", "usedBytes=10"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("log %q lacks %q", got, want)
 		}
@@ -340,7 +342,7 @@ func TestConcurrentBookingsNeverOvercommit(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if m.Book(ctx, ID{Namespace: "shop", Function: v1.ObjectName(fmt.Sprintf("f%d", i)), Name: "state"}, 1) == nil {
+			if m.Book(ctx, ID{Namespace: "shop", Kind: v1.KindFunction, Workload: v1.ObjectName(fmt.Sprintf("f%d", i)), Name: "state"}, 1) == nil {
 				mu.Lock()
 				ok++
 				mu.Unlock()
@@ -482,7 +484,7 @@ func TestIssue1203_DamagedMetaStopsOnlyItsVolume(t *testing.T) {
 	m := newManager(t, Options{Root: root})
 	damaged, intact := local("cart", "state"), local("thumbs", "state")
 	for _, id := range []ID{damaged, intact} {
-		if _, err := m.Reserve(ctx, id, v1.UID("u-"+id.Function), 1<<20, v1.DeletionRetain); err != nil {
+		if _, err := m.Reserve(ctx, id, v1.UID("u-"+id.Workload), 1<<20, v1.DeletionRetain); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -582,7 +584,7 @@ func TestRenewHandsTheSpaceOver(t *testing.T) {
 	if _, err := m.Reserve(ctx, local("other", "state"), "u1", 1<<20, v1.DeletionRetain); err != nil {
 		t.Fatal(err)
 	}
-	cur := ID{Namespace: "shop", Function: "thumbs", Name: "cache", Worker: "w0"}
+	cur := ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "thumbs", Name: "cache", Worker: "w0"}
 	if _, err := m.Reserve(ctx, cur, "", 1<<20, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -621,5 +623,45 @@ func TestRenewHandsTheSpaceOver(t *testing.T) {
 	wg.Wait()
 	if took.Load() {
 		t.Fatal("a booking took the space a Renew handed over")
+	}
+}
+
+// ADR-0347 Decision 1: a Job's local volume lives apart from that of a Function of the same name, lists back with its
+// kind, and an ID that names no Function or Job kind is refused.
+func TestJobVolumesLiveApartFromAFunctions(t *testing.T) {
+	ctx := t.Context()
+	m := newManager(t, Options{})
+	fnID := local("cart", "state")
+	jobID := ID{Namespace: "shop", Kind: v1.KindJob, Workload: "cart", Name: "state"}
+	fnDir, err := m.Reserve(ctx, fnID, "uid-fn", 1<<20, v1.DeletionRetain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobDir, err := m.Reserve(ctx, jobID, "uid-job", 1<<20, v1.DeletionRetain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fnDir == jobDir || filepath.Base(filepath.Dir(jobDir)) != "cart.job" {
+		t.Fatalf("the Function's volume is at %s and the Job's at %s; want apart, the Job's under cart.job", fnDir, jobDir)
+	}
+	infos, err := m.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := map[ID]v1.UID{}
+	for _, in := range infos {
+		owners[in.ID] = in.Owner
+	}
+	if owners[fnID] != "uid-fn" || owners[jobID] != "uid-job" || len(owners) != 2 {
+		t.Fatalf("List = %v, want each volume under its own kind and owner", infos)
+	}
+	if got := jobID.String(); got != "shop/cart.job/state" {
+		t.Fatalf("a Job's volume reads %q", got)
+	}
+	for _, kind := range []v1.Kind{"", v1.KindLake} {
+		id := ID{Namespace: "shop", Kind: kind, Workload: "cart", Name: "state"}
+		if err := m.Book(ctx, id, 1); fault.KindOf(err) != fault.Invalid {
+			t.Fatalf("Book of a volume of kind %q = %v, want Invalid", kind, err)
+		}
 	}
 }

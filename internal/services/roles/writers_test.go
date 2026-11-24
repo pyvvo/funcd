@@ -146,7 +146,7 @@ func seedKV(t *testing.T, st store.Store) {
 	create(t, st, &v1.KVStore{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
 		ObjectMeta: v1.ObjectMeta{Name: "counters", Namespace: "data", ResourceGroup: "rg1"},
-		Spec:       v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "landing"}, {Name: "owned", Owner: "producer"}}},
+		Spec:       v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "landing"}, {Name: "owned", Owner: v1.FunctionOwner("producer")}}},
 	})
 }
 

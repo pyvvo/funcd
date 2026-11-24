@@ -2,8 +2,6 @@ package v1alpha1
 
 import (
 	huma "github.com/danielgtaylor/huma/v2"
-
-	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Secret is a namespaced, pure-data resource for sensitive configuration.
@@ -20,7 +18,7 @@ type SecretSpec struct {
 	Type SecretType        `json:"type,omitempty" doc:"funcd does not read it."`
 	Data map[string][]byte `json:"data,omitempty" doc:"The Secret's values by key, each in base64. Each key is an environment-variable name: a letter or an underscore, then letters, digits and underscores; a key that starts with FUNCD_ never reaches a workload. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a Secret holding another value does not start."`
 	// Owner may write the Secret's keys through ctx.secret, as a KV table's owner writes the table (ADR-0327).
-	Owner ObjectName `json:"owner,omitempty" doc:"The one Function that may write the Secret's keys through ctx.secret, in its namespace, besides the writers that a RolesAssignment names, such as the Secret Data Writer role. The Function writes only while it binds the Secret. With no owner, only those writers can write it. An apply of the Secret replaces its data, keys a Function wrote included."`
+	Owner WorkloadRef `json:"owner,omitzero" doc:"The one Function or Job that may write the Secret's keys through ctx.secret, in its namespace, named with its kind, besides the writers that a RolesAssignment names, such as the Secret Data Writer role. The owner writes only while it binds the Secret. With no owner, only those writers can write it. An apply of the Secret replaces its data, keys a workload wrote included."`
 }
 
 // SecretType is an open typed-string discriminator for secret kinds.
@@ -45,8 +43,8 @@ func (s *Secret) Validate() error {
 	if err := validateMeta(s.TypeMeta, &s.ObjectMeta, KindSecret); err != nil {
 		return err
 	}
-	if s.Spec.Owner != "" && !dnsLabel.MatchString(string(s.Spec.Owner)) {
-		return fault.Invalidf(op, "spec.owner %q is not a valid Function name", s.Spec.Owner)
+	if err := s.Spec.Owner.validate(op, "spec.owner", KindFunction, KindJob); err != nil {
+		return err
 	}
 	return validateEnvKeys(op, s.Spec.Data)
 }

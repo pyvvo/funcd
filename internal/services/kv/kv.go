@@ -80,12 +80,12 @@ func tablePrefix(ns v1.NamespaceName, b Binding) string {
 // (get/list) or kv::write (put/del) on the KVTable (a sub-resource of the KVStore). The principal is
 // the connection-scoped caller Function; a deny (default-deny for reads; the built-in owner-forbid
 // for writes) maps to fault.Forbidden, raised from the read or the write deny's known cause (ADR-0330).
-func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, action auth.Action, b Binding) error {
+func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, action auth.Action, b Binding) error {
 	const op = "services.kv.authorize"
-	principal := &auth.EntityRef{Type: v1.KindFunction, Namespace: ns, Name: fn}
+	principal := services.Principal(ns, fn)
 	resource := &auth.EntityRef{Type: v1.KindKVStore, Namespace: ns, Name: b.Store, Path: b.Table}
 	dec, err := f.authorizer.Authorize(ctx, auth.Request{
-		Identity: auth.Identity{Subject: string(ns) + "/" + string(fn), Principal: principal},
+		Identity: auth.Identity{Subject: string(ns) + "/" + string(fn.Name), Principal: principal},
 		Action:   action,
 		Resource: resource,
 	})
@@ -97,14 +97,14 @@ func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.Objec
 		if action == auth.ActionKVRead {
 			deny = kvstore.ErrReadDenied
 		}
-		return deny.Errorf(op, "function %q is not authorized to %s table %q (store %q): %s", fn, action, b.Table, b.Store, dec.Reason)
+		return deny.Errorf(op, "%s is not authorized to %s table %q (store %q): %s", fn, action, b.Table, b.Store, dec.Reason)
 	}
 	return nil
 }
 
 // resolveAuth resolves a binding (naming) then authorizes the action against the table via the PDP
 // (ADR-0074), returning the binding on allow.
-func (f *Facade) resolveAuth(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string, action auth.Action) (Binding, error) {
+func (f *Facade) resolveAuth(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string, action auth.Action) (Binding, error) {
 	b, err := f.resolver.Resolve(ctx, ns, fn, alias)
 	if err != nil {
 		return Binding{}, err
@@ -117,14 +117,14 @@ func (f *Facade) resolveAuth(ctx context.Context, ns v1.NamespaceName, fn v1.Obj
 
 // CheckRead resolves the alias and asks the PDP kv::read on its table, as Get does, with no engine call: the
 // dependency check of a caller's binding (ADR-0215 Decision 3).
-func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) error {
+func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string) error {
 	_, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionKVRead)
 	return err
 }
 
 // Get returns the value for the alias's key. Reads are DEFAULT-DENY: the PDP must permit kv::read
 // (a permitting Policy) on the resolved table (ADR-0074).
-func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string) ([]byte, bool, error) {
+func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key string) ([]byte, bool, error) {
 	b, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionKVRead)
 	if err != nil {
 		return nil, false, err
@@ -138,13 +138,13 @@ func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 // Put stores value under the alias's key. The PDP authorizes kv::write — the built-in
 // forbid(kv::write) unless principal == resource.owner makes this owner-only (ADR-0074). Per-op caps next, then the
 // store's quota (ADR-0292), which counts the stored key and the value and credits the value it replaces.
-func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string, value []byte) error {
+func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key string, value []byte) error {
 	return f.put(ctx, ns, fn, alias, key, value, func(k string) (bool, error) { return true, f.kv.Put(ctx, k, value) })
 }
 
 // PutIf is Put that stores only while w's condition on the key holds, and that can give the key a TTL. A condition
 // that does not hold is a Result that is not Done, charged nothing to the quota.
-func (f *Facade) PutIf(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string, value []byte, w kvstore.Write) (kvstore.Result, error) {
+func (f *Facade) PutIf(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key string, value []byte, w kvstore.Write) (kvstore.Result, error) {
 	c, err := f.conditional("services.kv.put")
 	if err == nil {
 		err = kvstore.CheckWrite("services.kv.put", w)
@@ -163,7 +163,7 @@ func (f *Facade) PutIf(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNam
 
 // put authorizes kv::write on the alias's table, checks the per-op caps, admits the write against the store's quota,
 // then stores it with store, which reports whether it wrote; the quota settles what it wrote.
-func (f *Facade) put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string, value []byte, store func(k string) (bool, error)) error {
+func (f *Facade) put(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key string, value []byte, store func(k string) (bool, error)) error {
 	b, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionKVWrite)
 	if err != nil {
 		return err
@@ -195,12 +195,12 @@ func (f *Facade) put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 }
 
 // Delete removes the alias's key. The PDP authorizes kv::write (owner-only via the built-in forbid).
-func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string) error {
+func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key string) error {
 	return f.delete(ctx, ns, fn, alias, key, func(k string) (bool, error) { return true, f.kv.Delete(ctx, k) })
 }
 
 // DeleteIf is Delete that deletes only while the key exists at version, as a lease holder releases what it holds.
-func (f *Facade) DeleteIf(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key, version string) (kvstore.Result, error) {
+func (f *Facade) DeleteIf(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key, version string) (kvstore.Result, error) {
 	c, err := f.conditional("services.kv.delete")
 	if err != nil {
 		return kvstore.Result{}, err
@@ -215,7 +215,7 @@ func (f *Facade) DeleteIf(ctx context.Context, ns v1.NamespaceName, fn v1.Object
 }
 
 // delete authorizes kv::write on the alias's table, then deletes with del, which reports whether it deleted.
-func (f *Facade) delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string, del func(k string) (bool, error)) error {
+func (f *Facade) delete(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key string, del func(k string) (bool, error)) error {
 	b, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionKVWrite)
 	if err != nil {
 		return err
@@ -232,7 +232,7 @@ func (f *Facade) delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNa
 }
 
 // GetEntry is Get with the key's version and expiry, read under the same kv::read rule.
-func (f *Facade) GetEntry(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string) (kvstore.Entry, bool, error) {
+func (f *Facade) GetEntry(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, key string) (kvstore.Entry, bool, error) {
 	c, err := f.conditional("services.kv.get")
 	if err != nil {
 		return kvstore.Entry{}, false, err
@@ -268,7 +268,7 @@ func checkKeyLimit(op, key string) error {
 // List returns the alias's keys under prefix. Like Get, listing is DEFAULT-DENY: the PDP must permit
 // kv::read on the resolved table (ADR-0074). The <ns>/<store>/<table>/ prefix is stripped so the
 // caller only sees its own key space.
-func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, prefix string) ([]string, error) {
+func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, prefix string) ([]string, error) {
 	b, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionKVRead)
 	if err != nil {
 		return nil, err

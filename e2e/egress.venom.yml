@@ -20,6 +20,9 @@
 #   * CIDR deny — an unlisted IP (1.0.0.1) stays DENIED (ok=false); the allow-list is closed (implicit deny).
 #   * blocked-connection-audited — the gateway emits an egress audit record (allowed=false) to the funclog.
 #   * cidr-rule-reaches-the-bridge-address — a CIDR rule that names the bridge address reaches it through the gateway.
+#   * job-egress-named (ADR-0351 Decision 6) — a run of Job egress-probe egresses as its Job: a policy whose appliesTo
+#     names the Job lets it reach example.com, the Function of its name does not, and the wildcard policy, whose
+#     appliesTo is empty, reaches no Job.
 #
 # The EgressPolicies are applied MID-SUITE (in-VM `limactl shell` — co-located with the daemon, no path leak;
 # {{.vm}} is injected by the recipe --var) so the deny-then-allow ordering is observable. http steps hit the
@@ -288,7 +291,9 @@ testcases:
             namespace: default
             resourceGroup: rg1
           spec:
-            owner: egress-probe
+            owner:
+              kind: Function
+              name: egress-probe
           YAML
             FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /tmp/egress-engine.yaml'
         assertions:
@@ -469,3 +474,87 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.ok ShouldEqual true
+
+  # 7) job-egress-named: a run's worker is indexed as the Job its run names, so the policy that names the Job lets the
+  #    run reach example.com, which no policy opens to the Function of its name, and the wildcard policy, whose appliesTo
+  #    is empty, reaches no Job. A run calls once and may do so before the worker sync finds its worker, so the step
+  #    starts a run until one reaches example.com.
+  - name: job-egress-named
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            cat >/tmp/job-egress-probe.yaml <<"YAML"
+          apiVersion: funcd.io/v1alpha1
+          kind: Job
+          metadata:
+            name: egress-probe
+            namespace: default
+            resourceGroup: rg1
+          spec:
+            runtime: nodejs22
+            handler: handle
+            image: oci-layout:///mnt/funcd-deps/registry:egress-probe
+          YAML
+            cat >/tmp/egresspolicy-job.yaml <<"YAML"
+          apiVersion: funcd.io/v1alpha1
+          kind: EgressPolicy
+          metadata:
+            name: allow-the-job
+            namespace: default
+            resourceGroup: rg1
+          spec:
+            appliesTo:
+              - kind: Job
+                name: egress-probe
+            rules:
+              - to:
+                  domains:
+                    - example.com
+                ports:
+                  - 443
+          YAML
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            funcdctl apply -f /tmp/job-egress-probe.yaml && funcdctl apply -f /tmp/egresspolicy-job.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            run=$(funcdctl job run egress-probe --input "{\"url\":\"https://example.com\"}") || exit 1
+            for i in $(seq 60); do
+              out=$(funcdctl get jobrun "$run" -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin).get(\"status\",{});print(s.get(\"phase\",\"\"),json.dumps((s.get(\"result\") or {}).get(\"ok\")))")
+              case "$out" in Succeeded*|Failed*|Cancelled*) echo "$run $out"; exit 0;; esac
+              sleep 1
+            done
+            echo "$run did not end"; exit 1'
+        retry: 10
+        delay: 3
+        info: "a run under the policy that names the Job → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "Succeeded true"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/egress-probe"
+        headers:
+          content-type: application/json
+        body: '{"data":{"url":"https://example.com"}}'
+        info: "the Function of the Job's name → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.ok ShouldEqual false
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            run=$(funcdctl job run egress-probe --input "{\"url\":\"https://www.example.com\"}") || exit 1
+            for i in $(seq 60); do
+              out=$(funcdctl get jobrun "$run" -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin).get(\"status\",{});print(s.get(\"phase\",\"\"),json.dumps((s.get(\"result\") or {}).get(\"ok\")))")
+              case "$out" in Succeeded*|Failed*|Cancelled*) echo "$run $out"; exit 0;; esac
+              sleep 1
+            done
+            echo "$run did not end"; exit 1'
+        info: "a run under the wildcard policy only → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "Succeeded false"

@@ -65,7 +65,7 @@ func twoNamespaces() regMeta {
 	store := func(ns v1.NamespaceName, owner v1.ObjectName) *v1.KVStore {
 		return &v1.KVStore{
 			ObjectMeta: v1.ObjectMeta{Name: "orders", Namespace: ns, ResourceGroup: "rg1"},
-			Spec:       v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "items", Owner: owner}}},
+			Spec:       v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "items", Owner: v1.FunctionOwner(owner)}}},
 		}
 	}
 	return regMeta{

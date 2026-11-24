@@ -74,7 +74,7 @@ var (
 type Addon interface {
 	// Target makes every check before the dial, the binding, Cedar, the hold, the object's readiness and the path,
 	// and returns where the call goes (ADR-0338 Decision 2).
-	Target(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, path string) (AddonTarget, error)
+	Target(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, path string) (AddonTarget, error)
 }
 
 // AddonTarget is where a call goes: the engine's own address and the cleaned path to send.
@@ -119,14 +119,14 @@ func AddonFacet(a Addon, limits AddonLimits) Facet {
 }
 
 // NewAddonProxy is the node-private add-on proxy (ADR-0338 Decision 3), served at FUNCD_ADDON_<ALIAS>_URL: callerOf
-// resolves the X-Funcd-Addon-Token to its Function, then the call is the facet's.
+// resolves the X-Funcd-Addon-Token to its Function or its Job (ADR-0351 Decision 4), then the call is the facet's.
 func NewAddonProxy(a Addon, callerOf func(token string) (Ref, bool), limits AddonLimits, logger *slog.Logger) http.Handler {
 	c := newAddonCaller(a, limits, logger)
 	mux := http.NewServeMux()
 	serve := func(w http.ResponseWriter, r *http.Request) error {
 		caller, ok := callerOf(r.Header.Get(AddonTokenHeader))
 		if !ok {
-			return ErrAddonTokenRefused.Errorf("workernode.local.addonProxy", "the request carries no token of a Function")
+			return ErrAddonTokenRefused.Errorf("workernode.local.addonProxy", "the request carries no token of a Function or a Job")
 		}
 		return c.serve(w, r, caller, r.PathValue("alias"), "/"+r.PathValue("path"))
 	}
@@ -174,7 +174,7 @@ func (c addonCaller) serve(w http.ResponseWriter, r *http.Request, caller Ref, a
 	if c.addon == nil {
 		return fault.Unavailablef(op, "add-on calls are not served here")
 	}
-	t, err := c.addon.Target(r.Context(), caller.Namespace, caller.Function, alias, path)
+	t, err := c.addon.Target(r.Context(), caller.Namespace, caller.Workload(), alias, path)
 	if err != nil {
 		if errors.Is(err, ErrAddonHeld) {
 			w.Header().Set("Retry-After", addonHeldRetryAfter)

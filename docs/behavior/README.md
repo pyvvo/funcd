@@ -43,6 +43,7 @@ the bug rule in `.claude/CLAUDE.md`: a row points at what to read and proves not
 | [Services](services.md) | KVStore, Bucket, SQLDatabase, Lake, the S3 gateway |
 | [Addons](addons.md) | the add-ons an admin registers, their objects and engines |
 | [Eventing](eventing.md) | sources, Sensors, dead letters, Workflow runs |
+| [Jobs](jobs.md) | Jobs and their runs: a run's admission, who may act |
 | [Apps](apps.md) | rollouts, hooks, rollback, delete |
 | [Disaster recovery](disaster-recovery.md) | backups, Restores, namespace holds |
 | [Health](health.md) | storage probes, what funcd says about itself |

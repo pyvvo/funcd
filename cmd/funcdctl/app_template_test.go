@@ -485,10 +485,13 @@ func seedChild(t *testing.T, st store.Store, kind v1.Kind, name v1.ObjectName, o
 	t.Helper()
 	obj, ok := v1.NewObject(kind)
 	require.True(t, ok)
-	if wf, ok := obj.(*v1.Workflow); ok {
-		wf.Spec.Steps = []v1.WorkflowStep{{Name: "due", Function: &v1.FunctionStep{Image: "oci-layout://layout/todo-planner:1.0.0"}}}
-	}
 	m := owner.GetObjectMeta()
+	switch o := obj.(type) {
+	case *v1.Workflow:
+		o.Spec.Steps = []v1.WorkflowStep{{Name: "due", Function: &v1.FunctionStep{Image: "oci-layout://layout/todo-planner:1.0.0"}}}
+	case *v1.Revision:
+		o.Spec.Function = v1.ObjectRef{Kind: v1.KindFunction, Namespace: "team-a", Name: m.Name}
+	}
 	*obj.GetObjectMeta() = v1.ObjectMeta{Name: name, Namespace: "team-a", ResourceGroup: "rg1", OwnerReferences: []v1.OwnerReference{{
 		ObjectRef: v1.ObjectRef{Kind: owner.GroupVersionKind().Kind, Namespace: "team-a", Name: m.Name},
 		UID:       m.UID, Controller: controller, BlockOwnerDeletion: controller,

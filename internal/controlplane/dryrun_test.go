@@ -141,6 +141,8 @@ func sample(k v1.Kind, name v1.ObjectName) v1.Object {
 		x.Spec.Location = v1.LakeLocation{Bucket: "b", Prefix: "p"}
 	case *v1.WorkflowRun:
 		x.Spec.Workflow = "w"
+	case *v1.JobRun:
+		x.Spec.Job = "j"
 	case *v1.Site:
 		x.Spec.Buckets, x.Spec.Bindings = []v1.BucketEntry{{Name: "b"}}, v1.SiteBindings{Blob: []v1.BlobRef{{Bucket: "b", Prefix: "p"}}}
 	case *v1.Identity:

@@ -37,43 +37,45 @@ const (
 	reasonVolumesRestored = "Restored"
 )
 
-func localID(fn *v1.Function, name v1.ObjectName) volume.ID {
-	return volume.ID{Namespace: fn.Namespace, Function: fn.Name, Name: name}
+// localID is w's local volume name, under w's kind (ADR-0347 Decision 1).
+func localID(w workload, name v1.ObjectName) volume.ID {
+	return volume.ID{Namespace: w.meta().Namespace, Kind: w.kind(), Workload: w.meta().Name, Name: name}
 }
 
-// ensureVolumes reserves fn's local volumes before any worker boots (ADR-0262 Decisions 5 and 7), adopting a ref'd
+// ensureVolumes reserves w's local volumes before any worker boots (ADR-0262 Decisions 5 and 7), adopting a ref'd
 // retained volume first, and records a DataMissing loss (Decision 12). It returns the gate of the first volume that
-// stops fn.
-func (r *Reconciler) ensureVolumes(ctx context.Context, fn *v1.Function) (*gateFailure, error) {
-	if len(fn.Spec.Volumes) == 0 {
-		r.markVolumesSeen(fn) // a volume a later generation adds is new, not lost (#1200)
+// stops w.
+func (r *Reconciler) ensureVolumes(ctx context.Context, w workload) (*gateFailure, error) {
+	if len(w.spec.Volumes) == 0 {
+		r.markVolumesSeen(w) // a volume a later generation adds is new, not lost (#1200)
 		return nil, nil
 	}
 	if r.volumes == nil {
 		msg := "spec.volumes: volumes are off on this daemon"
 		return &gateFailure{reason: reasonVolumesOff, message: msg, readyMessage: msg, phase: v1.PhaseFailed}, nil
 	}
-	if err := r.dataMissing(ctx, fn); err != nil {
+	if err := r.dataMissing(ctx, w); err != nil {
 		return nil, err
 	}
-	if fn.Status.ObservedGeneration < fn.Generation {
-		if err := r.dropRemovedVolumes(ctx, fn); err != nil {
+	if w.observedGeneration() < w.meta().Generation {
+		if err := r.dropRemovedVolumes(ctx, w); err != nil {
 			return nil, err
 		}
 	}
-	for i, v := range fn.Spec.Volumes {
+	uid := w.meta().UID
+	for i, v := range w.spec.Volumes {
 		if v.Type != v1.VolumeLocal {
 			continue
 		}
 		field := fmt.Sprintf("spec.volumes[%d]", i)
-		id := localID(fn, v.VolumeName())
+		id := localID(w, v.VolumeName())
 		deletion := cmp.Or(v.Deletion, v1.DeletionRetain)
 		if v.Ref != "" {
-			if err := r.volumes.Adopt(ctx, id, fn.UID); err != nil {
+			if err := r.volumes.Adopt(ctx, id, uid); err != nil {
 				return volumeGate(field, err)
 			}
 		}
-		if _, err := r.volumes.Reserve(ctx, id, fn.UID, v.Bytes(), deletion); err != nil {
+		if _, err := r.volumes.Reserve(ctx, id, uid, v.Bytes(), deletion); err != nil {
 			return volumeGate(field, err)
 		}
 	}
@@ -107,18 +109,19 @@ func volumeGate(field string, err error) (*gateFailure, error) {
 	return nil, err
 }
 
-// dropRemovedVolumes applies its deletion policy to each local volume fn holds that its spec no longer declares: a
+// dropRemovedVolumes applies its deletion policy to each local volume w holds that its spec no longer declares: a
 // delete volume goes, a retain one is kept with no owner.
-func (r *Reconciler) dropRemovedVolumes(ctx context.Context, fn *v1.Function) error {
+func (r *Reconciler) dropRemovedVolumes(ctx context.Context, w workload) error {
 	infos, err := r.volumes.List(ctx)
 	if err != nil {
 		return err
 	}
+	m := w.meta()
 	for _, in := range infos {
-		if in.ID.Namespace != fn.Namespace || in.ID.Function != fn.Name || in.ID.Worker != "" || in.Owner != fn.UID {
+		if in.ID.Namespace != m.Namespace || in.ID.Kind != w.kind() || in.ID.Workload != m.Name || in.ID.Worker != "" || in.Owner != m.UID {
 			continue
 		}
-		if slices.ContainsFunc(fn.Spec.Volumes, func(v v1.VolumeEntry) bool { return v.Type == v1.VolumeLocal && v.VolumeName() == in.ID.Name }) {
+		if slices.ContainsFunc(w.spec.Volumes, func(v v1.VolumeEntry) bool { return v.Type == v1.VolumeLocal && v.VolumeName() == in.ID.Name }) {
 			continue
 		}
 		if err := r.dropVolume(ctx, in); err != nil {
@@ -136,11 +139,11 @@ func (r *Reconciler) dropVolume(ctx context.Context, in volume.Info) error {
 	return r.volumes.Adopt(ctx, in.ID, "")
 }
 
-// workerVolumes reserves a new emptyDir of each emptyDir volume for the worker replica of fn is about to create, each
-// taking over the space of the one the worker it replaces held (#1207), and returns every volume's mount and env value
+// workerVolumes reserves a new emptyDir of each emptyDir volume for the worker id of w is about to create, each taking
+// over the space of the one the worker it replaces held (#1207), and returns every volume's mount and env value
 // (ADR-0262 Decisions 2 and 3). A local volume is reserved again, idempotently, for its path.
-func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runtime.InstanceID) ([]runtime.Mount, map[string]string, error) {
-	if len(fn.Spec.Volumes) == 0 {
+func (r *Reconciler) workerVolumes(ctx context.Context, w workload, id runtime.InstanceID) ([]runtime.Mount, map[string]string, error) {
+	if len(w.spec.Volumes) == 0 {
 		return nil, nil, nil
 	}
 	if r.volumes == nil {
@@ -156,10 +159,10 @@ func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runt
 		return nil, nil, err
 	}
 	var mounts []runtime.Mount
-	env := make(map[string]string, len(fn.Spec.Volumes))
+	env := make(map[string]string, len(w.spec.Volumes))
 	var empty []volume.ID
-	for _, v := range fn.Spec.Volumes {
-		vid := localID(fn, v.VolumeName())
+	for _, v := range w.spec.Volumes {
+		vid := localID(w, v.VolumeName())
 		var host string
 		if v.Type == v1.VolumeEmptyDir {
 			vid.Worker = token
@@ -173,7 +176,7 @@ func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runt
 				empty = append(empty, vid)
 			}
 		} else {
-			host, err = r.volumes.Reserve(ctx, vid, fn.UID, v.Bytes(), cmp.Or(v.Deletion, v1.DeletionRetain))
+			host, err = r.volumes.Reserve(ctx, vid, w.meta().UID, v.Bytes(), cmp.Or(v.Deletion, v1.DeletionRetain))
 		}
 		if err != nil {
 			r.dropEmptyDirs(ctx, append(empty, old...))
@@ -286,9 +289,9 @@ func (r *Reconciler) sweepEmptyDirs(ctx context.Context, fn *v1.Function) error 
 	return nil
 }
 
-// volumesGone applies the delete path to a deleted Function's volumes unless the platform is held (ADR-0262
-// Decision 8): its emptyDirs go, each local volume per its deletion policy.
-func (r *Reconciler) volumesGone(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+// volumesGone applies the delete path to a deleted workload's volumes unless the platform is held (ADR-0262
+// Decision 8): its emptyDirs go, each local volume per its deletion policy. kind is the workload's, Function or Job.
+func (r *Reconciler) volumesGone(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) error {
 	if r.volumes == nil || r.platformHeld() {
 		return nil
 	}
@@ -297,11 +300,14 @@ func (r *Reconciler) volumesGone(ctx context.Context, ns v1.NamespaceName, name 
 		return err
 	}
 	for _, in := range infos {
-		if in.ID.Namespace == ns && in.ID.Function == name {
+		if in.ID.Namespace == ns && in.ID.Kind == kind && in.ID.Workload == name {
 			if err := r.dropVolume(ctx, in); err != nil {
 				return err
 			}
 		}
+	}
+	if kind != v1.KindFunction {
+		return nil
 	}
 	r.volMu.Lock()
 	for id := range r.emptyDirs {
@@ -381,20 +387,20 @@ func (r *Reconciler) releaseHeldLeftovers(ctx context.Context) {
 	}
 }
 
-// holds reports whether the stored Function a local volume's path names holds it.
+// holds reports whether the stored workload a local volume's path names holds it.
 func (r *Reconciler) holds(ctx context.Context, in volume.Info) (bool, error) {
-	uid, ok, err := r.FunctionUID(ctx, in.ID.Namespace, in.ID.Function)
+	uid, ok, err := r.WorkloadUID(ctx, in.ID.Namespace, in.ID.Kind, in.ID.Workload)
 	return ok && uid == in.Owner, err
 }
 
-// FunctionUID returns the UID of the stored Function, false when none is stored; the volume manager's Holder.
-func (r *Reconciler) FunctionUID(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.UID, bool, error) {
-	obj, err := r.store.Get(ctx, v1.KindFunction.GVK(), ns, name)
+// WorkloadUID returns the UID of the stored Function or Job, false when none is stored; the volume manager's Holder.
+func (r *Reconciler) WorkloadUID(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) (v1.UID, bool, error) {
+	obj, err := r.store.Get(ctx, kind.GVK(), ns, name)
 	if fault.KindOf(err) == fault.NotFound {
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, fault.Wrapf(err, fault.KindOf(err), "function.FunctionUID", "get function %s/%s", ns, name)
+		return "", false, fault.Wrapf(err, fault.KindOf(err), "function.WorkloadUID", "get %s %s/%s", kind, ns, name)
 	}
 	return obj.GetObjectMeta().UID, true, nil
 }
@@ -419,7 +425,7 @@ func (r *Reconciler) VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error) 
 			return nil, err
 		}
 		if !live {
-			out = append(out, v1.ObjectRef{Kind: v1.KindFunction, Namespace: in.ID.Namespace, Name: in.ID.Function + "/" + in.ID.Name})
+			out = append(out, v1.ObjectRef{Kind: in.ID.Kind, Namespace: in.ID.Namespace, Name: in.ID.Workload + "/" + in.ID.Name})
 		}
 	}
 	return out, nil
@@ -509,23 +515,35 @@ func (r *Reconciler) VolumeLost(ctx context.Context, ns v1.NamespaceName, fn, na
 	return ok && c.Status == v1.ConditionTrue && slices.Contains(lostVolumes(c.Message), string(name)), nil
 }
 
-// markVolumesSeen records this process's first pass over fn, the only pass that may find a lost volume.
-func (r *Reconciler) markVolumesSeen(fn *v1.Function) {
+// volumeOwner keys the volume state of a workload by its kind too: a Job and a Function of one name hold their volumes
+// apart (ADR-0347 Decision 1).
+type volumeOwner struct {
+	kind v1.Kind
+	ns   v1.NamespaceName
+	name v1.ObjectName
+}
+
+func volumeOwnerOf(w workload) volumeOwner {
+	return volumeOwner{w.kind(), w.meta().Namespace, w.meta().Name}
+}
+
+// markVolumesSeen records this process's first pass over w, the only pass that may find a lost volume.
+func (r *Reconciler) markVolumesSeen(w workload) {
 	r.volMu.Lock()
-	r.volumesSeen[fnKey{fn.Namespace, fn.Name}] = true
+	r.volumesSeen[volumeOwnerOf(w)] = true
 	r.volMu.Unlock()
 }
 
-// dataMissing sets DataMissing on fn (ADR-0262 Decision 12, as ADR-0234 Decision 6): on this process's first pass,
-// with durable volumes, a Function whose stored Ready is True for its current generation and whose local volume has no
+// dataMissing sets DataMissing on w (ADR-0262 Decision 12, as ADR-0234 Decision 6): on this process's first pass,
+// with durable volumes, a workload whose stored Ready is True for its current generation and whose local volume has no
 // leaf lost its data; a Succeeded Restore into that volume since then clears it.
-func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
-	key := fnKey{fn.Namespace, fn.Name}
+func (r *Reconciler) dataMissing(ctx context.Context, w workload) error {
+	key, st, m := volumeOwnerOf(w), w.owner.(v1.StatusObject).GetStatus(), w.meta()
 	r.volMu.Lock()
 	first, lost := !r.volumesSeen[key], r.volumesMissing[key]
 	pending := len(lost) > 0
 	r.volMu.Unlock()
-	cur, has := fn.Status.Conditions.Get(condDataMissing)
+	cur, has := st.Conditions.Get(condDataMissing)
 	if pending && has && cur.Status == v1.ConditionTrue {
 		r.volMu.Lock()
 		delete(r.volumesMissing, key)
@@ -533,34 +551,34 @@ func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 		pending = false
 	}
 	if pending {
-		r.setDataMissing(fn, lost)
+		r.setDataMissing(w, lost)
 		return nil
 	}
 	if has && cur.Status == v1.ConditionTrue {
-		restored, err := r.volumesRestoredSince(ctx, fn, lostVolumes(cur.Message), time.Time(cur.LastTransitionTime))
+		restored, err := r.volumesRestoredSince(ctx, w, lostVolumes(cur.Message), time.Time(cur.LastTransitionTime))
 		if err != nil || !restored {
 			return err
 		}
-		fn.Status.Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionFalse, Reason: reasonVolumesRestored, ObservedGeneration: fn.Generation})
+		st.Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionFalse, Reason: reasonVolumesRestored, ObservedGeneration: m.Generation})
 		return nil
 	}
 	if !first {
 		return nil
 	}
-	r.markVolumesSeen(fn)
-	ready, ok := fn.Status.Conditions.Get(condReady)
+	r.markVolumesSeen(w)
+	ready, ok := st.Conditions.Get(condReady)
 	// The stored Ready vouches only for the volumes its pass reserved: those of the current generation when no pass
 	// was left to run on an update (#1200).
-	if !r.volumesDurable || !ok || ready.Status != v1.ConditionTrue || fn.Status.ObservedGeneration != fn.Generation || !fn.Spec.HasLocalVolume() {
+	if !r.volumesDurable || !ok || ready.Status != v1.ConditionTrue || st.ObservedGeneration != m.Generation || !w.spec.HasLocalVolume() {
 		return nil
 	}
 	var gone []string
-	for _, v := range fn.Spec.Volumes {
+	for _, v := range w.spec.Volumes {
 		if v.Type != v1.VolumeLocal {
 			continue
 		}
 		// the leaf holds the data, not the meta beside it: a meta a crash damaged is no loss (#1203)
-		_, err := r.volumes.Empty(ctx, localID(fn, v.VolumeName()))
+		_, err := r.volumes.Empty(ctx, localID(w, v.VolumeName()))
 		if fault.KindOf(err) != fault.NotFound {
 			if err != nil {
 				return err
@@ -568,13 +586,13 @@ func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 			continue
 		}
 		gone = append(gone, string(v.VolumeName()))
-		r.logger.WarnContext(ctx, "function volume lost its data", "namespace", fn.Namespace, "function", fn.Name, "volume", v.VolumeName())
+		r.logger.WarnContext(ctx, "workload volume lost its data", "namespace", m.Namespace, "kind", w.kind(), "name", m.Name, "volume", v.VolumeName())
 	}
 	if len(gone) > 0 {
 		r.volMu.Lock()
 		r.volumesMissing[key] = gone
 		r.volMu.Unlock()
-		r.setDataMissing(fn, gone)
+		r.setDataMissing(w, gone)
 	}
 	return nil
 }
@@ -592,16 +610,19 @@ func lostVolumes(msg string) []string {
 	return strings.Split(names, ",")
 }
 
-func (r *Reconciler) setDataMissing(fn *v1.Function, lost []string) {
-	fn.Status.Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionTrue, Reason: reasonNoVolume, ObservedGeneration: fn.Generation,
-		Message: dataMissingVolumes + strings.Join(lost, ",") + "; the Function was Ready before and these local volumes are gone, so they start empty: run a workload Restore into each"})
+func (r *Reconciler) setDataMissing(w workload, lost []string) {
+	w.owner.(v1.StatusObject).GetStatus().Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionTrue,
+		Reason: reasonNoVolume, ObservedGeneration: w.meta().Generation,
+		Message: dataMissingVolumes + strings.Join(lost, ",") + "; the " + string(w.kind()) +
+			" was Ready before and these local volumes are gone, so they start empty: run a workload Restore into each"})
 }
 
-// volumesRestoredSince reports that Succeeded Restores created at or after since loaded every lost volume into fn.
-func (r *Reconciler) volumesRestoredSince(ctx context.Context, fn *v1.Function, lost []string, since time.Time) (bool, error) {
-	l, err := r.store.List(ctx, v1.KindRestore.GVK(), store.ListOptions{Namespace: fn.Namespace})
+// volumesRestoredSince reports that Succeeded Restores created at or after since loaded every lost volume into w.
+func (r *Reconciler) volumesRestoredSince(ctx context.Context, w workload, lost []string, since time.Time) (bool, error) {
+	ns, name := w.meta().Namespace, w.meta().Name
+	l, err := r.store.List(ctx, v1.KindRestore.GVK(), store.ListOptions{Namespace: ns})
 	if err != nil {
-		return false, fault.Wrapf(err, fault.KindOf(err), "function.dataMissing", "list restores in %q", fn.Namespace)
+		return false, fault.Wrapf(err, fault.KindOf(err), "function.dataMissing", "list restores in %q", ns)
 	}
 	restored := map[string]bool{}
 	for _, o := range l.Items {
@@ -610,7 +631,7 @@ func (r *Reconciler) volumesRestoredSince(ctx context.Context, fn *v1.Function, 
 			continue
 		}
 		for _, m := range rs.Spec.Members {
-			if m.Kind == v1.KindFunction && m.Volume != "" && cmp.Or(m.As, m.Name) == fn.Name {
+			if m.Kind == w.kind() && m.Volume != "" && cmp.Or(m.As, m.Name) == name {
 				restored[string(m.Volume)] = true
 			}
 		}
@@ -649,7 +670,7 @@ func (r *Reconciler) DeleteVolume(ctx context.Context, ns v1.NamespaceName, fn, 
 	if err != nil {
 		return err
 	}
-	id := volume.ID{Namespace: ns, Function: fn, Name: name}
+	id := volume.ID{Namespace: ns, Kind: v1.KindFunction, Workload: fn, Name: name}
 	i := slices.IndexFunc(infos, func(in volume.Info) bool { return in.ID == id })
 	if i < 0 {
 		return fault.NotFoundf(op, "volume %s does not exist", id)
@@ -694,7 +715,7 @@ func (r *Reconciler) bookStoredVolumes(ctx context.Context) error {
 			if v.Type != v1.VolumeLocal {
 				continue
 			}
-			if err := r.volumes.Book(ctx, localID(fn, v.VolumeName()), v.Bytes()); err != nil {
+			if err := r.volumes.Book(ctx, localID(functionWorkload(fn), v.VolumeName()), v.Bytes()); err != nil {
 				r.logger.WarnContext(ctx, "a stored volume does not fit at boot", "namespace", fn.Namespace, "function", fn.Name, "volume", v.VolumeName(), "err", err)
 			}
 		}

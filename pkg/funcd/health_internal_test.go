@@ -69,7 +69,7 @@ func healthPlatform(t *testing.T, kv kvstore.KV, b blob.Bucket) *Platform {
 // dependencies asks the platform's invoke socket of fn for GET /health/dependencies, as a new shim's readiness does.
 func dependencies(t *testing.T, p *Platform, fn v1.ObjectName) (int, *local.DependencyReport) {
 	t.Helper()
-	sock, err := p.exec.sockets.SocketFor("default", fn)
+	sock, err := p.exec.sockets.SocketFor(local.FunctionRef("default", fn))
 	require.NoError(t, err)
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
@@ -95,7 +95,7 @@ func todoParts(t *testing.T, p *Platform) {
 	t.Helper()
 	ks := &v1.KVStore{TypeMeta: v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore}}
 	ks.Name, ks.Namespace, ks.ResourceGroup = "todo-store", "default", "rg1"
-	ks.Spec.Tables = []v1.KVTable{{Name: "todos", Owner: "todo-api"}}
+	ks.Spec.Tables = []v1.KVTable{{Name: "todos", Owner: v1.FunctionOwner("todo-api")}}
 	create(t, p.cfg.store, ks)
 	b := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	b.Name, b.Namespace, b.ResourceGroup = "todo-files", "default", "rg1"

@@ -76,7 +76,9 @@ func quarantineRig(t *testing.T) (*wbRig, *fileEngines, string) {
 	return r, engines, volRoot
 }
 
-func cartState() volume.ID { return volume.ID{Namespace: "orders", Function: "cart", Name: "state"} }
+func cartState() volume.ID {
+	return volume.ID{Namespace: "orders", Kind: v1.KindFunction, Workload: "cart", Name: "state"}
+}
 
 func cartStateRef() quarantine.Ref {
 	return quarantine.Ref{ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Namespace: "orders", Name: "cart"}, Volume: "state"}

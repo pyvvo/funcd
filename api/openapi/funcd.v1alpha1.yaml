@@ -1401,11 +1401,8 @@ components:
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                       type: string
                     owner:
-                      description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-                      maxLength: 63
-                      minLength: 1
-                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-                      type: string
+                      $ref: "#/components/schemas/WorkloadRef"
+                      description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
                     quota:
                       $ref: "#/components/schemas/SizeQuota"
                       description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -1806,11 +1803,8 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               owner:
-                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-                maxLength: 63
-                minLength: 1
-                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-                type: string
+                $ref: "#/components/schemas/WorkloadRef"
+                description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
               quota:
                 $ref: "#/components/schemas/SizeQuota"
                 description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -2129,11 +2123,8 @@ components:
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                       type: string
                     owner:
-                      description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-                      maxLength: 63
-                      minLength: 1
-                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-                      type: string
+                      $ref: "#/components/schemas/WorkloadRef"
+                      description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
                     quota:
                       $ref: "#/components/schemas/SizeQuota"
                       description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -2678,8 +2669,8 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         owner:
-          $ref: "#/components/schemas/PrefixOwner"
-          description: The one Function or Lake that may write the prefix, besides the writers that a RolesAssignment names. In a Bucket that a Function or a Lake declares by name, an omitted owner is that Function or Lake. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one.
+          $ref: "#/components/schemas/WorkloadRef"
+          description: The one Function, Lake or Job that may write the prefix, named with its kind, besides the writers that a RolesAssignment names. In a Bucket that a Function, a Lake or a Job declares by name, an omitted owner is that workload. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one.
         quota:
           $ref: "#/components/schemas/SizeQuota"
           description: "A cap on the prefix's total size: a write into the prefix must fit both this cap and the Bucket's, and while it is set funcd refuses to sign a presigned PUT URL into the prefix, with 403. It also caps a Lake's files under the prefix, though not the Lake's catalog."
@@ -2995,12 +2986,9 @@ components:
       additionalProperties: false
       properties:
         appliesTo:
-          description: The Functions of the namespace, by name, that the rules apply to; empty applies them to every Function of the namespace.
+          description: The Functions and Jobs of the namespace that the rules apply to, each named with its kind; empty applies them to every Function of the namespace and to no Job.
           items:
-            maxLength: 63
-            minLength: 1
-            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-            type: string
+            $ref: "#/components/schemas/WorkloadRef"
           type:
             - array
             - "null"
@@ -3193,7 +3181,7 @@ components:
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         report:
-          description: "The report of funcd restore run, as it wrote restore.json: the generation that it loaded, the counts of its objects per kind, and the WorkflowRuns that it paused. Absent when no restore wrote one."
+          description: "The report of funcd restore run, as it wrote restore.json: the generation that it loaded, the counts of its objects per kind, the WorkflowRuns that it paused and the JobRuns that it cancelled. Absent when no restore wrote one."
         sqlOrphans:
           description: The SQL databases that do not exist and whose directory funcd still holds, each as <namespace>/<name>.
           items:
@@ -3772,11 +3760,8 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               owner:
-                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-                maxLength: 63
-                minLength: 1
-                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-                type: string
+                $ref: "#/components/schemas/WorkloadRef"
+                description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
               quota:
                 $ref: "#/components/schemas/SizeQuota"
                 description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -4110,6 +4095,485 @@ components:
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
       type: object
+    Job:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/JobSpec"
+        status:
+          $ref: "#/components/schemas/JobStatus"
+      required:
+        - metadata
+        - spec
+        - apiVersion
+        - kind
+      type: object
+    JobRun:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/JobRunSpec"
+        status:
+          $ref: "#/components/schemas/JobRunStatus"
+      required:
+        - metadata
+        - spec
+        - apiVersion
+        - kind
+      type: object
+    JobRunSpec:
+      additionalProperties: false
+      properties:
+        cancel:
+          description: "When true, the run is cancelled: a run that has not started ends Cancelled, and a running one has its worker stopped first, though its handler may have done part of its work. It may only turn true, and a run that has ended ignores it. funcdctl job cancel sets it."
+          type: boolean
+        input:
+          description: The run input, the data of the event that the handler receives. Over job.payloadLimit bytes, or off the input schema in the Job's status.contract, it is refused when the run is created. It is fixed once the run is created.
+        job:
+          description: The Job to run, in the run's namespace, fixed once the run is created. The run waits in Pending while that Job is missing or not Ready.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - job
+      type: object
+    JobRunStatus:
+      additionalProperties: false
+      properties:
+        conditions:
+          description: The conditions that explain the phase.
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        endedAt:
+          description: When the run ended.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        imageDigest:
+          description: The digest of the image of the pinned Revision.
+          type: string
+        jobRevision:
+          description: "The Revision of the Job that the run runs, pinned when it starts: an edit of the Job during the run changes nothing for it."
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        jobUID:
+          description: The UID of the run's Job, set when the run is created if the Job exists, else when it starts. A run whose Job is deleted, or re-created under a new UID, is cancelled.
+          type: string
+        observedGeneration:
+          description: The generation of the spec that funcd last acted on.
+          format: int64
+          type: integer
+        phase:
+          description: "Where the run is: Pending while it waits for its Job or for a free slot, Running while its worker runs the handler. Succeeded, Failed and Cancelled are final, and the Ready condition gives the reason."
+          enum:
+            - Pending
+            - Running
+            - Succeeded
+            - Failed
+            - Cancelled
+          type: string
+        result:
+          description: The handler's answer, once the run Succeeded.
+        startedAt:
+          description: When the run started running.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        startedBy:
+          description: The subject of the credential that created the run, which funcd sets; empty when there was none. It records who started the run and grants nothing.
+          type: string
+        traceId:
+          description: The run's W3C trace ID, 32 lowercase hex characters. funcdctl job logs reads the run's logs by it.
+          type: string
+      type: object
+    JobSpec:
+      additionalProperties: false
+      properties:
+        bindings:
+          $ref: "#/components/schemas/FunctionBindings"
+          description: "What the code may use: KV tables, Bucket prefixes, SQL databases, Lakes and Functions, each under an alias, and ConfigMaps and Secrets. A binding is the grant: a call on an alias with no binding is refused with 403. Each store, Lake, ConfigMap and Secret it names must be declared at the root, in this spec's kv, buckets, sql, lakes, configMaps or secrets."
+        buckets:
+          description: "The Buckets the Job declares: by name it creates and owns one, and a Bucket of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.blob binds only a declared Bucket."
+          items:
+            additionalProperties: false
+            properties:
+              deletion:
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
+                enum:
+                  - retain
+                  - delete
+                type: string
+              name:
+                description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              prefixes:
+                description: The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound.
+                items:
+                  $ref: "#/components/schemas/BucketPrefix"
+                type:
+                  - array
+                  - "null"
+              quota:
+                $ref: "#/components/schemas/BucketQuota"
+                description: Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403.
+              ref:
+                description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+            type: object
+          type:
+            - array
+            - "null"
+        concurrency:
+          description: "How many of the Job's runs may hold a worker at once: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued."
+          format: int64
+          maximum: 15
+          minimum: 1
+          type: integer
+        configMaps:
+          description: "The ConfigMaps the Job declares: by name it defines one from its data, which goes with the Job, by ref it uses an existing one. spec.bindings.config binds only a declared ConfigMap."
+          items:
+            additionalProperties: false
+            properties:
+              data:
+                additionalProperties:
+                  type: string
+                description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
+                type: object
+              name:
+                description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              ref:
+                description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+            type: object
+          type:
+            - array
+            - "null"
+        handler:
+          description: The name of the export that the shim calls once for each run, such as handle. A Job without one, or whose code has no such export, is not Ready, with ShapeInvalid.
+          pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
+          type: string
+        image:
+          description: "The OCI reference of the code's artifact: a registry reference with a tag or a digest, or an oci-layout:// reference to a layout on the server's disk. A Job whose image is missing, or cannot be resolved or pulled, starts no run."
+          type: string
+        imageDigest:
+          description: The sha256 digest that funcd pulls the image by and checks it against. Unset, funcd resolves the image to its digest when it creates the Revision of a new spec and keeps that digest, so a tag that moves later changes nothing.
+          pattern: ^sha256:[a-f0-9]{64}$
+          type: string
+        kv:
+          description: "The KVStores the Job declares: by name it creates and owns one, and a store of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.kv binds only a declared store."
+          items:
+            additionalProperties: false
+            properties:
+              deletion:
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
+                enum:
+                  - retain
+                  - delete
+                type: string
+              name:
+                description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              quota:
+                $ref: "#/components/schemas/KVStoreQuota"
+                description: Caps on the store's total size, on each value and on each key.
+              ref:
+                description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              tables:
+                description: The store's tables. A table is a key space that only its owner and the writers that a RolesAssignment names may write. Table names are unique within the store, and a store with no table has nothing a Function can write.
+                items:
+                  $ref: "#/components/schemas/KVTable"
+                type:
+                  - array
+                  - "null"
+            type: object
+          type:
+            - array
+            - "null"
+        lakes:
+          description: "The Lakes the Job declares: by name it creates one that goes with the Job, by ref it uses an existing one. spec.bindings.lake binds only a declared Lake, and a Lake declared by name declares nothing at its own root: it binds the Job's buckets, configMaps and secrets."
+          items:
+            additionalProperties: false
+            properties:
+              bindings:
+                $ref: "#/components/schemas/LakeBindings"
+                description: "What the Lake's engine uses: Bucket prefixes, and the ConfigMaps and Secrets of its environment."
+              buckets:
+                description: "The Buckets that a Lake applied on its own declares: by name the Lake creates the Bucket, an omitted prefix owner being the Lake, and a Bucket of that name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each Bucket that the Lake's bindings.blob names must be declared here. A lake that another resource declares sets none."
+                items:
+                  additionalProperties: false
+                  properties:
+                    deletion:
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
+                      enum:
+                        - retain
+                        - delete
+                      type: string
+                    name:
+                      description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    prefixes:
+                      description: The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound.
+                      items:
+                        $ref: "#/components/schemas/BucketPrefix"
+                      type:
+                        - array
+                        - "null"
+                    quota:
+                      $ref: "#/components/schemas/BucketQuota"
+                      description: Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403.
+                    ref:
+                      description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  type: object
+                type:
+                  - array
+                  - "null"
+              configMaps:
+                description: "The ConfigMaps that a Lake applied on its own declares: by name the Lake defines one, and a ConfigMap of its stored name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each ConfigMap that the Lake's bindings.config names must be declared here. A lake that another resource declares sets none."
+                items:
+                  additionalProperties: false
+                  properties:
+                    data:
+                      additionalProperties:
+                        type: string
+                      description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
+                      type: object
+                    name:
+                      description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    ref:
+                      description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  type: object
+                type:
+                  - array
+                  - "null"
+              ingress:
+                $ref: "#/components/schemas/Ingress"
+                description: Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/<name>, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself.
+              location:
+                $ref: "#/components/schemas/LakeLocation"
+                description: The Bucket prefix that holds the Lake's files, one of the Lake's bindings.blob. The Lake waits in Pending, with the reason PrefixNotOwned, until the prefix's owner is this Lake. The Lake's catalog is kept outside the Bucket, under the same location, so a Lake located where another was finds that Lake's files and catalog.
+              name:
+                description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              ref:
+                description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              resources:
+                $ref: "#/components/schemas/ResourceSpec"
+                description: The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine.
+              secrets:
+                description: The Secrets that a Lake applied on its own declares, with the keys its engine reads. Each Secret that the Lake's bindings.secret names must be declared here, and the Lake waits in Pending, with SecretNotFound or SecretKeyMissing, while one is missing or lacks a key. A lake that another resource declares sets none.
+                items:
+                  additionalProperties: false
+                  properties:
+                    description:
+                      description: What the Secret is for, for the installer who provides it.
+                      type: string
+                    keys:
+                      description: "The keys read from the Secret: its data must hold each of them."
+                      items:
+                        pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                        type: string
+                      minItems: 1
+                      type: array
+                    name:
+                      description: The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  required:
+                    - name
+                    - keys
+                  type: object
+                type:
+                  - array
+                  - "null"
+            type: object
+          type:
+            - array
+            - "null"
+        resources:
+          $ref: "#/components/schemas/ResourceSpec"
+          description: The CPU and memory caps of each run's worker; a field left empty takes functions.defaultResources. Only the containerd runtime enforces them.
+        runtime:
+          description: The runtime that runs the code, such as nodejs22 or python314. A Job without one is not Ready, with ShapeInvalid, and one whose runtime this node cannot run is not Ready, with RuntimeUnavailable.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        secrets:
+          description: The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Job waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key.
+          items:
+            additionalProperties: false
+            properties:
+              description:
+                description: What the Secret is for, for the installer who provides it.
+                type: string
+              keys:
+                description: "The keys read from the Secret: its data must hold each of them."
+                items:
+                  pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                  type: string
+                minItems: 1
+                type: array
+              name:
+                description: The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+            required:
+              - name
+              - keys
+            type: object
+          type:
+            - array
+            - "null"
+        sql:
+          description: "The SQLDatabases the Job declares: by name it creates and owns one, and a database of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.sql binds only a declared database."
+          items:
+            additionalProperties: false
+            properties:
+              deletion:
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
+                enum:
+                  - retain
+                  - delete
+                type: string
+              name:
+                description: The object's name. It takes the namespace and resource group of the resource that declares it.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              owner:
+                $ref: "#/components/schemas/WorkloadRef"
+                description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
+              quota:
+                $ref: "#/components/schemas/SizeQuota"
+                description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
+              ref:
+                description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              resources:
+                $ref: "#/components/schemas/ResourceSpec"
+                description: The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine.
+            type: object
+          type:
+            - array
+            - "null"
+        timeout:
+          description: "The bound on each call of a run's handler, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops."
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
+        volumes:
+          description: The directories each run's worker mounts. Apply refuses a Job with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A local volume is the Job's own, never a same-named Function's, and allows a concurrency of at most 1.
+          items:
+            $ref: "#/components/schemas/VolumeEntry"
+          type:
+            - array
+            - "null"
+      type: object
+    JobStatus:
+      additionalProperties: false
+      properties:
+        conditions:
+          description: The conditions that explain the phase.
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        contract:
+          $ref: "#/components/schemas/WorkflowContract"
+          description: The input and output schemas of the current Revision's image, read by its digest. A new run's input is checked against the input schema; an image with none holds the Job with ContractMissing.
+        currentRevision:
+          description: The Revision of the latest spec, named <job>-v<generation>. A run pins the current one when it starts, and keeps it until it ends.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        observedGeneration:
+          description: The generation of the spec that funcd last acted on.
+          format: int64
+          type: integer
+        phase:
+          description: Where the object is in its lifecycle.
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
+      type: object
     KVServiceSpec:
       additionalProperties: false
       properties:
@@ -4232,11 +4696,8 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         owner:
-          description: The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in one that a Workflow declares, it names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv.
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
+          $ref: "#/components/schemas/WorkloadRef"
+          description: The Function or Job that owns the table, in the store's namespace, named with its kind. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function or a Job declares, the owner defaults to that workload; in one that a Workflow declares, a Function owner names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every workload, the owner included, reaches the table through an entry of its spec.bindings.kv.
       required:
         - name
       type: object
@@ -5025,32 +5486,14 @@ components:
           description: "A worker id, a DNS-1123 label: Functions of the namespace that name it, run the same runtime, are in the same resource group and have the same bindings, owned data and grants share one worker, which status.pool names. Empty, the default, runs the Function solo. Only the process runtime pools, for node runtimes and, when the server's Python is 3.14 or later, python ones; anywhere else the Function runs solo too. A pool takes the first 16 Functions by name, and the others wait in Pending with PoolFull."
           type: string
       type: object
-    PrefixOwner:
-      additionalProperties: false
-      properties:
-        kind:
-          description: The writer's kind. A Function and a Lake may share a name, so the kind says which one writes.
-          enum:
-            - Function
-            - Lake
-          type: string
-        name:
-          description: The writer's name, in the Bucket's namespace. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares.
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
-      required:
-        - kind
-        - name
-      type: object
     PrincipalRef:
       additionalProperties: false
       properties:
         kind:
-          description: "The kind of the principal: a Function, or an Identity for a caller outside funcd."
+          description: "The kind of the principal: a Function, a Job, whose runs' workers act as it, or an Identity for a caller outside funcd."
           enum:
             - Function
+            - Job
             - Identity
           type: string
         name:
@@ -5417,31 +5860,36 @@ components:
       properties:
         function:
           $ref: "#/components/schemas/ObjectRef"
-          description: The Function whose spec this Revision snapshots.
+          description: The Function whose spec this Revision snapshots; unset on a Job's Revision. Exactly one of function and job is set.
         handler:
-          description: "The export that the Revision's workers call: the Function's spec.handler when funcd created the Revision."
+          description: "The export that the Revision's workers call: the spec.handler of its Function or Job when funcd created the Revision."
           pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
           type: string
         image:
-          description: "The artifact that the Revision's workers run: the Function's spec.image when funcd created the Revision."
+          description: "The artifact that the Revision's workers run: the spec.image of its Function or Job when funcd created the Revision."
           type: string
         imageDigest:
-          description: "The digest that the Revision's workers pull the image by: the Function's spec.imageDigest, or the digest that its image resolved to when funcd created the Revision. It never changes, even when a tag moves."
+          description: "The digest that the Revision's workers pull the image by: the spec.imageDigest of its Function or Job, or the digest that its image resolved to when funcd created the Revision. It never changes, even when a tag moves."
           pattern: ^sha256:[a-f0-9]{64}$
           type: string
+        job:
+          description: The Job whose spec this Revision snapshots, in the Revision's namespace; unset on a Function's Revision. A Job's Revision is named <job>-v<generation>. Exactly one of function and job is set.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
         number:
-          description: The generation of the Function's spec that this Revision snapshots.
+          description: The generation of the spec that this Revision snapshots.
           format: int64
           minimum: 1
           type: integer
         runtime:
-          description: "The runtime that the Revision's workers run: the Function's spec.runtime when funcd created the Revision."
+          description: "The runtime that the Revision's workers run: the spec.runtime of its Function or Job when funcd created the Revision."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
       required:
-        - function
         - number
       type: object
     RevisionStatus:
@@ -5824,11 +6272,8 @@ components:
       additionalProperties: false
       properties:
         owner:
-          description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
+          $ref: "#/components/schemas/WorkloadRef"
+          description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
         quota:
           $ref: "#/components/schemas/SizeQuota"
           description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -5976,11 +6421,8 @@ components:
           description: "The Secret's values by key, each in base64. Each key is an environment-variable name: a letter or an underscore, then letters, digits and underscores; a key that starts with FUNCD_ never reaches a workload. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a Secret holding another value does not start."
           type: object
         owner:
-          description: The one Function that may write the Secret's keys through ctx.secret, in its namespace, besides the writers that a RolesAssignment names, such as the Secret Data Writer role. The Function writes only while it binds the Secret. With no owner, only those writers can write it. An apply of the Secret replaces its data, keys a Function wrote included.
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
+          $ref: "#/components/schemas/WorkloadRef"
+          description: The one Function or Job that may write the Secret's keys through ctx.secret, in its namespace, named with its kind, besides the writers that a RolesAssignment names, such as the Secret Data Writer role. The owner writes only while it binds the Secret. With no owner, only those writers can write it. An apply of the Secret replaces its data, keys a workload wrote included.
         type:
           description: funcd does not read it.
           enum:
@@ -7007,11 +7449,8 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               owner:
-                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
-                maxLength: 63
-                minLength: 1
-                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-                type: string
+                $ref: "#/components/schemas/WorkloadRef"
+                description: The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it.
               quota:
                 $ref: "#/components/schemas/SizeQuota"
                 description: A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running.
@@ -7140,6 +7579,26 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
       required:
+        - name
+      type: object
+    WorkloadRef:
+      additionalProperties: false
+      properties:
+        kind:
+          description: The workload's kind. A Function, a Lake and a Job may share a name, so the kind says which one it is; each field names the kinds it accepts.
+          enum:
+            - Function
+            - Lake
+            - Job
+          type: string
+        name:
+          description: The workload's name, in the object's namespace.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - kind
         - name
       type: object
   securitySchemes:
@@ -12942,13 +13401,13 @@ paths:
                 $ref: "#/components/schemas/FaultError"
           description: |-
             - `urn:funcd:problem:conflict`: The Function has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Function again, apply the change to it, and send it with its new resourceVersion.
-            - `urn:funcd:problem:conflict`: Another Function's spec.bindings.links names the Function. Remove that link first.
+            - `urn:funcd:problem:conflict`: Another Function's or a Job's spec.bindings.links names the Function. Remove that link first.
           x-funcd-cases:
             - type: urn:funcd:problem:conflict
               when: The Function has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
               fix: Read the Function again, apply the change to it, and send it with its new resourceVersion.
             - type: urn:funcd:problem:conflict
-              when: Another Function's spec.bindings.links names the Function.
+              when: Another Function's or a Job's spec.bindings.links names the Function.
               fix: Remove that link first.
         "422":
           content:
@@ -14622,6 +15081,1254 @@ paths:
       summary: Replace an Invocation
       tags:
         - Invocation
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/jobruns:
+    get:
+      operationId: listJobRuns
+      parameters:
+        - description: The namespace whose objects the answer lists.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The namespace whose objects the answer lists.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/JobRun"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list JobRuns in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list JobRuns in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the JobRuns of a namespace
+      tags:
+        - JobRun
+    post:
+      operationId: createJobRun
+      parameters:
+        - description: Admit the write and store nothing.
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: Admit the write and store nothing.
+            type: boolean
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobRun"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRun"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create a JobRun in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create a JobRun in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: A JobRun of that name already exists in the namespace. Start a new run under another name: a run's spec.job and spec.input are fixed once it is created, so replacing the existing run cannot change them."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: A JobRun of that name already exists in the namespace.
+              fix: "Start a new run under another name: a run's spec.job and spec.input are fixed once it is created, so replacing the existing run cannot change them."
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body.
+            - `urn:funcd:problem:payload-too-large`: The run input in spec.input is larger than job.payloadLimit, 256 KiB by default. Send a smaller input, and pass large data by reference, such as the key of an object in a Bucket.
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+            - type: urn:funcd:problem:payload-too-large
+              when: The run input in spec.input is larger than job.payloadLimit, 256 KiB by default.
+              fix: Send a smaller input, and pass large data by reference, such as the key of an object in a Bucket.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
+            - `about:blank`: The run input in spec.input breaks the input schema in the Job's status.contract; the detail names each value that breaks it. Correct the values that the detail names.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives.
+            - type: about:blank
+              when: The run input in spec.input breaks the input schema in the Job's status.contract; the detail names each value that breaks it.
+              fix: Correct the values that the detail names.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create a JobRun
+      tags:
+        - JobRun
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/jobruns/{name}:
+    delete:
+      operationId: deleteJobRun
+      parameters:
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+          in: header
+          name: If-Match
+          schema:
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+            type: string
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete a JobRun in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete a JobRun in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No JobRun of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No JobRun of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The JobRun has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the JobRun again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The JobRun has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the JobRun again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete a JobRun
+      tags:
+        - JobRun
+    get:
+      operationId: getJobRun
+      parameters:
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRun"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read a JobRun in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read a JobRun in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No JobRun of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No JobRun of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a JobRun
+      tags:
+        - JobRun
+    put:
+      operationId: replaceJobRun
+      parameters:
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+          in: header
+          name: If-Match
+          schema:
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+            type: string
+        - description: Admit the write and store nothing.
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: Admit the write and store nothing.
+            type: boolean
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobRun"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRun"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: The body changes the run's spec.job or spec.input, which are fixed once the run is created, or turns spec.cancel back to false. Keep spec.job and spec.input, and start a new run under another name to run other input. A cancelled run stays cancelled.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: The body changes the run's spec.job or spec.input, which are fixed once the run is created, or turns spec.cancel back to false.
+              fix: Keep spec.job and spec.input, and start a new run under another name to run other input. A cancelled run stays cancelled.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace a JobRun in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace a JobRun in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No JobRun of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No JobRun of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The JobRun has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the JobRun again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The JobRun has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the JobRun again, apply the change to it, and send it with its new resourceVersion.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace a JobRun
+      tags:
+        - JobRun
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/jobruns/{name}/logs:
+    get:
+      operationId: getJobRunLogs
+      parameters:
+        - description: The run's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The run's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The run's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The run's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: "Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."
+          explode: false
+          in: query
+          name: since
+          schema:
+            description: "Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."
+            type: string
+        - description: "Only the lines at this level or above: trace, debug, info, warn, error or fatal."
+          explode: false
+          in: query
+          name: severity
+          schema:
+            description: "Only the lines at this level or above: trace, debug, info, warn, error or fatal."
+            type: string
+        - description: "The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: "The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogsOutputBody"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:invalid`: The since parameter is neither a duration, such as 15m, nor a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Send since in one of those two forms.
+            - `urn:funcd:problem:invalid`: The severity parameter is none of trace, debug, info, warn, error and fatal. Send one of those levels, or leave severity out.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The since parameter is neither a duration, such as 15m, nor a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z.
+              fix: Send since in one of those two forms.
+            - type: urn:funcd:problem:invalid
+              when: The severity parameter is none of trace, debug, info, warn, error and fatal.
+              fix: Send one of those levels, or leave severity out.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read JobRuns in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read JobRuns in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No JobRun of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No JobRun of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The limit parameter is not an integer. Send limit as a whole number.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The limit parameter is not an integer.
+              fix: Send limit as a whole number.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read the logs of a JobRun
+      tags:
+        - JobRun
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/jobs:
+    get:
+      operationId: listJobs
+      parameters:
+        - description: The namespace whose objects the answer lists.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The namespace whose objects the answer lists.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Job"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to list Jobs in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to list Jobs in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: List the Jobs of a namespace
+      tags:
+        - Job
+    post:
+      operationId: createJob
+      parameters:
+        - description: Admit the write and store nothing.
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: Admit the write and store nothing.
+            type: boolean
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Job"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: A link in spec.bindings.links names a Function that does not exist in the namespace. Apply the target Function first.
+            - `urn:funcd:problem:invalid`: A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not declare, such as a KVStore missing from spec.kv. Declare it in the spec, or bind one that it declares.
+            - `urn:funcd:problem:invalid`: The spec sets spec.volumes, and volumes are off on this daemon. Remove spec.volumes, or ask the operator to turn volumes on.
+            - `urn:funcd:problem:invalid`: A local volume's size differs from the size it was applied with: a volume is not resized. Keep the volume's size. A new size needs a new volume, under another name.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace is not the namespace of the path.
+              fix: Send the object to the path of its own namespace.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: A link in spec.bindings.links names a Function that does not exist in the namespace.
+              fix: Apply the target Function first.
+            - type: urn:funcd:problem:invalid
+              when: A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not declare, such as a KVStore missing from spec.kv.
+              fix: Declare it in the spec, or bind one that it declares.
+            - type: urn:funcd:problem:invalid
+              when: The spec sets spec.volumes, and volumes are off on this daemon.
+              fix: Remove spec.volumes, or ask the operator to turn volumes on.
+            - type: urn:funcd:problem:invalid
+              when: "A local volume's size differs from the size it was applied with: a volume is not resized."
+              fix: Keep the volume's size. A new size needs a new volume, under another name.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to create a Job in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to create a Job in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:conflict`: A Job of that name already exists in the namespace. Choose another name, or replace the existing Job.
+            - `urn:funcd:problem:conflict`: A local volume does not fit in the capacity that volumes.capacity sets, with the volumes reserved already. Delete the volumes that are no longer needed, or ask the operator to raise volumes.capacity.
+            - `urn:funcd:problem:conflict`: A local volume does not fit in the namespace's spec.volumeBudget, with the namespace's other volumes. Delete the namespace's volumes that are no longer needed, or ask an admin to raise its spec.volumeBudget.
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: A Job of that name already exists in the namespace.
+              fix: Choose another name, or replace the existing Job.
+            - type: urn:funcd:problem:conflict
+              when: A local volume does not fit in the capacity that volumes.capacity sets, with the volumes reserved already.
+              fix: Delete the volumes that are no longer needed, or ask the operator to raise volumes.capacity.
+            - type: urn:funcd:problem:conflict
+              when: A local volume does not fit in the namespace's spec.volumeBudget, with the namespace's other volumes.
+              fix: Delete the namespace's volumes that are no longer needed, or ask an admin to raise its spec.volumeBudget.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
+          x-funcd-cases:
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: The namespace in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Create a Job
+      tags:
+        - Job
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/jobs/{name}:
+    delete:
+      operationId: deleteJob
+      parameters:
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+          in: header
+          name: If-Match
+          schema:
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+            type: string
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as \"42\", or *. Send one If-Match line with the quoted resourceVersion, or *."
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to delete a Job in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to delete a Job in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Job of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Job of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:conflict`: The Job has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Job again, apply the change to it, and send it with its new resourceVersion."
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Job has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Job again, apply the change to it, and send it with its new resourceVersion.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Delete a Job
+      tags:
+        - Job
+    get:
+      operationId: getJob
+      parameters:
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to read a Job in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to read a Job in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Job of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Job of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit."
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Read a Job
+      tags:
+        - Job
+    put:
+      operationId: replaceJob
+      parameters:
+        - description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+          in: header
+          name: If-Match
+          schema:
+            description: "One strong entity-tag, the quoted resourceVersion, or *: the write is conditional on it."
+            type: string
+        - description: Admit the write and store nothing.
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: Admit the write and store nothing.
+            type: boolean
+        - description: The object's namespace.
+          in: path
+          name: namespace
+          required: true
+          schema:
+            description: The object's namespace.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: The object's name.
+          in: path
+          name: name
+          required: true
+          schema:
+            description: The object's name.
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Job"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:invalid`: The If-Match header is not one strong entity-tag, such as "42", or *. Send one If-Match line with the quoted resourceVersion, or *.
+            - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
+            - `urn:funcd:problem:invalid`: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Send the object to its own path, with at most one version.
+            - `about:blank`: The body is missing or is not JSON. Send a JSON body.
+            - `urn:funcd:problem:invalid`: A link in spec.bindings.links names a Function that does not exist in the namespace. Apply the target Function first.
+            - `urn:funcd:problem:invalid`: A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not declare, such as a KVStore missing from spec.kv. Declare it in the spec, or bind one that it declares.
+            - `urn:funcd:problem:invalid`: The spec sets spec.volumes, and volumes are off on this daemon. Remove spec.volumes, or ask the operator to turn volumes on.
+            - `urn:funcd:problem:invalid`: A local volume's size differs from the size it was applied with: a volume is not resized. Keep the volume's size. A new size needs a new volume, under another name.
+          x-funcd-cases:
+            - type: urn:funcd:problem:invalid
+              when: The If-Match header is not one strong entity-tag, such as "42", or *.
+              fix: Send one If-Match line with the quoted resourceVersion, or *.
+            - type: urn:funcd:problem:invalid
+              when: A field breaks a rule that the schema cannot hold, which the detail names.
+              fix: Correct the field that the detail names.
+            - type: urn:funcd:problem:invalid
+              when: The body's metadata.namespace or metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions.
+              fix: Send the object to its own path, with at most one version.
+            - type: about:blank
+              when: The body is missing or is not JSON.
+              fix: Send a JSON body.
+            - type: urn:funcd:problem:invalid
+              when: A link in spec.bindings.links names a Function that does not exist in the namespace.
+              fix: Apply the target Function first.
+            - type: urn:funcd:problem:invalid
+              when: A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not declare, such as a KVStore missing from spec.kv.
+              fix: Declare it in the spec, or bind one that it declares.
+            - type: urn:funcd:problem:invalid
+              when: The spec sets spec.volumes, and volumes are off on this daemon.
+              fix: Remove spec.volumes, or ask the operator to turn volumes on.
+            - type: urn:funcd:problem:invalid
+              when: "A local volume's size differs from the size it was applied with: a volume is not resized."
+              fix: Keep the volume's size. A new size needs a new volume, under another name.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unauthorized`: The request carries no bearer token or API key, or one that funcd does not know. Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unauthorized
+              when: The request carries no bearer token or API key, or one that funcd does not know.
+              fix: Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key.
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:forbidden`: The credential's role or namespaces do not allow it to replace a Job in the namespace. Use a credential whose role allows it, such as a developer of the namespace or an admin."
+          x-funcd-cases:
+            - type: urn:funcd:problem:forbidden
+              when: The credential's role or namespaces do not allow it to replace a Job in the namespace.
+              fix: Use a credential whose role allows it, such as a developer of the namespace or an admin.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: No Job of that name exists in the namespace. Check the name and the namespace."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: No Job of that name exists in the namespace.
+              fix: Check the name and the namespace.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:conflict`: The Job has changed since the resourceVersion that If-Match or metadata.resourceVersion names. Read the Job again, apply the change to it, and send it with its new resourceVersion.
+            - `urn:funcd:problem:conflict`: A local volume does not fit in the capacity that volumes.capacity sets, with the volumes reserved already. Delete the volumes that are no longer needed, or ask the operator to raise volumes.capacity.
+            - `urn:funcd:problem:conflict`: A local volume does not fit in the namespace's spec.volumeBudget, with the namespace's other volumes. Delete the namespace's volumes that are no longer needed, or ask an admin to raise its spec.volumeBudget.
+          x-funcd-cases:
+            - type: urn:funcd:problem:conflict
+              when: The Job has changed since the resourceVersion that If-Match or metadata.resourceVersion names.
+              fix: Read the Job again, apply the change to it, and send it with its new resourceVersion.
+            - type: urn:funcd:problem:conflict
+              when: A local volume does not fit in the capacity that volumes.capacity sets, with the volumes reserved already.
+              fix: Delete the volumes that are no longer needed, or ask the operator to raise volumes.capacity.
+            - type: urn:funcd:problem:conflict
+              when: A local volume does not fit in the namespace's spec.volumeBudget, with the namespace's other volumes.
+              fix: Delete the namespace's volumes that are no longer needed, or ask an admin to raise its spec.volumeBudget.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:payload-too-large`: The body is larger than 1 MiB. Send a smaller body."
+          x-funcd-cases:
+            - type: urn:funcd:problem:payload-too-large
+              when: The body is larger than 1 MiB.
+              fix: Send a smaller body.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The Content-Type of the body is not JSON. Send the body as application/json."
+          x-funcd-cases:
+            - type: about:blank
+              when: The Content-Type of the body is not JSON.
+              fix: Send the body as application/json.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `about:blank`: The namespace or the name in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
+            - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
+          x-funcd-cases:
+            - type: about:blank
+              when: The namespace or the name in the path is not a DNS-1123 label.
+              fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+            - type: about:blank
+              when: The query holds a parameter that the operation does not take.
+              fix: Send only the parameters that the operation lists.
+            - type: about:blank
+              when: The dryRun parameter is neither true nor false.
+              fix: Send dryRun=true, or leave it out.
+            - type: about:blank
+              when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
+              fix: Correct the field at the location that the detail gives.
+      security:
+        - bearer: []
+        - apiKey: []
+      summary: Replace a Job
+      tags:
+        - Job
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores:
     get:
       operationId: listKVStores

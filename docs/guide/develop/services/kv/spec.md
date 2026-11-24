@@ -35,7 +35,14 @@ This page lists the spec and status fields of KVStore, each with its type, its l
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `name` | string, required, a DNS-1123 label | The table's name, unique within the store. |
-| `owner` | string, a DNS-1123 label | The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in one that a Workflow declares, it names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv. |
+| `owner` | object, [`KVStore.spec.tables[].owner`](#kvstorespectablesowner) | The Function or Job that owns the table, in the store's namespace, named with its kind. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function or a Job declares, the owner defaults to that workload; in one that a Workflow declares, a Function owner names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every workload, the owner included, reaches the table through an entry of its spec.bindings.kv. |
+
+### `KVStore.spec.tables[].owner`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `kind` | string, required, one of `Function`, `Lake`, `Job` | The workload's kind. A Function, a Lake and a Job may share a name, so the kind says which one it is; each field names the kinds it accepts. |
+| `name` | string, required, a DNS-1123 label | The workload's name, in the object's namespace. |
 
 ### `KVStore.status`
 

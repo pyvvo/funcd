@@ -72,7 +72,7 @@ func TestQuarantineMovesLeafThenMeta(t *testing.T) {
 	if _, err := m.Quarantine().Move(ctx, id, qnow().Add(time.Second)); fault.KindOf(err) != fault.NotFound {
 		t.Fatalf("a second Move = %v, want NotFound: nothing is left", err)
 	}
-	if _, err := m.Quarantine().Move(ctx, ID{Namespace: "shop", Function: "cart", Name: "cache", Worker: "w1"}, qnow()); fault.KindOf(err) != fault.Invalid {
+	if _, err := m.Quarantine().Move(ctx, ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "cart", Name: "cache", Worker: "w1"}, qnow()); fault.KindOf(err) != fault.Invalid {
 		t.Fatalf("an emptyDir's Move = %v, want Invalid", err)
 	}
 }

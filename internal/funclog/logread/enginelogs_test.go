@@ -125,3 +125,32 @@ func TestEngineSegmentsCompactToParquet(t *testing.T) {
 	require.Equal(t, []string{"lake line", "stderr", "Lake", "sales", ""}, []string{lines[0].Body, lines[0].Source,
 		lines[0].Kind, lines[0].Name, lines[0].Function})
 }
+
+// ADR-0347 Decision 8: a run's shim worker's records are keyed by the kind JobRun and the run, apart from a same-named
+// Function's, under a shim worker's source label, not an engine's; the run's read finds them.
+func TestRunRecordsCarryAShimLabel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mem, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mem.Close() })
+	sink, err := funclog.NewBlobSink(funclog.Deps{Bucket: mem, Clock: clock.System()})
+	require.NoError(t, err)
+	run := funclog.Resource{Namespace: "default", Kind: "JobRun", Name: "hello-x1y2z", Replica: "0"}
+	require.NoError(t, sink.Append(ctx, run, funclog.Entry{Time: time.Now(), Severity: funclog.SevInfo, Body: "run line",
+		Source: funclog.SourceStdout}))
+	key, err := sink.Flush(ctx, run)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(key, "logs/default/jobruns.hello-x1y2z/"), key)
+	raw, err := mem.Get(ctx, key)
+	require.NoError(t, err)
+	for _, want := range []string{`{"key":"source","value":{"stringValue":"function"}}`, `{"key":"kind","value":{"stringValue":"JobRun"}}`,
+		`{"key":"name","value":{"stringValue":"hello-x1y2z"}}`} {
+		require.Contains(t, string(raw), want)
+	}
+	require.NoError(t, sink.Close())
+	lines, err := logread.NewBlobReader(mem).Read(ctx, logread.Query{Namespace: "default", Kind: "JobRun", Name: "hello-x1y2z"})
+	require.NoError(t, err)
+	require.Len(t, lines, 1)
+	require.Equal(t, "run line", lines[0].Body)
+}

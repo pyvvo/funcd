@@ -117,7 +117,7 @@ func sqlApp(version, api, migrate string) *v1.App {
 		ObjectMeta: v1.ObjectMeta{Name: "sqltodo", Namespace: "default", ResourceGroup: "rg1"},
 		Spec: v1.AppSpec{
 			Version: version,
-			SQL:     []v1.SQLDatabaseEntry{{Name: "todo-db", SQLDatabaseSpec: v1.SQLDatabaseSpec{Owner: "todo-api"}}},
+			SQL:     []v1.SQLDatabaseEntry{{Name: "todo-db", SQLDatabaseSpec: v1.SQLDatabaseSpec{Owner: v1.FunctionOwner("todo-api")}}},
 			Functions: []v1.AppFunction{
 				{Name: "todo-api", FunctionSpec: v1.FunctionSpec{
 					Runtime:  "nodejs22",
@@ -170,7 +170,7 @@ func TestScenarioAppInstallsDatabase(t *testing.T) {
 	e := startGC(t, funcd.WithSQLProviderRuntime(engines))
 	installSQL(t, e)
 	db := e.object(t, v1.KindSQLDatabase, "todo-db").(*v1.SQLDatabase)
-	require.Equal(t, v1.ObjectName("todo-api"), db.Spec.Owner)
+	require.Equal(t, v1.FunctionOwner("todo-api"), db.Spec.Owner)
 	marked, controlled := appRefs(db, e.app(t, "sqltodo"))
 	require.True(t, marked, "the App marks its database")
 	require.False(t, controlled, "deletion retain: no controller reference")

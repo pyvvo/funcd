@@ -75,7 +75,7 @@ func (s *FunctionSpec) validateVolumes(op string) error {
 	for i, v := range s.Volumes {
 		path := fmt.Sprintf("spec.volumes[%d]", i)
 		if (v.Name == "") == (v.Ref == "") {
-			return fault.Invalidf(op, "%s sets %s: want exactly one of name and ref", path, setNames(v.Name != "", v.Ref != ""))
+			return fault.Invalidf(op, "%s sets %s: want exactly one of name and ref", path, bothOrNeither(v.Name != "", "name", "ref"))
 		}
 		n := v.VolumeName()
 		if !dnsLabel.MatchString(string(n)) {
@@ -105,7 +105,7 @@ func (s *FunctionSpec) validateVolumes(op string) error {
 		}
 		switch {
 		case (v.Size == "") == (v.SizeBytes == 0):
-			return fault.Invalidf(op, "%s sets %s: want exactly one of size and sizeBytes", path, sizeForms(v))
+			return fault.Invalidf(op, "%s sets %s: want exactly one of size and sizeBytes", path, bothOrNeither(v.Size != "", "size", "sizeBytes"))
 		case v.Size != "":
 			n, err := v.Size.Bytes()
 			if err != nil {
@@ -130,18 +130,10 @@ func (s *FunctionSpec) validateVolumes(op string) error {
 	return nil
 }
 
-func sizeForms(v VolumeEntry) string {
-	if v.Size != "" {
-		return "both size and sizeBytes"
+// bothOrNeither names what a pair of exclusive fields sets when it sets both or neither: set is whether a is set.
+func bothOrNeither(set bool, a, b string) string {
+	if set {
+		return "both " + a + " and " + b
 	}
-	return "neither size nor sizeBytes"
-}
-
-func setNames(name, ref bool) string {
-	switch {
-	case name && ref:
-		return "both name and ref"
-	default:
-		return "neither name nor ref"
-	}
+	return "neither " + a + " nor " + b
 }

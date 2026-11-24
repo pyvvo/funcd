@@ -53,7 +53,7 @@ func TestManager_EnsureProxiesThroughToEngine(t *testing.T) {
 	// a granted Function token, driven through the proxy addr, reaches the stub with the token swapped.
 	// The injected value is bare host:port (the handler prepends quack://); the proxy speaks HTTP, so we
 	// dial http://<addr> here.
-	granted, grantedErr := DeriveLakeToken(master, "data", "analytics")
+	granted, grantedErr := DeriveLakeToken(master, "data", v1.KindFunction, "analytics")
 	require.NoError(t, grantedErr)
 	resp, err := http.Post("http://"+url, "application/octet-stream", strings.NewReader(string(makeHandshake(granted))))
 	require.NoError(t, err)
@@ -110,7 +110,7 @@ func TestManager_EnsureKeepsURLWhenEngineMoves(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, url1, url2, "the engine moved, but the proxy URL consumers hold is unchanged")
 
-	granted, err := DeriveLakeToken(master, "data", "analytics")
+	granted, err := DeriveLakeToken(master, "data", v1.KindFunction, "analytics")
 	require.NoError(t, err)
 	resp, err := http.Post("http://"+url1, "application/octet-stream", strings.NewReader(string(makeHandshake(granted))))
 	require.NoError(t, err)
@@ -197,7 +197,7 @@ func TestIssue379_ProxyLogsThroughManagerLogger(t *testing.T) {
 	require.Contains(t, logs.String(), `"msg":"lake PEP: unresolved credential"`, "the debug line reaches the injected logger")
 	require.Contains(t, logs.String(), `"component":"lake.gateway"`)
 
-	granted, err := DeriveLakeToken(master, "data", "analytics")
+	granted, err := DeriveLakeToken(master, "data", v1.KindFunction, "analytics")
 	require.NoError(t, err)
 	require.Equal(t, http.StatusServiceUnavailable, post(granted))
 	require.Empty(t, stdlog.String(), "nothing is logged through the stdlib log package")
@@ -228,7 +228,7 @@ func TestIssue531_EngineCallsSurviveDefaultTransportCloseIdle(t *testing.T) {
 	t.Cleanup(mgr.Shutdown)
 	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}, up.URL, engineToken, "")
 	require.NoError(t, err)
-	granted, err := DeriveLakeToken(master, "data", "analytics")
+	granted, err := DeriveLakeToken(master, "data", v1.KindFunction, "analytics")
 	require.NoError(t, err)
 	query := func() {
 		resp, perr := http.Post("http://"+url, "application/octet-stream", bytes.NewReader(makeHandshake(granted)))

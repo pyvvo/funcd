@@ -584,13 +584,13 @@ func (r *Reconciler) resolveBucketRefs(ctx context.Context, cs *v1.Lake) (reason
 	if lerr != nil {
 		return "", "", fault.Wrapf(lerr, fault.KindOf(lerr), op, "list buckets in %q", cs.Namespace)
 	}
-	prefixes := map[v1.ObjectName]map[string]v1.PrefixOwner{} // bucket name → its prefixes' owners
+	prefixes := map[v1.ObjectName]map[string]v1.WorkloadRef{} // bucket name → its prefixes' owners
 	for _, o := range bl.Items {
 		b, ok := o.(*v1.Bucket)
 		if !ok {
 			continue
 		}
-		set := make(map[string]v1.PrefixOwner, len(b.Spec.Prefixes))
+		set := make(map[string]v1.WorkloadRef, len(b.Spec.Prefixes))
 		for _, p := range b.Spec.Prefixes {
 			set[p.Name] = p.Owner
 		}

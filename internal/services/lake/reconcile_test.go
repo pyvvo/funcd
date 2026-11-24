@@ -1344,13 +1344,13 @@ func TestScenarioLakeEngineRenewalAge(t *testing.T) {
 func TestScenarioLakeOffItsOwnPrefixIsHeld(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
-		owner v1.PrefixOwner
+		owner v1.WorkloadRef
 		names string
 	}{
 		"a Function's":                 {v1.FunctionOwner("f"), `Function "f"`},
 		"another Lake's":               {v1.LakeOwner("other"), `Lake "other"`},
 		"a Function's of its own name": {v1.FunctionOwner("lake"), `Function "lake"`},
-		"no owner":                     {v1.PrefixOwner{}, "no owner"},
+		"no owner":                     {v1.WorkloadRef{}, "no owner"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

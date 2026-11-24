@@ -33,7 +33,7 @@ func recordingDataPlane(got *[]http.Header, body string) http.Handler {
 // brokerInvoke sends POST /invoke/greeter through NewHandler over inv, with a traceparent when tp is set.
 func brokerInvoke(t *testing.T, inv Invoker, tp string) *httptest.ResponseRecorder {
 	t.Helper()
-	caller, target := Ref{Namespace: "default", Function: "front"}, Ref{Namespace: "default", Function: "greeter"}
+	caller, target := FunctionRef("default", "front"), FunctionRef("default", "greeter")
 	h := NewHandler(caller, staticResolver{target: target}, inv, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/invoke/greeter", strings.NewReader(`{"name":"x"}`))
 	if tp != "" {

@@ -2,13 +2,10 @@ package workflow
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"maps"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,35 +13,9 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/funclog"
 	"github.com/pyvvo/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
-
-// mintTraceContext returns a fresh W3C trace context (ADR-0102): a 16-byte trace-id and an 8-byte
-// span-id, lowercase hex. Used once per run at start; the same context propagates to every step so a
-// run is one trace. On the near-impossible crypto/rand error it returns empty strings (the caller
-// proceeds with no traceparent — additive, never failing the run).
-func mintTraceContext() (traceID, rootSpanID string) {
-	var t [16]byte
-	var s [8]byte
-	if _, err := rand.Read(t[:]); err != nil {
-		return "", ""
-	}
-	if _, err := rand.Read(s[:]); err != nil {
-		return "", ""
-	}
-	return hex.EncodeToString(t[:]), hex.EncodeToString(s[:])
-}
-
-// mintSpanID returns a fresh 8-byte span-id as hex16 (ADR-0105): the engine mints one per DAG step so a
-// successor can parent on it. "" on the near-impossible crypto/rand error (the step then falls back to
-// minting its own span-id in the shim — additive, never failing the run).
-func mintSpanID() string {
-	var s [8]byte
-	if _, err := rand.Read(s[:]); err != nil {
-		return ""
-	}
-	return hex.EncodeToString(s[:])
-}
 
 // stepSpanID returns the pre-minted span-id of a step by name (ADR-0105), from the scheduling state the run
 // record persists. "" if the step is absent or unassigned.
@@ -56,24 +27,6 @@ func stepSpanID(rs *runState, name v1.ObjectName) string {
 }
 
 const engineOp = "workflow.engine"
-
-// maxStatusError caps the step-level error string mirrored to WorkflowRun.status (ADR-0100): the
-// first line, truncated to this length. The full error/stack lives in the step's span + logs
-// (F51/ADR-0101), reachable via `funcdctl workflow logs <run>` (ADR-0106) — status stays bounded so a
-// pathological stack trace can never bloat the CRD.
-const maxStatusError = 512
-
-// capErr returns the first line of s truncated to maxStatusError, appending "…" when it truncated —
-// the bounded troubleshooting summary mirrored to status (ADR-0100).
-func capErr(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[:i]
-	}
-	if len(s) > maxStatusError {
-		return s[:maxStatusError] + "…"
-	}
-	return s
-}
 
 // setRunning stamps a step's start as it enters Running (ADR-0100 timings).
 func (e *Engine) setRunning(n *stepNode) {
@@ -95,7 +48,7 @@ func (e *Engine) markFailed(n *stepNode, cause error) {
 	n.phase = v1.StepFailed
 	n.endedAt = e.clock.Now().UnixNano()
 	if n.errMsg == "" && cause != nil {
-		n.errMsg = capErr(cause.Error())
+		n.errMsg = observability.StatusError(cause.Error())
 	}
 }
 
@@ -266,13 +219,13 @@ func (e *Engine) execute(ctx, stop context.Context, ns v1.NamespaceName, runName
 	// ADR-0105: pre-mint a span-id per DAG step so a successor parents on it (the nested DAG waterfall). The
 	// onFailure handler is excluded (dagSteps omits it) — nothing parents on it; it mints its own id in the shim.
 	for _, name := range rs.dagSteps() {
-		rs.steps[name].spanID = mintSpanID()
+		rs.steps[name].spanID = observability.NewSpanID()
 	}
 	// ADR-0107: stamp each function step's resolved digest-pinned image (the fidelity record a replay gates on).
 	stampRevisions(rs, spec, opts.StepImages)
 	// ADR-0102/0104: one W3C trace context per run. A top-level run mints a fresh trace; a sub-workflow child
 	// inherits the parent's TraceID (shared trace) but mints its OWN RootSpanID and nests under the parent.
-	traceID, rootSpanID := mintTraceContext()
+	traceID, rootSpanID := observability.NewTraceContext()
 	rootParentID := ""
 	if inheritTraceID != "" {
 		traceID = inheritTraceID         // share the parent's trace (one composition = one trace)
@@ -318,7 +271,7 @@ func (e *Engine) execute(ctx, stop context.Context, ns v1.NamespaceName, runName
 // a run that cannot be stored stays unrecorded, and its requeue must not fire the handler again. A record
 // over the run store's value limit is recorded without its input, like an over-cap input.
 func (e *Engine) failAtStart(ctx context.Context, run *activeRun, cause error) (*runstate.Record, error) {
-	run.rec.Phase, run.rec.Error = runFailed, capErr(cause.Error())
+	run.rec.Phase, run.rec.Error = runFailed, observability.StatusError(cause.Error())
 	err := e.persist(ctx, run)
 	if fault.KindOf(err) == fault.PayloadTooLarge && len(run.rec.Input) > 0 {
 		run.rec.Input = nil
@@ -419,7 +372,7 @@ func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 		}
 	}
 	// Build the new record: fresh trace, copy the source's pinned spec/contract/input, provenance.
-	traceID, rootSpanID := mintTraceContext()
+	traceID, rootSpanID := observability.NewTraceContext()
 	rec := &runstate.Record{
 		Namespace: ns, Name: runName, RunUID: runUID, Workflow: src.Workflow, Phase: runRunning, Input: src.Input,
 		Spec: spec, Contract: src.Contract, StepContracts: src.StepContracts, Depth: 0,
@@ -430,7 +383,7 @@ func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 	rec.ChildPins = restamp(src.ChildPins, freshChildren(src, seed.From), childImages) // ADR-0189: the source's pins
 	// Fresh span-ids for every DAG step (re-run/Pending steps use them); copied steps clear theirs below.
 	for _, name := range rs.dagSteps() {
-		rs.steps[name].spanID = mintSpanID()
+		rs.steps[name].spanID = observability.NewSpanID()
 	}
 	outputs := map[v1.ObjectName]json.RawMessage{}
 	for _, name := range rs.order {
@@ -1282,7 +1235,7 @@ func (e *Engine) dispatchStep(rctx, ctx context.Context, run *activeRun, n *step
 	pin, err := targetPin(run.rec, target)
 	if err != nil {
 		run.rs.mu.Lock()
-		n.errMsg = capErr(err.Error())
+		n.errMsg = observability.StatusError(err.Error())
 		run.rs.mu.Unlock()
 		return nil, Permanent(err)
 	}
@@ -1363,7 +1316,7 @@ func (e *Engine) dispatchStep(rctx, ctx context.Context, run *activeRun, n *step
 	// ADR-0100: stamp the BARE dispatch cause here (before this retry-wrap and fail()'s run-wrap), so
 	// describe names the step's actual error (e.g. "scorer returned 503"), not the engine envelope.
 	run.rs.mu.Lock()
-	n.errMsg = capErr(lastErr.Error())
+	n.errMsg = observability.StatusError(lastErr.Error())
 	run.rs.mu.Unlock()
 	if stopped != nil { // the backoff was ended by the step's context, a pause or the drain, not the step
 		return nil, stopped
@@ -1469,7 +1422,7 @@ func failureContextSchema() json.RawMessage {
 // fail finalizes a Failed run, invoking the onFailure handler once if present. The handler's call holds a
 // step-call slot and ends at its step timeout or the drain bound (ADR-0146).
 func (e *Engine) fail(ctx context.Context, run *activeRun, cause error) (*runstate.Record, error) {
-	run.rec.Phase, run.rec.Error = runFailed, capErr(cause.Error())
+	run.rec.Phase, run.rec.Error = runFailed, observability.StatusError(cause.Error())
 	if run.spec.OnFailure != "" {
 		fc, _ := json.Marshal(failureContext{
 			Workflow: run.rec.Workflow, Run: run.rec.Name, FailedStep: run.rs.failedStep(),

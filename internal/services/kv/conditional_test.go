@@ -27,7 +27,7 @@ func TestSweepFreesQuotaAtOnce(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: v1.FunctionOwner("fn"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	db := memory.New()
 	book := quota.NewBook(clock.System(), nil)
@@ -44,24 +44,24 @@ func TestSweepFreesQuotaAtOnce(t *testing.T) {
 	require.NoError(t, err)
 
 	value := []byte(strings.Repeat("v", 30))
-	won, err := f.PutIf(ctx, "default", "fn", "cache", "lease", value, kvstore.Write{IfAbsent: true, TTL: time.Second})
+	won, err := f.PutIf(ctx, "default", v1.FunctionOwner("fn"), "cache", "lease", value, kvstore.Write{IfAbsent: true, TTL: time.Second})
 	require.NoError(t, err)
 	require.True(t, won.Done, "default/s/t/lease and 30 bytes: 47 of 64")
 	book.Refresh(ctx)
 	measured := measures.Load()
-	lost, err := f.PutIf(ctx, "default", "fn", "cache", "lease", value, kvstore.Write{IfAbsent: true})
+	lost, err := f.PutIf(ctx, "default", v1.FunctionOwner("fn"), "cache", "lease", value, kvstore.Write{IfAbsent: true})
 	require.NoError(t, err)
 	require.False(t, lost.Done, "a lost claim is its result, never 507")
-	require.Equal(t, fault.InsufficientStorage, fault.KindOf(f.Put(ctx, "default", "fn", "cache", "b", value)))
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(f.Put(ctx, "default", v1.FunctionOwner("fn"), "cache", "b", value)))
 	require.Equal(t, measured, measures.Load(), "the lost claim was charged nothing, so the refusal needed no new measure")
 	require.Eventually(t, func() bool {
-		_, found, err := f.Get(ctx, "default", "fn", "cache", "lease")
+		_, found, err := f.Get(ctx, "default", v1.FunctionOwner("fn"), "cache", "lease")
 		return err == nil && !found
 	}, 4*time.Second, 20*time.Millisecond)
 	swept, err := kv.Sweep(ctx, db.(kvstore.Sweeper), book, hold.NeverNamespace, time.Now())
 	require.NoError(t, err)
 	require.Equal(t, []string{"default/s/t/lease"}, swept)
-	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "b", value), "the sweep's delete makes room at once")
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "cache", "b", value), "the sweep's delete makes room at once")
 }
 
 // heldIn holds the namespaces it names, as a Restore's hold does.

@@ -33,6 +33,7 @@ func putHeld(t *testing.T, st store.Store, fnPhase, revPhase v1.Phase) (held, cu
 		rev := obj.(*v1.Revision)
 		rev.Name, rev.Namespace, rev.ResourceGroup = name, "default", "rg1"
 		rev.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Name: "f"}, UID: uid, Controller: true}}
+		rev.Spec.Function = v1.ObjectRef{Kind: v1.KindFunction, Namespace: "default", Name: "f"}
 		if name == "f-1" {
 			rev.Status.Phase = revPhase
 			rev.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionFalse, Reason: "ShapeInvalid"})

@@ -81,7 +81,7 @@ This page lists the spec and status fields of Identity, Role, RolesAssignment, P
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `kind` | string, required, one of `Function`, `Identity` | The kind of the principal: a Function, or an Identity for a caller outside funcd. |
+| `kind` | string, required, one of `Function`, `Job`, `Identity` | The kind of the principal: a Function, a Job, whose runs' workers act as it, or an Identity for a caller outside funcd. |
 | `name` | string, required, a DNS-1123 label | The principal's name, in the RolesAssignment's namespace. funcd does not check that it exists. |
 
 ### `RolesAssignment.spec.scope`

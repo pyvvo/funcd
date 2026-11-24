@@ -35,7 +35,7 @@ func (p proxyInvoker) Invoke(ctx context.Context, target Ref, input []byte, time
 	// internal invoke is by name and is not subject to a namespace's exposure mode. Spoof-proof — the
 	// value is set here in-process; an external request on the public listener can't carry it.
 	cctx = dataplane.WithInternal(cctx)
-	req := httptest.NewRequest(http.MethodPost, "/function/"+string(target.Function), bytes.NewReader(dataplane.InvokeEnvelope(target.Namespace, target.Function, input))).WithContext(cctx)
+	req := httptest.NewRequest(http.MethodPost, "/function/"+string(target.Name), bytes.NewReader(dataplane.InvokeEnvelope(target.Namespace, target.Name, input))).WithContext(cctx)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(namespaceHeader, string(target.Namespace))
 	if tp := traceparentFrom(cctx); tp != "" { // the caller's CLIENT span, verbatim (ADR-0165)
@@ -71,8 +71,8 @@ func (p proxyInvoker) Fetch(ctx context.Context, target Ref, f FetchRequest, tim
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cctx = dataplane.WithInternal(cctx)
-	body := dataplane.HTTPEnvelope(target.Namespace, target.Function, f.Body)
-	req := httptest.NewRequest(f.Method, "/function/"+string(target.Function)+f.Path, bytes.NewReader(body)).WithContext(cctx)
+	body := dataplane.HTTPEnvelope(target.Namespace, target.Name, f.Body)
+	req := httptest.NewRequest(f.Method, "/function/"+string(target.Name)+f.Path, bytes.NewReader(body)).WithContext(cctx)
 	req.URL.RawQuery = f.RawQuery
 	for key, values := range f.Header {
 		for _, v := range values {

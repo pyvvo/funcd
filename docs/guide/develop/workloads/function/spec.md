@@ -111,15 +111,15 @@ This page lists the spec and status fields of Function, Revision and Invocation,
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `name` | string, required, a DNS-1123 label | The prefix's name, unique within the Bucket. Over S3, it is the first segment of each object's key. |
-| `owner` | object, [`Function.spec.buckets[].prefixes[].owner`](#functionspecbucketsprefixesowner) | The one Function or Lake that may write the prefix, besides the writers that a RolesAssignment names. In a Bucket that a Function or a Lake declares by name, an omitted owner is that Function or Lake. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one. |
+| `owner` | object, [`Function.spec.buckets[].prefixes[].owner`](#functionspecbucketsprefixesowner) | The one Function, Lake or Job that may write the prefix, named with its kind, besides the writers that a RolesAssignment names. In a Bucket that a Function, a Lake or a Job declares by name, an omitted owner is that workload. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one. |
 | `quota` | object, [`Function.spec.buckets[].prefixes[].quota`](#functionspecbucketsprefixesquota) | A cap on the prefix's total size: a write into the prefix must fit both this cap and the Bucket's, and while it is set funcd refuses to sign a presigned PUT URL into the prefix, with 403. It also caps a Lake's files under the prefix, though not the Lake's catalog. |
 
 ### `Function.spec.buckets[].prefixes[].owner`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `kind` | string, required, one of `Function`, `Lake` | The writer's kind. A Function and a Lake may share a name, so the kind says which one writes. |
-| `name` | string, required, a DNS-1123 label | The writer's name, in the Bucket's namespace. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares. |
+| `kind` | string, required, one of `Function`, `Lake`, `Job` | The workload's kind. A Function, a Lake and a Job may share a name, so the kind says which one it is; each field names the kinds it accepts. |
+| `name` | string, required, a DNS-1123 label | The workload's name, in the object's namespace. |
 
 ### `Function.spec.buckets[].prefixes[].quota`
 
@@ -185,7 +185,7 @@ This page lists the spec and status fields of Function, Revision and Invocation,
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `name` | string, required, a DNS-1123 label | The table's name, unique within the store. |
-| `owner` | string, a DNS-1123 label | The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in one that a Workflow declares, it names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv. |
+| `owner` | object, [`Function.spec.buckets[].prefixes[].owner`](#functionspecbucketsprefixesowner) | The Function or Job that owns the table, in the store's namespace, named with its kind. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function or a Job declares, the owner defaults to that workload; in one that a Workflow declares, a Function owner names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every workload, the owner included, reaches the table through an entry of its spec.bindings.kv. |
 
 ### `Function.spec.lakes[]`
 
@@ -277,7 +277,7 @@ This page lists the spec and status fields of Function, Revision and Invocation,
 | --- | --- | --- |
 | `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
-| `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it. |
+| `owner` | object, [`Function.spec.buckets[].prefixes[].owner`](#functionspecbucketsprefixesowner) | The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it. |
 | `quota` | object, [`Function.spec.buckets[].prefixes[].quota`](#functionspecbucketsprefixesquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 | `resources` | object, [`Function.spec.resources`](#functionspecresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
@@ -317,12 +317,13 @@ This page lists the spec and status fields of Function, Revision and Invocation,
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `function` | object, [`Revision.spec.function`](#revisionspecfunction), required | The Function whose spec this Revision snapshots. |
-| `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` | The export that the Revision's workers call: the Function's spec.handler when funcd created the Revision. |
-| `image` | string | The artifact that the Revision's workers run: the Function's spec.image when funcd created the Revision. |
-| `imageDigest` | string, a sha256 digest | The digest that the Revision's workers pull the image by: the Function's spec.imageDigest, or the digest that its image resolved to when funcd created the Revision. It never changes, even when a tag moves. |
-| `number` | integer, required, at least 1 | The generation of the Function's spec that this Revision snapshots. |
-| `runtime` | string, a DNS-1123 label | The runtime that the Revision's workers run: the Function's spec.runtime when funcd created the Revision. |
+| `function` | object, [`Revision.spec.function`](#revisionspecfunction) | The Function whose spec this Revision snapshots; unset on a Job's Revision. Exactly one of function and job is set. |
+| `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` | The export that the Revision's workers call: the spec.handler of its Function or Job when funcd created the Revision. |
+| `image` | string | The artifact that the Revision's workers run: the spec.image of its Function or Job when funcd created the Revision. |
+| `imageDigest` | string, a sha256 digest | The digest that the Revision's workers pull the image by: the spec.imageDigest of its Function or Job, or the digest that its image resolved to when funcd created the Revision. It never changes, even when a tag moves. |
+| `job` | string, a DNS-1123 label | The Job whose spec this Revision snapshots, in the Revision's namespace; unset on a Function's Revision. A Job's Revision is named &lt;job&gt;-v&lt;generation&gt;. Exactly one of function and job is set. |
+| `number` | integer, required, at least 1 | The generation of the spec that this Revision snapshots. |
+| `runtime` | string, a DNS-1123 label | The runtime that the Revision's workers run: the spec.runtime of its Function or Job when funcd created the Revision. |
 
 ### `Revision.spec.function`
 

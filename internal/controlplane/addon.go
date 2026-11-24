@@ -3,7 +3,6 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -392,7 +391,7 @@ func registerAddonObjects(api huma.API, h Handlers) {
 	huma.Register(api, ops.list, func(ctx context.Context, in *addonList) (*listOutput[v1.AddonObject], error) {
 		items, err := h.ListAddonObjects(ctx, in.Namespace, in.Plural)
 		if err != nil {
-			return nil, addonFault(err)
+			return nil, wrapFaultError(err)
 		}
 		return &listOutput[v1.AddonObject]{Body: items}, nil
 	})
@@ -412,7 +411,7 @@ func registerAddonObjects(api huma.API, h Handlers) {
 		return addonRespond(h.ReplaceAddonObject(withDryRun(ctx, in.DryRun), in.Namespace, in.Plural, in.Name, in.Body))
 	})
 	huma.Register(api, ops.remove, func(ctx context.Context, in *addonDelete) (*struct{}, error) {
-		return nil, addonFault(h.DeleteAddonObject(ctx, in.Namespace, in.Plural, in.Name, in.rv))
+		return nil, wrapFaultError(h.DeleteAddonObject(ctx, in.Namespace, in.Plural, in.Name, in.rv))
 	})
 }
 
@@ -487,18 +486,9 @@ func addonObjectOperations() restOperations {
 	return ops
 }
 
-// addonFault keeps a huma error, the 422 of a config that breaks its schema, and maps every other through api/fault.
-func addonFault(err error) error {
-	var fe *faultError
-	if errors.As(err, &fe) {
-		return fe
-	}
-	return wrapFaultError(err)
-}
-
 func addonRespond(o v1.AddonObject, err error) (*bodyOutput[v1.AddonObject], error) {
 	if err != nil {
-		return nil, addonFault(err)
+		return nil, wrapFaultError(err)
 	}
 	return &bodyOutput[v1.AddonObject]{Body: o}, nil
 }

@@ -36,6 +36,8 @@ func (h *shimHarness) createObj(t *testing.T, k v1.Kind, name string, change fun
 		o.Name, o.Namespace, o.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	case *v1.ConfigMap:
 		o.Name, o.Namespace, o.ResourceGroup = v1.ObjectName(name), "default", "rg1"
+	case *v1.SQLDatabase:
+		o.Name, o.Namespace, o.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	}
 	_, err := h.st.Create(context.Background(), obj)
 	require.NoError(t, err)
@@ -100,7 +102,7 @@ func TestScenarioPoolSplitsByGrant(t *testing.T) {
 		}, false},
 		{"egresspolicy", func(t *testing.T, h *shimHarness) {
 			h.createObj(t, v1.KindEgressPolicy, "ep", func(o v1.Object) {
-				o.(*v1.EgressPolicy).Spec = v1.EgressPolicySpec{Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"example.com"}}}}, AppliesTo: []v1.ObjectName{"b"}}
+				o.(*v1.EgressPolicy).Spec = v1.EgressPolicySpec{Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"example.com"}}}}, AppliesTo: []v1.WorkloadRef{v1.FunctionOwner("b")}}
 			})
 		}, false},
 		{"policy", func(t *testing.T, h *shimHarness) {

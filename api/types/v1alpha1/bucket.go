@@ -38,28 +38,12 @@ type BucketSpec struct {
 type BucketPrefix struct {
 	// Name is the key prefix; a DNS-1123 label, unique within the bucket. The medallion layer.
 	Name string `json:"name" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The prefix's name, unique within the Bucket. Over S3, it is the first segment of each object's key."`
-	// Owner is the single writer, a Function or a Lake in this bucket's namespace, named with its kind (ADR-0275).
-	// Zero ⇒ no writer (read-only).
-	Owner PrefixOwner `json:"owner,omitzero" doc:"The one Function or Lake that may write the prefix, besides the writers that a RolesAssignment names. In a Bucket that a Function or a Lake declares by name, an omitted owner is that Function or Lake. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one."`
+	// Owner is the single writer, a Function, a Lake or a Job in this bucket's namespace, named with its kind (ADR-0275,
+	// ADR-0351). Zero ⇒ no writer (read-only).
+	Owner WorkloadRef `json:"owner,omitzero" doc:"The one Function, Lake or Job that may write the prefix, named with its kind, besides the writers that a RolesAssignment names. In a Bucket that a Function, a Lake or a Job declares by name, an omitted owner is that workload. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one."`
 	// Quota caps the prefix's total size (ADR-0292); a Lake's prefix quota is the Lake's cap.
 	Quota SizeQuota `json:"quota,omitzero" doc:"A cap on the prefix's total size: a write into the prefix must fit both this cap and the Bucket's, and while it is set funcd refuses to sign a presigned PUT URL into the prefix, with 403. It also caps a Lake's files under the prefix, though not the Lake's catalog."`
 }
-
-// PrefixOwner is a Bucket prefix's single writer, named with its kind (ADR-0275): a Function and a Lake may share a
-// name (ADR-0152), so the name alone does not say which writes.
-type PrefixOwner struct {
-	Kind Kind       `json:"kind" enum:"Function,Lake" doc:"The writer's kind. A Function and a Lake may share a name, so the kind says which one writes."`
-	Name ObjectName `json:"name" doc:"The writer's name, in the Bucket's namespace. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares."`
-}
-
-// FunctionOwner names Function name as a prefix's owner.
-func FunctionOwner(name ObjectName) PrefixOwner { return PrefixOwner{Kind: KindFunction, Name: name} }
-
-// LakeOwner names Lake name as a prefix's owner.
-func LakeOwner(name ObjectName) PrefixOwner { return PrefixOwner{Kind: KindLake, Name: name} }
-
-// IsZero reports whether no owner is set.
-func (o PrefixOwner) IsZero() bool { return o == PrefixOwner{} }
 
 // GroupVersionKind returns the constant GVK for Bucket.
 func (b *Bucket) GroupVersionKind() GroupVersionKind { return KindBucket.GVK() }
@@ -69,8 +53,8 @@ func (b *Bucket) GetStatus() *Status { return &b.Status.Status }
 
 // Validate performs envelope validation via the shared validateMeta helper, then the BucketSpec rules
 // JSON Schema can't express: the quota (ADR-0292) and each prefix's; within the bucket, prefix names are
-// unique (⇒ a prefix has exactly one owner) and each is a DNS-1123 label; and a set owner names a Function or a
-// Lake by a DNS-1123 label (ADR-0275).
+// unique (⇒ a prefix has exactly one owner) and each is a DNS-1123 label; and a set owner names a Function, a Lake or
+// a Job by a DNS-1123 label (ADR-0275, ADR-0351).
 func (b *Bucket) Validate() error {
 	const op = "Bucket.Validate"
 	if err := validateMeta(b.TypeMeta, &b.ObjectMeta, KindBucket); err != nil {
@@ -91,26 +75,12 @@ func (b *Bucket) Validate() error {
 			return fault.Invalidf(op, "spec.prefixes name %q is duplicated", p.Name)
 		}
 		seen[p.Name] = true
-		if err := p.Owner.validate(op, "spec.prefixes owner of "+p.Name); err != nil {
+		if err := p.Owner.validate(op, "spec.prefixes owner of "+p.Name, KindFunction, KindLake, KindJob); err != nil {
 			return err
 		}
 		if err := p.Quota.Validate(op, "spec.prefixes quota of "+p.Name); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-// validate checks a set owner: kind Function or Lake, and a DNS-1123 label as its name.
-func (o PrefixOwner) validate(op, field string) error {
-	if o.IsZero() {
-		return nil
-	}
-	if o.Kind != KindFunction && o.Kind != KindLake {
-		return fault.Invalidf(op, "%s: kind %q is not Function or Lake", field, o.Kind)
-	}
-	if !dnsLabel.MatchString(string(o.Name)) {
-		return fault.Invalidf(op, "%s: name %q is not a valid DNS-1123 label", field, o.Name)
 	}
 	return nil
 }

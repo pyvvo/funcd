@@ -492,7 +492,7 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	if held != nil && held.ownerKind != spec.OwnerKind {
 		return runtime.Instance{}, fault.Conflictf(op, "instance %q is held by a %s worker", id, held.ownerKind)
 	}
-	ctrID, cniID := workerNames(string(spec.Namespace), string(spec.Name), string(spec.Revision), strconv.Itoa(spec.Replica))
+	ctrID, cniID := containerNames(spec.OwnerKind, string(spec.Namespace), string(spec.Name), string(spec.Revision), strconv.Itoa(spec.Replica))
 	nctx := d.nsCtx(ctx, spec.Namespace)
 
 	image, err := d.resolveImage(nctx, op, spec.Image)
@@ -562,7 +562,7 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	env := make(map[string]string, len(spec.Env)+1)
 	maps.Copy(env, spec.Env)
 	env["FUNCD_PORTFILE"] = containerBootDir + "/port"
-	if spec.OwnerKind != v1alpha1.KindFunction {
+	if !shimOwner(spec.OwnerKind) {
 		env[runtime.ReportFileEnv] = containerBootDir + "/" + reportFile
 	}
 	spec.Env = env
@@ -729,6 +729,21 @@ func workerNames(ns, name, revision, replica string) (ctrID, cniID string) {
 		return name + "-r" + replica, ns + "_" + name + "-r" + replica
 	}
 	return revision + ".r" + replica, ns + "." + revision + ".r" + replica
+}
+
+// containerNames is workerNames by owner kind. A run's one worker is named after the run (ADR-0347 Decision 5), since
+// the revision it pins is its Job's other runs' too; its ".run" end meets no ".r<replica>" and no unrevisioned name.
+func containerNames(kind v1alpha1.Kind, ns, name, revision, replica string) (ctrID, cniID string) {
+	if kind == v1alpha1.KindJobRun {
+		return name + ".run", ns + "." + name + ".run"
+	}
+	return workerNames(ns, name, revision, replica)
+}
+
+// shimOwner reports whether a worker of kind runs a runtime shim, which writes no report (ADR-0276): a Function's
+// and a run's (ADR-0347 Decision 5). Every other kind's worker runs an engine.
+func shimOwner(kind v1alpha1.Kind) bool {
+	return kind == v1alpha1.KindFunction || kind == v1alpha1.KindJobRun
 }
 
 // fixedPort reads the FUNCD_PORT the shim binds (ADR-0032 container mode); 0 if unset.
@@ -928,7 +943,7 @@ func (d *driver) discard(nctx context.Context, c containerd.Container) error {
 	}
 	if labels, lerr := c.Labels(nctx); lerr == nil {
 		ns, name, rep := labels["funcd/namespace"], labels["funcd/name"], labels["funcd/replica"]
-		_, cniID := workerNames(ns, name, labels["funcd/revision"], rep)
+		_, cniID := containerNames(v1alpha1.Kind(labels[ownerKindLabel]), ns, name, labels["funcd/revision"], rep)
 		d.release(nctx, cniID)
 		// An unrevisioned worker created before ADR-0179 is attached under <ns>-<name>-r<replica>.
 		if labels["funcd/revision"] == "" && ns != "" && name != "" && rep != "" {

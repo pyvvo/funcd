@@ -102,6 +102,8 @@ ends the sleep (ADR-0192). A `Revision` is read-only, one per spec change, and s
 | `maxRevisionName` | 63 | `internal/function/function.go` |
 | `probeTimeout` | `readinessPoll / 2` | `internal/function/function.go` |
 | `readinessPoll` | 200ms | `internal/function/function.go` |
+| `errorBodyMax` | 4KiB | `internal/function/jobexec.go` |
+| `runPoll` | 50ms | `internal/function/jobexec.go` |
 | `defaultLivenessTimeout` | 30s | `internal/function/liveness.go` |
 | `maxReadinessReply` | 64KiB | `internal/function/liveness.go` |
 | `defaultReadinessTimeout` | 5s | `internal/function/readiness.go` |

@@ -535,6 +535,83 @@ funcdctl inspect <ref>[@<digest>]
 Print a function artifact's I/O contract from its OCI metadata (no bundle pull, no run)
 ```
 
+## `funcdctl job`
+
+```text
+funcdctl job
+
+Run Jobs and read their runs (run|runs|logs|describe|cancel)
+```
+
+## `funcdctl job cancel`
+
+```text
+funcdctl job cancel <run> [flags]
+
+Cancel a run (sets spec.cancel; a running run's worker is stopped)
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `-n`, `--namespace` | string |  | namespace (default: default) |
+
+## `funcdctl job describe`
+
+```text
+funcdctl job describe <run> [flags]
+
+Show a run: phase, reason, revision, digest, who started it, its times and its result
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `-n`, `--namespace` | string |  | namespace (default: default) |
+| `-o`, `--output` | string |  | output format: rendered (default) or json |
+
+## `funcdctl job logs`
+
+```text
+funcdctl job logs <run> [flags]
+
+Print a run's logs: its worker's lines and those of the calls it made
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--limit` | int | `0` | max records to return, most-recent (default 1000) |
+| `-n`, `--namespace` | string |  | namespace (default: default) |
+| `-o`, `--output` | string |  | output format: wide (append source/inv/attrs inline) \| json |
+| `--severity` | string |  | minimum level: trace\|debug\|info\|warn\|error\|fatal |
+| `--since` | string |  | only logs since a duration ago (15m, 1h30m) or an RFC3339 time (2026-10-07T22:00:00Z) |
+
+## `funcdctl job run`
+
+```text
+funcdctl job run <job> [run-name] [flags]
+
+Start a run of a Job and print its name (omit run-name for a server-generated <job>-<id>)
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--input` | string |  | run input: inline JSON or @file (default: none) |
+| `-n`, `--namespace` | string |  | namespace (default: default) |
+| `--resource-group` | string | `default` | resource group |
+
+## `funcdctl job runs`
+
+```text
+funcdctl job runs <job> [flags]
+
+List a Job's runs (newest first; --phase to filter)
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `-n`, `--namespace` | string |  | namespace (default: default) |
+| `-o`, `--output` | string |  | output format: json |
+| `--phase` | string |  | filter by run phase (Pending\|Running\|Succeeded\|Failed\|Cancelled) |
+
 ## `funcdctl kvstore`
 
 ```text
@@ -660,7 +737,7 @@ Return an object's quarantined data into it. Apply the object again first: the r
 ```text
 funcdctl types -f <name>.contract.yaml [flags]
 
-Generate FuncInput/FuncOutput + binding types from a contract file and its Function (.py / .d.ts; DX-only)
+Generate FuncInput/FuncOutput (JobInput/JobOutput for a Job) + binding types from a contract file and its Function or Job (.py / .d.ts; DX-only)
 ```
 
 | Flag | Type | Default | Description |

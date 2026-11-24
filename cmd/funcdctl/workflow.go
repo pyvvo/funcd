@@ -140,7 +140,7 @@ func (a *cli) workflowRunCmd() *cobra.Command {
 		Short: "Start a workflow run (creates a WorkflowRun; omit run-name for a server-generated <workflow>-<id>)",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			raw, err := readInput(input)
+			raw, err := readInput("funcdctl workflow run", input)
 			if err != nil {
 				return err
 			}
@@ -312,27 +312,34 @@ func (a *cli) workflowCancelCmd() *cobra.Command {
 // renders a troubleshooting view: per step its phase · attempts · duration · error, the run trace-id,
 // and a pointer to the full logs (ADR-0100). `-o json` returns the raw object (the prior default).
 func (a *cli) workflowDescribeCmd() *cobra.Command {
+	return a.runDescribeCmd("workflow", v1.KindWorkflowRun, "Show a workflow run's per-step troubleshooting state (phase, attempts, duration, error)",
+		func(obj v1.Object) error { return a.renderRunDescribe(obj.(*v1.WorkflowRun)) })
+}
+
+// runDescribeCmd is `funcdctl <group> describe <run>`: it reads the run, an object of kind, and prints it with render,
+// or the object itself with `-o json`.
+func (a *cli) runDescribeCmd(group string, kind v1.Kind, short string, render func(v1.Object) error) *cobra.Command {
 	var ns, output string
 	cmd := &cobra.Command{
 		Use:   "describe <run>",
-		Short: "Show a workflow run's per-step troubleshooting state (phase, attempts, duration, error)",
+		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := checkOutput("funcdctl workflow describe", output, "json"); err != nil {
+			if err := checkOutput("funcdctl "+group+" describe", output, "json"); err != nil {
 				return err
 			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err
 			}
-			obj, err := c.Get(cmd.Context(), v1.KindWorkflowRun, v1.NamespaceName(nsOrDefault(ns)), v1.ObjectName(args[0]))
+			obj, err := c.Get(cmd.Context(), kind, v1.NamespaceName(nsOrDefault(ns)), v1.ObjectName(args[0]))
 			if err != nil {
 				return err
 			}
 			if output == "json" {
 				return a.renderObject(obj, true)
 			}
-			return a.renderRunDescribe(obj.(*v1.WorkflowRun))
+			return render(obj)
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
@@ -409,15 +416,15 @@ func nsOrDefault(ns string) string {
 	return ns
 }
 
-// readInput resolves a run-input flag: empty ⇒ nil, @file ⇒ the file's bytes, else the literal JSON.
-func readInput(in string) (json.RawMessage, error) {
+// readInput resolves a run-input flag of command op: empty ⇒ nil, @file ⇒ the file's bytes, else the literal JSON.
+func readInput(op, in string) (json.RawMessage, error) {
 	if in == "" {
 		return nil, nil
 	}
 	if strings.HasPrefix(in, "@") {
 		data, err := os.ReadFile(in[1:]) //nolint:gosec // path is a user-supplied CLI argument
 		if err != nil {
-			return nil, fault.Invalidf("funcdctl workflow run", "read input file %q: %v", in[1:], err)
+			return nil, fault.Invalidf(op, "read input file %q: %v", in[1:], err)
 		}
 		return data, nil
 	}

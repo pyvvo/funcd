@@ -69,50 +69,50 @@ type poolPort struct {
 	port string
 }
 
-func (p poolPort) record(ns v1.NamespaceName, fn v1.ObjectName) {
-	p.add(p.port + " " + string(ns) + "/" + string(fn))
+func (p poolPort) record(ns v1.NamespaceName, fn v1.WorkloadRef) {
+	p.add(p.port + " " + string(ns) + "/" + string(fn.Name))
 }
 
-func (p poolPort) Get(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _ string) ([]byte, bool, error) {
+func (p poolPort) Get(_ context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, _, _ string) ([]byte, bool, error) {
 	p.record(ns, fn)
 	return []byte("v"), true, nil
 }
 
-func (p poolPort) Put(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _ string, _ []byte) error {
+func (p poolPort) Put(_ context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, _, _ string, _ []byte) error {
 	p.record(ns, fn)
 	return nil
 }
 
-func (p poolPort) Delete(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _ string) error {
+func (p poolPort) Delete(_ context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, _, _ string) error {
 	p.record(ns, fn)
 	return nil
 }
 
-func (p poolPort) List(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _ string) ([]string, error) {
+func (p poolPort) List(_ context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, _, _ string) ([]string, error) {
 	p.record(ns, fn)
 	return nil, nil
 }
 
 type poolKV struct{ poolPort }
 
-func (p poolKV) GetEntry(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _ string) (kvstore.Entry, bool, error) {
+func (p poolKV) GetEntry(_ context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, _, _ string) (kvstore.Entry, bool, error) {
 	p.record(ns, fn)
 	return kvstore.Entry{Value: []byte("v"), Version: "t-1"}, true, nil
 }
 
-func (p poolKV) PutIf(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _ string, _ []byte, _ kvstore.Write) (kvstore.Result, error) {
+func (p poolKV) PutIf(_ context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, _, _ string, _ []byte, _ kvstore.Write) (kvstore.Result, error) {
 	p.record(ns, fn)
 	return kvstore.Result{Done: true, Version: "t-1"}, nil
 }
 
-func (p poolKV) DeleteIf(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _, _ string) (kvstore.Result, error) {
+func (p poolKV) DeleteIf(_ context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, _, _, _ string) (kvstore.Result, error) {
 	p.record(ns, fn)
 	return kvstore.Result{Done: true}, nil
 }
 
 type poolBlob struct{ poolPort }
 
-func (p poolBlob) SignedURL(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _ string, _ iblob.SignOptions) (string, error) {
+func (p poolBlob) SignedURL(_ context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, _, _ string, _ iblob.SignOptions) (string, error) {
 	p.record(ns, fn)
 	return "https://signed.example/k", nil
 }
@@ -207,7 +207,7 @@ func TestPoolSocketForRemove(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
-	m.Remove("team-a", testPool)
+	m.Remove(local.FunctionRef("team-a", testPool))
 	require.NoFileExists(t, sock)
 	if conn, err := net.Dial("unix", sock); err == nil {
 		_ = conn.Close()
@@ -217,7 +217,7 @@ func TestPoolSocketForRemove(t *testing.T) {
 
 func TestSoloSocketIgnoresMemberHeader(t *testing.T) {
 	m, rec := poolManager(t)
-	sock, err := m.SocketFor("team-a", "a")
+	sock, err := m.SocketFor(local.FunctionRef("team-a", "a"))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, callAs(t, unixClient(t, sock), http.MethodGet, "/kv/k/key", "c"))
 	require.Equal(t, []string{"kv team-a/a"}, rec.take(), "a function's own socket serves it, whatever the header names")

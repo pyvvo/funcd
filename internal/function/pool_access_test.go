@@ -38,7 +38,7 @@ func TestPoolKeyCountsOwnedBoundTablesAndOwnedPrefixes(t *testing.T) {
 	t.Parallel()
 	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
 	h.createObj(t, v1.KindKVStore, "s", func(o v1.Object) {
-		o.(*v1.KVStore).Spec.Tables = []v1.KVTable{{Name: "bound", Owner: "owner"}, {Name: "unbound", Owner: "idle-owner"}}
+		o.(*v1.KVStore).Spec.Tables = []v1.KVTable{{Name: "bound", Owner: v1.FunctionOwner("owner")}, {Name: "unbound", Owner: v1.FunctionOwner("idle-owner")}}
 	})
 	h.createObj(t, v1.KindBucket, "k", func(o v1.Object) {
 		o.(*v1.Bucket).Spec.Prefixes = []v1.BucketPrefix{
@@ -70,13 +70,48 @@ func TestPoolKeyCountsOwnedBoundTablesAndOwnedPrefixes(t *testing.T) {
 	require.Equal(t, pooling.AccessHashOf(v1.FunctionSpec{}, []string{"blob/k/raw"}, group), access("writer"), "an owned prefix counts unbound")
 }
 
+// ADR-0351 Decision 3: what a Job owns, and an appliesTo item that names a Job, is no Function's, whatever its name: the
+// pooled Function of the Job's name counts none of it.
+func TestPoolKeyCountsNoJobsOwners(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	h.createObj(t, v1.KindKVStore, "s", func(o v1.Object) {
+		o.(*v1.KVStore).Spec.Tables = []v1.KVTable{{Name: "t", Owner: v1.JobOwner("tofu")}}
+	})
+	h.createObj(t, v1.KindBucket, "k", func(o v1.Object) {
+		o.(*v1.Bucket).Spec.Prefixes = []v1.BucketPrefix{{Name: "raw", Owner: v1.JobOwner("tofu")}}
+	})
+	h.createObj(t, v1.KindSecret, "creds", func(o v1.Object) { o.(*v1.Secret).Spec.Owner = v1.JobOwner("tofu") })
+	h.createObj(t, v1.KindSQLDatabase, "db", func(o v1.Object) { o.(*v1.SQLDatabase).Spec.Owner = v1.JobOwner("tofu") })
+	h.createObj(t, v1.KindEgressPolicy, "egress", func(o v1.Object) {
+		o.(*v1.EgressPolicy).Spec = v1.EgressPolicySpec{AppliesTo: []v1.WorkloadRef{v1.JobOwner("tofu")},
+			Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"api.example.com"}}}}}
+	})
+	bound := v1.FunctionSpec{Bindings: v1.FunctionBindings{KV: []v1.FunctionKV{{Alias: "t", Store: "s", Table: "t"}},
+		Secret: []v1.ObjectName{"creds"}}}
+	for _, n := range []string{"tofu", "plain"} {
+		h.create(t, n, func(fn *v1.Function) {
+			fn.Spec.Pooling.Worker = "agents"
+			fn.Spec.Bindings.KV, fn.Spec.Bindings.Secret = bound.Bindings.KV, bound.Bindings.Secret
+		})
+	}
+	got := h.pools(t, "tofu", "plain")
+	access := func(n string) string {
+		key, ok := pooling.ParsePool("default", got[n])
+		require.True(t, ok, n)
+		return key.AccessHash
+	}
+	require.Equal(t, pooling.AccessHashOf(bound, nil, []string{"group/rg1"}), access("tofu"), "the Job's tables, prefixes, Secrets, databases and egress count as bindings only")
+	require.Equal(t, access("plain"), access("tofu"))
+}
+
 // The access counts a Secret only when the Function both owns and binds it, as a KV table (ADR-0327 Decision 6): a
 // write needs the binding, so an owner that binds nothing gains no write.
 func TestPoolKeyCountsAnOwnedBoundSecret(t *testing.T) {
 	t.Parallel()
 	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
-	h.createObj(t, v1.KindSecret, "oauth", func(o v1.Object) { o.(*v1.Secret).Spec.Owner = "refresher" })
-	h.createObj(t, v1.KindSecret, "spare", func(o v1.Object) { o.(*v1.Secret).Spec.Owner = "idle-owner" })
+	h.createObj(t, v1.KindSecret, "oauth", func(o v1.Object) { o.(*v1.Secret).Spec.Owner = v1.FunctionOwner("refresher") })
+	h.createObj(t, v1.KindSecret, "spare", func(o v1.Object) { o.(*v1.Secret).Spec.Owner = v1.FunctionOwner("idle-owner") })
 	bound := v1.FunctionSpec{Bindings: v1.FunctionBindings{Secret: []v1.ObjectName{"oauth"}}}
 	for _, n := range []string{"refresher", "api"} {
 		h.create(t, n, func(fn *v1.Function) {

@@ -81,7 +81,7 @@ func post(t *testing.T, h http.Handler, alias, body string) *httptest.ResponseRe
 // the local API surfaces. Daemon faults (403/404/503) via the fault bridge; the target shim's
 // 422/500 propagated verbatim (ADR-0064).
 func TestScenarioInvokeErrorTaxonomy(t *testing.T) {
-	caller := local.Ref{Namespace: "team-a", Function: "a"}
+	caller := local.FunctionRef("team-a", "a")
 	for _, tc := range []struct {
 		name       string
 		resolveErr error
@@ -97,7 +97,7 @@ func TestScenarioInvokeErrorTaxonomy(t *testing.T) {
 		{"cold-wake timeout → 503", nil, nil, fault.Unavailablef("op", "never ready"), http.StatusServiceUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}, err: tc.resolveErr}
+			res := &fakeResolver{target: local.FunctionRef("team-a", "b"), err: tc.resolveErr}
 			h := local.NewHandler(caller, res, fakeInvoker{out: tc.invokeOut, err: tc.invokeErr}, nil, nil, nil)
 			rec := post(t, h, "payments", `{}`)
 			require.Equal(t, tc.wantStatus, rec.Code)
@@ -108,8 +108,8 @@ func TestScenarioInvokeErrorTaxonomy(t *testing.T) {
 // scenario: caller-identity-from-connection — the caller is the fixed sandbox Ref; a request body
 // cannot name a different caller.
 func TestScenarioCallerIdentityFromConnection(t *testing.T) {
-	caller := local.Ref{Namespace: "team-a", Function: "a"}
-	res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}}
+	caller := local.FunctionRef("team-a", "a")
+	res := &fakeResolver{target: local.FunctionRef("team-a", "b")}
 	h := local.NewHandler(caller, res, fakeInvoker{out: []byte(`{}`)}, nil, nil, nil)
 
 	post(t, h, "payments", `{"caller":"evil/other","sneaky":true}`)
@@ -121,9 +121,9 @@ func TestScenarioCallerIdentityFromConnection(t *testing.T) {
 func TestInvokeIsLogged(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	caller := local.Ref{Namespace: "team-a", Function: "a"}
+	caller := local.FunctionRef("team-a", "a")
 
-	h := local.NewHandler(caller, &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}},
+	h := local.NewHandler(caller, &fakeResolver{target: local.FunctionRef("team-a", "b")},
 		fakeInvoker{out: []byte(`{}`)}, nil, nil, logger)
 	post(t, h, "payments", `{}`)
 	got := buf.String()
@@ -144,8 +144,8 @@ func TestInvokeIsLogged(t *testing.T) {
 // Forbidden and never forwards to the Invoker. The invoke principal is connection-scoped (the fixed
 // caller Ref) and the resource is the resolved target Function — never the request body.
 func TestScenarioPolicyRevokesInvoke(t *testing.T) {
-	caller := local.Ref{Namespace: "team-a", Function: "a"}
-	target := local.Ref{Namespace: "team-a", Function: "pricing"}
+	caller := local.FunctionRef("team-a", "a")
+	target := local.FunctionRef("team-a", "pricing")
 	res := &fakeResolver{target: target}
 
 	t.Run("deny → Forbidden, not forwarded", func(t *testing.T) {
@@ -209,11 +209,11 @@ func TestResolver(t *testing.T) {
 		"checkout": callerFn(),
 		"devices":  api,
 	})
-	caller := local.Ref{Namespace: "team-a", Function: "a"}
+	caller := local.FunctionRef("team-a", "a")
 
 	target, protocol, timeout, err := r.Resolve(context.Background(), caller, "payments")
 	require.NoError(t, err)
-	require.Equal(t, local.Ref{Namespace: "team-a", Function: "checkout"}, target)
+	require.Equal(t, local.FunctionRef("team-a", "checkout"), target)
 	require.Equal(t, v1.ProtocolCloudEvent, protocol, "an unset protocol is cloudevent")
 	require.Equal(t, 30*time.Second, timeout, "unset link timeout ⇒ platform default")
 
@@ -249,7 +249,7 @@ func TestInvokerPropagates(t *testing.T) {
 			_, _ = w.Write([]byte(body))
 		})
 	}
-	target := local.Ref{Namespace: "team-a", Function: "b"}
+	target := local.FunctionRef("team-a", "b")
 
 	out, err := local.NewInvoker(dp(http.StatusOK, `{"ok":1}`)).Invoke(context.Background(), target, []byte(`{}`), time.Second)
 	require.NoError(t, err)
@@ -270,7 +270,7 @@ func TestIssue134_InvokeWrapsInputInCloudEventEnvelope(t *testing.T) {
 		got, _ = io.ReadAll(r.Body)
 		_, _ = w.Write([]byte(`{}`))
 	})
-	target := local.Ref{Namespace: "team-a", Function: "echo"}
+	target := local.FunctionRef("team-a", "echo")
 	invoke := func(input string) {
 		t.Helper()
 		_, err := local.NewInvoker(dp).Invoke(context.Background(), target, []byte(input), time.Second)
@@ -308,8 +308,8 @@ func TestIssue337_LinkTimeoutMidBodyIs503(t *testing.T) {
 	require.NoError(t, err)
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
-	res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}, timeout: 100 * time.Millisecond}
-	api := httptest.NewServer(local.NewHandler(local.Ref{Namespace: "team-a", Function: "a"}, res, local.NewInvoker(rp), nil, nil, nil))
+	res := &fakeResolver{target: local.FunctionRef("team-a", "b"), timeout: 100 * time.Millisecond}
+	api := httptest.NewServer(local.NewHandler(local.FunctionRef("team-a", "a"), res, local.NewInvoker(rp), nil, nil, nil))
 	defer api.Close()
 
 	resp, err := http.Post(api.URL+"/invoke/b", "application/json", strings.NewReader(`{}`))

@@ -28,7 +28,7 @@ func TestIssue1204_LeftoverEmptyDirsGoOnceTheHoldLifts(t *testing.T) {
 	root := t.TempDir()
 	last, err := volume.New(volume.Options{Root: root})
 	require.NoError(t, err)
-	leftover := volume.ID{Namespace: "team", Function: "thumbs", Name: "cache", Worker: "a1b2c3d4e5f6"}
+	leftover := volume.ID{Namespace: "team", Kind: v1.KindFunction, Workload: "thumbs", Name: "cache", Worker: "a1b2c3d4e5f6"}
 	_, err = last.Reserve(ctx, leftover, "", 1<<20, "")
 	require.NoError(t, err)
 
@@ -80,10 +80,10 @@ func TestHoldStatusListsOrphanVolumes(t *testing.T) {
 	thumbs, err := p.cfg.store.Get(ctx, v1.KindFunction.GVK(), "team", "thumbs")
 	require.NoError(t, err)
 	for id, owner := range map[volume.ID]v1.UID{
-		{Namespace: "team", Function: "thumbs", Name: "state"}:                           thumbs.GetObjectMeta().UID,
-		{Namespace: "team", Function: "thumbs", Name: "scratch", Worker: "a1b2c3d4e5f6"}: "",
-		{Namespace: "team", Function: "gone", Name: "state"}:                             "uid-of-gone",
-		{Namespace: "team", Function: "recreated", Name: "state"}:                        "uid-before-recreate",
+		{Namespace: "team", Kind: v1.KindFunction, Workload: "thumbs", Name: "state"}:                           thumbs.GetObjectMeta().UID,
+		{Namespace: "team", Kind: v1.KindFunction, Workload: "thumbs", Name: "scratch", Worker: "a1b2c3d4e5f6"}: "",
+		{Namespace: "team", Kind: v1.KindFunction, Workload: "gone", Name: "state"}:                             "uid-of-gone",
+		{Namespace: "team", Kind: v1.KindFunction, Workload: "recreated", Name: "state"}:                        "uid-before-recreate",
 	} {
 		_, err := p.exec.volumes.Reserve(ctx, id, owner, 1<<20, "")
 		require.NoError(t, err, "reserve %s", id)

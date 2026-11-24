@@ -75,7 +75,7 @@ type Evidence struct {
 	Held              bool                      `json:"held" doc:"True while the platform is held: its timers, blob sources, Sensors, runs, rollouts, backups and sweeps wait for the release."`
 	Marker            *Marker                   `json:"marker,omitempty" doc:"Why the platform is held, and since when; absent when it is not held."`
 	ReleasedAt        *v1.Timestamp             `json:"releasedAt,omitempty" doc:"When the last release lifted the platform's hold."`
-	Report            json.RawMessage           `json:"report,omitempty" doc:"The report of funcd restore run, as it wrote restore.json: the generation that it loaded, the counts of its objects per kind, and the WorkflowRuns that it paused. Absent when no restore wrote one."`
+	Report            json.RawMessage           `json:"report,omitempty" doc:"The report of funcd restore run, as it wrote restore.json: the generation that it loaded, the counts of its objects per kind, the WorkflowRuns that it paused and the JobRuns that it cancelled. Absent when no restore wrote one."`
 	Counts            map[v1.Kind]int           `json:"counts,omitempty" doc:"The number of objects of each kind that funcd stores now, to compare with the counts of report."`
 	PausedRuns        []string                  `json:"pausedRuns,omitempty" doc:"The WorkflowRuns that are paused and have not ended, each as <namespace>/<name>. A release leaves them paused, and funcdctl workflow resume runs one again."`
 	DeadLetters       []string                  `json:"deadLetters,omitempty" doc:"The dead letters of every namespace, each as <namespace>/<id>. Nothing delivers them again by itself."`

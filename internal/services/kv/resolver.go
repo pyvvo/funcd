@@ -16,7 +16,7 @@ import (
 type Binding struct {
 	Store         v1.ObjectName
 	Table         string
-	Owner         v1.ObjectName
+	Owner         v1.WorkloadRef
 	MaxValueBytes int64
 	MaxKeyBytes   int
 }
@@ -25,7 +25,7 @@ type Binding struct {
 // reads the caller's Function.spec.bindings.kv (the binding IS the capability) and the target KVStore.
 // fault.Forbidden when the caller has no spec.bindings.kv entry for the alias (default-deny).
 type BindingResolver interface {
-	Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) (Binding, error)
+	Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string) (Binding, error)
 }
 
 // MetaReader is the read-only metastore view the resolver needs (a subset of store.Store), declared
@@ -57,33 +57,29 @@ func NewResolver(r MetaReader) (BindingResolver, error) {
 // Resolve maps (ns, fn, alias) → Binding, default-deny. It reads the caller Function's spec.bindings.kv for the
 // alias → (store, table), then reads the target store for the table's owner + caps. A hit is cached for
 // ttl; a miss (Forbidden) is never cached.
-func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) (Binding, error) {
+func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string) (Binding, error) {
 	const op = "services.kv.Resolver.Resolve"
 	if b, ok := m.cache.Get(ns, fn, alias); ok {
 		return b, nil
 	}
 
-	// The caller function's spec.bindings.kv is the capability list (default-deny on a miss).
-	fobj, err := m.r.Get(ctx, v1.KindFunction.GVK(), ns, fn)
+	// The caller's spec.bindings.kv is the capability list (default-deny on a miss).
+	bindings, err := services.CallerBindings(ctx, m.r, ns, fn)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
-			return Binding{}, kvstore.ErrCallerMissing.Errorf(op, "function %q in %q not found; no KV binding for alias %q", fn, ns, alias)
+			return Binding{}, kvstore.ErrCallerMissing.Errorf(op, "%s in %q not found; no KV binding for alias %q", fn, ns, alias)
 		}
-		return Binding{}, fault.Wrapf(err, fault.Internal, op, "get function %q", fn)
-	}
-	caller, ok := fobj.(*v1.Function)
-	if !ok {
-		return Binding{}, fault.Internalf(op, "object %q is not a Function", fn)
+		return Binding{}, fault.Wrapf(err, fault.KindOf(err), op, "get %s", fn)
 	}
 	var bind *v1.FunctionKV
-	for i := range caller.Spec.Bindings.KV {
-		if caller.Spec.Bindings.KV[i].Alias == alias {
-			bind = &caller.Spec.Bindings.KV[i]
+	for i := range bindings.KV {
+		if bindings.KV[i].Alias == alias {
+			bind = &bindings.KV[i]
 			break
 		}
 	}
 	if bind == nil {
-		return Binding{}, kvstore.ErrNoBinding.Errorf(op, "function %q in %q has no KV binding for alias %q", fn, ns, alias)
+		return Binding{}, kvstore.ErrNoBinding.Errorf(op, "%s in %q has no KV binding for alias %q", fn, ns, alias)
 	}
 
 	// Read the target store for the table's owner + caps. A dangling binding (store/table gone) is
@@ -99,7 +95,7 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 	if !ok {
 		return Binding{}, fault.Internalf(op, "object %q is not a KVStore", bind.Store)
 	}
-	var owner v1.ObjectName
+	var owner v1.WorkloadRef
 	found := false
 	for _, tb := range ks.Spec.Tables {
 		if tb.Name == bind.Table {

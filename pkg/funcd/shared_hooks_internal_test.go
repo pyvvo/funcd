@@ -76,7 +76,7 @@ func TestDependencyCheck_ReadsTheProvidersInListOrder(t *testing.T) {
 	}
 	failsOn("orders-api", "kv", "store")
 	create(t, p.cfg.store, &v1.KVStore{TypeMeta: tmeta(v1.KindKVStore), ObjectMeta: meta("orders"),
-		Spec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "items", Owner: "orders-api"}}}})
+		Spec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "items", Owner: v1.FunctionOwner("orders-api")}}}})
 	failsOn("orders-api", "blob", "files")
 	create(t, p.cfg.store, &v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: meta("files"),
 		Spec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "in", Owner: v1.FunctionOwner("orders-api")}}}})

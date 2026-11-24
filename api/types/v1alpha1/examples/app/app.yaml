@@ -11,7 +11,9 @@ spec:
     - name: guestbook-entries
       tables:
         - name: entries
-          owner: guestbook-api
+          owner:
+            kind: Function
+            name: guestbook-api
   functions:
     - name: guestbook-api
       runtime: nodejs22

@@ -10,6 +10,8 @@ type PrincipalKind string
 const (
 	// PrincipalKindFunction is a Function's system-assigned identity.
 	PrincipalKindFunction PrincipalKind = "Function"
+	// PrincipalKindJob is a Job's own identity, which every worker of its runs acts as (ADR-0351 Decision 5).
+	PrincipalKindJob PrincipalKind = "Job"
 	// PrincipalKindIdentity is a user-assigned managed Identity (ADR-0135).
 	PrincipalKindIdentity PrincipalKind = "Identity"
 )
@@ -45,7 +47,7 @@ const (
 // PrincipalRef names the grantee: a typed {kind, name}. This is the "principal side is no longer
 // Function-only" generalization (ADR-0135/0136).
 type PrincipalRef struct {
-	Kind PrincipalKind `json:"kind" enum:"Function,Identity" doc:"The kind of the principal: a Function, or an Identity for a caller outside funcd."`
+	Kind PrincipalKind `json:"kind" enum:"Function,Job,Identity" doc:"The kind of the principal: a Function, a Job, whose runs' workers act as it, or an Identity for a caller outside funcd."`
 	Name ObjectName    `json:"name" doc:"The principal's name, in the RolesAssignment's namespace. funcd does not check that it exists."`
 }
 
@@ -108,7 +110,7 @@ func (ra *RolesAssignment) Validate() error {
 		if p == nil || p.Name == "" {
 			return fault.Invalidf(op, "spec.assignments[%d] has no principal (and no top-level default)", i)
 		}
-		if p.Kind != PrincipalKindFunction && p.Kind != PrincipalKindIdentity {
+		if p.Kind != PrincipalKindFunction && p.Kind != PrincipalKindJob && p.Kind != PrincipalKindIdentity {
 			return fault.Invalidf(op, "spec.assignments[%d].principal.kind %q is invalid", i, p.Kind)
 		}
 		if e.RoleRef.Name == "" {

@@ -27,7 +27,8 @@ const rewatchBackoff = time.Second
 // Pair is an owner kind and a child kind a reconciler stamps with a controller OwnerReference.
 type Pair struct{ Owner, Child v1.Kind }
 
-// Pairs is every pair a reconciler stamps. Revision is last: one sweep collects a Function, then its Revisions.
+// Pairs is every pair a reconciler stamps. Revision is last: one sweep collects a Function or a Job, then its
+// Revisions. A Job owns what a Function does, but a Route (ADR-0347 Decision 2).
 // The App pairs are one per App section kind (ADR-0199 Decision 7, ADR-0222 Decision 2), users before stores, with the
 // add-on objects among the stores (ADR-0337 Decision 5), (App, ConfigMap) after
 // (App, Bucket) (ADR-0213 Decision 5), then (App, AppRevision) (ADR-0200 Decision 8) and the hook calls of an
@@ -56,7 +57,11 @@ func Pairs() []Pair {
 		{Owner: v1.KindWorkflow, Child: v1.KindSQLDatabase}, {Owner: v1.KindWorkflow, Child: v1.KindLake},
 		{Owner: v1.KindWorkflow, Child: v1.KindConfigMap},
 		{Owner: v1.KindLake, Child: v1.KindBucket}, {Owner: v1.KindLake, Child: v1.KindConfigMap},
-		{Owner: v1.KindFunction, Child: v1.KindRoute}, {Owner: v1.KindFunction, Child: v1.KindRevision},
+		{Owner: v1.KindJob, Child: v1.KindLake}, {Owner: v1.KindJob, Child: v1.KindKVStore},
+		{Owner: v1.KindJob, Child: v1.KindSQLDatabase}, {Owner: v1.KindJob, Child: v1.KindBucket},
+		{Owner: v1.KindJob, Child: v1.KindConfigMap},
+		{Owner: v1.KindFunction, Child: v1.KindRoute}, {Owner: v1.KindJob, Child: v1.KindRevision},
+		{Owner: v1.KindFunction, Child: v1.KindRevision},
 	}
 }
 
@@ -529,7 +534,7 @@ func (c *Collector) held(ctx context.Context, obj v1.Object) (bool, error) {
 		return err == nil && h.Function(m.Name, m.UID), err
 	case *v1.Revision:
 		owner, ok := v1.ControllerOf(o.OwnerReferences)
-		if !ok {
+		if !ok || o.Spec.Job != "" { // a workflow run pins Functions' revisions only; a Job's go with it (ADR-0347 Decision 2)
 			return false, nil
 		}
 		h, err := revhold.Held(ctx, c.store, m.Namespace)
@@ -565,7 +570,7 @@ func DeleteBucket(ctx context.Context, s store.Store, p BucketPurger, b *v1.Buck
 
 // bucketUsers is the kinds whose specs can name a Bucket, in the order InUse reads them.
 func bucketUsers() []v1.Kind {
-	return []v1.Kind{v1.KindFunction, v1.KindLake, v1.KindEventSource, v1.KindRoute, v1.KindSite}
+	return []v1.Kind{v1.KindFunction, v1.KindJob, v1.KindLake, v1.KindEventSource, v1.KindRoute, v1.KindSite}
 }
 
 // InUse returns the first object in obj's namespace that still uses obj and that skip does not skip (nil skips
@@ -575,19 +580,18 @@ func bucketUsers() []v1.Kind {
 // (ADR-0080), a ConfigMap a Function's or Lake's spec.bindings.config or a Site's spec.runtimeConfig.configMap names
 // (ADR-0213 Decision 5, ADR-0239), a SQLDatabase a
 // Function's spec.bindings.sql names (ADR-0236), an add-on object a Function's spec.bindings.addon names (ADR-0338
-// Decision 1). Nothing uses an object of another kind.
+// Decision 1). A Job uses what its bindings name, as a Function does (ADR-0347 Decision 1). Nothing uses an object of
+// another kind.
 func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Object) bool) (v1.ObjectRef, bool, error) {
 	const op = "gc.InUse"
 	var kinds []v1.Kind
 	switch obj.(type) {
-	case *v1.Function, *v1.KVStore, *v1.SQLDatabase:
-		kinds = []v1.Kind{v1.KindFunction}
+	case *v1.Function, *v1.KVStore, *v1.SQLDatabase, *v1.AddonObject:
+		kinds = []v1.Kind{v1.KindFunction, v1.KindJob}
 	case *v1.Bucket:
 		kinds = bucketUsers()
 	case *v1.ConfigMap:
-		kinds = []v1.Kind{v1.KindFunction, v1.KindLake, v1.KindSite}
-	case *v1.AddonObject:
-		kinds = []v1.Kind{v1.KindFunction}
+		kinds = []v1.Kind{v1.KindFunction, v1.KindJob, v1.KindLake, v1.KindSite}
 	default:
 		return v1.ObjectRef{}, false, nil
 	}
@@ -610,25 +614,23 @@ func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Objec
 // uses reports whether u names obj in one of the fields InUse reads.
 func uses(u, obj v1.Object) bool {
 	name := obj.GetObjectMeta().Name
+	b, workload := bindingsOf(u)
 	switch obj.(type) {
 	case *v1.Function:
-		f, ok := u.(*v1.Function)
-		return ok && f.Name != name && slices.ContainsFunc(f.Spec.Bindings.Links, func(l v1.FunctionLink) bool { return l.Target == name })
+		self := u.GroupVersionKind().Kind == v1.KindFunction && u.GetName() == name
+		return workload && !self && slices.ContainsFunc(b.Links, func(l v1.FunctionLink) bool { return l.Target == name })
 	case *v1.KVStore:
-		f, ok := u.(*v1.Function)
-		return ok && slices.ContainsFunc(f.Spec.Bindings.KV, func(b v1.FunctionKV) bool { return b.Store == name })
+		return workload && slices.ContainsFunc(b.KV, func(k v1.FunctionKV) bool { return k.Store == name })
 	case *v1.SQLDatabase:
-		f, ok := u.(*v1.Function)
-		return ok && slices.ContainsFunc(f.Spec.Bindings.SQL, func(b v1.FunctionSQL) bool { return b.Database == name })
+		return workload && slices.ContainsFunc(b.SQL, func(s v1.FunctionSQL) bool { return s.Database == name })
 	case *v1.AddonObject:
-		f, ok := u.(*v1.Function)
-		return ok && slices.ContainsFunc(f.Spec.Bindings.Addon, func(b v1.FunctionAddon) bool { return b.Object == name })
+		return workload && slices.ContainsFunc(b.Addon, func(a v1.FunctionAddon) bool { return a.Object == name })
 	case *v1.Bucket:
 		return usesBucket(u, name)
 	case *v1.ConfigMap:
 		switch o := u.(type) {
-		case *v1.Function:
-			return slices.Contains(o.Spec.Bindings.Config, name)
+		case *v1.Function, *v1.Job:
+			return slices.Contains(b.Config, name)
 		case *v1.Lake:
 			return slices.Contains(o.Spec.Bindings.Config, name)
 		case *v1.Site:
@@ -638,12 +640,25 @@ func uses(u, obj v1.Object) bool {
 	return false
 }
 
+// bindingsOf is the bindings of a workload, a Function or a Job, which binds what a Function does (ADR-0347 Decision 1);
+// false for any other kind.
+func bindingsOf(u v1.Object) (v1.FunctionBindings, bool) {
+	switch o := u.(type) {
+	case *v1.Function:
+		return o.Spec.Bindings, true
+	case *v1.Job:
+		return o.Spec.Bindings, true
+	}
+	return v1.FunctionBindings{}, false
+}
+
 // usesBucket reports whether u names the Bucket name in one of the fields InUse reads.
 func usesBucket(u v1.Object, name v1.ObjectName) bool {
 	bound := func(b v1.FunctionBlob) bool { return b.Bucket == name }
 	switch o := u.(type) {
-	case *v1.Function:
-		return slices.ContainsFunc(o.Spec.Bindings.Blob, bound)
+	case *v1.Function, *v1.Job:
+		b, _ := bindingsOf(o)
+		return slices.ContainsFunc(b.Blob, bound)
 	case *v1.Lake:
 		return slices.ContainsFunc(o.Spec.Bindings.Blob, bound)
 	case *v1.EventSource:

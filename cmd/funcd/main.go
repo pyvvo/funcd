@@ -544,6 +544,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 	}
 	opts = append(opts, funcd.WithWorkflow(workflowDir, stepTimeout, retention, cfg.Workflow.DefaultRetry, cfg.Workflow.PayloadLimit),
 		funcd.WithWorkflowMaxStepsInFlight(cfg.Workflow.MaxStepsInFlight))
+	// Jobs (ADR-0347): config.Validate already held job.* to their bounds.
+	jobRetention, err := cfg.JobRetention()
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opts = append(opts, funcd.WithJobs(cfg.Job.MaxRunning, cfg.Job.PayloadLimit, jobRetention))
 	// ADR-0151: the response deadline of an external invoke whose Function sets no spec.timeout.
 	invokeTimeout, err := parseDuration("invoke.defaultTimeout", cfg.Invoke.DefaultTimeout, 0, 0, v1.Duration(v1.MaxInvokeTimeout))
 	if err != nil {

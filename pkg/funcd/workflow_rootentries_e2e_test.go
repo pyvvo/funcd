@@ -46,14 +46,14 @@ func TestScenarioWorkflowOwnsDatabase(t *testing.T) {
 	t.Parallel()
 	e := startGC(t)
 	e.apply(t, rootWorkflow("orders", "ingest", e.image(t), func(s *v1.WorkflowSpec) {
-		s.SQLDatabases = []v1.SQLDatabaseEntry{{Name: "orders-db", SQLDatabaseSpec: v1.SQLDatabaseSpec{Owner: "ingest"}}}
+		s.SQLDatabases = []v1.SQLDatabaseEntry{{Name: "orders-db", SQLDatabaseSpec: v1.SQLDatabaseSpec{Owner: v1.FunctionOwner("ingest")}}}
 		s.Steps[0].Function.Bindings.SQL = []v1.FunctionSQL{{Alias: "db", Database: "orders-db"}}
 	}))
 	e.waitExists(t, v1.KindSQLDatabase, "orders-db")
 	wf := e.object(t, v1.KindWorkflow, "orders")
 	db := e.object(t, v1.KindSQLDatabase, "orders-db").(*v1.SQLDatabase)
 	require.True(t, ownedstore.Marked(db.OwnerReferences, wf), "SQLDatabase orders-db carries orders' marker")
-	require.Equal(t, v1.ObjectName("orders-ingest"), db.Spec.Owner, "the owner names the step's Function, its writer")
+	require.Equal(t, v1.FunctionOwner("orders-ingest"), db.Spec.Owner, "the owner names the step's Function, its writer")
 	e.waitExists(t, v1.KindFunction, "orders-ingest")
 	require.Equal(t, []v1.FunctionSQL{{Alias: "db", Database: "orders-db"}}, e.function(t, "orders-ingest").Spec.Bindings.SQL)
 }

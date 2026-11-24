@@ -109,7 +109,6 @@ holds code, not bindings: a step reads its current bindings, and a paused run wi
 | `defaultMaxQueuedPerSensor` | 4096 | `internal/sensor/sensor.go` |
 | `errBodyMax` | 256 | `internal/workflow/dispatch.go` |
 | `maxRetryBackoff` | `time.Duration(v1.MaxRetryBackoff)` | `internal/workflow/engine.go` |
-| `maxStatusError` | 512 | `internal/workflow/engine.go` |
 | `linkAttempts` | 5 | `internal/workflow/reconcile_run.go` |
 | `waitRequeue` | 2s | `internal/workflow/reconcile_run.go` |
 | `contractRequeue` | 5s | `internal/workflow/reconcile_workflow.go` |

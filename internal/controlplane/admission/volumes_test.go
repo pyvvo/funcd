@@ -16,13 +16,21 @@ type booker struct {
 	err             error
 }
 
-func (b *booker) Book(_ context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, size int64) error {
-	b.booked = append(b.booked, string(ns)+"/"+string(fn)+"/"+string(name))
+// workloadKey is a booked volume's workload: a Function's name, or a Job's under job:.
+func workloadKey(kind v1.Kind, name v1.ObjectName) string {
+	if kind == v1.KindJob {
+		return "job:" + string(name)
+	}
+	return string(name)
+}
+
+func (b *booker) Book(_ context.Context, ns v1.NamespaceName, kind v1.Kind, fn, name v1.ObjectName, size int64) error {
+	b.booked = append(b.booked, string(ns)+"/"+workloadKey(kind, fn)+"/"+string(name))
 	return b.err
 }
 
-func (b *booker) Fits(_ context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, size int64) error {
-	b.checked = append(b.checked, string(ns)+"/"+string(fn)+"/"+string(name))
+func (b *booker) Fits(_ context.Context, ns v1.NamespaceName, kind v1.Kind, fn, name v1.ObjectName, size int64) error {
+	b.checked = append(b.checked, string(ns)+"/"+workloadKey(kind, fn)+"/"+string(name))
 	return b.err
 }
 
@@ -76,4 +84,24 @@ func TestIssue1205_DryRunChecksWithoutBooking(t *testing.T) {
 	b.err = fault.Wrapf(fault.Conflictf("volume.Fits", "full"), fault.Conflict, "volume.Fits", "VolumeCapacity")
 	_, err = a.Admit(t.Context(), admission.Request{Operation: admission.Create, Object: fn, DryRun: true})
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "a dry run answers the real write's refusal")
+}
+
+// ADR-0347 Decision 1: a Job's local volumes are booked under its kind, apart from a same-named Function's, and a Job
+// with a volume is refused while volumes are off.
+func TestFunctionVolumesBooksAJobsUnderItsKind(t *testing.T) {
+	b := &booker{}
+	a := admission.NewFunctionVolumesAdmission(b)
+	require.True(t, a.Handles(v1.KindJob.GVK(), admission.Create))
+	require.True(t, a.Handles(v1.KindJob.GVK(), admission.Update))
+	job := &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob}}
+	job.Name, job.Namespace = "cart", "shop"
+	job.Spec.Volumes = []v1.VolumeEntry{{Name: "state", Type: v1.VolumeLocal, SizeBytes: 1}, {Name: "tmp", Type: v1.VolumeEmptyDir, SizeBytes: 1}}
+	_, err := a.Admit(t.Context(), admission.Request{Operation: admission.Create, Object: job})
+	require.NoError(t, err)
+	_, err = a.Admit(t.Context(), admission.Request{Operation: admission.Create, Object: volumeFn(v1.VolumeEntry{Name: "state", Type: v1.VolumeLocal, SizeBytes: 1})})
+	require.NoError(t, err)
+	require.Equal(t, []string{"shop/job:cart/state", "shop/cart/state"}, b.booked)
+
+	_, err = admission.NewFunctionVolumesAdmission(nil).Admit(t.Context(), admission.Request{Operation: admission.Create, Object: job})
+	require.ErrorContains(t, err, "VolumesOff")
 }

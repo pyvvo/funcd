@@ -62,7 +62,7 @@ func etlPolicy() *v1.EgressPolicy {
 	return &v1.EgressPolicy{
 		ObjectMeta: v1.ObjectMeta{Name: "egress", Namespace: "acme", ResourceGroup: "rg1"},
 		Spec: v1.EgressPolicySpec{
-			AppliesTo: []v1.ObjectName{"etl"},
+			AppliesTo: []v1.WorkloadRef{v1.FunctionOwner("etl")},
 			Rules: []v1.EgressRule{
 				{To: v1.EgressTo{Domains: []string{"*.x.com"}}, Ports: []int{443}},
 				{To: v1.EgressTo{CIDRs: []string{"10.0.0.0/8"}}, Ports: []int{5432}},
@@ -128,7 +128,7 @@ func TestEgress_CompilesToCedar(t *testing.T) {
 	ep := &v1.EgressPolicy{
 		ObjectMeta: v1.ObjectMeta{Name: "egress", Namespace: "acme", ResourceGroup: "rg1"},
 		Spec: v1.EgressPolicySpec{
-			AppliesTo: []v1.ObjectName{"etl"},
+			AppliesTo: []v1.WorkloadRef{v1.FunctionOwner("etl")},
 			Rules: []v1.EgressRule{
 				{To: v1.EgressTo{Domains: []string{"*.x.com"}, CIDRs: []string{"10.0.0.0/8"}}, Ports: []int{443, 5432}},
 			},
@@ -279,18 +279,18 @@ func (m agreeMeta) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Names
 // must agree, one a Go reading of what the other compiles to Cedar, so every class of input runs through both.
 func TestScenarioForwarderAndPDPAgree(t *testing.T) {
 	t.Parallel()
-	policy := func(name v1.ObjectName, ns v1.NamespaceName, appliesTo []v1.ObjectName, rules ...v1.EgressRule) *v1.EgressPolicy {
+	policy := func(name v1.ObjectName, ns v1.NamespaceName, appliesTo []v1.WorkloadRef, rules ...v1.EgressRule) *v1.EgressPolicy {
 		return &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"}, Spec: v1.EgressPolicySpec{AppliesTo: appliesTo, Rules: rules}}
 	}
 	domains := func(d ...string) v1.EgressRule {
 		return v1.EgressRule{To: v1.EgressTo{Domains: d}, Ports: []int{443}}
 	}
 	whole := policy("whole", "acme", nil, domains("whole.example"))
-	named := policy("named", "acme", []v1.ObjectName{"etl"}, domains("named.example"))
+	named := policy("named", "acme", []v1.WorkloadRef{v1.FunctionOwner("etl")}, domains("named.example"))
 	mixed := policy("mixed", "acme", nil,
 		v1.EgressRule{To: v1.EgressTo{Domains: []string{"exact.example", "*.wild.example"}, CIDRs: []string{"198.51.100.0/24"}}, Ports: []int{443}},
 		domains("second.example"))
-	anyPort := policy("any", "acme", []v1.ObjectName{"web"}, v1.EgressRule{To: v1.EgressTo{Domains: []string{"any.example"}}})
+	anyPort := policy("any", "acme", []v1.WorkloadRef{v1.FunctionOwner("web")}, v1.EgressRule{To: v1.EgressTo{Domains: []string{"any.example"}}})
 	elsewhere := policy("elsewhere", "beta", nil, domains("beta.example"))
 
 	principals := []auth.EntityRef{

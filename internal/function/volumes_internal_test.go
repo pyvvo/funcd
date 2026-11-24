@@ -21,7 +21,7 @@ import (
 func withVolumes(t *testing.T, r *Reconciler) string {
 	t.Helper()
 	root := t.TempDir()
-	m, err := volume.New(volume.Options{Root: root, Holder: r.FunctionUID})
+	m, err := volume.New(volume.Options{Root: root, Holder: r.WorkloadUID})
 	require.NoError(t, err)
 	r.volumes, r.volumesDurable = m, true
 	return root
@@ -106,7 +106,7 @@ func TestScenarioLocalSurvives(t *testing.T) {
 	dir := first.Env["FUNCD_VOLUME_STATE"]
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "orders.db"), []byte("rows"), 0o600))
 	for _, rev := range []v1.ObjectName{"", "cart-2", "cart-3"} {
-		spec, err := r.workerSpec(t.Context(), fn, rev, 0, "/art/app.mjs", workerEnv{})
+		spec, err := r.workerSpec(t.Context(), functionWorkload(fn), rev, functionWorker(fn, 0), "/art/app.mjs", workerEnv{})
 		require.NoError(t, err)
 		require.Equal(t, dir, spec.Env["FUNCD_VOLUME_STATE"])
 		b, err := os.ReadFile(filepath.Join(spec.Env["FUNCD_VOLUME_STATE"], "orders.db"))
@@ -167,22 +167,22 @@ func TestEnsureVolumesRefOwnership(t *testing.T) {
 	r := newShimReconciler(t, nil)
 	withVolumes(t, r)
 	old := volumeFn("cart", stateVolume())
-	g, err := r.ensureVolumes(t.Context(), old)
+	g, err := r.ensureVolumes(t.Context(), functionWorkload(old))
 	require.NoError(t, err)
 	require.Nil(t, g)
 	obj, err := r.store.Create(t.Context(), volumeFn("cart", stateVolume())) // cart deleted and applied again: a new UID
 	require.NoError(t, err)
 	again := obj.(*v1.Function)
-	g, err = r.ensureVolumes(t.Context(), again)
+	g, err = r.ensureVolumes(t.Context(), functionWorkload(again))
 	require.NoError(t, err)
 	require.Equal(t, reasonStoreNotOwned, g.reason)
 	again.Spec.Volumes = []v1.VolumeEntry{{Ref: "state", Type: v1.VolumeLocal, SizeBytes: 1 << 20}}
-	g, err = r.ensureVolumes(t.Context(), again)
+	g, err = r.ensureVolumes(t.Context(), functionWorkload(again))
 	require.NoError(t, err)
 	require.Nil(t, g, "ref adopts the retained volume")
 
 	off := newShimReconciler(t, nil)
-	g, err = off.ensureVolumes(t.Context(), volumeFn("cart", stateVolume()))
+	g, err = off.ensureVolumes(t.Context(), functionWorkload(volumeFn("cart", stateVolume())))
 	require.NoError(t, err)
 	require.Equal(t, reasonVolumesOff, g.reason)
 }
@@ -195,7 +195,7 @@ func TestDataMissingAfterLoss(t *testing.T) {
 	withVolumes(t, r)
 	fn := volumeFn("cart", stateVolume())
 	fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
-	require.NoError(t, r.dataMissing(t.Context(), fn))
+	require.NoError(t, r.dataMissing(t.Context(), functionWorkload(fn)))
 	c, ok := fn.Status.Conditions.Get(condDataMissing)
 	require.True(t, ok)
 	require.Equal(t, v1.ConditionTrue, c.Status)
@@ -210,7 +210,7 @@ func TestDataMissingAfterLoss(t *testing.T) {
 	other.Spec.Members = []v1.RestoreMember{{Kind: v1.KindFunction, Name: "cart", Volume: "cache", InPlace: true}}
 	_, err := r.store.Create(t.Context(), &other)
 	require.NoError(t, err)
-	require.NoError(t, r.dataMissing(t.Context(), fn))
+	require.NoError(t, r.dataMissing(t.Context(), functionWorkload(fn)))
 	c, _ = fn.Status.Conditions.Get(condDataMissing)
 	require.Equal(t, v1.ConditionTrue, c.Status, "a Restore of another volume leaves DataMissing")
 	_, err = r.store.Create(t.Context(), rs)
@@ -218,7 +218,7 @@ func TestDataMissingAfterLoss(t *testing.T) {
 	reqs := r.MapRestore(t.Context(), rs)
 	require.Len(t, reqs, 1)
 	require.Equal(t, v1.ObjectName("cart"), reqs[0].Name)
-	require.NoError(t, r.dataMissing(t.Context(), fn))
+	require.NoError(t, r.dataMissing(t.Context(), functionWorkload(fn)))
 	c, _ = fn.Status.Conditions.Get(condDataMissing)
 	require.Equal(t, v1.ConditionFalse, c.Status, "the Restore clears DataMissing")
 }
@@ -232,7 +232,7 @@ func TestDeleteVolume(t *testing.T) {
 	obj, err := r.store.Create(t.Context(), volumeFn("cart", stateVolume()))
 	require.NoError(t, err)
 	fn := obj.(*v1.Function)
-	g, err := r.ensureVolumes(t.Context(), fn)
+	g, err := r.ensureVolumes(t.Context(), functionWorkload(fn))
 	require.NoError(t, err)
 	require.Nil(t, g)
 	require.Equal(t, fault.Conflict, fault.KindOf(r.DeleteVolume(t.Context(), "shop", "cart", "state")))
@@ -256,7 +256,7 @@ func TestIssue1200_AddedVolumeIsNotDataMissing(t *testing.T) {
 	}
 	pass := func(t *testing.T, r *Reconciler, fn *v1.Function) (v1.Condition, bool) {
 		t.Helper()
-		_, err := r.ensureVolumes(t.Context(), fn)
+		_, err := r.ensureVolumes(t.Context(), functionWorkload(fn))
 		require.NoError(t, err)
 		return fn.Status.Conditions.Get(condDataMissing)
 	}
@@ -292,14 +292,14 @@ func TestIssue1203_DamagedMetaIsNotDataMissing(t *testing.T) {
 	before, err := volume.New(volume.Options{Root: root})
 	require.NoError(t, err)
 	fn := volumeFn("cart", stateVolume())
-	_, err = before.Reserve(t.Context(), localID(fn, "state"), fn.UID, 1<<20, v1.DeletionRetain)
+	_, err = before.Reserve(t.Context(), localID(functionWorkload(fn), "state"), fn.UID, 1<<20, v1.DeletionRetain)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "shop", "cart", "state.meta"), nil, 0o600))
-	m, err := volume.New(volume.Options{Root: root, Holder: r.FunctionUID})
+	m, err := volume.New(volume.Options{Root: root, Holder: r.WorkloadUID})
 	require.NoError(t, err, "a damaged meta stops the volume manager from opening")
 	r.volumes, r.volumesDurable = m, true
 	fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
-	require.NoError(t, r.dataMissing(t.Context(), fn))
+	require.NoError(t, r.dataMissing(t.Context(), functionWorkload(fn)))
 	_, missing := fn.Status.Conditions.Get(condDataMissing)
 	require.False(t, missing, "the leaf holds the data")
 }
@@ -323,16 +323,38 @@ func (s *stealing) Release(ctx context.Context, id volume.ID) error {
 func TestIssue1207_ReplacedWorkerKeepsItsEmptyDirSpace(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	inner, err := volume.New(volume.Options{Root: t.TempDir(), CapacityBytes: 2 << 20, Holder: r.FunctionUID})
+	inner, err := volume.New(volume.Options{Root: t.TempDir(), CapacityBytes: 2 << 20, Holder: r.WorkloadUID})
 	require.NoError(t, err)
-	waiting := volume.ID{Namespace: "shop", Function: "big", Name: "state"}
+	waiting := volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "big", Name: "state"}
 	s := &stealing{Manager: inner}
 	r.volumes, r.volumesDurable = s, true
 	fn := volumeFn("thumbs", cacheVolume()) // a 1 MiB emptyDir
 	_ = mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 	require.ErrorIs(t, inner.Book(t.Context(), waiting, 2<<20), volume.ErrCapacity, "the capacity holds no 2 MiB beside the worker")
 	s.steal = func() { _ = inner.Book(context.Background(), waiting, 2<<20) }
-	_, err = r.workerSpec(t.Context(), fn, "", 0, "/art/app.mjs", workerEnv{})
+	_, err = r.workerSpec(t.Context(), functionWorkload(fn), "", functionWorker(fn, 0), "/art/app.mjs", workerEnv{})
 	require.NoError(t, err, "the replacement worker gets its emptyDir")
 	require.ErrorIs(t, inner.Book(t.Context(), waiting, 2<<20), volume.ErrCapacity, "the waiting volume took no space of the replaced worker")
+}
+
+// ADR-0347 Decision 1 and ADR-0262 Decision 12: a Job records a lost local volume as a Function does, under its own
+// kind, so a same-named Function's state is its own.
+func TestJobDataMissingAfterLoss(t *testing.T) {
+	t.Parallel()
+	r := newShimReconciler(t, nil)
+	withVolumes(t, r)
+	job := &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob}}
+	job.Name, job.Namespace, job.ResourceGroup = "cart", "shop", "rg"
+	job.Spec.Volumes = []v1.VolumeEntry{stateVolume()}
+	job.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
+	require.NoError(t, r.dataMissing(t.Context(), jobWorkload(job)))
+	c, ok := job.Status.Conditions.Get(condDataMissing)
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionTrue, c.Status)
+	require.Contains(t, c.Message, "lost volumes: state; the Job was Ready before")
+
+	fn := volumeFn("cart", stateVolume())
+	require.NoError(t, r.dataMissing(t.Context(), functionWorkload(fn)))
+	_, ok = fn.Status.Conditions.Get(condDataMissing)
+	require.False(t, ok, "the Job's loss is not the same-named Function's, whose stored Ready vouches for nothing")
 }

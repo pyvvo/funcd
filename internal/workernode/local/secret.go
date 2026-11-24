@@ -16,11 +16,11 @@ import (
 // the caller binds, checked on every read. As for KV, the caller's namespace and function come from the sandbox's
 // fixed Ref, never from the request.
 type Secrets interface {
-	List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) ([]string, error)
-	Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, key string) (value string, found bool, err error)
+	List(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef) ([]string, error)
+	Get(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, key string) (value string, found bool, err error)
 	// Put and Delete write one key of Secret binding, which the caller binds and may write (ADR-0327).
-	Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key, value string) error
-	Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string) error
+	Put(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key, value string) error
+	Delete(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string) error
 }
 
 // maxSecretBytes caps a write's body, as SQL's does (ADR-0327 Decision 4).
@@ -47,7 +47,7 @@ type secretValue struct {
 // the sandbox's fixed namespace and function. A key no bound Secret holds is 404; a failed check is its problem
 // document (403 on a deny). Values are never logged. Each endpoint declares its known causes (ADR-0330).
 func registerSecrets(mux facetMux, caller Ref, s Secrets, logger *slog.Logger) {
-	ns, fn := caller.Namespace, caller.Function
+	ns, fn := caller.Namespace, caller.Workload()
 	read := []*fault.KnownCause{secrets.ErrCallerMissing, secrets.ErrReadDenied, secrets.ErrSecretMissing,
 		secrets.ErrValueNotText}
 	write := []*fault.KnownCause{secrets.ErrCallerMissing, secrets.ErrNoBinding, secrets.ErrSecretMissing,

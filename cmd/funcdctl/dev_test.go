@@ -529,7 +529,7 @@ func (d *deleteStatus) RoundTrip(r *http.Request) (*http.Response, error) {
 func kvStoreDoc(tables ...string) string {
 	s := "apiVersion: funcd.io/v1alpha1\nkind: KVStore\nmetadata:\n  name: a\nspec:\n  tables:\n"
 	for _, tb := range tables {
-		s += "    - name: " + tb + "\n      owner: counter\n"
+		s += "    - name: " + tb + "\n      owner:\n        kind: Function\n        name: counter\n"
 	}
 	return s
 }
@@ -611,10 +611,10 @@ func TestIssue490_DevReloadDropsBoundTableAndPrefix(t *testing.T) {
 				"media.yaml": "apiVersion: funcd.io/v1alpha1\nkind: Bucket\nmetadata:\n  name: media\nspec:\n  prefixes:\n" + prefixes,
 			})
 	}
-	before := folder("    - name: hot\n      owner: counter\n    - name: cold\n      owner: counter\n",
+	before := folder("    - name: hot\n      owner:\n        kind: Function\n        name: counter\n    - name: cold\n      owner:\n        kind: Function\n        name: counter\n",
 		"    - name: raw\n      owner:\n        kind: Function\n        name: counter\n    - name: old\n      owner:\n        kind: Function\n        name: counter\n",
 		"      - alias: cold\n        store: cache\n        table: cold\n", "      - alias: old\n        bucket: media\n        prefix: old\n")
-	after := folder("    - name: hot\n      owner: counter\n", "    - name: raw\n      owner:\n        kind: Function\n        name: counter\n    - name: fresh\n      owner:\n        kind: Function\n        name: counter\n",
+	after := folder("    - name: hot\n      owner:\n        kind: Function\n        name: counter\n", "    - name: raw\n      owner:\n        kind: Function\n        name: counter\n    - name: fresh\n      owner:\n        kind: Function\n        name: counter\n",
 		"", "      - alias: fresh\n        bucket: media\n        prefix: fresh\n")
 	settled := func(inst *devInstance) bool {
 		ctx := context.Background()

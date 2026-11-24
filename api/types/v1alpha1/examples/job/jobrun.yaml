@@ -1,0 +1,12 @@
+# region jobrun
+apiVersion: funcd.io/v1alpha1
+kind: JobRun
+metadata:
+  name: report-2026-10
+  namespace: default
+  resourceGroup: rg1
+spec:
+  job: report
+  input:
+    month: "2026-10"
+# endregion jobrun

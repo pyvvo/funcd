@@ -25,7 +25,7 @@ func TestIssue127_InvokeCapsTheTargetResponse(t *testing.T) {
 			}
 		})
 	}
-	target := Ref{Namespace: "team-a", Function: "b"}
+	target := FunctionRef("team-a", "b")
 
 	out, err := NewInvoker(answering(maxInvokeBytes)).Invoke(context.Background(), target, []byte(`{}`), time.Second)
 	require.NoError(t, err, "a response at the cap is returned")

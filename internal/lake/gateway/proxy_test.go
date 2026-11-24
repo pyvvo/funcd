@@ -90,7 +90,7 @@ func TestLakeProxy_AllowDeny(t *testing.T) {
 	// granted: analytics is bound to lake ⇒ allow ⇒ forwarded with the engine token swapped in.
 	stub := &engineStub{}
 	front := newProxy(stub)
-	granted, grantedErr := DeriveLakeToken(master, "data", "analytics")
+	granted, grantedErr := DeriveLakeToken(master, "data", v1.KindFunction, "analytics")
 	require.NoError(t, grantedErr)
 	resp := post(front, makeHandshake(granted))
 	_ = resp.Body.Close()
@@ -104,7 +104,7 @@ func TestLakeProxy_AllowDeny(t *testing.T) {
 	// ungranted: reporting is unbound ⇒ deny ⇒ 403, upstream never called.
 	stub2 := &engineStub{}
 	front2 := newProxy(stub2)
-	ungranted, ungrantedErr := DeriveLakeToken(master, "data", "reporting")
+	ungranted, ungrantedErr := DeriveLakeToken(master, "data", v1.KindFunction, "reporting")
 	require.NoError(t, ungrantedErr)
 	resp2 := post(front2, makeHandshake(ungranted))
 	_ = resp2.Body.Close()
@@ -215,7 +215,7 @@ func TestIssue39_ProxyStreamsTheBody(t *testing.T) {
 		})))
 		t.Cleanup(front.Close)
 
-		granted, err := DeriveLakeToken(master, "data", "analytics")
+		granted, err := DeriveLakeToken(master, "data", v1.KindFunction, "analytics")
 		require.NoError(t, err)
 		tail := bytes.Repeat([]byte("q"), 1<<20)
 		resp, err := http.Post(front.URL, "application/octet-stream", bytes.NewReader(append(makeHandshake(granted), tail...)))
@@ -262,7 +262,7 @@ func TestIssue378_ProxyErrorsAreProblemJSONViaSlog(t *testing.T) {
 	master := []byte("proxy-test-node-master")
 	keys := NewLakeKeys(master, st)
 	target := auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}
-	granted, err := DeriveLakeToken(master, "data", "analytics")
+	granted, err := DeriveLakeToken(master, "data", v1.KindFunction, "analytics")
 	require.NoError(t, err)
 
 	stoppedURL := "http://127.0.0.1:1" // nothing listens there: a closed server's port could be bound again
@@ -353,7 +353,7 @@ func TestIssue830_LakeProxyLogsThroughItsLogger(t *testing.T) {
 	st := store.New(memory.New())
 	seedLakeWorld(t, st)
 	master := []byte("proxy-test-node-master")
-	granted, err := DeriveLakeToken(master, "data", "analytics")
+	granted, err := DeriveLakeToken(master, "data", v1.KindFunction, "analytics")
 	require.NoError(t, err)
 	stoppedURL := "http://127.0.0.1:1" // nothing listens there: a closed server's port could be bound again
 
@@ -409,13 +409,13 @@ func TestLakeProxy_DeniesCrossNamespaceCaller(t *testing.T) {
 		return resp.StatusCode, stub
 	}
 
-	owner, err := DeriveLakeToken(master, "victim", "reader")
+	owner, err := DeriveLakeToken(master, "victim", v1.KindFunction, "reader")
 	require.NoError(t, err)
 	code, stub := query(owner)
 	require.Equal(t, http.StatusOK, code, "the owner namespace's bound Function is forwarded")
 	require.True(t, stub.hit)
 
-	thief, err := DeriveLakeToken(master, "attacker", "thief")
+	thief, err := DeriveLakeToken(master, "attacker", v1.KindFunction, "thief")
 	require.NoError(t, err)
 	for name, token := range map[string]string{"Function bound to attacker/lake": thief, "Identity granted on attacker/lake": minted} {
 		code, stub := query(token)
@@ -448,7 +448,7 @@ func TestIssue634_ProxyResendsUnsentQueryOnFreshConn(t *testing.T) {
 	seedLakeWorld(t, st)
 	master := []byte("issue-634-master")
 	keys := NewLakeKeys(master, st)
-	granted, err := DeriveLakeToken(master, "data", "analytics")
+	granted, err := DeriveLakeToken(master, "data", v1.KindFunction, "analytics")
 	require.NoError(t, err)
 
 	bodies := make(chan []byte, 2)

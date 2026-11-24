@@ -22,8 +22,8 @@ func kvStore(name string, mvb int64, mkb int, tables ...KVTable) *KVStore {
 // tables[] sub-domains and the status tables/bindings counts (ADR-0073).
 func TestKVStoreRoundtrip(t *testing.T) {
 	ks := kvStore("orders", 2048, 64,
-		KVTable{Name: "customers", Owner: "customers-svc"},
-		KVTable{Name: "fulfillment", Owner: "fulfillment-svc"})
+		KVTable{Name: "customers", Owner: FunctionOwner("customers-svc")},
+		KVTable{Name: "fulfillment", Owner: FunctionOwner("fulfillment-svc")})
 	ks.Status = KVStoreStatus{Status: Status{Phase: PhaseReady}, Tables: 2, Bindings: 3}
 	data, err := json.Marshal(ks)
 	if err != nil {
@@ -36,7 +36,7 @@ func TestKVStoreRoundtrip(t *testing.T) {
 	if ks2.Name != ks.Name || ks2.Spec.Quota.MaxValueBytes != 2048 || ks2.Spec.Quota.MaxKeyBytes != 64 {
 		t.Errorf("KVStore roundtrip mismatch: %+v", ks2)
 	}
-	if len(ks2.Spec.Tables) != 2 || ks2.Spec.Tables[0].Name != "customers" || ks2.Spec.Tables[0].Owner != "customers-svc" {
+	if len(ks2.Spec.Tables) != 2 || ks2.Spec.Tables[0].Name != "customers" || ks2.Spec.Tables[0].Owner != FunctionOwner("customers-svc") {
 		t.Errorf("KVStore tables roundtrip mismatch: %+v", ks2.Spec.Tables)
 	}
 	if ks2.Status.Phase != PhaseReady || ks2.Status.Tables != 2 || ks2.Status.Bindings != 3 {
@@ -89,7 +89,7 @@ func TestKVStoreValidate(t *testing.T) {
 	if err := kvStore("ok", 0, 0).Validate(); err != nil {
 		t.Errorf("valid KVStore rejected: %v", err)
 	}
-	if err := kvStore("with-tables", 0, 0, KVTable{Name: "a", Owner: "f"}, KVTable{Name: "b"}).Validate(); err != nil {
+	if err := kvStore("with-tables", 0, 0, KVTable{Name: "a", Owner: FunctionOwner("f")}, KVTable{Name: "b"}).Validate(); err != nil {
 		t.Errorf("valid KVStore with tables rejected: %v", err)
 	}
 	if err := kvStore("neg", -1, 0).Validate(); fault.KindOf(err) != fault.Invalid {

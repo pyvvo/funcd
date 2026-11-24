@@ -43,6 +43,34 @@ func functionUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
 	return cedartypes.NewEntityUID(entityTypeFunction, cedartypes.String(string(ns)+"/"+string(name)))
 }
 
+func jobUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
+	return cedartypes.NewEntityUID(entityTypeJob, cedartypes.String(string(ns)+"/"+string(name)))
+}
+
+// workloadUID is the entity of the workload ref names, by its kind (ADR-0351 Decision 3): a Function, a Lake and a
+// Job of one name are three entities.
+func workloadUID(ns v1.NamespaceName, ref v1.WorkloadRef) cedartypes.EntityUID {
+	switch ref.Kind {
+	case v1.KindLake:
+		return lakeUID(ns, ref.Name)
+	case v1.KindJob:
+		return jobUID(ns, ref.Name)
+	}
+	return functionUID(ns, ref.Name)
+}
+
+// workloadBindings are the bindings of a Function or a Job principal, which the capabilities materialize alike
+// (ADR-0351 Decision 1); any other principal has none of a workload's.
+func workloadBindings(src PrincipalObject) (*v1.FunctionBindings, bool) {
+	switch o := src.(type) {
+	case *v1.Function:
+		return &o.Spec.Bindings, true
+	case *v1.Job:
+		return &o.Spec.Bindings, true
+	}
+	return nil, false
+}
+
 func kvStoreUID(ns v1.NamespaceName, store v1.ObjectName) cedartypes.EntityUID {
 	return cedartypes.NewEntityUID(entityTypeKVStore, cedartypes.String(string(ns)+"/"+string(store)))
 }
@@ -100,19 +128,19 @@ func kvCapability(writers WriterLister) Capability {
 		Name:                  "kv",
 		Actions:               []auth.Action{auth.ActionKVRead, auth.ActionKVWrite},
 		EmitsEntityType:       entityTypeKVTable,
-		SupportingEntityTypes: []cedartypes.EntityType{entityTypeKVStore},
+		SupportingEntityTypes: []cedartypes.EntityType{entityTypeKVStore, entityTypeJob},
 		Resource: func(ctx context.Context, r MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
 			return kvResource(ctx, r, resource, writers)
 		},
 		PrincipalBinding: PrincipalBinding{
 			Attr: "kvBindings",
 			Bind: func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
-				fn, ok := src.(*v1.Function)
+				bs, ok := workloadBindings(src)
 				if !ok {
 					return nil // providers have no spec.bindings.kv → contribute nothing (inert)
 				}
-				out := make([]cedartypes.EntityUID, 0, len(fn.Spec.Bindings.KV))
-				for _, b := range fn.Spec.Bindings.KV {
+				out := make([]cedartypes.EntityUID, 0, len(bs.KV))
+				for _, b := range bs.KV {
 					out = append(out, kvTableUID(ns, b.Store, b.Table))
 				}
 				return out
@@ -164,8 +192,8 @@ func kvResource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 	// (ADR-0136). Empty ⇒ the forbid fires (owner-less/unassigned ⇒ read-only, default-deny).
 	var writerVals []cedartypes.Value
 	for _, tb := range ks.Spec.Tables {
-		if tb.Name == resource.Path && tb.Owner != "" {
-			ownerUID := functionUID(ks.Namespace, tb.Owner)
+		if tb.Name == resource.Path && !tb.Owner.IsZero() {
+			ownerUID := workloadUID(ks.Namespace, tb.Owner)
 			tableAttrs["owner"] = ownerUID // kept for back-compat (user policies compare resource.owner)
 			writerVals = append(writerVals, ownerUID)
 			break
@@ -193,19 +221,20 @@ func kvResource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 // missing). It owns no principal-owned resource beyond the target Function.
 func InvokeCapability() Capability {
 	return Capability{
-		Name:            "invoke",
-		Actions:         []auth.Action{auth.ActionLinkInvoke},
-		EmitsEntityType: entityTypeFunction,
-		Resource:        invokeResource,
+		Name:                  "invoke",
+		Actions:               []auth.Action{auth.ActionLinkInvoke},
+		EmitsEntityType:       entityTypeFunction,
+		SupportingEntityTypes: []cedartypes.EntityType{entityTypeJob},
+		Resource:              invokeResource,
 		PrincipalBinding: PrincipalBinding{
 			Attr: "links",
 			Bind: func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
-				fn, ok := src.(*v1.Function)
+				bs, ok := workloadBindings(src)
 				if !ok {
 					return nil // providers have no spec.bindings.links → contribute nothing (inert)
 				}
-				out := make([]cedartypes.EntityUID, 0, len(fn.Spec.Bindings.Links))
-				for _, l := range fn.Spec.Bindings.Links {
+				out := make([]cedartypes.EntityUID, 0, len(bs.Links))
+				for _, l := range bs.Links {
 					out = append(out, functionUID(ns, l.Target))
 				}
 				return out
@@ -247,7 +276,7 @@ func s3Capability(builtin string, writers WriterLister) Capability {
 		Name:                  "s3",
 		Actions:               []auth.Action{auth.ActionS3Read, auth.ActionS3Write},
 		EmitsEntityType:       entityTypeBlobPrefix,
-		SupportingEntityTypes: []cedartypes.EntityType{entityTypeBucket, entityTypeS3Identity, entityTypeIdentity},
+		SupportingEntityTypes: []cedartypes.EntityType{entityTypeBucket, entityTypeS3Identity, entityTypeIdentity, entityTypeJob},
 		Resource: func(ctx context.Context, r MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
 			return s3Resource(ctx, r, resource, writers)
 		},
@@ -257,6 +286,8 @@ func s3Capability(builtin string, writers WriterLister) Capability {
 				var blobs []v1.FunctionBlob
 				switch o := src.(type) {
 				case *v1.Function:
+					blobs = o.Spec.Bindings.Blob
+				case *v1.Job:
 					blobs = o.Spec.Bindings.Blob
 				case *v1.Lake:
 					blobs = o.Spec.Bindings.Blob // ADR-0088: a provider's spec.bindings.blob are its blobBindings
@@ -318,10 +349,7 @@ func s3Resource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 	var writerVals []cedartypes.Value
 	for _, pfx := range bkt.Spec.Prefixes {
 		if pfx.Name == resource.Path && !pfx.Owner.IsZero() {
-			ownerUID := functionUID(bkt.Namespace, pfx.Owner.Name)
-			if pfx.Owner.Kind == v1.KindLake {
-				ownerUID = lakeUID(bkt.Namespace, pfx.Owner.Name)
-			}
+			ownerUID := workloadUID(bkt.Namespace, pfx.Owner)
 			prefixAttrs["owner"] = ownerUID
 			writerVals = append(writerVals, ownerUID)
 			break
@@ -351,19 +379,20 @@ func s3Resource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 // granted via a Lake-scoped RolesAssignment (compiled to a permit), not this built-in.
 func LakeCapability() Capability {
 	return Capability{
-		Name:            "lake",
-		Actions:         []auth.Action{auth.ActionLakeQuery},
-		EmitsEntityType: entityTypeLake,
-		Resource:        lakeResource,
+		Name:                  "lake",
+		Actions:               []auth.Action{auth.ActionLakeQuery},
+		EmitsEntityType:       entityTypeLake,
+		SupportingEntityTypes: []cedartypes.EntityType{entityTypeJob},
+		Resource:              lakeResource,
 		PrincipalBinding: PrincipalBinding{
 			Attr: "lakeBindings",
 			Bind: func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
-				fn, ok := src.(*v1.Function)
+				bs, ok := workloadBindings(src)
 				if !ok {
 					return nil // providers have no spec.bindings.lake → contribute nothing (inert)
 				}
-				out := make([]cedartypes.EntityUID, 0, len(fn.Spec.Bindings.Lake))
-				for _, b := range fn.Spec.Bindings.Lake {
+				out := make([]cedartypes.EntityUID, 0, len(bs.Lake))
+				for _, b := range bs.Lake {
 					out = append(out, lakeUID(ns, b.Lake))
 				}
 				return out
@@ -393,6 +422,12 @@ func lakeResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (ced
 // any other type is not its own (ADR-0175).
 func FunctionPrincipalSource() PrincipalSource {
 	return principalSource[*v1.Function](v1.KindFunction, "cedar.FunctionPrincipalSource", "function")
+}
+
+// JobPrincipalSource resolves a Job principal's backing *v1.Job (ADR-0351 Decision 1): every worker of its runs acts as
+// the Job, never as a same-named Function, and its bindings are materialized as a Function's are.
+func JobPrincipalSource() PrincipalSource {
+	return principalSource[*v1.Job](v1.KindJob, "cedar.JobPrincipalSource", "job")
 }
 
 // LakePrincipalSource resolves a Lake principal's backing *v1.Lake (ADR-0088,
@@ -450,10 +485,11 @@ func netDestUID(id string) cedartypes.EntityUID {
 // KindNetDestination case (entities.go).
 func EgressCapability() Capability {
 	return Capability{
-		Name:            "egress",
-		Actions:         []auth.Action{auth.ActionEgressConnect},
-		EmitsEntityType: entityTypeNetDestination,
-		Resource:        netDestinationResource,
+		Name:                  "egress",
+		Actions:               []auth.Action{auth.ActionEgressConnect},
+		EmitsEntityType:       entityTypeNetDestination,
+		SupportingEntityTypes: []cedartypes.EntityType{entityTypeJob},
+		Resource:              netDestinationResource,
 		// PrincipalBinding: zero value ⇒ NONE. Builtin: "" ⇒ NONE (default-deny).
 	}
 }
@@ -502,13 +538,14 @@ func SQLCapabilityWithWriters(w WriterLister) Capability { return sqlCapability(
 // lake::query it owns no writable resource: no WriterLister, no write action.
 func AddonCapability() Capability {
 	return Capability{
-		Name:            "addon",
-		Actions:         []auth.Action{auth.ActionAddonCall},
-		EmitsEntityType: entityTypeAddonObject,
-		Resource:        addonResource,
+		Name:                  "addon",
+		Actions:               []auth.Action{auth.ActionAddonCall},
+		EmitsEntityType:       entityTypeAddonObject,
+		SupportingEntityTypes: []cedartypes.EntityType{entityTypeJob},
+		Resource:              addonResource,
 		PrincipalBinding: PrincipalBinding{
 			Attr: "addonBindings",
-			Bind: bindFunction(func(fn *v1.Function) []v1.FunctionAddon { return fn.Spec.Bindings.Addon },
+			Bind: bindFunction(func(b *v1.FunctionBindings) []v1.FunctionAddon { return b.Addon },
 				func(ns v1.NamespaceName, b v1.FunctionAddon) cedartypes.EntityUID {
 					return addonObjectUID(ns, b.Object)
 				}),
@@ -529,15 +566,15 @@ func addonResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (ce
 	}, true, nil
 }
 
-// bindFunction is a PrincipalBinding.Bind over a Function's bindings, one entity per binding; a principal that is not a
-// Function contributes nothing.
-func bindFunction[B v1.FunctionSQL | v1.FunctionLake | v1.FunctionLink | v1.FunctionAddon](bindings func(*v1.Function) []B, uid func(v1.NamespaceName, B) cedartypes.EntityUID) func(v1.NamespaceName, PrincipalObject) []cedartypes.EntityUID {
+// bindFunction is a PrincipalBinding.Bind over a Function's or a Job's bindings, one entity per binding; any other
+// principal contributes nothing.
+func bindFunction[B v1.FunctionSQL | v1.FunctionLake | v1.FunctionLink | v1.FunctionAddon](bindings func(*v1.FunctionBindings) []B, uid func(v1.NamespaceName, B) cedartypes.EntityUID) func(v1.NamespaceName, PrincipalObject) []cedartypes.EntityUID {
 	return func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
-		fn, ok := src.(*v1.Function)
+		all, ok := workloadBindings(src)
 		if !ok {
 			return nil
 		}
-		bs := bindings(fn)
+		bs := bindings(all)
 		out := make([]cedartypes.EntityUID, 0, len(bs))
 		for _, b := range bs {
 			out = append(out, uid(ns, b))
@@ -548,15 +585,16 @@ func bindFunction[B v1.FunctionSQL | v1.FunctionLake | v1.FunctionLink | v1.Func
 
 func sqlCapability(writers WriterLister) Capability {
 	return Capability{
-		Name:            "sql",
-		Actions:         []auth.Action{auth.ActionSQLRead, auth.ActionSQLWrite},
-		EmitsEntityType: entityTypeSQLDatabase,
+		Name:                  "sql",
+		Actions:               []auth.Action{auth.ActionSQLRead, auth.ActionSQLWrite},
+		EmitsEntityType:       entityTypeSQLDatabase,
+		SupportingEntityTypes: []cedartypes.EntityType{entityTypeJob},
 		Resource: func(ctx context.Context, r MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
 			return sqlResource(ctx, r, resource, writers)
 		},
 		PrincipalBinding: PrincipalBinding{
 			Attr: "sqlBindings",
-			Bind: bindFunction(func(fn *v1.Function) []v1.FunctionSQL { return fn.Spec.Bindings.SQL },
+			Bind: bindFunction(func(b *v1.FunctionBindings) []v1.FunctionSQL { return b.SQL },
 				func(ns v1.NamespaceName, b v1.FunctionSQL) cedartypes.EntityUID {
 					return sqlDatabaseUID(ns, b.Database)
 				}),
@@ -596,10 +634,10 @@ func sqlResource(ctx context.Context, r MetaReader, resource auth.EntityRef, wri
 
 // addOwnerAndWriters sets a resource's `owner`, its owner Function when named, and `writers`, that owner plus the
 // writer-role grants listed (ADR-0136); a resource with neither gets no `writers`, so a single-writer forbid fires.
-func addOwnerAndWriters(attrs cedartypes.RecordMap, ns v1.NamespaceName, owner v1.ObjectName, listed []cedartypes.EntityUID) {
+func addOwnerAndWriters(attrs cedartypes.RecordMap, ns v1.NamespaceName, owner v1.WorkloadRef, listed []cedartypes.EntityUID) {
 	var writerVals []cedartypes.Value
-	if owner != "" {
-		ownerUID := functionUID(ns, owner)
+	if !owner.IsZero() {
+		ownerUID := workloadUID(ns, owner)
 		attrs["owner"] = ownerUID
 		writerVals = append(writerVals, ownerUID)
 	}
@@ -634,7 +672,7 @@ func secretCapability(writers WriterLister) Capability {
 		EmitsEntityType: entityTypeSecret,
 		// An add-on object is a principal of secret::read (ADR-0332 Decision 4) and the resource of addon::call
 		// (ADR-0338 Decision 5), so a Policy names it under either capability.
-		SupportingEntityTypes: []cedartypes.EntityType{entityTypeAddonObject},
+		SupportingEntityTypes: []cedartypes.EntityType{entityTypeAddonObject, entityTypeJob},
 		Resource: func(ctx context.Context, r MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
 			return secretResource(ctx, r, resource, writers)
 		},
@@ -644,6 +682,8 @@ func secretCapability(writers WriterLister) Capability {
 				var names []v1.ObjectName
 				switch o := src.(type) {
 				case *v1.Function:
+					names = o.Spec.Bindings.Secret
+				case *v1.Job:
 					names = o.Spec.Bindings.Secret
 				case *v1.Lake:
 					names = o.Spec.Bindings.Secret

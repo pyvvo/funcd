@@ -20,6 +20,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // testPeriod is the supervision period the ADR-0142 tests run with.
@@ -412,18 +413,18 @@ func TestIssue353_ReadinessListErrorKeepsServing(t *testing.T) {
 // brokenSockets is a local API socket provider whose SocketFor fails while broken is set.
 type brokenSockets struct{ broken atomic.Bool }
 
-func (b *brokenSockets) SocketFor(_ v1.NamespaceName, name v1.ObjectName) (string, error) {
+func (b *brokenSockets) SocketFor(ref local.Ref) (string, error) {
 	if b.broken.Load() {
 		return "", fault.Unavailablef("test.SocketFor", "create socket dir: permission denied")
 	}
-	return "/run/test/" + string(name) + ".sock", nil
+	return "/run/test/" + string(ref.Name) + ".sock", nil
 }
 
 func (b *brokenSockets) PoolSocketFor(ns v1.NamespaceName, pool v1.ObjectName, _ []v1.ObjectName) (string, error) {
-	return b.SocketFor(ns, pool)
+	return b.SocketFor(local.FunctionRef(ns, pool))
 }
 
-func (*brokenSockets) Remove(v1.NamespaceName, v1.ObjectName) {}
+func (*brokenSockets) Remove(local.Ref) {}
 
 // Issue #358: a local API socket that cannot be provisioned keeps the Function from going Ready, with a reason naming
 // the error, and starts no worker without it; the pass retries, and the Function is Ready once the socket is provisioned.

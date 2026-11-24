@@ -51,12 +51,12 @@ func TestFacadeCheckRead(t *testing.T) {
 	f, err := kv.NewFacade(kv.FacadeDeps{KV: noEngine{t}, Resolver: b, Authorizer: pdp})
 	require.NoError(t, err)
 
-	require.NoError(t, f.CheckRead(ctx, "default", "todo-api", "store"))
+	require.NoError(t, f.CheckRead(ctx, "default", v1.FunctionOwner("todo-api"), "store"))
 	require.Equal(t, auth.ActionKVRead, pdp.last.Action)
-	require.Equal(t, fault.Forbidden, fault.KindOf(f.CheckRead(ctx, "default", "todo-api", "audit")), "an unbound alias")
+	require.Equal(t, fault.Forbidden, fault.KindOf(f.CheckRead(ctx, "default", v1.FunctionOwner("todo-api"), "audit")), "an unbound alias")
 
 	pdp.readGrants = map[string]bool{}
-	require.Equal(t, fault.Forbidden, fault.KindOf(f.CheckRead(ctx, "default", "todo-api", "store")), "no permitting Policy")
+	require.Equal(t, fault.Forbidden, fault.KindOf(f.CheckRead(ctx, "default", v1.FunctionOwner("todo-api"), "store")), "no permitting Policy")
 }
 
 // probe is a storage probe whose answer a test sets.
@@ -85,7 +85,7 @@ func TestKVStoreStatusFollowsTheKVProbe(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := store.New(storemem.New())
-	_, err := st.Create(ctx, mkKVStore("todo-store", v1.KVTable{Name: "todos", Owner: "todo-api"}))
+	_, err := st.Create(ctx, mkKVStore("todo-store", v1.KVTable{Name: "todos", Owner: v1.FunctionOwner("todo-api")}))
 	require.NoError(t, err)
 	_, err = st.Create(ctx, mkFunctionWithKV("todo-api", v1.FunctionKV{Alias: "store", Store: "todo-store", Table: "todos"}))
 	require.NoError(t, err)

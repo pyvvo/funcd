@@ -82,13 +82,14 @@ type ShapeValidator interface {
 // reconciler sets it as FUNCD_INVOKE_SOCKET in the worker env so the shim can dial context.invoke.
 // nil ⇒ fn-to-fn links are off (the env var is unset; invoke fails closed in the shim).
 type InvokeSocketProvider interface {
-	SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, error)
+	// SocketFor provisions the local API socket of ref: a Function's, or one run's of a Job (ADR-0351 Decision 2).
+	SocketFor(ref local.Ref) (string, error)
 	// PoolSocketFor provisions the one local API socket of pool worker `pool`, on which each call names its member;
 	// members is the set it serves, replaced on every call.
 	PoolSocketFor(ns v1.NamespaceName, pool v1.ObjectName, members []v1.ObjectName) (string, error)
-	// Remove stops + deletes the function's local API listener (called from teardown on delete, so
-	// the socket lifecycle tracks the Function resource — controller-driven, not leaked).
-	Remove(ns v1.NamespaceName, name v1.ObjectName)
+	// Remove stops + deletes ref's local API listener (called from teardown on delete, and as a run's worker is
+	// removed, so the socket lifecycle tracks its resource — controller-driven, not leaked).
+	Remove(ref local.Ref)
 }
 
 // Deps configures the Function lifecycle reconciler (internal component, ADR-0002 §1).
@@ -120,6 +121,9 @@ type Deps struct {
 	Resolver ArtifactResolver
 	// Platforms (ADR-0145) lists an artifact digest's platforms for the placement gate. nil → no gate.
 	Platforms PlatformResolver
+	// Inspector reads a Job's image contract by digest into its status.contract (ADR-0347 Decision 2). nil → none is
+	// read, so a run's input is left unchecked.
+	Inspector ContractInspector
 
 	// EndpointMode + ImageFor select container execution (ADR-0032). EndpointLoopback
 	// (default) is the process driver: ShimCommand launches the shim, loopback+portfile.
@@ -295,8 +299,9 @@ type Reconciler struct {
 	shimByFamily      map[string][]string // runtime-family prefix → shim command (ADR-0049)
 	endpointMode      EndpointMode
 	imageFor          func(string) string
-	resolver          ArtifactResolver // nil → no digest resolution (ADR-0035)
-	platformsOf       PlatformResolver // nil → no platform gate (ADR-0145)
+	resolver          ArtifactResolver  // nil → no digest resolution (ADR-0035)
+	platformsOf       PlatformResolver  // nil → no platform gate (ADR-0145)
+	inspector         ContractInspector // nil → a Job's contract is not read (ADR-0347 Decision 2)
 	httpClient        *http.Client
 	contracts         contracts // each artifact's compiled contract (ADR-0303)
 
@@ -387,8 +392,8 @@ type Reconciler struct {
 	// Revision watch, guarded by sparedMu; the store's Revision.status stays the truth.
 	held map[fnKey]bool
 
-	// volumes keeps the Functions' volumes (ADR-0262); emptyDirs names each worker's emptyDirs, volumesSeen the
-	// Functions this process passed over, volumesMissing those whose DataMissing awaits a status write,
+	// volumes keeps the Functions' and Jobs' volumes (ADR-0262); emptyDirs names each worker's emptyDirs, volumesSeen the
+	// workloads this process passed over, volumesMissing those whose DataMissing awaits a status write,
 	// heldLeftovers the last run's emptyDirs a held boot kept (#1204), restoring the Functions a Restore keeps
 	// workerless and launching the passes creating their workers (#1206), and passSlots the replica slots the steps of
 	// a pass keep for its sweep (#1207); volMu guards the seven, and launched tells StopWorkers that a pass is done
@@ -399,8 +404,8 @@ type Reconciler struct {
 	quarantinePeriod time.Duration
 	volMu            sync.Mutex
 	emptyDirs        map[runtime.InstanceID][]volume.ID
-	volumesSeen      map[fnKey]bool
-	volumesMissing   map[fnKey][]string
+	volumesSeen      map[volumeOwner]bool
+	volumesMissing   map[volumeOwner][]string
 	heldLeftovers    []volume.ID
 	restoring        map[fnKey]int
 	launching        map[fnKey]int
@@ -523,7 +528,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
 		logMaxRecordBytes: d.LogMaxRecordBytes, defaultResources: d.DefaultResources,
 		materializer: d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
-		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms,
+		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms, inspector: d.Inspector,
 		httpClient:        httpx.NodeClient(cmp.Or(d.ProbeTimeout, probeTimeout)),
 		probeTimeout:      cmp.Or(d.ProbeTimeout, probeTimeout),
 		secrets:           d.Secrets,
@@ -566,8 +571,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		hold:              d.Hold,
 		quarantinePeriod:  d.QuarantinePeriod,
 		emptyDirs:         map[runtime.InstanceID][]volume.ID{},
-		volumesSeen:       map[fnKey]bool{},
-		volumesMissing:    map[fnKey][]string{},
+		volumesSeen:       map[volumeOwner]bool{},
+		volumesMissing:    map[volumeOwner][]string{},
 		restoring:         map[fnKey]int{},
 		launching:         map[fnKey]int{},
 		passSlots:         map[fnKey]map[runtime.InstanceID]bool{},
@@ -587,7 +592,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			if derr := r.teardown(ctx, req.Namespace, req.Name); derr != nil {
 				return controller.Result{}, derr
 			}
-			if derr := r.volumesGone(ctx, req.Namespace, req.Name); derr != nil {
+			if derr := r.volumesGone(ctx, v1.KindFunction, req.Namespace, req.Name); derr != nil {
 				return controller.Result{}, derr
 			}
 			gone := &v1.Function{ObjectMeta: v1.ObjectMeta{Namespace: req.Namespace, Name: req.Name}}
@@ -744,7 +749,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 
 	// 3c-3d. binding gates: fn's current bindings resolve before any worker boots, a held revision's too (ADR-0190
 	// Decision 9).
-	env, err := r.bindings(ctx, fn)
+	env, err := r.bindings(ctx, functionWorkload(fn))
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -802,7 +807,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	}
 	res, err := r.finish(ctx, fn, v, drainAfter)
 	if err == nil && fn.Status.Phase == v1.PhaseReady {
-		err = r.pruneConfigMaps(ctx, fn)
+		err = r.pruneConfigMaps(ctx, functionWorkload(fn))
 	}
 	return afterHeld(res, err, herr)
 }
@@ -1959,7 +1964,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i, Platforms: platforms}); perr != nil {
 			return revisionPass{}, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
 		}
-		spec, serr := r.workerSpec(ctx, tmpl, rev, i, artifactPath, we)
+		spec, serr := r.workerSpec(ctx, functionWorkload(tmpl), rev, functionWorker(tmpl, i), artifactPath, we)
 		if serr != nil {
 			r.logger.Warn("could not start worker", "function", tmpl.Name, "replica", i, "err", serr)
 			retryAt = earlier(retryAt, r.boot.startResult(runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i), now, serr))
@@ -2272,7 +2277,7 @@ func (r *Reconciler) convergeHeld(ctx context.Context, fn *v1.Function, env *bou
 		return 0, err
 	}
 	if env == nil {
-		e, err := r.bindings(ctx, fn)
+		e, err := r.bindings(ctx, functionWorkload(fn))
 		if err != nil {
 			return 0, err
 		}
@@ -2477,10 +2482,8 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 			return fault.Wrapf(err, fault.KindOf(err), "function.teardown", "retire worker")
 		}
 	}
-	r.boot.forget(backoffPrefix(ns, name)) // replicas with no instance too: a namesake starts at zero (ADR-0169)
-	if r.invokeSockets != nil {
-		r.invokeSockets.Remove(ns, name) // the local API socket dies with the Function (ADR-0064)
-	}
+	r.boot.forget(backoffPrefix(ns, name))      // replicas with no instance too: a namesake starts at zero (ADR-0169)
+	r.removeSocket(local.FunctionRef(ns, name)) // the local API socket dies with the Function (ADR-0064)
 	return nil
 }
 
@@ -2495,14 +2498,40 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 // (errRevisionMissing). The create path first retires every worker labelled with the Revision's name: the owner
 // garbage collector may already have deleted a deleted namesake's Revision (ADR-0170).
 func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (string, error) {
+	return r.stamp(ctx, stampSubject{
+		w:          functionWorkload(fn),
+		revision:   v1.ObjectName(revisionName(fn)),
+		current:    v1.ObjectName(fn.Status.CurrentRevision),
+		setCurrent: func(rev v1.ObjectName) { fn.Status.CurrentRevision = string(rev) },
+		judge:      func(rev *v1.Revision) revisionOwner { return revisionOf(rev, fn) },
+		retire:     func(ctx context.Context, rev v1.ObjectName) error { return r.retireStale(ctx, fn, rev) },
+	})
+}
+
+// stampSubject is what a Revision snapshots (ADR-0347 Decision 2): a Function's spec, or a Job's through the fields it
+// shares with a Function's. judge is ADR-0172 Decision 5's table for its kind, and retire, when set, runs before the
+// create.
+type stampSubject struct {
+	w          workload
+	revision   v1.ObjectName
+	current    v1.ObjectName
+	setCurrent func(v1.ObjectName)
+	judge      func(*v1.Revision) revisionOwner
+	retire     func(ctx context.Context, rev v1.ObjectName) error
+}
+
+// stamp is ensureRevision for any subject: it adopts the subject's own stored Revision, drops a deleted namesake's,
+// refuses another's, and otherwise creates it with the digest pinned once (ADR-0035), naming the subject in spec.function
+// or spec.job and in its controller reference; it returns the Revision's digest.
+func (r *Reconciler) stamp(ctx context.Context, s stampSubject) (string, error) {
 	const op = "function.ensureRevision"
-	revName := revisionName(fn)
-	existing, err := r.getRevision(ctx, fn.Namespace, v1.ObjectName(revName))
+	m := s.w.meta()
+	existing, err := r.getRevision(ctx, m.Namespace, s.revision)
 	switch {
 	case err == nil:
-		switch revisionOf(existing, fn) {
+		switch s.judge(existing) {
 		case revSelf:
-			return r.adoptRevision(ctx, fn, existing)
+			return r.adoptRevision(ctx, s, existing)
 		case revOther:
 			return "", stampTaken(existing)
 		}
@@ -2511,13 +2540,13 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 		}
 	case fault.KindOf(err) != fault.NotFound:
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "get revision")
-	case fn.Status.CurrentRevision == revName:
-		return "", fmt.Errorf("%w: %s", errRevisionMissing, revName)
+	case s.current == s.revision:
+		return "", fmt.Errorf("%w: %s", errRevisionMissing, s.revision)
 	}
 	// create path: pin the digest — explicit if set, else resolve the ref (ADR-0035).
-	pinned := fn.Spec.ImageDigest
+	pinned := s.w.spec.ImageDigest
 	if pinned == "" {
-		d, rerr := r.pinDigest(ctx, fn.Spec.Image)
+		d, rerr := r.pinDigest(ctx, s.w.spec.Image)
 		if rerr != nil {
 			return "", rerr
 		}
@@ -2525,61 +2554,67 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 	}
 	obj, _ := v1.NewObject(v1.KindRevision)
 	rev := obj.(*v1.Revision)
-	rev.Name = v1.ObjectName(revName)
-	rev.Namespace = fn.Namespace
-	rev.ResourceGroup = fn.ResourceGroup
-	owner := controllerRef(fn)
+	rev.Name = s.revision
+	rev.Namespace = m.Namespace
+	rev.ResourceGroup = m.ResourceGroup
+	owner := s.w.controllerRef()
 	rev.OwnerReferences = []v1.OwnerReference{owner}
 	rev.Spec = v1.RevisionSpec{
-		Function: owner.ObjectRef,
-		Number:   fn.Generation,
-		Runtime:  fn.Spec.Runtime,
-		Handler:  fn.Spec.Handler,
-		Image:    fn.Spec.Image, ImageDigest: pinned,
+		Number:  m.Generation,
+		Runtime: s.w.spec.Runtime,
+		Handler: s.w.spec.Handler,
+		Image:   s.w.spec.Image, ImageDigest: pinned,
 	}
-	if err := r.retireStale(ctx, fn, rev.Name); err != nil {
-		return "", err
+	if owner.Kind == v1.KindJob {
+		rev.Spec.Job = owner.Name
+	} else {
+		rev.Spec.Function = owner.ObjectRef
+	}
+	if s.retire != nil {
+		if err := s.retire(ctx, rev.Name); err != nil {
+			return "", err
+		}
 	}
 	if _, cerr := r.store.Create(ctx, rev); cerr != nil {
 		switch fault.KindOf(cerr) {
 		case fault.Conflict:
-			return r.settleCreateConflict(ctx, fn, cerr)
+			return r.settleCreateConflict(ctx, s, cerr)
 		case fault.Invalid:
 			return "", fmt.Errorf("%w: %w", errRevisionStampFailed, cerr)
 		}
 		return "", fault.Wrapf(cerr, fault.KindOf(cerr), op, "create revision")
 	}
-	fn.Status.CurrentRevision = revName
+	s.setCurrent(s.revision)
 	return pinned, nil
 }
 
-// settleCreateConflict reads the Revision a concurrent create stored under fn's name: fn's own is adopted, another
-// Function's fails the stamp, and a deleted namesake's returns the Conflict, so the next pass drops it (ADR-0172).
-func (r *Reconciler) settleCreateConflict(ctx context.Context, fn *v1.Function, conflict error) (string, error) {
+// settleCreateConflict reads the Revision a concurrent create stored under the subject's name: its own is adopted,
+// another's fails the stamp, and a deleted namesake's returns the Conflict, so the next pass drops it (ADR-0172).
+func (r *Reconciler) settleCreateConflict(ctx context.Context, s stampSubject, conflict error) (string, error) {
 	const op = "function.ensureRevision"
-	cur, err := r.getRevision(ctx, fn.Namespace, v1.ObjectName(revisionName(fn)))
+	cur, err := r.getRevision(ctx, s.w.meta().Namespace, s.revision)
 	if err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "get revision after a create conflict")
 	}
-	switch revisionOf(cur, fn) {
+	switch s.judge(cur) {
 	case revSelf:
-		return r.adoptRevision(ctx, fn, cur)
+		return r.adoptRevision(ctx, s, cur)
 	case revOther:
 		return "", stampTaken(cur)
 	}
 	return "", fault.Wrapf(conflict, fault.Conflict, op, "create revision")
 }
 
-// adoptRevision makes rev, fn's own, the current revision. A ref-less one (stamped before 2dc9d26) first gets fn as
-// its controller: the reconciler's one metadata write to a Revision (ADR-0172 Decision 5).
-func (r *Reconciler) adoptRevision(ctx context.Context, fn *v1.Function, rev *v1.Revision) (string, error) {
+// adoptRevision makes rev, the subject's own, its current revision. A ref-less one (stamped before 2dc9d26) first gets
+// the subject as its controller: the reconciler's one metadata write to a Revision (ADR-0172 Decision 5).
+func (r *Reconciler) adoptRevision(ctx context.Context, s stampSubject, rev *v1.Revision) (string, error) {
 	if _, owned := v1.ControllerOf(rev.OwnerReferences); !owned {
-		rev.OwnerReferences = append(rev.OwnerReferences, controllerRef(fn))
+		rev.OwnerReferences = append(rev.OwnerReferences, s.w.controllerRef())
 		if _, err := r.store.Update(ctx, rev); err != nil {
 			return "", fault.Wrapf(err, fault.KindOf(err), "function.adoptRevision", "adopt revision %q", rev.Name)
 		}
 	}
-	fn.Status.CurrentRevision = string(rev.Name)
+	s.setCurrent(rev.Name)
 	return rev.Spec.ImageDigest, nil
 }
 
@@ -2594,11 +2629,6 @@ func (r *Reconciler) getRevision(ctx context.Context, ns v1.NamespaceName, name 
 		return nil, fault.Internalf("function.getRevision", "object %q is not a Revision", name)
 	}
 	return rev, nil
-}
-
-func controllerRef(fn *v1.Function) v1.OwnerReference {
-	ref := v1.ObjectRef{Kind: v1.KindFunction, Namespace: fn.Namespace, Name: fn.Name}
-	return v1.OwnerReference{ObjectRef: ref, UID: fn.UID, Controller: true}
 }
 
 const (
@@ -2628,10 +2658,13 @@ const (
 	revOther                         // another Function's
 )
 
-// revisionOf follows ADR-0172 Decision 5: a controller ref decides first (this UID revSelf, another UID of this name
-// revNamesake, another Function revOther); ref-less, spec.function naming another Function is revOther, then
-// revSelf if the status names it, else revNamesake.
+// revisionOf follows ADR-0172 Decision 5: a Job's Revision is never a Function's (ADR-0347 Decision 2); a controller
+// ref decides first (this UID revSelf, another UID of this name revNamesake, another Function revOther); ref-less,
+// spec.function naming another Function is revOther, then revSelf if the status names it, else revNamesake.
 func revisionOf(rev *v1.Revision, fn *v1.Function) revisionOwner {
+	if rev.Spec.Job != "" {
+		return revOther
+	}
 	if o, ok := v1.ControllerOf(rev.OwnerReferences); ok {
 		switch {
 		case o.Kind != v1.KindFunction || o.Name != fn.Name:
@@ -2650,9 +2683,12 @@ func revisionOf(rev *v1.Revision, fn *v1.Function) revisionOwner {
 	return revNamesake
 }
 
-// stampTaken is the error of a Revision name another Function's Revision holds.
+// stampTaken is the error of a Revision name another Function's or Job's Revision holds.
 func stampTaken(rev *v1.Revision) error {
 	ref := rev.Spec.Function
+	if rev.Spec.Job != "" {
+		ref = v1.ObjectRef{Kind: v1.KindJob, Namespace: rev.Namespace, Name: rev.Spec.Job}
+	}
 	if o, ok := v1.ControllerOf(rev.OwnerReferences); ok {
 		ref = o.ObjectRef
 	}
@@ -3159,15 +3195,32 @@ func unavailablePrefix(rt v1.RuntimeName) string {
 // context.kv (ADR-0069) and the rest, and returns its host path. EVERY function gets one (KV is available to all; the
 // link-as-grant check for invoke stays at resolve time, so a linkless function's invoke still fails closed). "" when
 // the local API is off; a socket that cannot be provisioned is an error, so no worker starts without it (issue #358).
-func (r *Reconciler) invokeSocket(fn *v1.Function) (string, error) {
+func (r *Reconciler) invokeSocket(ref local.Ref) (string, error) {
 	if r.invokeSockets == nil {
 		return "", nil
 	}
-	sock, err := r.invokeSockets.SocketFor(fn.Namespace, fn.Name)
+	sock, err := r.invokeSockets.SocketFor(ref)
 	if err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), "function.invokeSocket", "provision the local API socket")
 	}
 	return sock, nil
+}
+
+// removeSocket stops ref's local API socket, if the local API is on.
+func (r *Reconciler) removeSocket(ref local.Ref) {
+	if r.invokeSockets != nil {
+		r.invokeSockets.Remove(ref)
+	}
+}
+
+// callerRef is the local API caller worker wo of w acts as: its Function, or its Job with the run it serves (ADR-0351
+// Decision 2).
+func callerRef(w workload, wo workerOf) local.Ref {
+	m := w.meta()
+	if wo.kind == v1.KindJobRun {
+		return local.Ref{Namespace: m.Namespace, Kind: v1.KindJob, Name: m.Name, Run: wo.name}
+	}
+	return local.FunctionRef(m.Namespace, m.Name)
 }
 
 // isPythonFamily reports whether rt is a python-family runtime (e.g. "python314") — the family
@@ -3221,6 +3274,13 @@ func (e contractMissingError) Error() string {
 	return "artifact " + e.digest + " carries no I/O contract; a cloudevent Function needs one (ADR-0090)"
 }
 
+// requiresContract reports whether the artifacts r materializes carry their I/O contract (ADR-0090), so a cloudevent
+// workload's artifact with none is refused (issue #1084).
+func (r *Reconciler) requiresContract() bool {
+	req, ok := r.materializer.(ContractRequirer)
+	return ok && req.RequiresContract()
+}
+
 // httpContractError is the materialize error of an http Function whose artifact carries an I/O contract, which it may
 // not (ADR-0243). No shim reads the contract to refuse it, so funcd does, as a shape failure (ADR-0304 Decision 3).
 type httpContractError struct{ digest string }
@@ -3245,7 +3305,7 @@ func (r *Reconciler) materialize(ctx context.Context, fn *v1.Function) (string, 
 		return path, nil
 	}
 	if !delivered {
-		if req, ok := r.materializer.(ContractRequirer); ok && req.RequiresContract() {
+		if r.requiresContract() {
 			return "", contractMissingError{digest: fn.Spec.ImageDigest}
 		}
 		return path, nil
@@ -3258,15 +3318,29 @@ func (r *Reconciler) materialize(ctx context.Context, fn *v1.Function) (string, 
 }
 
 // shimEnv is the env a solo shim worker starts from: the artifact path as the worker sees it, the
-// handler export (ADR-0030), FUNCD_FUNCTION, which the shim names its invocation spans after (ADR-0101), and
-// FUNCD_PROTOCOL, which tells it whether the export is an event handler or an http(app) one (ADR-0243).
-func shimEnv(fn *v1.Function, artifact string) map[string]string {
+// handler export (ADR-0030), and FUNCD_PROTOCOL, which tells it whether the export is an event handler or an http(app)
+// one (ADR-0243). The owner's own env follows (workerOf).
+func shimEnv(spec *v1.FunctionSpec, artifact string) map[string]string {
 	return map[string]string{
 		"FUNCD_ARTIFACT": artifact,
-		"FUNCD_HANDLER":  fn.Spec.Handler,
-		"FUNCD_FUNCTION": string(fn.Name),
-		"FUNCD_PROTOCOL": string(fn.Spec.Protocol.Normalized()),
+		"FUNCD_HANDLER":  spec.Handler,
+		"FUNCD_PROTOCOL": string(spec.Protocol.Normalized()),
 	}
+}
+
+// workerOf is who a worker runs for: a Function's replica, whose env names the Function (FUNCD_FUNCTION, after which
+// the shim names its invocation spans, ADR-0101), or a run's one worker, which carries the run's name and kind and no
+// Function's name (ADR-0347 Decision 5).
+type workerOf struct {
+	name    v1.ObjectName
+	kind    v1.Kind
+	replica int
+	env     map[string]string
+}
+
+// functionWorker is replica i of fn.
+func functionWorker(fn *v1.Function, i int) workerOf {
+	return workerOf{name: fn.Name, kind: v1.KindFunction, replica: i, env: map[string]string{"FUNCD_FUNCTION": string(fn.Name)}}
 }
 
 // addRecordBound passes funclog.maxRecordBytes to a shim or a pool host, which bounds each record line by it (ADR-0168).
@@ -3276,53 +3350,56 @@ func (r *Reconciler) addRecordBound(env map[string]string) {
 	}
 }
 
-// workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is configured, ADR-0030) it launches
-// the runtime shim with the materialized artifact and handler in the env; otherwise it runs the legacy long-lived
-// placeholder (ADR-0020). we is what the providers fn binds give its workers (bindings).
-func (r *Reconciler) workerSpec(ctx context.Context, fn *v1.Function, rev v1.ObjectName, replica int, artifactPath string, we workerEnv) (runtime.WorkerSpec, error) {
-	spec := runtime.WorkerSpec{Namespace: fn.Namespace, Name: fn.Name, OwnerKind: v1.KindFunction, Replica: replica, Image: string(fn.Spec.Runtime)}
+// workerSpec builds the runtime spec of worker wo of w's revision rev. In shim mode (a Materializer is configured,
+// ADR-0030) it launches the runtime shim with the materialized artifact and handler in the env; otherwise it runs the
+// legacy long-lived placeholder (ADR-0020). we is what the providers w binds give its workers (bindings). A run's
+// worker gets a local API socket of its own, on which it acts as its Job (ADR-0351 Decision 2).
+func (r *Reconciler) workerSpec(ctx context.Context, w workload, rev v1.ObjectName, wo workerOf, artifactPath string, we workerEnv) (runtime.WorkerSpec, error) {
+	m := w.meta()
+	spec := runtime.WorkerSpec{Namespace: m.Namespace, Name: wo.name, OwnerKind: wo.kind, Replica: wo.replica, Image: string(w.spec.Runtime)}
 	if r.materializer == nil {
 		// Legacy placeholder: a long-lived process stands in for the worker; real execution is the shim path (ADR-0030).
 		spec.Command = []string{"sleep", "86400"}
 		return spec, nil
 	}
-	volMounts, volEnv, err := r.workerVolumes(ctx, fn, runtime.NewInstanceID(fn.Namespace, fn.Name, rev, replica))
+	volMounts, volEnv, err := r.workerVolumes(ctx, w, runtime.NewInstanceID(m.Namespace, wo.name, rev, wo.replica))
 	if err != nil {
 		return runtime.WorkerSpec{}, err
 	}
-	sock, err := r.invokeSocket(fn)
+	sock, err := r.invokeSocket(callerRef(w, wo))
 	if err != nil {
 		return runtime.WorkerSpec{}, err
 	}
-	spec.Limits = r.limitsOf(ctx, fn)
+	spec.Limits = r.limitsOf(ctx, w.fn())
 	if r.endpointMode != EndpointNetnsFixedPort {
 		// Process mode (ADR-0030): ShimCommand launches the shim, which binds loopback and writes its port file; the
 		// worker sees the host paths, and its volumes are host directories with no mount (ADR-0262).
-		spec.Command = r.shimFor(fn.Spec.Runtime) // node by default; python* → the python shim (ADR-0049)
-		spec.Env = r.shimWorkerEnv(fn, artifactPath, filepath.Dir(artifactPath), sock, we, volEnv)
+		spec.Command = r.shimFor(w.spec.Runtime) // node by default; python* → the python shim (ADR-0049)
+		spec.Env = r.shimWorkerEnv(w, wo, artifactPath, filepath.Dir(artifactPath), sock, we, volEnv)
 		return spec, nil
 	}
 	// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command empty), the artifact is bind-mounted
 	// read-only, each volume is a bind of its leaf alone (ADR-0262), the local API socket is bound in at its in-container
 	// path, and the shim binds a fixed netns port.
-	spec.Image = r.imageFor(string(fn.Spec.Runtime))
+	spec.Image = r.imageFor(string(w.spec.Runtime))
 	spec.Mounts = append([]runtime.Mount{{Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true}}, volMounts...)
 	if sock != "" {
 		spec.Mounts = append(spec.Mounts, runtime.Mount{Source: sock, Target: containerInvokeSocket})
 		sock = containerInvokeSocket
 	}
-	spec.Env = r.shimWorkerEnv(fn, filepath.Join(containerArtifactDir, filepath.Base(artifactPath)), containerArtifactDir, sock, we, volEnv)
+	spec.Env = r.shimWorkerEnv(w, wo, filepath.Join(containerArtifactDir, filepath.Base(artifactPath)), containerArtifactDir, sock, we, volEnv)
 	spec.Env["FUNCD_PORT"] = strconv.Itoa(containerShimPort)
 	return spec, nil
 }
 
 // shimWorkerEnv is the env a solo shim worker starts with, artifact, bundleRoot and socket as the worker sees them: the
-// shim's own (shimEnv), the record bound (ADR-0168), the bundle's (ADR-0089), the local API socket, what the providers
-// fn binds give it, and FUNCD_VOLUME_<NAME> for each of its volumes (ADR-0262).
-func (r *Reconciler) shimWorkerEnv(fn *v1.Function, artifact, bundleRoot, socket string, we workerEnv, volEnv map[string]string) map[string]string {
-	env := shimEnv(fn, artifact)
+// shim's own (shimEnv), its owner's (workerOf), the record bound (ADR-0168), the bundle's (ADR-0089), the local API
+// socket, what the providers w binds give it, and FUNCD_VOLUME_<NAME> for each of its volumes (ADR-0262).
+func (r *Reconciler) shimWorkerEnv(w workload, wo workerOf, artifact, bundleRoot, socket string, we workerEnv, volEnv map[string]string) map[string]string {
+	env := shimEnv(w.spec, artifact)
+	maps.Copy(env, wo.env)
 	r.addRecordBound(env)
-	addBundleEnv(env, fn.Spec.Runtime, bundleRoot)
+	addBundleEnv(env, w.spec.Runtime, bundleRoot)
 	if socket != "" {
 		env["FUNCD_INVOKE_SOCKET"] = socket
 	}

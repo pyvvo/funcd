@@ -33,19 +33,19 @@ func (zeroReader) Read(p []byte) (int, error) {
 // Put is ever called, so the port body is irrelevant.
 type capFakeBlob struct{}
 
-func (capFakeBlob) Get(context.Context, v1.NamespaceName, v1.ObjectName, string, string) ([]byte, bool, error) {
+func (capFakeBlob) Get(context.Context, v1.NamespaceName, v1.WorkloadRef, string, string) ([]byte, bool, error) {
 	return nil, false, nil
 }
-func (capFakeBlob) Put(context.Context, v1.NamespaceName, v1.ObjectName, string, string, []byte) error {
+func (capFakeBlob) Put(context.Context, v1.NamespaceName, v1.WorkloadRef, string, string, []byte) error {
 	return nil
 }
-func (capFakeBlob) Delete(context.Context, v1.NamespaceName, v1.ObjectName, string, string) error {
+func (capFakeBlob) Delete(context.Context, v1.NamespaceName, v1.WorkloadRef, string, string) error {
 	return nil
 }
-func (capFakeBlob) List(context.Context, v1.NamespaceName, v1.ObjectName, string, string) ([]string, error) {
+func (capFakeBlob) List(context.Context, v1.NamespaceName, v1.WorkloadRef, string, string) ([]string, error) {
 	return nil, nil
 }
-func (capFakeBlob) SignedURL(context.Context, v1.NamespaceName, v1.ObjectName, string, string, blob.SignOptions) (string, error) {
+func (capFakeBlob) SignedURL(context.Context, v1.NamespaceName, v1.WorkloadRef, string, string, blob.SignOptions) (string, error) {
 	return "", nil
 }
 
@@ -53,7 +53,7 @@ func (capFakeBlob) SignedURL(context.Context, v1.NamespaceName, v1.ObjectName, s
 // guard fires in the handler before Put is called). The over-cap body is STREAMED (not allocated).
 func TestScenarioBlobSizeCap(t *testing.T) {
 	mux := http.NewServeMux()
-	registerBlob(mux, Ref{Namespace: "default", Function: "fn"}, capFakeBlob{}, slog.Default())
+	registerBlob(mux, FunctionRef("default", "fn"), capFakeBlob{}, slog.Default())
 
 	over := httptest.NewRequest(http.MethodPut, "/blob/b/obj", io.LimitReader(zeroReader{}, maxBlobBytes+1))
 	overRec := httptest.NewRecorder()

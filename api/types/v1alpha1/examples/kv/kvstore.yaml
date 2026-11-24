@@ -10,7 +10,9 @@ spec:
     maxSize: 64Mi
   tables:
     - name: table-counters
-      owner: counter
+      owner:
+        kind: Function
+        name: counter
 # endregion kvstore
 ---
 apiVersion: funcd.io/v1alpha1

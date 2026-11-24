@@ -51,13 +51,13 @@ type fakeKVResolver struct {
 	maxValueBytes int64
 }
 
-func (b fakeKVResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.ObjectName, alias string) (kvsvc.Binding, error) {
-	if fn == "fn" && alias == "b" {
+func (b fakeKVResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.WorkloadRef, alias string) (kvsvc.Binding, error) {
+	if fn == v1.FunctionOwner("fn") && alias == "b" {
 		maxValue := b.maxValueBytes
 		if maxValue == 0 {
 			maxValue = 1 << 20
 		}
-		return kvsvc.Binding{Store: "s", Table: "t", Owner: b.owner, MaxValueBytes: maxValue, MaxKeyBytes: 1024}, nil
+		return kvsvc.Binding{Store: "s", Table: "t", Owner: v1.FunctionOwner(b.owner), MaxValueBytes: maxValue, MaxKeyBytes: 1024}, nil
 	}
 	return kvsvc.Binding{}, fault.Forbiddenf("fakeKVResolver", "no kv binding for %s/%s", fn, alias)
 }
@@ -68,7 +68,7 @@ func kvHandler(t *testing.T, ns v1.NamespaceName, resolver kvsvc.BindingResolver
 	t.Helper()
 	f, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: kvmemory.New(), Resolver: resolver, Authorizer: pdp})
 	require.NoError(t, err)
-	return local.NewHandler(local.Ref{Namespace: ns, Function: "fn"}, nil, nil, nil, nil, nil, local.WithFacets(local.KVFacet(f)))
+	return local.NewHandler(local.FunctionRef(ns, "fn"), nil, nil, nil, nil, nil, local.WithFacets(local.KVFacet(f)))
 }
 
 func do(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {
@@ -165,7 +165,7 @@ func TestIssue169_DeclaredValueCapIsServable(t *testing.T) {
 		ks := &v1.KVStore{
 			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
 			ObjectMeta: v1.ObjectMeta{Name: "s", Namespace: "default", ResourceGroup: "rg1"},
-			Spec:       v1.KVStoreSpec{Quota: v1.KVStoreQuota{MaxValueBytes: capBytes}, Tables: []v1.KVTable{{Name: "t", Owner: "fn"}}},
+			Spec:       v1.KVStoreSpec{Quota: v1.KVStoreQuota{MaxValueBytes: capBytes}, Tables: []v1.KVTable{{Name: "t", Owner: v1.FunctionOwner("fn")}}},
 		}
 		if ks.Validate() != nil {
 			continue
@@ -249,7 +249,7 @@ type failingKV struct {
 	err error
 }
 
-func (f failingKV) GetEntry(context.Context, v1.NamespaceName, v1.ObjectName, string, string) (kvstore.Entry, bool, error) {
+func (f failingKV) GetEntry(context.Context, v1.NamespaceName, v1.WorkloadRef, string, string) (kvstore.Entry, bool, error) {
 	return kvstore.Entry{}, false, f.err
 }
 
@@ -257,7 +257,7 @@ func (f failingKV) GetEntry(context.Context, v1.NamespaceName, v1.ObjectName, st
 func TestLocalAPIFaultCauseStaysInTheLog(t *testing.T) {
 	const cause = "open data/kv/000001.vlog: permission denied"
 	var logs bytes.Buffer
-	h := local.NewHandler(local.Ref{Namespace: "default", Function: "fn"}, nil, nil, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)),
+	h := local.NewHandler(local.FunctionRef("default", "fn"), nil, nil, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)),
 		local.WithFacets(local.KVFacet(failingKV{err: fault.Wrapf(errors.New(cause), fault.Internal, "kvbadger.Get", "read the key")})))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/kv/b/k", http.NoBody))

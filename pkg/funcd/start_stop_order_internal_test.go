@@ -25,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // scenario: providers-boot-in-order
@@ -312,7 +313,7 @@ func TestShutdown_KeepsTheLocalAPIUntilTheWorkersStop(t *testing.T) {
 	require.NoError(t, err)
 	ks := &v1.KVStore{TypeMeta: v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore}}
 	ks.Name, ks.Namespace, ks.ResourceGroup = "notes", "default", "rg1"
-	ks.Spec.Tables = []v1.KVTable{{Name: "last", Owner: "leaving"}}
+	ks.Spec.Tables = []v1.KVTable{{Name: "last", Owner: v1.FunctionOwner("leaving")}}
 	create(t, p.cfg.store, ks)
 	for name, bindings := range map[v1.ObjectName]v1.FunctionBindings{
 		"cold": {},
@@ -327,7 +328,7 @@ func TestShutdown_KeepsTheLocalAPIUntilTheWorkersStop(t *testing.T) {
 			Bindings: bindings}
 		create(t, p.cfg.store, fn)
 	}
-	rt.sock, err = p.exec.sockets.SocketFor("default", "leaving")
+	rt.sock, err = p.exec.sockets.SocketFor(local.FunctionRef("default", "leaving"))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

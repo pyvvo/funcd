@@ -78,7 +78,7 @@ func (e *gcEnv) stepBinds(t *testing.T, fn string) []v1.FunctionKV {
 func TestScenarioRecreatedWorkflowNeedsHandover(t *testing.T) {
 	e := startGC(t)
 	keep := kvStore("w-keep", v1.DeletionRetain)
-	keep.Tables[0].Owner = "s"
+	keep.Tables[0].Owner = v1.FunctionOwner("s")
 	e.boundWorkflow(t, keep)
 	e.waitExists(t, v1.KindKVStore, "w-keep")
 	require.Eventually(t, func() bool { return e.exists(t, v1.KindFunction, "w-s") && len(e.stepBinds(t, "w-s")) == 1 }, 30*time.Second, 50*time.Millisecond)

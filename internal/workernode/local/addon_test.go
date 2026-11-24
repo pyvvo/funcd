@@ -72,24 +72,24 @@ type fakeAddon struct {
 	err    error
 }
 
-func (f fakeAddon) Target(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, path string) (local.AddonTarget, error) {
+func (f fakeAddon) Target(_ context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias, path string) (local.AddonTarget, error) {
 	switch {
 	case f.err != nil:
 		return local.AddonTarget{}, f.err
-	case ns != "default" || fn != "rauthy-settings" || alias != "idp":
+	case ns != "default" || fn != v1.FunctionOwner("rauthy-settings") || alias != "idp":
 		return local.AddonTarget{}, local.ErrAddonNoBinding.Errorf("test", "no binding %q", alias)
 	}
 	return local.AddonTarget{Address: strings.TrimPrefix(f.engine, "http://"), Path: path}, nil
 }
 
 func facetHandler(a local.Addon, limits local.AddonLimits) http.Handler {
-	return local.NewHandler(local.Ref{Namespace: "default", Function: "rauthy-settings"}, nil, nil, nil, nil, nil,
+	return local.NewHandler(local.FunctionRef("default", "rauthy-settings"), nil, nil, nil, nil, nil,
 		local.WithFacets(local.AddonFacet(a, limits)))
 }
 
 func proxyHandler(a local.Addon, limits local.AddonLimits) http.Handler {
 	return local.NewAddonProxy(a, func(token string) (local.Ref, bool) {
-		return local.Ref{Namespace: "default", Function: "rauthy-settings"}, token == "the-token"
+		return local.FunctionRef("default", "rauthy-settings"), token == "the-token"
 	}, limits, nil)
 }
 
@@ -274,10 +274,10 @@ func TestAddonCallNamesNoEngineAddress(t *testing.T) {
 		var logs bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 		limits := local.AddonLimits{Timeout: 100 * time.Millisecond}
-		facet := local.NewHandler(local.Ref{Namespace: "default", Function: "rauthy-settings"}, nil, nil, nil, nil, logger,
+		facet := local.NewHandler(local.FunctionRef("default", "rauthy-settings"), nil, nil, nil, nil, logger,
 			local.WithFacets(local.AddonFacet(fakeAddon{engine: c.engine}, limits)))
 		proxy := local.NewAddonProxy(fakeAddon{engine: c.engine}, func(string) (local.Ref, bool) {
-			return local.Ref{Namespace: "default", Function: "rauthy-settings"}, true
+			return local.FunctionRef("default", "rauthy-settings"), true
 		}, limits, logger)
 		for _, h := range []http.Handler{facet, proxy} {
 			res := call(t, h, http.MethodGet, "/addon/idp/x", http.Header{local.AddonTokenHeader: {"t"}}, "")

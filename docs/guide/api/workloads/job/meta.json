@@ -1,0 +1,10 @@
+{
+  "title": "Job",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

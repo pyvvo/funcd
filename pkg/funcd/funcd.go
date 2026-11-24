@@ -316,6 +316,11 @@ type config struct {
 	workflowRetention    time.Duration
 	workflowDefaultRetry int
 	workflowPayloadLimit int64
+	// The job.* keys (ADR-0347, WithJobs): the runs holding a worker at once on this node, a run's input and result
+	// bytes, and how long an ended run is kept.
+	jobMaxRunning   int
+	jobPayloadLimit int64
+	jobRetention    time.Duration
 	// workflowMaxStepsInFlight bounds the function-step calls in flight across all runs (ADR-0146); 0 ⇒ no cap.
 	workflowMaxStepsInFlight int
 	// workflowContracts overrides the F65 typed-edge ContractResolver (ADR-0098). Empty ⇒ the production
@@ -554,6 +559,8 @@ type Platform struct {
 	workflowEngine    *workflow.Engine        // owns the run goroutines; drained on shutdown (ADR-0146)
 	workflowRetention time.Duration           // terminal-run retention horizon (0 ⇒ no sweep)
 
+	jobRuns *function.JobRunReconciler // the JobRun reconciler (ADR-0347): Boot, the retention sweep, the executors
+
 	eventStore *eventstore.Store // eventing's durable store (ADR-0201): dead letters + seen lists; closed on shutdown
 	phases     *lifecycle.Phases // the providers in boot order, the Executor first
 	exec       *executor         // the Executor provider
@@ -586,6 +593,9 @@ func New(opts ...Option) (_ *Platform, err error) {
 		workflowRetention:    defaultWorkflowRetention,
 		workflowDefaultRetry: defaultWorkflowRetry,
 		workflowPayloadLimit: defaultWorkflowPayloadLimit,
+		jobMaxRunning:        platformconfig.DefaultJobMaxRunning,
+		jobPayloadLimit:      platformconfig.DefaultJobPayloadLimit,
+		jobRetention:         platformconfig.DefaultJobRetention,
 		deadletterRetention:  defaultDeadletterRetention,
 		deadletterMaxEntries: defaultDeadletterMaxEntries,
 		invokeDefaultTimeout: v1.DefaultInvokeTimeout,
@@ -725,8 +735,8 @@ func (p *Platform) buildControlPlane() error {
 		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.LakeCapability(),
 			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapabilityWithWriters(writerLister),
 			cedarauth.AddonCapability()},
-		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.LakePrincipalSource(),
-			cedarauth.AddonObjectPrincipalSource()},
+		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.JobPrincipalSource(),
+			cedarauth.LakePrincipalSource(), cedarauth.AddonObjectPrincipalSource()},
 	)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar capability registry")
@@ -897,6 +907,7 @@ func (p *Platform) buildControlPlane() error {
 		ImageFor:             c.imageFor,
 		Resolver:             resolver,
 		Platforms:            platforms,
+		Inspector:            jobContracts(c.workflowContracts),
 		BootBackoffInitial:   c.bootBackoffInitial,
 		BootBackoffMax:       c.bootBackoffMax,
 		SupervisionPeriod:    c.pacing.SupervisionPeriod,
@@ -952,6 +963,11 @@ func (p *Platform) buildControlPlane() error {
 	}
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	p.fnReconciler = fnReconciler
+	// ADR-0347 Decision 2: a Job is reconciled on the Function's deps; a run that ends lets its Job collect the revision
+	// it pinned, and a change to what a Job defines at its root re-runs the Job, which writes it back
+	jobs := fnReconciler.Jobs()
+	ctrl.Register(v1.KindJob.GVK(), jobs)
+	ctrl.Watches(v1.KindJobRun.GVK(), jobs.MapRun)
 	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
 	ctrl.Watches(v1.KindRevision.GVK(), fnReconciler.MapRevision)
 	ctrl.Watches(v1.KindRestore.GVK(), fnReconciler.MapRestore) // a Restore into a volume clears DataMissing (ADR-0262)
@@ -963,6 +979,7 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0248 Decision 3: a change to what a Function defines at its root re-runs that Function, which writes it back
 	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindLake, v1.KindConfigMap} {
 		ctrl.Watches(k.GVK(), ownedstore.MapOwner(c.store, v1.KindFunction))
+		ctrl.Watches(k.GVK(), ownedstore.MapOwner(c.store, v1.KindJob))
 	}
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	// ADR-0302: one invokePlugin chain, which every call to a worker runs: the data plane's, the workflow
@@ -979,6 +996,19 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0303: the contract plugins come last, so they check the envelope the data plane built.
 	callChain := invoke.NewChain(append(dataplane.Plugins(edgeEnforcer, targetLimiter, c.callGate(), c.invokeDefaultTimeout),
 		contractcheck.Plugins(fnReconciler)...)...)
+	// ADR-0347 Decisions 4 to 8: the runs' one status writer, still under the platform's and the namespaces' holds, whose
+	// executors call through the chain; a Job's change reaches its runs, and a run that ends frees a slot for those that
+	// wait
+	runsCfg := function.RunsConfig{MaxRunning: c.jobMaxRunning, PayloadLimit: c.jobPayloadLimit,
+		Retention: c.jobRetention, Enqueue: ctrl.Enqueue, Hold: c.gate(), NamespaceHold: c.nsGate(), Chain: callChain,
+		Client: workerClient(calls, 0)}
+	if p.exec.egressWorkers != nil {
+		runsCfg.Egress = p.exec.egressWorkers // a run's worker is indexed as its Job before its one call (ADR-0351 Decision 6)
+	}
+	p.jobRuns = fnReconciler.Runs(runsCfg)
+	ctrl.Register(v1.KindJobRun.GVK(), p.jobRuns)
+	ctrl.Watches(v1.KindJob.GVK(), p.jobRuns.MapJob)
+	ctrl.Watches(v1.KindJobRun.GVK(), p.jobRuns.MapRun)
 	// ADR-0309: eventing builds its parts once the workload core exists, since its Sensors call through the Function
 	// reconciler's endpoints, the activator and the call chain.
 	if err := p.eventing.build(eventingDeps{fanout: fanout, events: es, quota: p.checker, endpoints: fnReconciler.Endpoints(),
@@ -1152,6 +1182,11 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewWorkflowRunContractAdmission(storeReader{c.store}),
 			// ADR-0094: a run's workflow/input/replay are fixed at creation — a second run under a taken name is a Conflict.
 			admission.NewWorkflowRunSpecImmutableAdmission(),
+			// ADR-0347 Decision 3: a JobRun's input within job.payloadLimit and its Job's contract, its spec fixed but a
+			// one-way cancel.
+			admission.NewJobRunPayloadAdmission(c.jobPayloadLimit),
+			admission.NewJobRunContractAdmission(storeReader{c.store}),
+			admission.NewJobRunSpecAdmission(),
 			// ADR-0170: a ResourceGroup is deleted only when it has no member (or with force, members first).
 			admission.NewResourceGroupDeletionProtectionAdmission(r),
 			// ADR-0222: a schedule's recipients and target, a Backup's ttl, immutable records, and update on the
@@ -1343,6 +1378,13 @@ func (p *Platform) Run(ctx context.Context) error {
 	if err := p.phases.Start(ctx); err != nil && ctx.Err() == nil {
 		return abort(err)
 	}
+	// ADR-0347 Decision 7: the drivers swept every worker an earlier run left when they were built, and the controller
+	// has not started, so a run stored Running was cut by the stop; held or not, it ends Interrupted and never restarts.
+	if p.jobRuns != nil {
+		if err := p.jobRuns.Boot(ctx); err != nil && ctx.Err() == nil {
+			return abort(err)
+		}
+	}
 
 	if m, held := p.heldMarker(); held {
 		// ADR-0206 Decision 6: KV or blob data newer than a restored metastore may have no object yet, so the boot
@@ -1392,6 +1434,9 @@ func (p *Platform) Run(ctx context.Context) error {
 	}
 	if p.workflowSweeper != nil && p.workflowRetention > 0 { // ADR-0094: periodic terminal-run retention sweep
 		loops = append(loops, p.runWorkflowRetention)
+	}
+	if p.jobRuns != nil { // ADR-0347 Decision 8: the ended JobRuns' retention sweep
+		loops = append(loops, p.runJobRetention)
 	}
 	if p.workflowEngine != nil { // ADR-0146: the run goroutines, drained within the shutdown bound before Shutdown
 		loops = append(loops, func(ctx context.Context) { p.workflowEngine.Run(ctx, p.drainTimeout) })
@@ -1484,6 +1529,11 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if p.tlsProvider != nil {
 			_ = p.tlsProvider.Close(ctx) // stop certmagic's renewal goroutine (ADR-0111)
 		}
+		if p.jobRuns != nil {
+			// the controller has stopped, so no pass writes a stopped executor's answer: the next boot ends its run
+			// Interrupted (ADR-0347 Decision 7); each executor stops its worker while the runtime is still open
+			p.jobRuns.Close()
+		}
 		// Every provider gets ready to close, in reverse order: the Lake closes its PEP proxies, then the Executor closes
 		// the runtime, which stops every worker, and the workers' local API listeners.
 		beforeStopErr := p.phases.BeforeStop(ctx)
@@ -1556,6 +1606,42 @@ func (contractResolver) Contract(ctx context.Context, image string) (v1.Workflow
 		return v1.WorkflowContract{}, "", uerr
 	}
 	return c, digest, nil
+}
+
+// contractInspector is the production function.ContractInspector (ADR-0347 Decision 2): a Job's image contract read
+// by its digest from registry metadata, never the bundle. An image pinned by no digest, a file artifact, has none to
+// read that way.
+type contractInspector struct{}
+
+func (contractInspector) Inspect(ctx context.Context, image, digest string) ([]byte, error) {
+	if digest == "" {
+		return nil, fault.NotFoundf("funcd.contractInspector", "%s is pinned by no digest", image)
+	}
+	return artifact.Inspect(ctx, image, digest)
+}
+
+// jobContracts is the Jobs' ContractInspector: dev's contract resolver when it sets one, else the registry metadata.
+func jobContracts(dev workflow.ContractResolver) function.ContractInspector {
+	if dev != nil {
+		return resolverInspector{dev}
+	}
+	return contractInspector{}
+}
+
+// resolverInspector reads a Job's contract through the workflow contract resolver that funcdctl dev sets
+// (WithWorkflowContractResolver), which knows an image built from source by its reference, so a JobRun's admission under
+// dev checks its input as a server's does.
+type resolverInspector struct{ r workflow.ContractResolver }
+
+func (i resolverInspector) Inspect(ctx context.Context, image, _ string) ([]byte, error) {
+	c, _, err := i.r.Contract(ctx, image)
+	if err != nil {
+		return nil, err
+	}
+	if len(c.Input) == 0 && len(c.Output) == 0 {
+		return nil, fault.NotFoundf("funcd.resolverInspector", "%s carries no contract", image)
+	}
+	return json.Marshal(c)
 }
 
 // childResolver is the production workflow.ChildResolver (ADR-0099): it reads a child Workflow's pinned
@@ -1657,6 +1743,29 @@ func (p *Platform) runWorkflowRetention(ctx context.Context) {
 			}
 			if n > 0 {
 				p.logger.InfoContext(ctx, "workflow retention sweep reclaimed runs", "count", n)
+			}
+		}
+	}
+}
+
+// runJobRetention sweeps the ended JobRuns past job.retention (ADR-0347 Decision 8) at most hourly, sooner when the
+// retention is short, until ctx is cancelled. The sweep itself skips held runs; a failure is logged and the next tick
+// retries.
+func (p *Platform) runJobRetention(ctx context.Context) {
+	ticker := time.NewTicker(min(p.cfg.jobRetention, maxRetentionSweep))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := p.jobRuns.SweepExpired(ctx)
+			if err != nil {
+				p.logger.WarnContext(ctx, "job run retention sweep failed", "error", err)
+				continue
+			}
+			if n > 0 {
+				p.logger.InfoContext(ctx, "job run retention sweep deleted runs", "count", n)
 			}
 		}
 	}
@@ -1857,15 +1966,15 @@ func (e *executor) syncEgressWorkers(ctx context.Context) {
 }
 
 // reconcileEgressWorkers computes the current running-worker IP→Ref set from the runtime (over the
-// namespaces that have a Function or a Lake) and applies the diff against prev to the WorkerIndex,
+// namespaces that have a Function, a Lake or a Job) and applies the diff against prev to the WorkerIndex,
 // returning the new snapshot. Each worker is indexed as the principal of its owner kind (ADR-0175): a Function
-// worker as its Function, an engine as its Lake; a worker of any other kind is not indexed (an
-// unknown source, denied). A worker's funcd0 IP is the source IP the F80 REDIRECT preserves, so it keys both
-// the gateway lookup and the DNS-forwarder correlation. A transient store error keeps the current index
-// (returns prev).
+// worker as its Function, an engine as its Lake, a run's worker as its run's Job (ADR-0351 Decision 6); a worker of
+// any other kind, or of a run no longer stored, is not indexed (an unknown source, denied). A worker's funcd0 IP is
+// the source IP the F80 REDIRECT preserves, so it keys both the gateway lookup and the DNS-forwarder correlation. A
+// transient store error keeps the current index (returns prev).
 func (e *executor) reconcileEgressWorkers(ctx context.Context, prev map[netip.Addr]auth.EntityRef) map[netip.Addr]auth.EntityRef {
 	namespaces := map[v1.NamespaceName]struct{}{}
-	for _, kind := range []v1.Kind{v1.KindFunction, v1.KindLake} {
+	for _, kind := range []v1.Kind{v1.KindFunction, v1.KindLake, v1.KindJob} {
 		res, err := e.cfg.store.List(ctx, kind.GVK(), store.ListOptions{})
 		if err != nil {
 			return prev
@@ -1884,14 +1993,17 @@ func (e *executor) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 			if in.State != runtime.StateRunning || in.IP == "" {
 				continue
 			}
-			if in.OwnerKind != v1.KindFunction && in.OwnerKind != v1.KindLake {
-				continue
-			}
 			ip, perr := netip.ParseAddr(in.IP)
 			if perr != nil {
 				continue
 			}
-			live[ip] = auth.EntityRef{Type: in.OwnerKind, Namespace: in.Namespace, Name: in.Name}
+			ref, ok, err := e.egressPrincipal(ctx, in)
+			if err != nil {
+				return prev
+			}
+			if ok {
+				live[ip] = ref
+			}
 		}
 	}
 	for ip, ref := range live {
@@ -1906,6 +2018,30 @@ func (e *executor) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 	}
 	_ = e.indexAddonEngines(ctx) // a failed run keeps the index; the next sync runs again
 	return live
+}
+
+// egressPrincipal is the principal worker in acts as at the egress gateway: its Function or its Lake, or the Job its run
+// names in spec.job, read by the worker's name (ADR-0351 Decision 6). ok is false for a worker of any other kind and
+// for a run no longer stored.
+func (e *executor) egressPrincipal(ctx context.Context, in runtime.Instance) (auth.EntityRef, bool, error) {
+	switch in.OwnerKind {
+	case v1.KindFunction, v1.KindLake:
+		return auth.EntityRef{Type: in.OwnerKind, Namespace: in.Namespace, Name: in.Name}, true, nil
+	case v1.KindJobRun:
+		obj, err := e.cfg.store.Get(ctx, v1.KindJobRun.GVK(), in.Namespace, in.Name)
+		if fault.KindOf(err) == fault.NotFound {
+			return auth.EntityRef{}, false, nil
+		}
+		if err != nil {
+			return auth.EntityRef{}, false, err
+		}
+		run, ok := obj.(*v1.JobRun)
+		if !ok {
+			return auth.EntityRef{}, false, nil
+		}
+		return auth.EntityRef{Type: v1.KindJob, Namespace: in.Namespace, Name: run.Spec.Job}, true, nil
+	}
+	return auth.EntityRef{}, false, nil
 }
 
 // indexAddonEngines puts the address of every add-on engine, from its worker's creation on, in the gateway's engine
@@ -2338,31 +2474,36 @@ func (e *executor) openVolumes() error {
 		}
 		return 0, nil
 	}
-	o.Holder = func(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (v1.UID, bool, error) {
-		obj, err := c.store.Get(ctx, v1.KindFunction.GVK(), ns, fn)
+	o.Holder = func(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) (v1.UID, bool, error) {
+		obj, err := c.store.Get(ctx, kind.GVK(), ns, name)
 		if fault.KindOf(err) == fault.NotFound {
 			return "", false, nil
 		}
 		if err != nil {
-			return "", false, fault.Wrapf(err, fault.KindOf(err), "funcd.volumeHolder", "get function %s/%s", ns, fn)
+			return "", false, fault.Wrapf(err, fault.KindOf(err), "funcd.volumeHolder", "get %s %s/%s", kind, ns, name)
 		}
 		return obj.GetObjectMeta().UID, true, nil
 	}
-	// a stored Function declares the volume, or a stored App's part the App has not written that way yet (#1208)
+	// a stored Function or Job declares the volume, or a stored App's part the App has not written that way yet (#1208)
 	o.Declared = func(ctx context.Context, id volume.ID) (bool, error) {
 		const op = "funcd.volumeDeclared"
 		declares := func(obj v1.Object) bool {
-			f, _ := obj.(*v1.Function)
-			return f != nil && f.Name == id.Function && slices.ContainsFunc(f.Spec.Volumes, func(v v1.VolumeEntry) bool {
-				return v.Type == v1.VolumeLocal && v.VolumeName() == id.Name
-			})
+			var vols []v1.VolumeEntry
+			switch w := obj.(type) {
+			case *v1.Function:
+				vols = w.Spec.Volumes
+			case *v1.Job:
+				vols = w.Spec.Volumes
+			}
+			return obj.GroupVersionKind().Kind == id.Kind && obj.GetName() == id.Workload &&
+				slices.ContainsFunc(vols, func(v v1.VolumeEntry) bool { return v.Type == v1.VolumeLocal && v.VolumeName() == id.Name })
 		}
-		obj, err := c.store.Get(ctx, v1.KindFunction.GVK(), id.Namespace, id.Function)
+		obj, err := c.store.Get(ctx, id.Kind.GVK(), id.Namespace, id.Workload)
 		switch {
 		case err == nil && declares(obj):
 			return true, nil
 		case err != nil && fault.KindOf(err) != fault.NotFound:
-			return false, fault.Wrapf(err, fault.KindOf(err), op, "get function %s/%s", id.Namespace, id.Function)
+			return false, fault.Wrapf(err, fault.KindOf(err), op, "get %s %s/%s", id.Kind, id.Namespace, id.Workload)
 		}
 		apps, err := c.store.List(ctx, v1.KindApp.GVK(), store.ListOptions{Namespace: id.Namespace})
 		if err != nil {
@@ -2393,12 +2534,12 @@ func (p *Platform) volumeBooker() admission.VolumeBooker {
 
 type volumeBooker struct{ m volume.Manager }
 
-func (b volumeBooker) Book(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, sizeBytes int64) error {
-	return b.m.Book(ctx, volume.ID{Namespace: ns, Function: fn, Name: name}, sizeBytes)
+func (b volumeBooker) Book(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, workload, name v1.ObjectName, sizeBytes int64) error {
+	return b.m.Book(ctx, volume.ID{Namespace: ns, Kind: kind, Workload: workload, Name: name}, sizeBytes)
 }
 
-func (b volumeBooker) Fits(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, sizeBytes int64) error {
-	return b.m.Fits(ctx, volume.ID{Namespace: ns, Function: fn, Name: name}, sizeBytes)
+func (b volumeBooker) Fits(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, workload, name v1.ObjectName, sizeBytes int64) error {
+	return b.m.Fits(ctx, volume.ID{Namespace: ns, Kind: kind, Workload: workload, Name: name}, sizeBytes)
 }
 
 // volumeLoader adapts the volume manager to the workload backups (ADR-0262 Decision 11), and the Function reconciler's
@@ -2410,7 +2551,7 @@ type volumeLoader struct {
 }
 
 func vid(ns v1.NamespaceName, fn, name v1.ObjectName) volume.ID {
-	return volume.ID{Namespace: ns, Function: fn, Name: name}
+	return volume.ID{Namespace: ns, Kind: v1.KindFunction, Workload: fn, Name: name}
 }
 
 func (l volumeLoader) Source(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (io.ReadCloser, error) {

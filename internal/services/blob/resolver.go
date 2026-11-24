@@ -22,7 +22,7 @@ type Binding struct {
 // caller's Function.spec.bindings.blob (the binding IS the capability) — fault.Forbidden when the caller has no
 // spec.bindings.blob entry for the alias (default-deny, ADR-0073).
 type BindingResolver interface {
-	Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) (Binding, error)
+	Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string) (Binding, error)
 }
 
 // MetaReader is the read-only metastore view the resolver needs (a subset of store.Store), declared
@@ -55,33 +55,29 @@ func NewResolver(r MetaReader) (BindingResolver, error) {
 // alias → (bucket, prefix). A hit is cached for ttl; a miss (Forbidden) is never cached. The bucket's
 // existence + the prefix owner are resolved by the S3 PDP + the substrate bucket resolver downstream, so
 // the resolver only proves the binding was declared.
-func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) (Binding, error) {
+func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, alias string) (Binding, error) {
 	const op = "services.blob.Resolver.Resolve"
 	if b, ok := m.cache.Get(ns, fn, alias); ok {
 		return b, nil
 	}
 
-	// The caller function's spec.bindings.blob is the capability list (default-deny on a miss).
-	fobj, err := m.r.Get(ctx, v1.KindFunction.GVK(), ns, fn)
+	// The caller's spec.bindings.blob is the capability list (default-deny on a miss).
+	bindings, err := services.CallerBindings(ctx, m.r, ns, fn)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
-			return Binding{}, blob.ErrCallerMissing.Errorf(op, "function %q in %q not found; no blob binding for alias %q", fn, ns, alias)
+			return Binding{}, blob.ErrCallerMissing.Errorf(op, "%s in %q not found; no blob binding for alias %q", fn, ns, alias)
 		}
-		return Binding{}, fault.Wrapf(err, fault.Internal, op, "get function %q", fn)
-	}
-	caller, ok := fobj.(*v1.Function)
-	if !ok {
-		return Binding{}, fault.Internalf(op, "object %q is not a Function", fn)
+		return Binding{}, fault.Wrapf(err, fault.KindOf(err), op, "get %s", fn)
 	}
 	var bind *v1.FunctionBlob
-	for i := range caller.Spec.Bindings.Blob {
-		if caller.Spec.Bindings.Blob[i].Alias == alias {
-			bind = &caller.Spec.Bindings.Blob[i]
+	for i := range bindings.Blob {
+		if bindings.Blob[i].Alias == alias {
+			bind = &bindings.Blob[i]
 			break
 		}
 	}
 	if bind == nil {
-		return Binding{}, blob.ErrNoBinding.Errorf(op, "function %q in %q has no blob binding for alias %q", fn, ns, alias)
+		return Binding{}, blob.ErrNoBinding.Errorf(op, "%s in %q has no blob binding for alias %q", fn, ns, alias)
 	}
 
 	b := Binding{Bucket: bind.Bucket, Prefix: bind.Prefix}

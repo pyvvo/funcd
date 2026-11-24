@@ -499,10 +499,6 @@ func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) err
 	if err := roots.validate(op, w.ObjectMeta); err != nil {
 		return err
 	}
-	owners := make(map[ObjectName]bool, len(names))
-	for n := range names {
-		owners[n] = true
-	}
 	lakes := make(map[ObjectName]bool, len(s.Lakes))
 	for i, c := range s.Lakes {
 		if c.Name == "" {
@@ -511,28 +507,36 @@ func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) err
 		if names[c.Name] {
 			return fault.Invalidf(op, "spec.lakes[%d].name %q is also a step's name: a store owner would name both", i, c.Name)
 		}
-		owners[c.Name] = true
 		lakes[c.Name] = true
 	}
+	// a Function owner names a step and a Lake owner a declared lake; a Workflow declares no Job
+	ownerOff := func(o WorkloadRef) string {
+		switch {
+		case o.IsZero(), o.Kind == KindFunction && names[o.Name], o.Kind == KindLake && lakes[o.Name]:
+			return ""
+		case o.Kind == KindLake:
+			return "is not a declared lake"
+		case o.Kind == KindFunction:
+			return "is not a step"
+		}
+		return "names a " + string(o.Kind) + ", which a Workflow does not declare"
+	}
 	for i := range s.SQLDatabases {
-		if o := s.SQLDatabases[i].Owner; s.SQLDatabases[i].Name != "" && o != "" && !owners[o] {
-			return fault.Invalidf(op, "spec.sql[%d].owner %q is not a step or a declared lake", i, o)
+		if off := ownerOff(s.SQLDatabases[i].Owner); s.SQLDatabases[i].Name != "" && off != "" {
+			return fault.Invalidf(op, "spec.sql[%d].owner %s %s", i, s.SQLDatabases[i].Owner, off)
 		}
 	}
 	for i := range s.KVStores {
 		for j, t := range w.Spec.KVStores[i].Tables {
-			if t.Owner != "" && !names[t.Owner] {
-				return fault.Invalidf(op, "spec.kv[%d].tables[%d].owner %q is not a step", i, j, t.Owner)
+			if off := ownerOff(t.Owner); off != "" {
+				return fault.Invalidf(op, "spec.kv[%d].tables[%d].owner %s %s", i, j, t.Owner, off)
 			}
 		}
 	}
 	for i := range w.Spec.Buckets {
 		for j, p := range w.Spec.Buckets[i].Prefixes {
-			switch {
-			case p.Owner.Kind == KindFunction && !names[p.Owner.Name]:
-				return fault.Invalidf(op, "spec.buckets[%d].prefixes[%d].owner %q is not a step", i, j, p.Owner.Name)
-			case p.Owner.Kind == KindLake && !lakes[p.Owner.Name]:
-				return fault.Invalidf(op, "spec.buckets[%d].prefixes[%d].owner %q is not a declared lake", i, j, p.Owner.Name)
+			if off := ownerOff(p.Owner); off != "" {
+				return fault.Invalidf(op, "spec.buckets[%d].prefixes[%d].owner %s %s", i, j, p.Owner, off)
 			}
 		}
 	}

@@ -381,6 +381,14 @@ type Config struct {
 		DataDir string `json:"dataDir,omitempty" env:"FUNCD_WORKFLOW_DATA_DIR" doc:"The directory of the run state, which keeps each workflow run's progress. Empty means <storage.dataDir>/workflow. With storage.mode memory, the run state lives in memory and funcd does not use this directory."`
 	} `json:"workflow,omitempty"`
 
+	// Job tunes the Jobs (ADR-0347): MaxRunning bounds the runs that hold a worker at once on this node, PayloadLimit a
+	// run's input and its result, and Retention is how long an ended run is kept, a positive duration (CheckJob).
+	Job struct {
+		MaxRunning   int    `json:"maxRunning,omitempty" env:"FUNCD_JOB_MAX_RUNNING" validate:"min=1" doc:"The most JobRuns that may hold a worker at once on this node, all Jobs together, at least 1. A run past it waits in Pending with Queued, and a free slot goes to the oldest waiting run whose Job is below its own concurrency."`
+		PayloadLimit int64  `json:"payloadLimit,omitempty" env:"FUNCD_JOB_PAYLOAD_LIMIT" validate:"min=1" doc:"The most bytes that a JobRun's input and its result may hold, at least 1. A larger input is refused with 413 when the run is created, and a larger result fails the run with reason PayloadLimitExceeded."`
+		Retention    string `json:"retention,omitempty" env:"FUNCD_JOB_RETENTION" doc:"How long funcd keeps a JobRun after it ends, as a positive duration; then it deletes the run. Empty means 720h."`
+	} `json:"job,omitempty"`
+
 	// Eventing tunes the Sensor action-delivery reliability path (ADR-0118, F85). DeliveryAttempts is the
 	// bounded-retry cap before a failed workflow:/function: delivery is dead-lettered. The event store (ADR-0201,
 	// ADR-0300), one Badger instance holding the dead letters, the blob seen lists and the change feed's watermarks, is
@@ -585,6 +593,9 @@ func defaults() Config {
 	c.Workflow.MaxStepsInFlight = 64
 	c.Workflow.ArtifactPollInterval = "5s"
 	c.Workflow.DefaultRetryBackoff = "0s"
+	c.Job.MaxRunning = DefaultJobMaxRunning
+	c.Job.PayloadLimit = DefaultJobPayloadLimit
+	c.Job.Retention = v1.Duration(DefaultJobRetention).String()
 	// Eventing DLQ (ADR-0118): 3 delivery attempts before dead-lettering; parked entries kept 720h with a
 	// per-namespace cap of 1000, swept periodically.
 	c.Eventing.DeliveryAttempts = 3
@@ -747,7 +758,7 @@ func (c Config) Validate() error {
 		if err := c.validateCredentials(op); err != nil {
 			return err
 		}
-		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine(), c.CheckKVSweep(), c.CheckFunctions(), c.CheckStorage(), c.CheckWorkloadBackup()} {
+		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine(), c.CheckJob(), c.CheckKVSweep(), c.CheckFunctions(), c.CheckStorage(), c.CheckWorkloadBackup()} {
 			if len(fs) > 0 && fs[0].Error {
 				return fault.Invalidf(op, "%s", fs[0].Message)
 			}

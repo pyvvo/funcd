@@ -9,6 +9,7 @@ import (
 	"time"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
 	"github.com/pyvvo/funcd/internal/workflow/runstate/badger"
 )
@@ -104,7 +105,7 @@ func TestTimingsRecorded(t *testing.T) {
 }
 
 // scenario: error-is-capped — a step failing with a very long error mirrors a CAPPED status error
-// (≤ maxStatusError, first line preferred), so the CRD never bloats.
+// (≤ observability.MaxStatusError, first line preferred), so the CRD never bloats.
 func TestErrorIsCapped(t *testing.T) {
 	c := newCause()
 	long := strings.Repeat("x", 4000)
@@ -115,7 +116,7 @@ func TestErrorIsCapped(t *testing.T) {
 	if b == nil {
 		t.Fatal("b step missing")
 	}
-	if len([]rune(b.Error)) > maxStatusError+1 { // +1 for the appended ellipsis rune
+	if len([]rune(b.Error)) > observability.MaxStatusError+1 { // +1 for the appended ellipsis rune
 		t.Fatalf("b.Error not capped: %d runes", len([]rune(b.Error)))
 	}
 	if !strings.HasSuffix(b.Error, "…") {

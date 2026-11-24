@@ -357,6 +357,26 @@ func WithWorkflow(dataDir string, defaultStepTimeout, retention time.Duration, d
 	}
 }
 
+// WithJobs sets the job.* keys (ADR-0347): maxRunning bounds the runs that hold a worker at once on this node,
+// payloadLimit a run's input (at admission) and its result in bytes, and retention how long an ended run is kept.
+// Without it each key takes its daemon config default; a maxRunning or a payloadLimit below 1, or a retention that is
+// not positive, is fault.Invalid from New.
+func WithJobs(maxRunning int, payloadLimit int64, retention time.Duration) Option {
+	return func(c *config) error {
+		const op = "funcd.WithJobs"
+		switch {
+		case maxRunning < 1:
+			return fault.Invalidf(op, "job.maxRunning %d: want at least 1", maxRunning)
+		case payloadLimit < 1:
+			return fault.Invalidf(op, "job.payloadLimit %d: want at least 1", payloadLimit)
+		case retention <= 0:
+			return fault.Invalidf(op, "job.retention %s: want a positive duration", retention)
+		}
+		c.jobMaxRunning, c.jobPayloadLimit, c.jobRetention = maxRunning, payloadLimit, retention
+		return nil
+	}
+}
+
 // WithDefaultInvokeTimeout sets invoke.defaultTimeout (ADR-0151): how long an external invoke waits for its
 // response to start when the Function sets no spec.timeout. 0 ⇒ v1.DefaultInvokeTimeout (60s); negative or over
 // v1.MaxInvokeTimeout (1h) ⇒ fault.Invalid from New. Links and workflow steps keep their own limits.

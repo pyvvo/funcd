@@ -97,7 +97,7 @@ func sqlCauseEnv(t *testing.T, opts ...funcd.Option) *causeEnv {
 	for _, name := range databases {
 		db := &v1.SQLDatabase{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSQLDatabase.GVK().APIVersion(), Kind: v1.KindSQLDatabase},
 			ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1"}}
-		db.Spec.Owner = "owner"
+		db.Spec.Owner = v1.FunctionOwner("owner")
 		switch name {
 		case "unmeasured":
 			db.Spec.Quota.MaxBytes = 1 << 20

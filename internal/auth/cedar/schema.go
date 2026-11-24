@@ -24,8 +24,10 @@ import (
 // Function::"<ns>/<name>", KVStore::"<ns>/<store>", KVTable::"<ns>/<store>/<table>".
 const (
 	entityTypeFunction = "Function"
-	entityTypeKVStore  = "KVStore"
-	entityTypeKVTable  = "KVTable"
+	// ADR-0351 Decision 1: a Job, the principal every worker of its runs acts as.
+	entityTypeJob     = "Job"
+	entityTypeKVStore = "KVStore"
+	entityTypeKVTable = "KVTable"
 	// ADR-0080 (S3 frontend): the blob data domain + sub-domain + the external SigV4 principal.
 	entityTypeBucket     = "Bucket"     // the blob domain (the KVStore parallel)
 	entityTypeBlobPrefix = "BlobPrefix" // a sub-domain carrying owner (the KVTable parallel)
@@ -63,7 +65,7 @@ const (
 var defaultRegistry, _ = NewRegistry(
 	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability(), LakeCapability(), SQLCapability(),
 		SecretCapability(), AddonCapability()},
-	[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource(), AddonObjectPrincipalSource()},
+	[]PrincipalSource{FunctionPrincipalSource(), JobPrincipalSource(), LakePrincipalSource(), AddonObjectPrincipalSource()},
 )
 
 // KnownAction reports whether action is in the assembled schema vocabulary (ADR-0116).
@@ -114,7 +116,7 @@ func (e scopeEntity) named() []scopeUID {
 // and Action are not namespaced.
 func namespacedEntityType(t string) bool {
 	switch t {
-	case entityTypeFunction, entityTypeKVStore, entityTypeKVTable, entityTypeBucket, entityTypeBlobPrefix,
+	case entityTypeFunction, entityTypeJob, entityTypeKVStore, entityTypeKVTable, entityTypeBucket, entityTypeBlobPrefix,
 		entityTypeS3Identity, entityTypeIdentity, entityTypeLake, entityTypeSQLDatabase, entityTypeSecret,
 		entityTypeAddonObject:
 		return true

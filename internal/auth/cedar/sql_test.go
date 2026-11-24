@@ -77,7 +77,7 @@ func sqlDriver(t *testing.T, writers writerList, policies ...v1.Policy) auth.Aut
 		},
 		dbs: map[v1.ObjectName]*v1.SQLDatabase{"todo-db": {
 			ObjectMeta: v1.ObjectMeta{Name: "todo-db", Namespace: "default", ResourceGroup: "rg1"},
-			Spec:       v1.SQLDatabaseSpec{Owner: "todo-api"},
+			Spec:       v1.SQLDatabaseSpec{Owner: v1.FunctionOwner("todo-api")},
 		}},
 	}
 	reg, err := cedar.NewRegistry([]cedar.Capability{cedar.SQLCapabilityWithWriters(writers)}, []cedar.PrincipalSource{cedar.FunctionPrincipalSource()})

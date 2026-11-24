@@ -37,14 +37,47 @@ const (
 // maxInvokeBytes caps an invoke request body and the target's response (a DoS guard on the local API).
 const maxInvokeBytes = 1 << 20 // 1 MiB
 
-// Ref identifies a function replica's caller identity (namespace + function).
+// Ref is a worker's caller identity, fixed per listener (ADR-0351 Decision 2): its namespace, its kind, Function or Job,
+// the workload's name and, for a Job's worker, its run. A ref of any other kind is refused.
 type Ref struct {
 	Namespace v1.NamespaceName
-	Function  v1.ObjectName
+	Kind      v1.Kind
+	Name      v1.ObjectName
+	Run       v1.ObjectName
 }
 
-// String renders the ref as "<namespace>/<function>" for logs.
-func (r Ref) String() string { return string(r.Namespace) + "/" + string(r.Function) }
+// FunctionRef is Function name of ns as a caller, or as a link's target.
+func FunctionRef(ns v1.NamespaceName, name v1.ObjectName) Ref {
+	return Ref{Namespace: ns, Kind: v1.KindFunction, Name: name}
+}
+
+// Workload is the Function or the Job the ref acts as, whose bindings are its grants.
+func (r Ref) Workload() v1.WorkloadRef { return v1.WorkloadRef{Kind: r.Kind, Name: r.Name} }
+
+// Valid reports whether the ref is a Function's, with no run, or a Job's run's.
+func (r Ref) Valid() bool {
+	if r.Namespace == "" || r.Name == "" {
+		return false
+	}
+	return (r.Kind == v1.KindFunction && r.Run == "") || (r.Kind == v1.KindJob && r.Run != "")
+}
+
+// String renders the ref for logs: "<namespace>/<function>" for a Function, "<namespace>/<job>/<run>" for a Job's run.
+func (r Ref) String() string {
+	if r.Kind == v1.KindJob {
+		return string(r.Namespace) + "/" + string(r.Name) + "/" + string(r.Run)
+	}
+	return string(r.Namespace) + "/" + string(r.Name)
+}
+
+// key names the ref's listener: a Function's and a pool worker's by namespace and name, a run's by its kind too, so a
+// Job and a Function of one name never share one.
+func (r Ref) key() string {
+	if r.Kind == v1.KindJob {
+		return string(r.Namespace) + "/" + string(r.Kind) + "/" + string(r.Name) + "/" + string(r.Run)
+	}
+	return string(r.Namespace) + "/" + string(r.Name)
+}
 
 // traceparentHeader is the W3C trace-context header (ADR-0165). The handler carries it in the ctx it
 // passes to Invoker.Invoke, so the Invoker contract (ADR-0064) keeps its signature and a wrapping
@@ -168,6 +201,13 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, de
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if !caller.Valid() {
+		// a ref of another kind, the zero value included, is no caller (ADR-0351 Decision 2)
+		return wrap(logger, "/", nil, func(_ http.ResponseWriter, r *http.Request) error {
+			logger.WarnContext(r.Context(), "local API call refused: the caller is no Function and no Job's run", "caller", caller.String(), "kind", caller.Kind)
+			return fault.Forbiddenf("workernode.local", "caller %q of kind %q is no Function and no Job's run", caller, caller.Kind)
+		})
+	}
 	var o options
 	for _, opt := range opts {
 		opt(&o)
@@ -176,7 +216,7 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, de
 	// so a request body can never name a different caller.
 	callerIdentity := auth.Identity{
 		Subject:   caller.String(),
-		Principal: &auth.EntityRef{Type: v1.KindFunction, Namespace: caller.Namespace, Name: caller.Function},
+		Principal: &auth.EntityRef{Type: caller.Kind, Namespace: caller.Namespace, Name: caller.Name},
 	}
 	mux := http.NewServeMux()
 	for _, f := range o.facets {
@@ -333,7 +373,7 @@ func authorizeLink(ctx context.Context, authz auth.Authorizer, identity auth.Ide
 	dec, err := authz.Authorize(ctx, auth.Request{
 		Identity: identity,
 		Action:   auth.ActionLinkInvoke,
-		Resource: &auth.EntityRef{Type: v1.KindFunction, Namespace: target.Namespace, Name: target.Function},
+		Resource: &auth.EntityRef{Type: v1.KindFunction, Namespace: target.Namespace, Name: target.Name},
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "authorize link::invoke")

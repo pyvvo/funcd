@@ -47,6 +47,8 @@ type Report struct {
 	PausedByRestore   []string        `json:"pausedByRestore,omitempty"`
 	AlreadyPaused     []string        `json:"alreadyPaused,omitempty"`
 	RecordsWithoutRun []string        `json:"recordsWithoutRun,omitempty"`
+	// CancelledByRestore are the JobRuns it ended Cancelled with Restored, for a person to start again (ADR-0347 Decision 7).
+	CancelledByRestore []string `json:"cancelledByRestore,omitempty"`
 }
 
 // Options configure Run and Inspect. Source is the target opened with the operator's restore credential
@@ -449,10 +451,26 @@ func secretRefs(ctx context.Context, eng store.Engine) ([]v1.ObjectRef, error) {
 	return out, err
 }
 
-// holdRuns pauses each non-terminal WorkflowRun not already paused (Decision 7) and lists the run records no
-// WorkflowRun names, which stay inert.
+// holdRuns pauses each non-terminal WorkflowRun not already paused (Decision 7), lists the run records no WorkflowRun
+// names, which stay inert, and ends each JobRun not ended Cancelled with Restored: the backup cannot say whether it
+// ran since, so a person reruns it (ADR-0347 Decision 7).
 func (r *restoring) holdRuns(ctx context.Context, rep *Report) error {
 	const op = "restore.Run"
+	jobRuns, err := r.st.List(ctx, v1.KindJobRun.GVK(), store.ListOptions{})
+	if err != nil {
+		return err
+	}
+	for _, o := range jobRuns.Items {
+		run, ok := o.(*v1.JobRun)
+		if !ok || run.Status.Phase.Ended() {
+			continue
+		}
+		run.Status.End(v1.JobRunCancelled, v1.JobRunRestored, "a platform restore: the backup cannot say whether the run ran since", rep.At)
+		if _, err := r.st.Update(ctx, run); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "end JobRun %s/%s", run.Namespace, run.Name)
+		}
+		rep.CancelledByRestore = append(rep.CancelledByRestore, string(run.Namespace)+"/"+string(run.Name))
+	}
 	l, err := r.st.List(ctx, v1.KindWorkflowRun.GVK(), store.ListOptions{})
 	if err != nil {
 		return err

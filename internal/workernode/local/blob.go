@@ -26,11 +26,11 @@ const maxBlobBytes = 64 << 20 // 64 MiB
 // sandbox's fixed Ref), NEVER read from the request: a function can only reach its own namespace's blob,
 // and its binding resolution is keyed by its trustworthy fixed function identity (ADR-0127/0073).
 type Blob interface {
-	Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string) ([]byte, bool, error)
-	Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string, data []byte) error
-	Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string) error
-	List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, prefix string) ([]string, error)
-	SignedURL(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string, opts blob.SignOptions) (string, error)
+	Get(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string) ([]byte, bool, error)
+	Put(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string, data []byte) error
+	Delete(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string) error
+	List(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, prefix string) ([]string, error)
+	SignedURL(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string, opts blob.SignOptions) (string, error)
 }
 
 // minSignExpiry and maxSignExpiry bound a presign lifetime (ADR-0198): S3 signs whole seconds; SigV4 caps at 7 days.
@@ -52,7 +52,7 @@ func BlobFacet(b Blob) Facet {
 // file store refuses a key on a read, a write or a delete, but not on a sign, which opens no file.
 func registerBlob(mux facetMux, caller Ref, b Blob, logger *slog.Logger) {
 	ns := caller.Namespace
-	fn := caller.Function
+	fn := caller.Workload()
 	resolve := []*fault.KnownCause{blob.ErrCallerMissing, blob.ErrNoBinding}
 	keyRules := []*fault.KnownCause{blob.ErrKeyNotUTF8, blob.ErrKeyReserved, blob.ErrKeyUnstorable}
 	get := slices.Concat(resolve, []*fault.KnownCause{blob.ErrReadDenied, blob.ErrWriteDenied, blob.ErrBucketMissing,

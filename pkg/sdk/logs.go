@@ -24,15 +24,7 @@ type LogsOptions struct {
 // to the caller's authenticated identity by the server (admin sees any namespace, developer/viewer only a
 // bound one) — the namespace is the authorized path segment, never a client-asserted filter.
 func (c *Client) Logs(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, o LogsOptions) ([]logread.Line, error) {
-	const op = "sdk.Logs"
-	if ns == "" || fn == "" {
-		return nil, fault.Invalidf(op, "namespace and function are required")
-	}
-	u, err := c.itemURL(v1.KindFunction, ns, fn)
-	if err != nil {
-		return nil, err
-	}
-	return c.readLines(ctx, op, u+"/logs", o, "")
+	return c.objectLogs(ctx, "sdk.Logs", "function", v1.KindFunction, ns, fn, o, "")
 }
 
 // EngineLogs reads the logs of the engine of a Lake, a SQLDatabase or an object of an add-on's kind (ADR-0342
@@ -54,15 +46,26 @@ func (c *Client) EngineLogs(ctx context.Context, ns v1.NamespaceName, kind v1.Ki
 // function's output plus any sub-workflow child steps (one composition = one trace). Tenant-scoped by the
 // caller's identity (get/WorkflowRun in the namespace). o.Step narrows to one step's function.
 func (c *Client) RunLogs(ctx context.Context, ns v1.NamespaceName, run v1.ObjectName, o LogsOptions) ([]logread.Line, error) {
-	const op = "sdk.RunLogs"
-	if ns == "" || run == "" {
-		return nil, fault.Invalidf(op, "namespace and run are required")
+	return c.objectLogs(ctx, "sdk.RunLogs", "run", v1.KindWorkflowRun, ns, run, o, o.Step)
+}
+
+// JobRunLogs reads a JobRun's logs (ADR-0347 Decision 8): its worker's own lines, raw output included, with the lines
+// that the calls it made wrote under its trace. Scoped as Logs is, by the right to get JobRuns in the namespace.
+func (c *Client) JobRunLogs(ctx context.Context, ns v1.NamespaceName, run v1.ObjectName, o LogsOptions) ([]logread.Line, error) {
+	return c.objectLogs(ctx, "sdk.JobRunLogs", "run", v1.KindJobRun, ns, run, o, "")
+}
+
+// objectLogs reads the logs route of object name of kind in ns, which what names in the refusal of an empty one.
+func (c *Client) objectLogs(ctx context.Context, op, what string, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName,
+	o LogsOptions, step string) ([]logread.Line, error) {
+	if ns == "" || name == "" {
+		return nil, fault.Invalidf(op, "namespace and %s are required", what)
 	}
-	u, err := c.itemURL(v1.KindWorkflowRun, ns, run)
+	u, err := c.itemURL(kind, ns, name)
 	if err != nil {
 		return nil, err
 	}
-	return c.readLines(ctx, op, u+"/logs", o, o.Step)
+	return c.readLines(ctx, op, u+"/logs", o, step)
 }
 
 // readLines reads the lines that the logs route u answers, filtered as o asks; step goes to a run's route only.

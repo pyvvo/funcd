@@ -86,3 +86,41 @@ func TestLinkDeletionProtectionAdmission(t *testing.T) {
 	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Delete, GVK: gvk, Old: fn("a", lnk("toB", "b"))})
 	require.NoError(t, err, "a function with no dependents is deletable")
 }
+
+// ADR-0347 Decision 1: a Job's links name Functions that exist, and a Function a Job links to cannot be deleted while
+// the link stays.
+func TestJobLinks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	target := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
+	target.Name, target.Namespace = "api", "default"
+	job := &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob}}
+	job.Name, job.Namespace = "api", "default"
+	job.Spec.Bindings.Links = []v1.FunctionLink{{Alias: "api", Target: "api"}}
+	r := jobLinkReader{fns: []v1.Object{target}, jobs: []v1.Object{job}}
+
+	validity := admission.NewLinkValidityAdmission(r)
+	require.True(t, validity.Handles(v1.KindJob.GVK(), admission.Create))
+	_, err := validity.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindJob.GVK(), Object: job})
+	require.NoError(t, err, "a Job named like the Function it links to closes no cycle")
+	lonely := &v1.Job{TypeMeta: job.TypeMeta, ObjectMeta: v1.ObjectMeta{Name: "lonely", Namespace: "default"}}
+	lonely.Spec.Bindings.Links = []v1.FunctionLink{{Alias: "api", Target: "ghost"}}
+	_, err = validity.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindJob.GVK(), Object: lonely})
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, `spec.bindings.links[api].target "ghost" does not exist in namespace "default"`)
+
+	protection := admission.NewLinkDeletionProtectionAdmission(r)
+	_, err = protection.Admit(ctx, admission.Request{Operation: admission.Delete, GVK: v1.KindFunction.GVK(), Old: target})
+	require.Equal(t, fault.Conflict, fault.KindOf(err))
+	require.ErrorContains(t, err, `function "api" is linked by Job "api" (alias "api"); remove the link first`)
+}
+
+// jobLinkReader lists fns as the namespace's Functions and jobs as its Jobs.
+type jobLinkReader struct{ fns, jobs []v1.Object }
+
+func (r jobLinkReader) List(_ context.Context, gvk v1.GroupVersionKind, _ v1.NamespaceName) ([]v1.Object, error) {
+	if gvk == v1.KindJob.GVK() {
+		return r.jobs, nil
+	}
+	return r.fns, nil
+}

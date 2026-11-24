@@ -128,8 +128,11 @@ func resolveEntries(ctx context.Context, ra *v1.RolesAssignment, roles RoleResol
 // principalEntity maps a PrincipalRef to its Cedar (type, id).
 func principalEntity(ns v1.NamespaceName, p v1.PrincipalRef) (typ, id string) {
 	t := entityTypeFunction
-	if p.Kind == v1.PrincipalKindIdentity {
+	switch p.Kind {
+	case v1.PrincipalKindIdentity:
 		t = entityTypeIdentity
+	case v1.PrincipalKindJob:
+		t = entityTypeJob
 	}
 	return t, string(ns) + "/" + string(p.Name)
 }

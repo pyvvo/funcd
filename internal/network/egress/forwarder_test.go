@@ -237,7 +237,7 @@ func TestScenarioLookupFollowsWhoARuleCovers(t *testing.T) {
 		Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"whole.example"}}}},
 	}}
 	named := &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "named", Namespace: "acme"}, Spec: v1.EgressPolicySpec{
-		AppliesTo: []v1.ObjectName{"etl"},
+		AppliesTo: []v1.WorkloadRef{v1.FunctionOwner("etl")},
 		Rules:     []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"named.example"}}}},
 	}}
 	for _, tc := range []struct {
@@ -268,7 +268,7 @@ func TestWildcardTokenFollowsWhoARuleCovers(t *testing.T) {
 		Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"api.y.example"}}}},
 	}}
 	named := &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "named", Namespace: "acme"}, Spec: v1.EgressPolicySpec{
-		AppliesTo: []v1.ObjectName{"etl"},
+		AppliesTo: []v1.WorkloadRef{v1.FunctionOwner("etl")},
 		Rules:     []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"*.y.example"}}}},
 	}}
 	dst := netip.MustParseAddr("203.0.113.7")

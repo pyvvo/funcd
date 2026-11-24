@@ -131,7 +131,9 @@ func (s *addonProvider) proxyFor() function.AddonProxy {
 			}
 			return ln.Addr().String(), nil
 		},
-		Token: func(ns v1.NamespaceName, fn v1.ObjectName) string { return addonsvc.Token(master, ns, fn) },
+		Token: func(ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) string {
+			return addonsvc.Token(master, ns, kind, name)
+		},
 	}
 }
 

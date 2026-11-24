@@ -84,8 +84,8 @@ func (p s3TestPDP) Authorize(_ context.Context, req auth.Request) (auth.Decision
 // fakeBlobResolver binds caller "fn" via alias "b" → bucket "bkt", prefix "p"; else default-deny.
 type fakeBlobResolver struct{}
 
-func (fakeBlobResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.ObjectName, alias string) (blobsvc.Binding, error) {
-	if fn == "fn" && alias == "b" {
+func (fakeBlobResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.WorkloadRef, alias string) (blobsvc.Binding, error) {
+	if fn == v1.FunctionOwner("fn") && alias == "b" {
 		return blobsvc.Binding{Bucket: "bkt", Prefix: "p"}, nil
 	}
 	return blobsvc.Binding{}, fault.Forbiddenf("fakeBlobResolver", "no blob binding for %s/%s", fn, alias)
@@ -106,7 +106,7 @@ func blobHandler(t *testing.T, ns v1.NamespaceName, pdp auth.Authorizer, bkt ibl
 		Authorizer: pdp,
 	})
 	require.NoError(t, err)
-	return local.NewHandler(local.Ref{Namespace: ns, Function: "fn"}, nil, nil, nil, nil, nil, local.WithFacets(local.BlobFacet(f)))
+	return local.NewHandler(local.FunctionRef(ns, "fn"), nil, nil, nil, nil, nil, local.WithFacets(local.BlobFacet(f)))
 }
 
 // scenario: blob-read-write (local API) — a bound function put/gets its prefix over context.blob, no keypair.

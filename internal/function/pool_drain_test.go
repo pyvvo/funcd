@@ -24,6 +24,7 @@ import (
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // ADR-0190 Decision 8 tests: a manifest rebuild starts a second pool worker and drains the old one.
@@ -34,8 +35,8 @@ type recordingSockets struct {
 	members map[v1.ObjectName][]v1.ObjectName
 }
 
-func (s *recordingSockets) SocketFor(_ v1.NamespaceName, name v1.ObjectName) (string, error) {
-	return "sock-" + string(name), nil
+func (s *recordingSockets) SocketFor(ref local.Ref) (string, error) {
+	return "sock-" + string(ref.Name), nil
 }
 
 func (s *recordingSockets) PoolSocketFor(_ v1.NamespaceName, pool v1.ObjectName, members []v1.ObjectName) (string, error) {
@@ -48,7 +49,7 @@ func (s *recordingSockets) PoolSocketFor(_ v1.NamespaceName, pool v1.ObjectName,
 	return "sock-" + string(pool), nil
 }
 
-func (s *recordingSockets) Remove(v1.NamespaceName, v1.ObjectName) {}
+func (s *recordingSockets) Remove(local.Ref) {}
 
 func (s *recordingSockets) of(pool v1.ObjectName) []v1.ObjectName {
 	s.mu.Lock()

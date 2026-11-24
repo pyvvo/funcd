@@ -151,7 +151,7 @@ the status; with `funcdctl dev`, add the `--server` and `--token` flags of its b
 - When a Function that declares the Bucket by `name` is deleted, its entry's `deletion` decides: `retain`, the
   default, keeps the Bucket and its objects, and `delete` deletes them.
 - A Bucket that stayed belongs to the deleted Function: a new Function of the same name declares it by `ref`, or waits
-  with `StoreNotOwned`. A prefix's owner is a name, so that new Function can write its prefixes again.
+  with `StoreNotOwned`. A prefix's owner names a kind and a name, never a UID, so that new Function can write its prefixes again.
 
 ## CLI errors
 

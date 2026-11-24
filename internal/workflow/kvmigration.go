@@ -123,7 +123,7 @@ func adoptableAtUpgrade(cur *v1.KVStore, wf *v1.Workflow) bool {
 		steps[materializedName(wf, wf.Spec.Steps[i].Name)] = true
 	}
 	for _, t := range cur.Spec.Tables {
-		if t.Owner != "" && !steps[t.Owner] {
+		if !t.Owner.IsZero() && (t.Owner.Kind != v1.KindFunction || !steps[t.Owner.Name]) {
 			return false
 		}
 	}

@@ -224,7 +224,7 @@ func (e *executor) captureLogs(fn *function.Reconciler) {
 	if lc, ok := c.runtime.(runtime.LogCapturer); ok && e.logSink != nil {
 		sinks := funclog.Sinks{Logs: e.logs, Traces: e.traces()}
 		lc.SetLogCapture(func(spec runtime.WorkerSpec, r io.ReadCloser) {
-			res := funclog.Resource{Namespace: string(spec.Namespace), Function: string(spec.Name), Replica: strconv.Itoa(spec.Replica)}
+			res := workerResource(spec)
 			if !strings.HasPrefix(string(spec.Name), "__pool__") {
 				e.logRoutes.start(r, func() { _ = funclog.Route(context.Background(), r, sinks, res, logger) })
 				return
@@ -236,14 +236,14 @@ func (e *executor) captureLogs(fn *function.Reconciler) {
 	}
 	if oc, ok := c.runtime.(runtime.OutputCapturer); ok {
 		oc.SetOutputCapture(func(spec runtime.WorkerSpec, out *workerpipe.Output) {
-			if spec.OwnerKind != v1.KindFunction {
+			if spec.OwnerKind != v1.KindFunction && spec.OwnerKind != v1.KindJobRun {
 				e.logEngineOutput(spec, out)
 				return
 			}
 			if e.logs == nil {
 				return
 			}
-			res := funclog.Resource{Namespace: string(spec.Namespace), Function: string(spec.Name), Replica: strconv.Itoa(spec.Replica)}
+			res := workerResource(spec)
 			dst := e.logs
 			if strings.HasPrefix(string(spec.Name), "__pool__") {
 				members, _, _ := fn.PoolMembers(spec.Namespace, spec.Name)
@@ -260,6 +260,18 @@ func (e *executor) captureLogs(fn *function.Reconciler) {
 			}
 		})
 	}
+}
+
+// workerResource names a shim worker's lines in funclog: a Function's by the Function, a run's by its kind and name, so a
+// run's lines stay apart from those of a Function of its name (ADR-0347 Decision 8).
+func workerResource(spec runtime.WorkerSpec) funclog.Resource {
+	res := funclog.Resource{Namespace: string(spec.Namespace), Replica: strconv.Itoa(spec.Replica)}
+	if spec.OwnerKind == v1.KindJobRun {
+		res.Kind, res.Name = string(v1.KindJobRun), string(spec.Name)
+		return res
+	}
+	res.Function = string(spec.Name)
+	return res
 }
 
 // useFunctions hands over the Function reconciler, which New builds after the Executor (ADR-0309 Decision 3): a Restore

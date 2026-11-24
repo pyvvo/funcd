@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"fmt"
+
 	"github.com/pyvvo/funcd/api/fault"
 )
 
@@ -48,9 +50,9 @@ type KVStoreSpec struct {
 type KVTable struct {
 	// Name is the sub-domain name; a DNS-1123 label, unique within the store.
 	Name string `json:"name" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The table's name, unique within the store."`
-	// Owner is a writer by default, a Function in this store's namespace; a writer-role grant adds others (ADR-0136).
-	// Cross-resource validity (the owner exists) is an admission, not Validate.
-	Owner ObjectName `json:"owner,omitempty" doc:"The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in one that a Workflow declares, it names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv."`
+	// Owner is a writer by default, a Function or a Job in this store's namespace named with its kind (ADR-0351); a
+	// writer-role grant adds others (ADR-0136). Cross-resource validity (the owner exists) is an admission, not Validate.
+	Owner WorkloadRef `json:"owner,omitzero" doc:"The Function or Job that owns the table, in the store's namespace, named with its kind. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function or a Job declares, the owner defaults to that workload; in one that a Workflow declares, a Function owner names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every workload, the owner included, reaches the table through an entry of its spec.bindings.kv."`
 }
 
 // KVStoreStatus is the observed state of a KVStore (ADR-0072/0073): the reconciler sets Ready and the
@@ -127,6 +129,9 @@ func validateTables(op, path string, tables []KVTable) error {
 			return fault.Invalidf(op, "%s[%d].name %q is duplicated", path, i, tb.Name)
 		}
 		seen[tb.Name] = true
+		if err := tb.Owner.validate(op, fmt.Sprintf("%s[%d].owner", path, i), KindFunction, KindJob); err != nil {
+			return err // a Lake owns a prefix or a database, never a table (ADR-0351 Decision 3)
+		}
 	}
 	return nil
 }

@@ -28,8 +28,8 @@ const (
 // SQL is the function-facing SQL port the local API routes to; the services/sql.Facade satisfies it. As for KV, the
 // caller's namespace and function come from the sandbox's fixed Ref, never from the request (ADR-0233).
 type SQL interface {
-	Query(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string, stmts []json.RawMessage) ([]QueryResult, error)
-	Execute(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string, stmts []json.RawMessage) ([]ExecResult, error)
+	Query(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding string, stmts []json.RawMessage) ([]QueryResult, error)
+	Execute(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding string, stmts []json.RawMessage) ([]ExecResult, error)
 }
 
 // QueryResult is one query statement's rows in rqlite's array format, which keeps duplicate column names.
@@ -72,7 +72,7 @@ func SQLFacet(s SQL) Facet {
 // that is not Ready 503, an oversized body or answer 413, and a write the quota or the free-space floor refuses 507,
 // each endpoint with the known causes it declares (ADR-0330).
 func registerSQL(mux facetMux, caller Ref, s SQL, logger *slog.Logger) {
-	ns, fn := caller.Namespace, caller.Function
+	ns, fn := caller.Namespace, caller.Workload()
 	handle(mux, logger, "POST /sql/{binding}/query", sqlCauses(), serveSQL(logger, caller, "query",
 		func(r *http.Request, stmts []json.RawMessage) (queryResponse, error) {
 			res, err := s.Query(r.Context(), ns, fn, r.PathValue("binding"), stmts)

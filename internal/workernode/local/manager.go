@@ -71,10 +71,15 @@ func NewManager(dir string, store FunctionStore, invoker Invoker, authz auth.Aut
 	}
 }
 
-// SocketFor ensures the local API for (ns, name) is serving and returns its socket path. Idempotent.
-func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, error) {
+// SocketFor ensures the local API for ref is serving and returns its socket path. Idempotent. Every run of a Job has a
+// socket of its own, and a Job and a Function of one name never share one (ADR-0351 Decision 2); a ref of any other
+// kind, the zero value included, is refused.
+func (m *Manager) SocketFor(ref Ref) (string, error) {
 	const op = "workernode.local.SocketFor"
-	key := string(ns) + "/" + string(name)
+	if !ref.Valid() {
+		return "", fault.Invalidf(op, "caller %q of kind %q is no Function and no Job's run", ref, ref.Kind)
+	}
+	key := ref.key()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -83,7 +88,7 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 	if s, ok := m.active[key]; ok {
 		return s.path, nil
 	}
-	s, err := m.bind(op, key, m.handlerFor(Ref{Namespace: ns, Function: name}), nil)
+	s, err := m.bind(op, key, m.handlerFor(ref), nil)
 	if err != nil {
 		return "", err
 	}
@@ -163,7 +168,7 @@ func (p *poolMembers) set(ns v1.NamespaceName, members []v1.ObjectName, build fu
 				continue
 			}
 		}
-		next[name] = build(Ref{Namespace: ns, Function: name})
+		next[name] = build(FunctionRef(ns, name))
 	}
 	p.handlers.Store(&next)
 }
@@ -202,13 +207,13 @@ func (m *Manager) serve(key string, s *serving, run func() error) {
 	s.cancel()
 }
 
-// Remove stops + deletes the local API listener for (ns, name), a Function's or a pool worker's, if any —
+// Remove stops + deletes the local API listener for ref, a Function's, a pool worker's or a run's, if any —
 // called when the Function or the pool is deleted, so the socket lifecycle tracks the resource
 // (controller-driven, not leaked). It returns once the listener is closed: closing a Unix listener unlinks
 // its path, which a Function re-created under the same name binds again (issue #491). It holds mu until
 // then, so a concurrent SocketFor binds after it.
-func (m *Manager) Remove(ns v1.NamespaceName, name v1.ObjectName) {
-	key := string(ns) + "/" + string(name)
+func (m *Manager) Remove(ref Ref) {
+	key := ref.key()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, ok := m.active[key]

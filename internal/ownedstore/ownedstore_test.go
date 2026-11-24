@@ -36,6 +36,7 @@ func TestIsMarker(t *testing.T) {
 	require.False(t, ownedstore.IsMarker(ref(v1.KindApp, true)), "a controller reference is not a marker")
 	require.True(t, ownedstore.IsMarker(ref(v1.KindFunction, false)))
 	require.True(t, ownedstore.IsMarker(ref(v1.KindSite, false)))
+	require.True(t, ownedstore.IsMarker(ref(v1.KindJob, false)), "a Job owns its root entries as a Function does")
 	require.False(t, ownedstore.IsMarker(ref(v1.KindRoute, false)), "a Route stamps no marker")
 }
 

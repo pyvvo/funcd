@@ -117,7 +117,7 @@ func TestWorkflowOnFailureAndOwnedStore(t *testing.T) {
 	// owned-store owner must be a step.
 	w2 := newWorkflow(WorkflowSpec{
 		Steps:    []WorkflowStep{imgStep("a")},
-		KVStores: []KVStoreEntry{{Name: "s", KVStoreSpec: KVStoreSpec{Tables: []KVTable{{Name: "t", Owner: "ghost"}}}}},
+		KVStores: []KVStoreEntry{{Name: "s", KVStoreSpec: KVStoreSpec{Tables: []KVTable{{Name: "t", Owner: FunctionOwner("ghost")}}}}},
 	})
 	if err := w2.Validate(); err == nil {
 		t.Fatal("owned-store owner naming a non-step must be rejected")
@@ -134,7 +134,7 @@ func TestIssue927_ValidateRefusesWhatItsObjectsRefuse(t *testing.T) {
 				Image:    "oci:img",
 				Bindings: StepBindings{KV: []FunctionKV{{Alias: "c", Store: "cache", Table: "a"}, {Alias: "d", Store: "cache", Table: "b"}}, Blob: []FunctionBlob{{Alias: "in", Bucket: "data", Prefix: "in"}, {Alias: "out", Bucket: "data", Prefix: "out"}}, Lake: []FunctionLake{{Alias: "q", Lake: "lake"}, {Alias: "r", Lake: "lake"}}, Config: []ObjectName{"settings"}},
 			}}},
-			KVStores: []KVStoreEntry{{Name: "cache", KVStoreSpec: KVStoreSpec{Tables: []KVTable{{Name: "a", Owner: "s"}, {Name: "b", Owner: "s"}}}}},
+			KVStores: []KVStoreEntry{{Name: "cache", KVStoreSpec: KVStoreSpec{Tables: []KVTable{{Name: "a", Owner: FunctionOwner("s")}, {Name: "b", Owner: FunctionOwner("s")}}}}},
 		}
 	}
 	if err := newWorkflow(spec()).Validate(); err != nil {
@@ -241,7 +241,7 @@ func TestWorkflowPoolingMode(t *testing.T) {
 func TestIssue927_ValidateRefusesRepeatedKVName(t *testing.T) {
 	w := newWorkflow(WorkflowSpec{
 		Steps:    []WorkflowStep{imgStep("s")},
-		KVStores: []KVStoreEntry{{Name: "cache", KVStoreSpec: KVStoreSpec{Tables: []KVTable{{Name: "a", Owner: "s"}}}}, {Name: "cache", KVStoreSpec: KVStoreSpec{Tables: []KVTable{{Name: "b", Owner: "s"}}}}},
+		KVStores: []KVStoreEntry{{Name: "cache", KVStoreSpec: KVStoreSpec{Tables: []KVTable{{Name: "a", Owner: FunctionOwner("s")}}}}, {Name: "cache", KVStoreSpec: KVStoreSpec{Tables: []KVTable{{Name: "b", Owner: FunctionOwner("s")}}}}},
 	})
 	err := w.Validate()
 	if want := `spec.kv[1] repeats the name "cache" of spec.kv[0]`; err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), want) {
@@ -256,7 +256,7 @@ func TestIssue927_ValidateRefusesRepeatedKVName(t *testing.T) {
 // scenario: workflow-owner (ADR-0275, its refusals) — a Workflow prefix's Function owner must be a step, and its Lake
 // owner a declared lake.
 func TestScenarioWorkflowOwner(t *testing.T) {
-	owned := func(o PrefixOwner) *Workflow {
+	owned := func(o WorkloadRef) *Workflow {
 		w := newWorkflow(WorkflowSpec{Steps: []WorkflowStep{imgStep("a")}})
 		w.Spec.Buckets = []BucketEntry{{Name: "files", BucketSpec: BucketSpec{Prefixes: []BucketPrefix{{Name: "p", Owner: o}}}}}
 		return w
@@ -269,5 +269,8 @@ func TestScenarioWorkflowOwner(t *testing.T) {
 	}
 	if err := owned(LakeOwner("a")).Validate(); err == nil || !strings.Contains(err.Error(), "is not a declared lake") {
 		t.Errorf("a Lake owner the Workflow does not declare: want refused, got %v", err)
+	}
+	if err := owned(JobOwner("a")).Validate(); err == nil || !strings.Contains(err.Error(), "which a Workflow does not declare") {
+		t.Errorf("a Job owner, of a step's name: want refused, got %v", err)
 	}
 }

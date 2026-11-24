@@ -11,6 +11,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
 )
 
@@ -68,6 +69,54 @@ func TestIssue1084_OCIArtifactWithoutContractDoesNotStart(t *testing.T) {
 			require.Equal(t, "artifact "+digest+" carries no I/O contract; a cloudevent Function needs one (ADR-0090)", ready.Message)
 			creates, _ := h.rt.counts()
 			require.Zero(t, creates, "no worker is created")
+		})
+	}
+}
+
+// artifactInspector reads a Job's contract from its OCI artifact by digest, as the daemon's inspector does.
+type artifactInspector struct{}
+
+func (artifactInspector) Inspect(ctx context.Context, image, digest string) ([]byte, error) {
+	return artifact.Inspect(ctx, image, digest)
+}
+
+// ADR-0347 Decision 2, amended 2026-11-23 (#1015): a Job whose OCI artifact carries no I/O contract is held with
+// ContractMissing, as a cloudevent Function's is (#1084); one whose artifact carries one is Ready.
+func TestJobWithoutContractIsHeld(t *testing.T) {
+	t.Parallel()
+	contract, err := artifact.ContractBlob([]byte(`{}`), []byte(`{}`))
+	require.NoError(t, err)
+	for name, tc := range map[string]struct {
+		contract []byte
+		held     bool
+	}{
+		"without-contract": {held: true},
+		"with-contract":    {contract: contract},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ref, digest := pushHandler(t, tc.contract)
+			oras := artifact.NewOrasMaterializer(t.TempDir(), "")
+			h := newShimHarness(t, http.StatusOK, false, func(d *function.Deps) { d.Materializer, d.Inspector = oras, artifactInspector{} })
+			obj, _ := v1.NewObject(v1.KindJob)
+			job := obj.(*v1.Job)
+			job.Name, job.Namespace, job.ResourceGroup = "hello", "default", "rg1"
+			job.Spec = v1.JobSpec{Runtime: "nodejs22", Handler: "handle", Image: ref, ImageDigest: digest}
+			_, err := h.st.Create(context.Background(), job)
+			require.NoError(t, err)
+			_, err = h.r.Jobs().Reconcile(context.Background(), controller.Request{GVK: v1.KindJob.GVK(), Namespace: "default", Name: "hello"})
+			require.NoError(t, err)
+			obj, err = h.st.Get(context.Background(), v1.KindJob.GVK(), "default", "hello")
+			require.NoError(t, err)
+			got := obj.(*v1.Job)
+			ready := readyOf(t, got)
+			if !tc.held {
+				require.Equal(t, v1.ConditionTrue, ready.Status, ready.Message)
+				return
+			}
+			require.Equal(t, v1.PhaseFailed, got.Status.Phase)
+			require.Equal(t, "ContractMissing", ready.Reason)
+			require.Equal(t, "artifact "+digest+" carries no I/O contract; a Job needs one, as a cloudevent Function does (ADR-0347 Decision 2)", ready.Message)
 		})
 	}
 }

@@ -35,6 +35,7 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/testkit/freeport"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -140,7 +141,7 @@ func TestIssue330_TempInvokeSocketDirRemoved(t *testing.T) {
 	t.Run("shutdown", func(t *testing.T) {
 		p, err := New(InMemory())
 		require.NoError(t, err)
-		sock, err := p.exec.sockets.SocketFor("default", "fn")
+		sock, err := p.exec.sockets.SocketFor(local.FunctionRef("default", "fn"))
 		require.NoError(t, err)
 		require.NoError(t, p.Shutdown(context.Background()))
 		require.NoDirExists(t, filepath.Dir(sock))

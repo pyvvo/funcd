@@ -1,9 +1,5 @@
 package v1alpha1
 
-import (
-	"github.com/pyvvo/funcd/api/fault"
-)
-
 // SQLDatabase is a SQL database served by its own rqlite engine (ADR-0232, FEAT-0011/F128): the SQL reconciler runs
 // one engine container per database through the add-on runtime, with a durable host directory (ADR-0231), and
 // reports it Ready once the engine answers its readiness probe.
@@ -18,7 +14,7 @@ type SQLDatabase struct {
 // write (ADR-0233). An empty memory bound means the reconciler's default (256Mi); the spec is not rewritten.
 type SQLDatabaseSpec struct {
 	Resources ResourceSpec `json:"resources,omitempty" doc:"The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine."`
-	Owner     ObjectName   `json:"owner,omitempty" doc:"The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it."`
+	Owner     WorkloadRef  `json:"owner,omitzero" doc:"The one Function, Lake or Job that may write the database, in its namespace, named with its kind, besides the writers that a RolesAssignment names. In a database that a Function or a Job declares by name, it defaults to that workload, and in a Workflow's sql a Function owner names a step and a Lake owner a lake that the Workflow declares. A Lake writes no SQL, so a database a Lake owns is written by those writers only. With no owner, only those writers can write it."`
 	// Quota caps the database's total size (ADR-0292).
 	Quota SizeQuota `json:"quota,omitzero" doc:"A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running."`
 }
@@ -49,8 +45,8 @@ func (d *SQLDatabase) Validate() error {
 	if err := d.Spec.Resources.Validate(op, "spec.resources"); err != nil {
 		return err
 	}
-	if d.Spec.Owner != "" && !dnsLabel.MatchString(string(d.Spec.Owner)) {
-		return fault.Invalidf(op, "spec.owner %q is not a valid Function name", d.Spec.Owner)
+	if err := d.Spec.Owner.validate(op, "spec.owner", KindFunction, KindLake, KindJob); err != nil {
+		return err
 	}
 	return nil
 }

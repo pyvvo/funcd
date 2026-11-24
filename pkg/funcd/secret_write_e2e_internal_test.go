@@ -48,13 +48,16 @@ func op(verb, binding, key, value string) string {
 func wrote(w writeReply) bool        { return w.OK }
 func refusedWrite(w writeReply) bool { return w.Error != nil && strings.Contains(*w.Error, "403") }
 
-// applyOAuth applies Secret oauth, owned by owner, holding data.
+// applyOAuth applies Secret oauth, owned by Function owner, or by no one when owner is "", holding data.
 func (r *secretRig) applyOAuth(t *testing.T, owner v1.ObjectName, data map[string][]byte) {
 	t.Helper()
 	obj, _ := v1.NewObject(v1.KindSecret)
 	s := obj.(*v1.Secret)
 	s.Name, s.Namespace, s.ResourceGroup = "oauth", "default", "rg1"
-	s.Spec.Owner, s.Spec.Data = owner, data
+	s.Spec.Data = data
+	if owner != "" {
+		s.Spec.Owner = v1.FunctionOwner(owner)
+	}
 	r.apply(t, s)
 }
 

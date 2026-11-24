@@ -51,8 +51,8 @@ func (r *Reconciler) accessIn(ctx context.Context, ns v1.NamespaceName) (accessI
 	for _, o := range kvs {
 		if st, ok := o.(*v1.KVStore); ok {
 			for _, t := range st.Spec.Tables {
-				if t.Owner != "" {
-					idx.owned[t.Owner] = append(idx.owned[t.Owner], "kv/"+string(st.Name)+"/"+t.Name)
+				if t.Owner.Kind == v1.KindFunction { // a Job's table is no Function's, whatever its name (ADR-0351)
+					idx.owned[t.Owner.Name] = append(idx.owned[t.Owner.Name], "kv/"+string(st.Name)+"/"+t.Name)
 				}
 			}
 		}
@@ -64,7 +64,7 @@ func (r *Reconciler) accessIn(ctx context.Context, ns v1.NamespaceName) (accessI
 	for _, o := range buckets {
 		if b, ok := o.(*v1.Bucket); ok {
 			for _, p := range b.Spec.Prefixes {
-				if p.Owner.Kind == v1.KindFunction { // a Lake's prefix is no Function's, whatever its name (ADR-0275)
+				if p.Owner.Kind == v1.KindFunction { // a Lake's or a Job's prefix is no Function's, whatever its name (ADR-0275)
 					idx.owned[p.Owner.Name] = append(idx.owned[p.Owner.Name], "blob/"+string(b.Name)+"/"+p.Name)
 				}
 			}
@@ -75,8 +75,8 @@ func (r *Reconciler) accessIn(ctx context.Context, ns v1.NamespaceName) (accessI
 		return accessIndex{}, err
 	}
 	for _, o := range dbs {
-		if db, ok := o.(*v1.SQLDatabase); ok && db.Spec.Owner != "" {
-			idx.owned[db.Spec.Owner] = append(idx.owned[db.Spec.Owner], "sql/"+string(db.Name))
+		if db, ok := o.(*v1.SQLDatabase); ok && db.Spec.Owner.Kind == v1.KindFunction {
+			idx.owned[db.Spec.Owner.Name] = append(idx.owned[db.Spec.Owner.Name], "sql/"+string(db.Name))
 		}
 	}
 	secrets, err := list(v1.KindSecret)
@@ -84,8 +84,8 @@ func (r *Reconciler) accessIn(ctx context.Context, ns v1.NamespaceName) (accessI
 		return accessIndex{}, err
 	}
 	for _, o := range secrets {
-		if sec, ok := o.(*v1.Secret); ok && sec.Spec.Owner != "" {
-			idx.owned[sec.Spec.Owner] = append(idx.owned[sec.Spec.Owner], "secret/"+string(sec.Name))
+		if sec, ok := o.(*v1.Secret); ok && sec.Spec.Owner.Kind == v1.KindFunction {
+			idx.owned[sec.Spec.Owner.Name] = append(idx.owned[sec.Spec.Owner.Name], "secret/"+string(sec.Name))
 		}
 	}
 	ras, err := list(v1.KindRolesAssignment)
@@ -108,8 +108,10 @@ func (r *Reconciler) accessIn(ctx context.Context, ns v1.NamespaceName) (accessI
 				return accessIndex{}, fault.Wrapf(merr, fault.Internal, op, "encode EgressPolicy %s", ep.Name)
 			}
 			grant := "egresspolicy/" + string(ep.Name) + "@" + sha256Hex(rules)
-			for _, fn := range ep.Spec.AppliesTo {
-				idx.grants[fn] = append(idx.grants[fn], grant)
+			for _, ref := range ep.Spec.AppliesTo {
+				if ref.Kind == v1.KindFunction { // a Job is in no pool (ADR-0351 Decision 3)
+					idx.grants[ref.Name] = append(idx.grants[ref.Name], grant)
+				}
 			}
 		}
 	}

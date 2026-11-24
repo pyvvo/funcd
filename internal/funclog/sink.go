@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/funclog/compact"
 	"github.com/pyvvo/funcd/internal/platform/clock"
@@ -296,8 +297,12 @@ func marshalOTLP(res Resource, entries []Entry, now time.Time) ([]byte, error) {
 	logs := plog.NewLogs()
 	rl := logs.ResourceLogs().AppendEmpty()
 	ra := rl.Resource().Attributes()
-	if res.Kind != "" { // an engine's records (ADR-0342 Decision 2)
-		ra.PutStr("source", "engine")
+	if res.Kind != "" { // an engine's records (ADR-0342 Decision 2), or a run's shim worker's (ADR-0347 Decision 8)
+		source := "engine"
+		if res.Kind == string(v1.KindJobRun) {
+			source = "function"
+		}
+		ra.PutStr("source", source)
 		ra.PutStr("namespace", res.Namespace)
 		ra.PutStr("kind", res.Kind)
 		ra.PutStr("name", res.Name)
@@ -360,12 +365,16 @@ func tenantOf(r Resource) string {
 // segmentKey partitions objects as logs/<ns>/<fn>/<date>/<unixnano>-<replica>.otlp.jsonl, <fn> an engine's
 // <plural>.<name> (ADR-0342 Decision 2).
 func segmentKey(res Resource, now time.Time) string {
-	owner := res.Function
-	if res.Kind != "" {
-		owner = compact.EngineSegment(res.Kind, res.Name)
-	}
 	return fmt.Sprintf("logs/%s/%s/%s/%d-%s.otlp.jsonl",
-		res.Namespace, owner, now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), keyReplica(res.Replica))
+		res.Namespace, res.segment(), now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), keyReplica(res.Replica))
+}
+
+// segment is the <fn> part of res's keys: its Function, or for the object of a Kind, <plural>.<name>.
+func (res Resource) segment() string {
+	if res.Kind != "" {
+		return compact.EngineSegment(res.Kind, res.Name)
+	}
+	return res.Function
 }
 
 // maxKeyReplica bounds the replica part of a segment key. A run-root span's replica is its run record name,

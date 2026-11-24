@@ -28,26 +28,52 @@ const (
 	defaultMeasureInterval = 30 * time.Second
 )
 
-// ID names one volume: a Function's local volume, or with Worker set one worker's emptyDir.
+// ID names one volume: a local volume of a Function or a Job, its workload, or with Worker set one worker's emptyDir.
+// Kind is the workload's kind, KindFunction or KindJob, and any other is refused: a Job's volumes live apart from those
+// of a Function of the same name (ADR-0347 Decision 1).
 type ID struct {
 	Namespace v1.NamespaceName
-	Function  v1.ObjectName
+	Kind      v1.Kind
+	Workload  v1.ObjectName
 	Name      v1.ObjectName
 	Worker    string // "" for a local volume
 }
 
 func (id ID) String() string {
-	s := fmt.Sprintf("%s/%s/%s", id.Namespace, id.Function, id.Name)
+	s := fmt.Sprintf("%s/%s/%s", id.Namespace, workloadDir(id.Kind, id.Workload), id.Name)
 	if id.Worker != "" {
 		s += "@" + id.Worker
 	}
 	return s
 }
 
+// jobDirSuffix marks a Job's directory: a DNS label holds no dot, so <job>.job never meets a Function's <function>.
+const jobDirSuffix = ".job"
+
+// workloadDir is the directory of a workload's volumes under its namespace: a Function's name, as before Jobs had
+// volumes, or a Job's name with jobDirSuffix.
+func workloadDir(kind v1.Kind, name v1.ObjectName) string {
+	if kind == v1.KindJob {
+		return string(name) + jobDirSuffix
+	}
+	return string(name)
+}
+
+// workloadOf reads a workload's directory back: its kind and name, false for a directory no workload owns.
+func workloadOf(dir string) (v1.Kind, v1.ObjectName, bool) {
+	if name, job := strings.CutSuffix(dir, jobDirSuffix); job && workerToken.MatchString(name) {
+		return v1.KindJob, v1.ObjectName(name), true
+	}
+	if workerToken.MatchString(dir) {
+		return v1.KindFunction, v1.ObjectName(dir), true
+	}
+	return "", "", false
+}
+
 // Info is a volume as its meta records it.
 type Info struct {
 	ID        ID
-	Owner     v1.UID // "" ⇒ retained: no Function holds it
+	Owner     v1.UID // "" ⇒ retained: no workload holds it
 	SizeBytes int64
 	Deletion  v1.DeletionPolicy
 }
@@ -63,7 +89,7 @@ type Manager interface {
 	// Reserve creates or checks id's leaf and sets its quota against its booking (booking it first when it has
 	// none); StoreNotOwned when the meta names another UID. deletion is recorded for the delete path.
 	Reserve(ctx context.Context, id ID, owner v1.UID, sizeBytes int64, deletion v1.DeletionPolicy) (hostPath string, err error)
-	// Adopt stamps owner on a retained local volume; "" retains it; Conflict while another live Function holds it.
+	// Adopt stamps owner on a retained local volume; "" retains it; Conflict while another live workload holds it.
 	Adopt(ctx context.Context, id ID, owner v1.UID) error
 	Release(ctx context.Context, id ID) error // removes the leaf and frees its booking
 	// Renew releases emptyDir old and reserves emptyDir id of sizeBytes under one lock: the worker that replaces old's
@@ -116,13 +142,14 @@ type Options struct {
 	CapacityBytes int64 // 0 ⇒ no capacity check (funcdctl dev)
 	// Budget returns a namespace's volume budget in bytes, 0 for none.
 	Budget func(ctx context.Context, ns v1.NamespaceName) (int64, error)
-	// Holder returns the UID of the stored Function a volume's path names, or false when none is stored.
-	Holder func(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (v1.UID, bool, error)
+	// Holder returns the UID of the stored workload, a Function or a Job, that a volume's path names, or false when none
+	// is stored.
+	Holder func(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) (v1.UID, bool, error)
 	// UID and GID own each leaf (the runtime images run as root, the zero value).
 	UID, GID int
 	// BookingTTL drops a booking no Reserve backed (an apply refused after its admission); default 1 minute.
 	BookingTTL time.Duration
-	// Declared reports whether a stored Function declares id's local volume, whose booking BookingTTL never drops: its
+	// Declared reports whether a stored workload declares id's local volume, whose booking BookingTTL never drops: its
 	// pass reserves it, however long an earlier gate holds that pass (#1208). nil ⇒ none is kept.
 	Declared func(ctx context.Context, id ID) (bool, error)
 	// MeasureInterval paces the measurement of an unenforced Limiter; default 30 s.
@@ -222,7 +249,7 @@ func (m *manager) measure() {
 	for _, in := range infos {
 		used, err := usage(m.leaf(in.ID))
 		if err == nil && used > in.meta.SizeBytes {
-			m.o.Logger.Warn("volume past its size", "namespace", in.ID.Namespace, "function", in.ID.Function,
+			m.o.Logger.Warn("volume past its size", "namespace", in.ID.Namespace, "kind", in.ID.Kind, "workload", in.ID.Workload,
 				"volume", in.ID.Name, "worker", in.ID.Worker, "sizeBytes", in.meta.SizeBytes, "usedBytes", used)
 		}
 	}
@@ -248,7 +275,10 @@ func usage(dir string) (int64, error) {
 }
 
 func (m *manager) validID(op string, id ID) error {
-	for _, p := range []string{string(id.Namespace), string(id.Function), string(id.Name)} {
+	if id.Kind != v1.KindFunction && id.Kind != v1.KindJob {
+		return fault.Invalidf(op, "volume %s: its workload's kind %q is neither Function nor Job", id, id.Kind)
+	}
+	for _, p := range []string{string(id.Namespace), string(id.Workload), string(id.Name)} {
 		if !workerToken.MatchString(p) {
 			return fault.Invalidf(op, "volume %s: %q is not a DNS-1123 label", id, p)
 		}
@@ -260,11 +290,11 @@ func (m *manager) validID(op string, id ID) error {
 }
 
 func (m *manager) fnDir(id ID) string {
-	return filepath.Join(m.o.Root, string(id.Namespace), string(id.Function))
+	return filepath.Join(m.o.Root, string(id.Namespace), workloadDir(id.Kind, id.Workload))
 }
 
-// leaf is the volume's directory: <ns>/<fn>/<name> for a local volume, <ns>/<fn>/<name>.empty/<worker> for an
-// emptyDir. A DNS label holds no dot, so neither collides with another volume's leaf or meta.
+// leaf is the volume's directory: <ns>/<workload>/<name> for a local volume, <ns>/<workload>/<name>.empty/<worker> for
+// an emptyDir, a Job's <workload> being <job>.job. A DNS label holds no dot, so none collides with another's.
 func (m *manager) leaf(id ID) string {
 	if id.Worker != "" {
 		return filepath.Join(m.fnDir(id), string(id.Name)+".empty", id.Worker)
@@ -560,13 +590,13 @@ func (m *manager) Adopt(ctx context.Context, id ID, owner v1.UID) error {
 	return m.writeMeta(id, md)
 }
 
-// live reports whether the Function that owned a volume is still stored. A volume's path names its Function, so only
-// a stored Function of that name with that UID holds it.
+// live reports whether the workload that owned a volume is still stored. A volume's path names its workload, so only
+// a stored workload of that kind and name with that UID holds it.
 func (m *manager) live(ctx context.Context, id ID, uid v1.UID) (bool, error) {
 	if m.o.Holder == nil {
 		return true, nil
 	}
-	cur, ok, err := m.o.Holder(ctx, id.Namespace, id.Function)
+	cur, ok, err := m.o.Holder(ctx, id.Namespace, id.Kind, id.Workload)
 	if err != nil {
 		return false, err
 	}
@@ -656,7 +686,7 @@ type scanned struct {
 	meta meta
 }
 
-// scan reads every meta under the root, sorted by ID: <ns>/<fn>/<name>.meta and <ns>/<fn>/<name>.empty/<w>.meta.
+// scan reads every meta under the root, sorted by ID: <ns>/<workload>/<name>.meta and <ns>/<workload>/<name>.empty/<w>.meta.
 func (m *manager) scan() ([]scanned, error) {
 	const op = "volume.scan"
 	var out []scanned
@@ -673,10 +703,11 @@ func (m *manager) scan() ([]scanned, error) {
 			return nil, fault.Wrapf(err, fault.Internal, op, "list namespace %s", ns.Name())
 		}
 		for _, fn := range fns {
-			if !fn.IsDir() || !workerToken.MatchString(fn.Name()) {
+			kind, workload, ok := workloadOf(fn.Name())
+			if !fn.IsDir() || !ok {
 				continue
 			}
-			base := ID{Namespace: v1.NamespaceName(ns.Name()), Function: v1.ObjectName(fn.Name())}
+			base := ID{Namespace: v1.NamespaceName(ns.Name()), Kind: kind, Workload: workload}
 			ids, err := m.scanFunction(base)
 			if err != nil {
 				return nil, err
@@ -702,7 +733,7 @@ func (m *manager) scanFunction(base ID) ([]ID, error) {
 	dir := m.fnDir(base)
 	ents, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, "volume.scan", "list function %s/%s", base.Namespace, base.Function)
+		return nil, fault.Wrapf(err, fault.Internal, "volume.scan", "list the volumes of %s %s/%s", base.Kind, base.Namespace, base.Workload)
 	}
 	var ids []ID
 	for _, e := range ents {

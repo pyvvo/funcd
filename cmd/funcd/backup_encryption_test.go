@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/platform/config"
@@ -54,9 +55,9 @@ func TestScenarioMasterKeyMigrates(t *testing.T) {
 		require.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
 		require.Contains(t, logs, legacy)
 		require.Contains(t, logs, target)
-		want, err := lakegw.DeriveLakeToken(old, "team", "fn")
+		want, err := lakegw.DeriveLakeToken(old, "team", v1.KindFunction, "fn")
 		require.NoError(t, err)
-		got, err := lakegw.DeriveLakeToken(master, "team", "fn")
+		got, err := lakegw.DeriveLakeToken(master, "team", v1.KindFunction, "fn")
 		require.NoError(t, err)
 		require.Equal(t, want, got, "the lake tokens stay")
 	})

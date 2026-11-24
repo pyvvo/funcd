@@ -17,6 +17,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/funclog"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
@@ -240,7 +241,7 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before *
 	}
 	// A first record over the run store's value limit even without its input is refused on every start.
 	if prev == nil && rec == nil && fault.KindOf(err) == fault.PayloadTooLarge {
-		res, err := r.failUnrecorded(ctx, run, *before, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "RunRecordTooLarge", Message: capErr(err.Error())})
+		res, err := r.failUnrecorded(ctx, run, *before, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "RunRecordTooLarge", Message: observability.StatusError(err.Error())})
 		return res, true, err
 	}
 	// ADR-0107: a replay seed rejection (SeedInvalid/DigestDrift) produces no record — fail the run with
@@ -248,7 +249,7 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before *
 	if prev == nil && run.Spec.Replay != nil && fault.KindOf(err) == fault.Invalid {
 		res, err := r.failUnrecorded(ctx, run, *before, v1.Condition{
 			Type: "ReplaySeeded", Status: v1.ConditionFalse,
-			Reason: replayReason(err), Message: capErr(err.Error()),
+			Reason: replayReason(err), Message: observability.StatusError(err.Error()),
 		})
 		return res, true, err
 	}
@@ -566,7 +567,7 @@ func (r *RunReconciler) failUnrecorded(ctx context.Context, run *v1.WorkflowRun,
 // its Workflow's status.runs.active, and re-checks it after waitRequeue.
 func (r *RunReconciler) wait(ctx context.Context, run *v1.WorkflowRun, before []byte, reason, msg string) (controller.Result, error) {
 	run.Status.Phase = runPending
-	run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: capErr(msg)})
+	run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: observability.StatusError(msg)})
 	res, err := r.writeStatus(ctx, run, before, nil)
 	if err != nil || res.Requeue {
 		return res, err

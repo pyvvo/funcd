@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 )
 
@@ -80,4 +81,26 @@ func TestIdentityLakeTokenRoundTrip(t *testing.T) {
 		_, _, ok := decodeIdentityLakeToken(token)
 		require.False(t, ok, label)
 	}
+}
+
+// ADR-0351 Decision 4: the lake token's claims name the kind, so a Job's token resolves to the Job and never to the
+// Function of its name; a token that names another kind resolves to nothing.
+func TestWorkloadLakeTokenNamesItsKind(t *testing.T) {
+	t.Parallel()
+	master := []byte("node-master")
+	keys := NewLakeKeys(master, nil)
+	job, err := DeriveLakeToken(master, "data", v1.KindJob, "tofu")
+	require.NoError(t, err)
+	fn, err := DeriveLakeToken(master, "data", v1.KindFunction, "tofu")
+	require.NoError(t, err)
+	require.NotEqual(t, job, fn)
+	for token, want := range map[string]v1.Kind{job: v1.KindJob, fn: v1.KindFunction} {
+		got, ok := keys.PrincipalFor(token)
+		require.True(t, ok)
+		require.Equal(t, auth.EntityRef{Type: want, Namespace: "data", Name: "tofu"}, got)
+	}
+	lake, err := DeriveLakeToken(master, "data", v1.KindLake, "tofu")
+	require.NoError(t, err)
+	_, ok := keys.PrincipalFor(lake)
+	require.False(t, ok, "a token of another kind")
 }

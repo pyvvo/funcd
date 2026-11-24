@@ -31,7 +31,7 @@ type readCheck struct {
 	calls []string
 }
 
-func (r *readCheck) CheckRead(_ context.Context, _ v1.NamespaceName, _ v1.ObjectName, alias string) error {
+func (r *readCheck) CheckRead(_ context.Context, _ v1.NamespaceName, _ v1.WorkloadRef, alias string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, alias)
@@ -117,7 +117,7 @@ func (f *fixture) fn(name v1.ObjectName, phase v1.Phase, change func(*v1.Functio
 }
 
 func (f *fixture) checkOf(name v1.ObjectName) *local.DependencyReport {
-	return f.check.Check(context.Background(), local.Ref{Namespace: ns, Function: name})
+	return f.check.Check(context.Background(), local.FunctionRef(ns, name))
 }
 
 // api binds KV table store, blob prefix files and links mailer.
@@ -232,14 +232,14 @@ func TestCheckerBudgetAndStoreErrors(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
 	<-ctx.Done()
-	rep := f.check.Check(ctx, local.Ref{Namespace: ns, Function: "todo-api"})
+	rep := f.check.Check(ctx, local.FunctionRef(ns, "todo-api"))
 	require.Equal(t, "Timeout", rep.Reason)
 	require.Contains(t, []string{"kv", "socket"}, rep.Kind)
 	require.Empty(t, f.kv.calls, "no Facade call past the budget")
 
 	broken := health.NewChecker(health.CheckerDeps{Store: failingStore{}})
 	require.Equal(t, &local.DependencyReport{Kind: "socket", Reason: "Unreachable", Message: "the metastore is closed"},
-		broken.Check(context.Background(), local.Ref{Namespace: ns, Function: "todo-api"}))
+		broken.Check(context.Background(), local.FunctionRef(ns, "todo-api")))
 }
 
 type failingStore struct{}
@@ -255,7 +255,7 @@ func TestDependencyEndpointNeverCallsAWorker(t *testing.T) {
 	f := newFixture(t)
 	f.fn("todo-api", "", api)
 	f.fn("mailer", v1.PhaseIdle, nil)
-	h := local.NewHandler(local.Ref{Namespace: ns, Function: "todo-api"}, local.NewResolver(f.st), noInvoke{t}, f.pdp,
+	h := local.NewHandler(local.FunctionRef(ns, "todo-api"), local.NewResolver(f.st), noInvoke{t}, f.pdp,
 		f.check, slog.New(slog.DiscardHandler))
 
 	get := func() *httptest.ResponseRecorder {
@@ -289,7 +289,7 @@ func TestCheckerSQL(t *testing.T) {
 		fn.Spec.Bindings.SQL = []v1.FunctionSQL{{Alias: "app", Database: "todo-db"}}
 	})
 	f.fn("mailer", v1.PhaseIdle, nil)
-	caller := local.Ref{Namespace: ns, Function: "todo-api"}
+	caller := local.FunctionRef(ns, "todo-api")
 	require.Nil(t, check.Check(context.Background(), caller))
 	require.Equal(t, []string{"app"}, sql.calls)
 
@@ -317,7 +317,7 @@ func TestCheckerSecret(t *testing.T) {
 		fn.Spec.Bindings.Secret = []v1.ObjectName{"api-keys", "settings"}
 	})
 	f.fn("mailer", v1.PhaseIdle, nil)
-	caller := local.Ref{Namespace: ns, Function: "todo-api"}
+	caller := local.FunctionRef(ns, "todo-api")
 	require.Nil(t, check.Check(context.Background(), caller))
 	require.Equal(t, []string{"api-keys", "settings"}, sec.calls)
 
@@ -341,7 +341,7 @@ func TestCheckerAddon(t *testing.T) {
 		api(fn)
 		fn.Spec.Bindings.Addon = []v1.FunctionAddon{{Alias: "idp", Object: "login"}}
 	})
-	caller := local.Ref{Namespace: ns, Function: "rauthy-settings"}
+	caller := local.FunctionRef(ns, "rauthy-settings")
 	require.Nil(t, check.Check(context.Background(), caller))
 	require.Equal(t, []string{"idp"}, addon.calls)
 

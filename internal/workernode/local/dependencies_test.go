@@ -49,7 +49,7 @@ func depsHandler(caller local.Ref, deps local.DependencyChecker) http.Handler {
 // fails, 503 Timeout past DependencyCheckBudget; with no checker the route does not exist, so a shim reads 404 as a pass.
 func TestDependencyEndpoint(t *testing.T) {
 	t.Parallel()
-	caller := local.Ref{Namespace: "team-a", Function: "todo-api"}
+	caller := local.FunctionRef("team-a", "todo-api")
 	audit := &local.DependencyReport{Kind: "kv", Binding: "audit", Reason: "Forbidden", Message: "kv::read denied"}
 
 	require.Equal(t, http.StatusNotFound, do(t, depsHandler(caller, nil), http.MethodGet, "/health/dependencies", "").Code)
@@ -89,7 +89,7 @@ func TestPoolSocketDependencies(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	deps := &fakeDeps{reports: map[local.Ref]*local.DependencyReport{
-		{Namespace: "team-a", Function: "b"}: {Kind: "blob", Binding: "files", Reason: "StorageUnreachable", Message: "down"},
+		local.FunctionRef("team-a", "b"): {Kind: "blob", Binding: "files", Reason: "StorageUnreachable", Message: "down"},
 	}}
 	rec := &poolCalls{}
 	m := local.NewManager(dir, poolStore{rec}, poolInvoker{rec}, nil, deps, slog.New(slog.DiscardHandler))
@@ -104,6 +104,6 @@ func TestPoolSocketDependencies(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, callAs(t, c, http.MethodGet, "/health/dependencies", "a"))
 	require.Equal(t, http.StatusServiceUnavailable, callAs(t, c, http.MethodGet, "/health/dependencies", "b"))
-	require.Equal(t, []local.Ref{{Namespace: "team-a", Function: "a"}, {Namespace: "team-a", Function: "b"}}, deps.seen())
+	require.Equal(t, []local.Ref{local.FunctionRef("team-a", "a"), local.FunctionRef("team-a", "b")}, deps.seen())
 	require.Empty(t, rec.take(), "the check calls no worker, store or port through the local API")
 }

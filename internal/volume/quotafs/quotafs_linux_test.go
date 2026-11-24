@@ -69,7 +69,7 @@ func TestScenarioWritePastSizeFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := volume.ID{Namespace: "shop", Function: "cart", Name: "state"}
+	id := volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "cart", Name: "state"}
 	dir, err := m.Reserve(context.Background(), id, "uid-1", 1<<20, v1.DeletionRetain)
 	if err != nil {
 		t.Fatalf("Reserve: %v", err)
@@ -129,11 +129,11 @@ func TestIssue1201_EveryBookedVolumeWritesItsSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	first, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Function: "first", Name: "state"}, "uid-a", 32<<20, v1.DeletionRetain)
+	first, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "first", Name: "state"}, "uid-a", 32<<20, v1.DeletionRetain)
 	if err != nil {
 		t.Fatalf("Reserve first: %v", err)
 	}
-	second := volume.ID{Namespace: "shop", Function: "second", Name: "state"}
+	second := volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "second", Name: "state"}
 	if _, err := m.Reserve(ctx, second, "uid-b", 32<<20, v1.DeletionRetain); !errors.Is(err, volume.ErrCapacity) {
 		t.Fatalf("Reserve of 32 MiB beside 32 MiB on a 64 MiB image = %v, want VolumeCapacity", err)
 	}
@@ -167,7 +167,7 @@ func TestIssue1203_NewVolumeBesideADamagedMetaWritesItsSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	cart, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Function: "cart", Name: "state"}, "uid-a", 16<<20, v1.DeletionRetain)
+	cart, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "cart", Name: "state"}, "uid-a", 16<<20, v1.DeletionRetain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestIssue1203_NewVolumeBesideADamagedMetaWritesItsSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, err := reopened.Reserve(ctx, volume.ID{Namespace: "shop", Function: "thumbs", Name: "state"}, "uid-b", 16<<20, v1.DeletionRetain)
+	dir, err := reopened.Reserve(ctx, volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "thumbs", Name: "state"}, "uid-b", 16<<20, v1.DeletionRetain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,11 +235,11 @@ func TestScenarioInodeLimitApplied(t *testing.T) {
 	f, _ := openFS(t, 64<<20)
 	m := newVolumes(t, f)
 	ctx := context.Background()
-	a, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Function: "cart", Name: "a"}, "uid-1", 1<<20, v1.DeletionRetain)
+	a, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "cart", Name: "a"}, "uid-1", 1<<20, v1.DeletionRetain)
 	if err != nil {
 		t.Fatalf("Reserve a: %v", err)
 	}
-	b, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Function: "cart", Name: "b"}, "uid-1", 1<<20, v1.DeletionRetain)
+	b, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "cart", Name: "b"}, "uid-1", 1<<20, v1.DeletionRetain)
 	if err != nil {
 		t.Fatalf("Reserve b: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestScenarioExistingVolumeLimited(t *testing.T) {
 	f, _ := openFS(t, 64<<20)
 	m := newVolumes(t, f)
 	ctx := context.Background()
-	id := volume.ID{Namespace: "shop", Function: "cart", Name: "state"}
+	id := volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "cart", Name: "state"}
 	dir, err := m.Reserve(ctx, id, "uid-1", 1<<20, v1.DeletionRetain)
 	if err != nil {
 		t.Fatalf("Reserve: %v", err)
@@ -294,7 +294,7 @@ func TestScenarioEmptyDirLimited(t *testing.T) {
 	needRoot(t)
 	f, _ := openFS(t, 64<<20)
 	m := newVolumes(t, f)
-	id := volume.ID{Namespace: "shop", Function: "cart", Name: "scratch", Worker: "w1"}
+	id := volume.ID{Namespace: "shop", Kind: v1.KindFunction, Workload: "cart", Name: "scratch", Worker: "w1"}
 	old := id
 	old.Worker = "w0"
 	dir, err := m.Renew(context.Background(), old, id, 2<<20)

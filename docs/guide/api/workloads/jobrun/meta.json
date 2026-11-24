@@ -1,0 +1,11 @@
+{
+  "title": "JobRun",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete",
+    "get-logs"
+  ]
+}

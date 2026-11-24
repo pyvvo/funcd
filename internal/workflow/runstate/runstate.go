@@ -95,7 +95,7 @@ type StepState struct {
 	SpanID string `json:"spanId,omitempty"` // 16 hex
 	// Troubleshooting lineage (ADR-0100), stamped by the engine at the step's terminal transition and
 	// mirrored to WorkflowRun.status.steps[]: when the step started/ended (→ duration) and the raw
-	// step-level failure cause (CAPPED to maxStatusError, Failed steps only). Attempts (above) is now
+	// step-level failure cause (CAPPED to observability.MaxStatusError, Failed steps only). Attempts (above) is now
 	// populated. Restored across Resume for already-terminal steps so a resumed run keeps its history.
 	StartedAt int64  `json:"startedAt,omitempty"` // unix nanos
 	EndedAt   int64  `json:"endedAt,omitempty"`   // unix nanos

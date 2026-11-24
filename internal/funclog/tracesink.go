@@ -232,7 +232,12 @@ func marshalTraceOTLP(res Resource, spans []Span, now time.Time) ([]byte, error)
 	ra := rs.Resource().Attributes()
 	ra.PutStr("source", "function") // the tenant/function lane label, distinct from ADR-0010's source=platform
 	ra.PutStr("namespace", res.Namespace)
-	ra.PutStr("function", res.Function)
+	if res.Kind != "" { // a JobRun's spans (ADR-0347 Decision 8)
+		ra.PutStr("kind", res.Kind)
+		ra.PutStr("name", res.Name)
+	} else {
+		ra.PutStr("function", res.Function)
+	}
 	if res.Replica != "" {
 		ra.PutStr("replica", res.Replica)
 	}
@@ -297,10 +302,10 @@ func marshalTraceOTLP(res Resource, spans []Span, now time.Time) ([]byte, error)
 	return append(b, '\n'), nil // JSON-Lines: one OTLP document per line
 }
 
-// traceSegmentKey partitions objects as traces/<ns>/<fn>/<date>/<unixnano>-<replica>.otlp.jsonl.
+// traceSegmentKey partitions objects as traces/<ns>/<fn>/<date>/<unixnano>-<replica>.otlp.jsonl, <fn> as segmentKey's.
 func traceSegmentKey(res Resource, now time.Time) string {
 	return fmt.Sprintf("traces/%s/%s/%s/%d-%s.otlp.jsonl",
-		res.Namespace, res.Function, now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), keyReplica(res.Replica))
+		res.Namespace, res.segment(), now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), keyReplica(res.Replica))
 }
 
 func estimateSpanBytes(sp Span) int {

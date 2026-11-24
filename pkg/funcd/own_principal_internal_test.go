@@ -61,7 +61,7 @@ func lakeResource(ns v1.NamespaceName) *v1.Lake {
 	return cs
 }
 
-func egressToExample(ns v1.NamespaceName, appliesTo ...v1.ObjectName) *v1.EgressPolicy {
+func egressToExample(ns v1.NamespaceName, appliesTo ...v1.WorkloadRef) *v1.EgressPolicy {
 	ep := &v1.EgressPolicy{TypeMeta: v1.TypeMeta{APIVersion: v1.KindEgressPolicy.GVK().APIVersion(), Kind: v1.KindEgressPolicy}}
 	ep.Name, ep.Namespace, ep.ResourceGroup = "egress", ns, "rg1"
 	ep.Spec = v1.EgressPolicySpec{
@@ -76,9 +76,15 @@ func egressToExample(ns v1.NamespaceName, appliesTo ...v1.ObjectName) *v1.Egress
 // audit record the gateway writes.
 func egressConnect(t *testing.T, p *executor, pdp auth.Authorizer, src string) egress.AuditRecord {
 	t.Helper()
+	return egressConnectTo(t, p, pdp, src, "example.com")
+}
+
+// egressConnectTo is egressConnect to domain:443.
+func egressConnectTo(t *testing.T, p *executor, pdp auth.Authorizer, src, domain string) egress.AuditRecord {
+	t.Helper()
 	ref, ok := p.egressWorkers.Lookup(netip.MustParseAddr(src))
 	require.True(t, ok, "worker %s is indexed", src)
-	nd := auth.NetDestination{IP: netip.MustParseAddr("93.184.216.34"), Port: 443, Domains: []string{"example.com"}}
+	nd := auth.NetDestination{IP: netip.MustParseAddr("93.184.216.34"), Port: 443, Domains: []string{domain}}
 	resource := nd.Ref(ref.Namespace)
 	dec, err := pdp.Authorize(context.Background(), auth.Request{
 		Identity: auth.Identity{Principal: &ref},
@@ -98,6 +104,49 @@ func egressPlatform(t *testing.T, st store.Store, rt runtime.Runtime) (*executor
 	pdp, err := cedarauth.New(cedarauth.Deps{Entities: ep, Policies: policySource{st}})
 	require.NoError(t, err)
 	return p, pdp
+}
+
+// scenario: job-egress-named — a run's worker is indexed as the Job its stored run names in spec.job: an EgressPolicy
+// whose appliesTo names the Job lets the run reach api.example.com:443, and the Function of the Job's name stays in;
+// under a policy with an empty appliesTo alone, the run stays in. The worker of a run no longer stored is not indexed
+// (ADR-0351 Decision 6). The egress lane runs it on a real node, as its case job-egress-named.
+func TestScenarioJobEgressNamed(t *testing.T) {
+	t.Parallel()
+	meta := func(name v1.ObjectName) v1.ObjectMeta {
+		return v1.ObjectMeta{Name: name, Namespace: "acme", ResourceGroup: "rg1"}
+	}
+	for _, tc := range []struct {
+		name      string
+		appliesTo []v1.WorkloadRef
+		run, fn   bool
+	}{{"appliesTo the Job", []v1.WorkloadRef{v1.JobOwner("tofu")}, true, false}, {"empty appliesTo", nil, false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fn := lakeFunction("acme")
+			fn.Name = "tofu"
+			job := &v1.Job{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJob.GVK().APIVersion(), Kind: v1.KindJob}, ObjectMeta: meta("tofu"),
+				Spec: v1.JobSpec{Runtime: "nodejs22", Handler: "handle", Image: "oci://x/tofu:1"}}
+			run := &v1.JobRun{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJobRun.GVK().APIVersion(), Kind: v1.KindJobRun}, ObjectMeta: meta("tofu-1"),
+				Spec: v1.JobRunSpec{Job: "tofu"}, Status: v1.JobRunStatus{Phase: v1.JobRunRunning}}
+			policy := egressToExample("acme", tc.appliesTo...)
+			policy.Spec.Rules[0].To.Domains = []string{"api.example.com"}
+			st := store.New(memory.New())
+			seedObjects(t, st, fn, job, run, policy)
+			rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
+			runningWorker(rt, "acme", "tofu-1", v1.KindJobRun, "10.63.0.6")
+			runningWorker(rt, "acme", "tofu", v1.KindFunction, "10.63.0.7")
+			runningWorker(rt, "acme", "gone-1", v1.KindJobRun, "10.63.0.8")
+			p, pdp := egressPlatform(t, st, rt)
+
+			ref, ok := p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.6"))
+			require.True(t, ok)
+			require.Equal(t, auth.EntityRef{Type: v1.KindJob, Namespace: "acme", Name: "tofu"}, ref)
+			require.Equal(t, tc.run, egressConnectTo(t, p, pdp, "10.63.0.6", "api.example.com").Allowed, "the run")
+			require.Equal(t, tc.fn, egressConnectTo(t, p, pdp, "10.63.0.7", "api.example.com").Allowed, "the Function of the Job's name")
+			_, ok = p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.8"))
+			require.False(t, ok, "the worker of a run no longer stored is not indexed")
+		})
+	}
 }
 
 // The forwarder listens on the bridge address, or on loopback with none, and on no other (ADR-0315): from another of the
@@ -162,7 +211,7 @@ func TestStoreDomainRules(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(memory.New())
 	whole := egressToExample("acme")
-	named := egressToExample("acme", "etl")
+	named := egressToExample("acme", v1.FunctionOwner("etl"))
 	named.Name, named.Spec.Rules[0].To.Domains = "named", []string{"*.named.example"}
 	other := egressToExample("beta")
 	other.Spec.Rules[0].To.Domains = []string{"beta.example"}
@@ -196,8 +245,8 @@ func TestScenarioEngineEgressIsLake(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name      string
-		appliesTo []v1.ObjectName
-	}{{"whole namespace", nil}, {"appliesTo lake", []v1.ObjectName{"lake"}}} {
+		appliesTo []v1.WorkloadRef
+	}{{"whole namespace", nil}, {"appliesTo lake", []v1.WorkloadRef{v1.FunctionOwner("lake")}}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			st := store.New(memory.New())

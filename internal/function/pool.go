@@ -748,7 +748,7 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 			}
 			path = p
 		}
-		own, issue, g := r.ownWorkerEnv(m)
+		own, issue, g := r.ownWorkerEnv(functionWorkload(m))
 		if g != nil {
 			if m.Name == self.Name {
 				return nil, 0, fault.Internalf(op, "build the env of %s/%s: %s", m.Namespace, m.Name, g.message)
@@ -994,9 +994,7 @@ func (r *Reconciler) reclaimOrphanPools(ctx context.Context, ns v1.NamespaceName
 			return err
 		}
 		r.forgetPool(ns, in.Name)
-		if r.invokeSockets != nil {
-			r.invokeSockets.Remove(ns, in.Name)
-		}
+		r.removeSocket(local.FunctionRef(ns, in.Name))
 		_ = os.Remove(poolManifestPath(r.poolManifestDir, ns, in.Name))
 	}
 	return nil

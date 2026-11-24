@@ -87,8 +87,8 @@ func TestScenarioKVStoreCreateProvisions(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
 	_, err := st.Create(ctx, mkKVStore("orders",
-		v1.KVTable{Name: "customers", Owner: "customers-svc"},
-		v1.KVTable{Name: "fulfillment", Owner: "fulfillment-svc"}))
+		v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("customers-svc")},
+		v1.KVTable{Name: "fulfillment", Owner: v1.FunctionOwner("fulfillment-svc")}))
 	require.NoError(t, err)
 	// two functions bind the store; a third binds a different store.
 	_, err = st.Create(ctx, mkFunctionWithKV("customers-svc", v1.FunctionKV{Alias: "c", Store: "orders", Table: "customers"}))
@@ -119,7 +119,7 @@ func TestScenarioKVStoreCreateProvisions(t *testing.T) {
 func TestReadyObservesGeneration(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
-	_, err := st.Create(ctx, mkKVStore("orders", v1.KVTable{Name: "customers", Owner: "customers-svc"}))
+	_, err := st.Create(ctx, mkKVStore("orders", v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("customers-svc")}))
 	require.NoError(t, err)
 	r, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: st})
 	require.NoError(t, err)
@@ -137,7 +137,7 @@ func TestReadyObservesGeneration(t *testing.T) {
 	require.Equal(t, int64(1), cond.ObservedGeneration)
 
 	ks := get()
-	ks.Spec.Tables = append(ks.Spec.Tables, v1.KVTable{Name: "fulfillment", Owner: "fulfillment-svc"})
+	ks.Spec.Tables = append(ks.Spec.Tables, v1.KVTable{Name: "fulfillment", Owner: v1.FunctionOwner("fulfillment-svc")})
 	_, err = st.Update(ctx, ks)
 	require.NoError(t, err)
 	_, err = r.Reconcile(ctx, req)
@@ -191,7 +191,7 @@ func TestScenarioTableRemovalReclaimed(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
 	// the store now declares only "customers"; "fulfillment" was removed.
-	_, err := st.Create(ctx, mkKVStore("orders", v1.KVTable{Name: "customers", Owner: "customers-svc"}))
+	_, err := st.Create(ctx, mkKVStore("orders", v1.KVTable{Name: "customers", Owner: v1.FunctionOwner("customers-svc")}))
 	require.NoError(t, err)
 	d := &recPrefixManager{keys: []string{
 		"default/orders/customers/alice",

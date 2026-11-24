@@ -42,13 +42,13 @@ func TestIssue170_ResolverCacheEvictsExpiredEntries(t *testing.T) {
 	churn := func(name string) {
 		_, err := st.Create(ctx, mkFunctionWithBlob(name, v1.FunctionBlob{Alias: "files", Bucket: "bkt", Prefix: "p"}))
 		require.NoError(t, err)
-		_, err = r.Resolve(ctx, "default", v1.ObjectName(name), "files")
+		_, err = r.Resolve(ctx, "default", v1.FunctionOwner(v1.ObjectName(name)), "files")
 		require.NoError(t, err)
 		require.NoError(t, st.Delete(ctx, v1.KindFunction.GVK(), "default", v1.ObjectName(name), ""))
 	}
 
 	churn("fn")
-	_, err = r.Resolve(ctx, "default", "fn", "files")
+	_, err = r.Resolve(ctx, "default", v1.FunctionOwner("fn"), "files")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err))
 	require.Zero(t, svcblob.CacheLen(r), "a Forbidden re-resolve must drop the deleted function's expired entry")
 

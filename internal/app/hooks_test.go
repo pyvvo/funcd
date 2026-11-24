@@ -872,7 +872,7 @@ func TestAppPreHookPartsFirst(t *testing.T) {
 
 	h.edit(func(a *v1.App) {
 		a.Spec.Version = "4.0.0"
-		a.Spec.KV[0].Tables = append(a.Spec.KV[0].Tables, v1.KVTable{Name: "migrations", Owner: "todo-migrate"})
+		a.Spec.KV[0].Tables = append(a.Spec.KV[0].Tables, v1.KVTable{Name: "migrations", Owner: v1.FunctionOwner("todo-migrate")})
 		a.Spec.Functions[1].Bindings.KV = append(a.Spec.Functions[1].Bindings.KV, v1.FunctionKV{Alias: "log", Store: "todo-store", Table: "migrations"})
 		a.Spec.Functions[0].Image = "oci-layout://todo-api:4"
 	})

@@ -33,11 +33,11 @@ func (f fetchInvoker) Fetch(_ context.Context, _ local.Ref, req local.FetchReque
 }
 
 func fetchHandler(protocol v1.FunctionProtocol, inv local.Invoker, authz *fakeAuthz) http.Handler {
-	res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "devices"}, protocol: protocol}
+	res := &fakeResolver{target: local.FunctionRef("team-a", "devices"), protocol: protocol}
 	if authz == nil {
-		return local.NewHandler(local.Ref{Namespace: "team-a", Function: "bridge"}, res, inv, nil, nil, nil)
+		return local.NewHandler(local.FunctionRef("team-a", "bridge"), res, inv, nil, nil, nil)
 	}
-	return local.NewHandler(local.Ref{Namespace: "team-a", Function: "bridge"}, res, inv, authz, nil, nil)
+	return local.NewHandler(local.FunctionRef("team-a", "bridge"), res, inv, authz, nil, nil)
 }
 
 // scenario: http-fetch — context.fetch reaches a linked http Function with the caller's method, path, query, headers
@@ -113,7 +113,7 @@ func TestInvokerFetchesThroughTheDataPlane(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, `{"id":"7"}`)
 	})
-	reply, err := local.NewInvoker(dp).Fetch(context.Background(), local.Ref{Namespace: "team-a", Function: "devices"},
+	reply, err := local.NewInvoker(dp).Fetch(context.Background(), local.FunctionRef("team-a", "devices"),
 		local.FetchRequest{Method: http.MethodPost, Path: "/devices", RawQuery: "dry=1", Header: http.Header{}, Body: []byte(`{"data":1}`)}, time.Second)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, reply.Status)

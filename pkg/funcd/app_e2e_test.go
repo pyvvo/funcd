@@ -148,10 +148,10 @@ func TestScenarioAppSharedWriterRefused(t *testing.T) {
 		"two Workflows declaring one kv store": {
 			edit: func(a *v1.App) {
 				plan := &a.Spec.Workflows[0]
-				plan.KVStores = []v1.KVStoreEntry{{Name: "todo-plan-state", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "runs", Owner: "due"}}}}}
+				plan.KVStores = []v1.KVStoreEntry{{Name: "todo-plan-state", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "runs", Owner: v1.FunctionOwner("due")}}}}}
 				a.Spec.Workflows = append(a.Spec.Workflows, v1.AppWorkflow{Name: "todo-report", WorkflowSpec: v1.WorkflowSpec{
 					Steps:    []v1.WorkflowStep{{Name: "sum", Function: &v1.FunctionStep{Image: plan.Steps[0].Function.Image}}},
-					KVStores: []v1.KVStoreEntry{{Name: "todo-plan-state", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "runs", Owner: "sum"}}}}},
+					KVStores: []v1.KVStoreEntry{{Name: "todo-plan-state", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "runs", Owner: v1.FunctionOwner("sum")}}}}},
 				}})
 			},
 			want: []string{"spec.workflows[0].kv", "an App's part declares nothing at its root"},

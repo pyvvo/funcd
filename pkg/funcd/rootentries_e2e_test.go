@@ -89,12 +89,12 @@ func TestScenarioFunctionOwnsItsStore(t *testing.T) {
 	e.apply(t, rootFn("counter", pushStepImage(t, e.layout, e.src, "counter"), func(s *v1.FunctionSpec) { countersStore(s, "") }))
 
 	fn := e.function(t, "counter")
-	require.Equal(t, v1.ObjectName("counter"), fn.Spec.KVStores[0].Tables[0].Owner, "the stored Function shows owner: counter")
+	require.Equal(t, v1.FunctionOwner("counter"), fn.Spec.KVStores[0].Tables[0].Owner, "the stored Function shows owner: counter")
 	e.waitExists(t, v1.KindKVStore, "counters")
 	ks := e.object(t, v1.KindKVStore, "counters").(*v1.KVStore)
 	require.True(t, ownedstore.Marked(ks.OwnerReferences, fn), "KVStore counters carries counter's marker")
 	require.Len(t, ks.OwnerReferences, 1, "retain: no controller reference")
-	require.Equal(t, []v1.KVTable{{Name: "counts", Owner: "counter"}}, ks.Spec.Tables)
+	require.Equal(t, []v1.KVTable{{Name: "counts", Owner: v1.FunctionOwner("counter")}}, ks.Spec.Tables)
 
 	e.waitServes(t, "counter")
 	_, body := e.answer(t, "counter")
@@ -305,7 +305,7 @@ func TestScenarioWorkflowStepsBind(t *testing.T) {
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
 		ObjectMeta: v1.ObjectMeta{Name: "etl", Namespace: "default", ResourceGroup: "rg1"},
 		Spec: v1.WorkflowSpec{
-			KVStores: []v1.KVStoreEntry{{Name: "etl-kv", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "rows", Owner: "load"}}}}, {Ref: "shared"}},
+			KVStores: []v1.KVStoreEntry{{Name: "etl-kv", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "rows", Owner: v1.FunctionOwner("load")}}}}, {Ref: "shared"}},
 			Buckets:  []v1.BucketEntry{{Name: "etl-files", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: v1.FunctionOwner("load")}}}}},
 			Steps: []v1.WorkflowStep{{Name: "load", Function: &v1.FunctionStep{Image: e.image(t), Bindings: v1.StepBindings{
 				KV:   []v1.FunctionKV{{Alias: "rows", Store: "etl-kv", Table: "rows"}, {Alias: "shared", Store: "shared", Table: "t"}},
@@ -318,7 +318,7 @@ func TestScenarioWorkflowStepsBind(t *testing.T) {
 	stored := e.object(t, v1.KindWorkflow, "etl")
 	kv := e.object(t, v1.KindKVStore, "etl-kv").(*v1.KVStore)
 	require.True(t, ownedstore.Marked(kv.OwnerReferences, stored))
-	require.Equal(t, v1.ObjectName("etl-load"), kv.Spec.Tables[0].Owner, "a table owner names a step")
+	require.Equal(t, v1.FunctionOwner("etl-load"), kv.Spec.Tables[0].Owner, "a table owner names a step")
 	b := e.object(t, v1.KindBucket, "etl-files").(*v1.Bucket)
 	require.True(t, ownedstore.Marked(b.OwnerReferences, stored))
 	require.Equal(t, []v1.BucketPrefix{{Name: "raw", Owner: v1.FunctionOwner("etl-load")}}, b.Spec.Prefixes, "a prefix owner names a step")

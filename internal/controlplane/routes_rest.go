@@ -61,18 +61,23 @@ func registerFunction(api huma.API, h Handlers) {
 		list: h.ListFunctions, create: h.CreateFunction, get: h.GetFunction,
 		replace: h.ReplaceFunction, remove: h.DeleteFunction,
 		cases: &kindCases{create: writes, replace: writes, remove: []ErrorCase{problem(fault.Conflict,
-			"Another Function's spec.bindings.links names the Function.", "Remove that link first.")}},
+			"Another Function's or a Job's spec.bindings.links names the Function.", "Remove that link first.")}},
 	})
 }
 
 // functionWrites are the cases a Function's create and replace add to their verb's: the admissions of its links
 // (ADR-0064), its bindings (ADR-0248) and its local volumes (ADR-0262).
 func functionWrites() []ErrorCase {
+	return slices.Insert(workloadWrites(), 1, problem(fault.Invalid, "The links would close a cycle among the "+
+		"namespace's Functions, such as a Function that links to itself.", "Remove a link of the cycle."))
+}
+
+// workloadWrites are the cases that a Function's and a Job's create and replace share (ADR-0347 Decision 1): no link
+// names a Job, so a Job's links close no cycle.
+func workloadWrites() []ErrorCase {
 	return []ErrorCase{
 		problem(fault.Invalid, "A link in spec.bindings.links names a Function that does not exist in the namespace.",
 			"Apply the target Function first."),
-		problem(fault.Invalid, "The links would close a cycle among the namespace's Functions, such as a Function "+
-			"that links to itself.", "Remove a link of the cycle."),
 		problem(fault.Invalid, "A binding names a store, a Lake, a ConfigMap or a Secret that the spec does not "+
 			"declare, such as a KVStore missing from spec.kv.", "Declare it in the spec, or bind one that it declares."),
 		problem(fault.Invalid, "The spec sets spec.volumes, and volumes are off on this daemon.",
@@ -446,6 +451,40 @@ func registerSensor(api huma.API, h Handlers) {
 		kind: "Sensor", kinds: "Sensors", path: "sensors",
 		list: h.ListSensors, create: h.CreateSensor, get: h.GetSensor, replace: h.ReplaceSensor, remove: h.DeleteSensor,
 		cases: &kindCases{},
+	})
+}
+
+// ===== Job (namespaced) — ADR-0347 =====
+
+func registerJob(api huma.API, h Handlers) {
+	writes := workloadWrites()
+	registerNamespacedCRUD(api, crudRoutes[v1.Job]{
+		kind: "Job", kinds: "Jobs", path: "jobs",
+		list: h.ListJobs, create: h.CreateJob, get: h.GetJob, replace: h.ReplaceJob, remove: h.DeleteJob,
+		cases: &kindCases{create: writes, replace: writes},
+	})
+}
+
+// ===== JobRun (namespaced) — ADR-0347 =====
+
+func registerJobRun(api huma.API, h Handlers) {
+	// The jobrun-payload and jobrun-contract admissions check a create's input; jobrun-spec refuses a replace that
+	// changes spec.job or spec.input, or turns spec.cancel back (ADR-0347 Decision 3).
+	input := []ErrorCase{
+		problem(fault.PayloadTooLarge, "The run input in spec.input is larger than job.payloadLimit, 256 KiB by default.",
+			"Send a smaller input, and pass large data by reference, such as the key of an object in a Bucket."),
+		blank(http.StatusUnprocessableEntity, "The run input in spec.input breaks the input schema in the Job's "+
+			"status.contract; the detail names each value that breaks it.", "Correct the values that the detail names."),
+	}
+	fixed := problem(fault.Invalid, "The body changes the run's spec.job or spec.input, which are fixed once the run is "+
+		"created, or turns spec.cancel back to false.", "Keep spec.job and spec.input, and start a new run under another "+
+		"name to run other input. A cancelled run stays cancelled.")
+	registerNamespacedCRUD(api, crudRoutes[v1.JobRun]{
+		kind: "JobRun", kinds: "JobRuns", path: "jobruns",
+		list: h.ListJobRuns, create: h.CreateJobRun, get: h.GetJobRun, replace: h.ReplaceJobRun, remove: h.DeleteJobRun,
+		cases: &kindCases{create: input, replace: []ErrorCase{fixed},
+			words: map[sharedCase]wording{nameTaken: {fix: "Start a new run under another name: a run's spec.job and " +
+				"spec.input are fixed once it is created, so replacing the existing run cannot change them."}}},
 	})
 }
 

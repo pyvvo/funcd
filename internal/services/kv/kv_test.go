@@ -29,8 +29,8 @@ type fakeResolver struct {
 
 func bkey(fn v1.ObjectName, alias string) string { return string(fn) + "/" + alias }
 
-func (b fakeResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.ObjectName, alias string) (kv.Binding, error) {
-	if bd, ok := b.m[bkey(fn, alias)]; ok {
+func (b fakeResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.WorkloadRef, alias string) (kv.Binding, error) {
+	if bd, ok := b.m[bkey(fn.Name, alias)]; ok {
 		return bd, nil
 	}
 	return kv.Binding{}, fault.Forbiddenf("fakeResolver", "no kv binding for %s/%s", fn, alias)
@@ -93,17 +93,17 @@ func TestScenarioKVBindingResolves(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	f := newFacade(t, b, allowAll{})
 
-	require.NoError(t, f.Put(ctx, "default", "customers-svc", "customers", "alice", []byte("1")))
-	v, found, err := f.Get(ctx, "default", "customers-svc", "customers", "alice")
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("customers-svc"), "customers", "alice", []byte("1")))
+	v, found, err := f.Get(ctx, "default", v1.FunctionOwner("customers-svc"), "customers", "alice")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, []byte("1"), v)
 
-	keys, err := f.List(ctx, "default", "customers-svc", "customers", "")
+	keys, err := f.List(ctx, "default", v1.FunctionOwner("customers-svc"), "customers", "")
 	require.NoError(t, err)
 	require.Equal(t, []string{"alice"}, keys, "keys are stripped of <ns>/<store>/<table>/")
 }
@@ -115,11 +115,11 @@ func TestScenarioUnboundAccessDenied(t *testing.T) {
 	ctx := context.Background()
 	f := newFacade(t, fakeResolver{m: map[string]kv.Binding{}}, allowAll{}) // no bindings
 
-	require.Equal(t, fault.Forbidden, fault.KindOf(f.Put(ctx, "default", "fn", "b", "k", []byte("v"))))
-	_, _, gerr := f.Get(ctx, "default", "fn", "b", "k")
+	require.Equal(t, fault.Forbidden, fault.KindOf(f.Put(ctx, "default", v1.FunctionOwner("fn"), "b", "k", []byte("v"))))
+	_, _, gerr := f.Get(ctx, "default", v1.FunctionOwner("fn"), "b", "k")
 	require.Equal(t, fault.Forbidden, fault.KindOf(gerr))
-	require.Equal(t, fault.Forbidden, fault.KindOf(f.Delete(ctx, "default", "fn", "b", "k")))
-	_, lerr := f.List(ctx, "default", "fn", "b", "")
+	require.Equal(t, fault.Forbidden, fault.KindOf(f.Delete(ctx, "default", v1.FunctionOwner("fn"), "b", "k")))
+	_, lerr := f.List(ctx, "default", v1.FunctionOwner("fn"), "b", "")
 	require.Equal(t, fault.Forbidden, fault.KindOf(lerr))
 }
 
@@ -129,14 +129,14 @@ func TestScenarioFacadeReadDefaultDeny(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("reporting", "customers"): {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("reporting", "customers"): {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	pdp := &pdpStub{readGrants: map[string]bool{}, owners: map[string]v1.ObjectName{"orders/customers": "customers-svc"}}
 	f := newFacade(t, b, pdp)
 
-	_, _, gerr := f.Get(ctx, "default", "reporting", "customers", "alice")
+	_, _, gerr := f.Get(ctx, "default", v1.FunctionOwner("reporting"), "customers", "alice")
 	require.Equal(t, fault.Forbidden, fault.KindOf(gerr), "read denied without a permitting Policy (default-deny)")
-	_, lerr := f.List(ctx, "default", "reporting", "customers", "")
+	_, lerr := f.List(ctx, "default", v1.FunctionOwner("reporting"), "customers", "")
 	require.Equal(t, fault.Forbidden, fault.KindOf(lerr))
 }
 
@@ -146,8 +146,8 @@ func TestScenarioFacadeReadAllowedWithPolicy(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
-		bkey("reporting", "customers"):     {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("reporting", "customers"):     {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	pdp := &pdpStub{
 		readGrants: map[string]bool{rgKey("default", "reporting", "orders"): true},
@@ -155,8 +155,8 @@ func TestScenarioFacadeReadAllowedWithPolicy(t *testing.T) {
 	}
 	f := newFacade(t, b, pdp)
 
-	require.NoError(t, f.Put(ctx, "default", "customers-svc", "customers", "alice", []byte("1")), "owner writes")
-	v, found, err := f.Get(ctx, "default", "reporting", "customers", "alice")
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("customers-svc"), "customers", "alice", []byte("1")), "owner writes")
+	v, found, err := f.Get(ctx, "default", v1.FunctionOwner("reporting"), "customers", "alice")
 	require.NoError(t, err, "reporting reads with a permitting Policy")
 	require.True(t, found)
 	require.Equal(t, []byte("1"), v)
@@ -168,8 +168,8 @@ func TestScenarioFacadeOwnerWrite(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
-		bkey("reporting", "customers"):     {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("reporting", "customers"):     {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	pdp := &pdpStub{
 		readGrants: map[string]bool{rgKey("default", "reporting", "orders"): true},
@@ -177,9 +177,9 @@ func TestScenarioFacadeOwnerWrite(t *testing.T) {
 	}
 	f := newFacade(t, b, pdp)
 
-	require.NoError(t, f.Put(ctx, "default", "customers-svc", "customers", "alice", []byte("1")), "owner writes")
-	require.Equal(t, fault.Forbidden, fault.KindOf(f.Put(ctx, "default", "reporting", "customers", "k", []byte("v"))), "non-owner write Forbidden")
-	require.Equal(t, fault.Forbidden, fault.KindOf(f.Delete(ctx, "default", "reporting", "customers", "alice")), "non-owner delete Forbidden")
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("customers-svc"), "customers", "alice", []byte("1")), "owner writes")
+	require.Equal(t, fault.Forbidden, fault.KindOf(f.Put(ctx, "default", v1.FunctionOwner("reporting"), "customers", "k", []byte("v"))), "non-owner write Forbidden")
+	require.Equal(t, fault.Forbidden, fault.KindOf(f.Delete(ctx, "default", v1.FunctionOwner("reporting"), "customers", "alice")), "non-owner delete Forbidden")
 }
 
 // scenario: per-function-principal — the facade builds the PDP principal from the connection-scoped
@@ -188,12 +188,12 @@ func TestScenarioPerFunctionPrincipal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: "customers-svc", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("customers-svc", "customers"): {Store: "orders", Table: "customers", Owner: v1.FunctionOwner("customers-svc"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	pdp := &pdpStub{readGrants: map[string]bool{}, owners: map[string]v1.ObjectName{"orders/customers": "customers-svc"}}
 	f := newFacade(t, b, pdp)
 
-	_ = f.Put(ctx, "team-a", "customers-svc", "customers", "k", []byte("v"))
+	_ = f.Put(ctx, "team-a", v1.FunctionOwner("customers-svc"), "customers", "k", []byte("v"))
 	require.NotNil(t, pdp.last, "the facade consulted the PDP")
 	require.NotNil(t, pdp.last.Identity.Principal)
 	require.Equal(t, v1.KindFunction, pdp.last.Identity.Principal.Type)
@@ -210,14 +210,14 @@ func TestScenarioValueOverCapRejected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("fn", "small"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 4, MaxKeyBytes: 3},
+		bkey("fn", "small"): {Store: "s", Table: "t", Owner: v1.FunctionOwner("fn"), MaxValueBytes: 4, MaxKeyBytes: 3},
 	}}
 	pdp := &pdpStub{owners: map[string]v1.ObjectName{"s/t": "fn"}}
 	f := newFacade(t, b, pdp)
 
-	require.NoError(t, f.Put(ctx, "default", "fn", "small", "ok", []byte("abcd")), "at the cap is allowed")
-	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(f.Put(ctx, "default", "fn", "small", "ok", []byte("abcde"))), "over value cap ⇒ PayloadTooLarge")
-	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(f.Put(ctx, "default", "fn", "small", "abcd", []byte("x"))), "over key cap ⇒ PayloadTooLarge")
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "small", "ok", []byte("abcd")), "at the cap is allowed")
+	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(f.Put(ctx, "default", v1.FunctionOwner("fn"), "small", "ok", []byte("abcde"))), "over value cap ⇒ PayloadTooLarge")
+	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(f.Put(ctx, "default", v1.FunctionOwner("fn"), "small", "abcd", []byte("x"))), "over key cap ⇒ PayloadTooLarge")
 }
 
 // TestIssue377_DeclaredKeyCapIsStorable — a maxKeyBytes a KVStore passes Validate with is a cap the durable
@@ -237,19 +237,19 @@ func TestIssue377_DeclaredKeyCapIsStorable(t *testing.T) {
 		ks := &v1.KVStore{
 			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
 			ObjectMeta: v1.ObjectMeta{Name: store, Namespace: ns, ResourceGroup: "rg1"},
-			Spec:       v1.KVStoreSpec{Quota: v1.KVStoreQuota{MaxKeyBytes: capBytes}, Tables: []v1.KVTable{{Name: table, Owner: "fn"}}},
+			Spec:       v1.KVStoreSpec{Quota: v1.KVStoreQuota{MaxKeyBytes: capBytes}, Tables: []v1.KVTable{{Name: table, Owner: v1.FunctionOwner("fn")}}},
 		}
 		if ks.Validate() != nil {
 			continue
 		}
 		b := fakeResolver{m: map[string]kv.Binding{
-			bkey("fn", "b"): {Store: store, Table: table, Owner: "fn", MaxValueBytes: ks.Spec.EffectiveMaxValueBytes(), MaxKeyBytes: ks.Spec.EffectiveMaxKeyBytes()},
+			bkey("fn", "b"): {Store: store, Table: table, Owner: v1.FunctionOwner("fn"), MaxValueBytes: ks.Spec.EffectiveMaxValueBytes(), MaxKeyBytes: ks.Spec.EffectiveMaxKeyBytes()},
 		}}
 		f, err := kv.NewFacade(kv.FacadeDeps{KV: db, Resolver: b, Authorizer: allowAll{}})
 		require.NoError(t, err)
-		require.NoErrorf(t, f.Put(ctx, ns, "fn", "b", strings.Repeat("k", capBytes), []byte("v")),
+		require.NoErrorf(t, f.Put(ctx, ns, v1.FunctionOwner("fn"), "b", strings.Repeat("k", capBytes), []byte("v")),
 			"store cap %d bytes passed Validate, so a key of that size must be stored", capBytes)
-		require.Equal(t, fault.PayloadTooLarge, fault.KindOf(f.Put(ctx, ns, "fn", "b", strings.Repeat("k", capBytes+1), []byte("v"))),
+		require.Equal(t, fault.PayloadTooLarge, fault.KindOf(f.Put(ctx, ns, v1.FunctionOwner("fn"), "b", strings.Repeat("k", capBytes+1), []byte("v"))),
 			"a key over the store cap is PayloadTooLarge")
 		stored++
 	}
@@ -274,7 +274,7 @@ func (m rawMeta) Get(_ context.Context, gvk v1.GroupVersionKind, _ v1.NamespaceN
 func TestIssue461_StoredOverLimitCapsAreClamped(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	ks := mkKVStore("legacy", v1.KVTable{Name: "t", Owner: "fn"})
+	ks := mkKVStore("legacy", v1.KVTable{Name: "t", Owner: v1.FunctionOwner("fn")})
 	ks.Spec.Quota.MaxKeyBytes, ks.Spec.Quota.MaxValueBytes = 100000, 4<<20
 	require.Error(t, ks.Validate(), "precondition: today's Validate rejects the stored caps")
 	r, err := kv.NewResolver(rawMeta{
@@ -288,15 +288,15 @@ func TestIssue461_StoredOverLimitCapsAreClamped(t *testing.T) {
 	f, err := kv.NewFacade(kv.FacadeDeps{KV: db, Resolver: r, Authorizer: allowAll{}})
 	require.NoError(t, err)
 
-	err = f.Put(ctx, "default", "fn", "b", strings.Repeat("k", 70000), []byte("v"))
+	err = f.Put(ctx, "default", v1.FunctionOwner("fn"), "b", strings.Repeat("k", 70000), []byte("v"))
 	require.Equalf(t, fault.PayloadTooLarge, fault.KindOf(err), "a 70000-byte key is over MaxKeyBytesLimit: %.200v", err)
-	_, _, err = f.Get(ctx, "default", "fn", "b", strings.Repeat("k", 70000))
+	_, _, err = f.Get(ctx, "default", v1.FunctionOwner("fn"), "b", strings.Repeat("k", 70000))
 	require.Equalf(t, fault.PayloadTooLarge, fault.KindOf(err), "a get of a 70000-byte key: %.200v", err)
-	err = f.Delete(ctx, "default", "fn", "b", strings.Repeat("k", 70000))
+	err = f.Delete(ctx, "default", v1.FunctionOwner("fn"), "b", strings.Repeat("k", 70000))
 	require.Equalf(t, fault.PayloadTooLarge, fault.KindOf(err), "a delete of a 70000-byte key: %.200v", err)
-	err = f.Put(ctx, "default", "fn", "b", "k", make([]byte, v1.MaxValueBytesLimit+1))
+	err = f.Put(ctx, "default", v1.FunctionOwner("fn"), "b", "k", make([]byte, v1.MaxValueBytesLimit+1))
 	require.Equalf(t, fault.PayloadTooLarge, fault.KindOf(err), "a value over MaxValueBytesLimit: %.200v", err)
-	require.NoError(t, f.Put(ctx, "default", "fn", "b", strings.Repeat("k", v1.MaxKeyBytesLimit), []byte("v")),
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "b", strings.Repeat("k", v1.MaxKeyBytesLimit), []byte("v")),
 		"a key at MaxKeyBytesLimit is stored")
 }
 
@@ -308,24 +308,24 @@ func TestScenarioKVLoweredKeyCapKeepsKeys(t *testing.T) {
 	engine := memory.New()
 	facade := func(maxKeyBytes int) *kv.Facade {
 		b := fakeResolver{m: map[string]kv.Binding{
-			bkey("fn", "b"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 1 << 20, MaxKeyBytes: maxKeyBytes},
+			bkey("fn", "b"): {Store: "s", Table: "t", Owner: v1.FunctionOwner("fn"), MaxValueBytes: 1 << 20, MaxKeyBytes: maxKeyBytes},
 		}}
 		f, err := kv.NewFacade(kv.FacadeDeps{KV: engine, Resolver: b, Authorizer: allowAll{}})
 		require.NoError(t, err)
 		return f
 	}
 	key := strings.Repeat("k", 2000)
-	require.NoError(t, facade(4096).Put(ctx, "default", "fn", "b", key, []byte("v")))
+	require.NoError(t, facade(4096).Put(ctx, "default", v1.FunctionOwner("fn"), "b", key, []byte("v")))
 
 	lowered := facade(1024)
-	got, found, err := lowered.Get(ctx, "default", "fn", "b", key)
+	got, found, err := lowered.Get(ctx, "default", v1.FunctionOwner("fn"), "b", key)
 	require.NoError(t, err)
 	require.True(t, found, "a key stored under the higher cap is still readable")
 	require.Equal(t, []byte("v"), got)
-	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(lowered.Put(ctx, "default", "fn", "b", key, []byte("w"))),
+	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(lowered.Put(ctx, "default", v1.FunctionOwner("fn"), "b", key, []byte("w"))),
 		"the lowered cap still bounds a rewrite")
-	require.NoError(t, lowered.Delete(ctx, "default", "fn", "b", key))
-	_, found, err = lowered.Get(ctx, "default", "fn", "b", key)
+	require.NoError(t, lowered.Delete(ctx, "default", v1.FunctionOwner("fn"), "b", key))
+	_, found, err = lowered.Get(ctx, "default", v1.FunctionOwner("fn"), "b", key)
 	require.NoError(t, err)
 	require.False(t, found, "the delete removed the key")
 }
@@ -336,7 +336,7 @@ func TestScenarioKVTotalRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: v1.FunctionOwner("fn"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	db := memory.New()
 	book := quota.NewBook(clock.System(), nil)
@@ -351,20 +351,20 @@ func TestScenarioKVTotalRefused(t *testing.T) {
 	require.NoError(t, err)
 
 	value := []byte(strings.Repeat("v", 30))
-	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "a", value), "default/s/t/a and 30 bytes: 43 of 64")
-	err = f.Put(ctx, "default", "fn", "cache", "b", value)
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "cache", "a", value), "default/s/t/a and 30 bytes: 43 of 64")
+	err = f.Put(ctx, "default", v1.FunctionOwner("fn"), "cache", "b", value)
 	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
 	require.ErrorContains(t, err, "kvstore default/s holds 43 of its 64 bytes")
 	_, found, err := db.Get(ctx, "default/s/t/b")
 	require.NoError(t, err)
 	require.False(t, found, "a refused put reaches no driver")
-	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "a", value), "an overwrite of the same size fits on its credit")
-	got, found, err := f.Get(ctx, "default", "fn", "cache", "a")
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "cache", "a", value), "an overwrite of the same size fits on its credit")
+	got, found, err := f.Get(ctx, "default", v1.FunctionOwner("fn"), "cache", "a")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, value, got)
-	require.NoError(t, f.Delete(ctx, "default", "fn", "cache", "a"))
-	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "b", value), "a fresh measure sees the delete")
+	require.NoError(t, f.Delete(ctx, "default", v1.FunctionOwner("fn"), "cache", "a"))
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "cache", "b", value), "a fresh measure sees the delete")
 }
 
 // scenario: floor-refuses-workload-writes (KV) — below the free-space floor a put gets 507 before it reaches the
@@ -373,7 +373,7 @@ func TestFloorRefusesKVPut(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	b := fakeResolver{m: map[string]kv.Binding{
-		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: v1.FunctionOwner("fn"), MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
 	}}
 	db := memory.New()
 	var free atomic.Int64
@@ -385,20 +385,20 @@ func TestFloorRefusesKVPut(t *testing.T) {
 		Quota: floor.Guard(quota.None)})
 	require.NoError(t, err)
 
-	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "a", []byte("v")))
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "cache", "a", []byte("v")))
 	free.Store(1 << 30)
 	clk.Advance(time.Second)
-	err = f.Put(ctx, "default", "fn", "cache", "b", []byte("v"))
+	err = f.Put(ctx, "default", v1.FunctionOwner("fn"), "cache", "b", []byte("v"))
 	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
 	_, found, err := db.Get(ctx, "default/s/t/b")
 	require.NoError(t, err)
 	require.False(t, found, "a refused put reaches no driver")
-	got, found, err := f.Get(ctx, "default", "fn", "cache", "a")
+	got, found, err := f.Get(ctx, "default", v1.FunctionOwner("fn"), "cache", "a")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, []byte("v"), got)
-	require.NoError(t, f.Delete(ctx, "default", "fn", "cache", "a"), "a delete is admitted below the floor")
+	require.NoError(t, f.Delete(ctx, "default", v1.FunctionOwner("fn"), "cache", "a"), "a delete is admitted below the floor")
 	free.Store(3 << 30)
 	clk.Advance(time.Second)
-	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "b", []byte("v")), "above the floor again")
+	require.NoError(t, f.Put(ctx, "default", v1.FunctionOwner("fn"), "cache", "b", []byte("v")), "above the floor again")
 }
