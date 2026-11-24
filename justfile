@@ -392,8 +392,10 @@ lima-example-all:
     set -uo pipefail
     scripts/lane-lock.sh $$ || exit 1
     export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
-    lanes=$(python3 scripts/lane.py --venom-lanes) || { echo "lima-example-all: cannot list the lanes of scripts/lanes.yaml" >&2; exit 1; }
-    echo "venom lanes: $lanes metastore"
+    lanes=$(python3 scripts/lane.py --venom-lanes) || { echo "lima-example-all: cannot list the lanes of ${FUNCD_LANES:-scripts/lanes.yaml}" >&2; exit 1; }
+    # Another repository's lanes (FUNCD_LANES, scripts/lane.py) run without funcd's own metastore lane.
+    metastore=metastore; [ -z "${FUNCD_LANES:-}" ] || metastore=""
+    echo "venom lanes: $lanes $metastore"
     deps='{{lima_deps}}'; vm='{{lima_name}}-shared'
     just ARCH={{ARCH}} build-runtime-images || exit 1
     mkdir -p "$deps" || exit 1
@@ -424,8 +426,8 @@ lima-example-all:
     done
     down
     if [ -n "$halted" ]; then
-        echo "lima-example-all: $halted failed; lanes not run: ${all[*]:$i} metastore"
-    else
+        echo "lima-example-all: $halted failed; lanes not run: ${all[*]:$i} $metastore"
+    elif [ -n "$metastore" ]; then
         echo "═════════════ venom lane: metastore ═════════════"
         if just lima-example-metastore; then passed="$passed metastore"; else failed="$failed metastore"; fi
     fi
