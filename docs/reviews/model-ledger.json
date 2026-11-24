@@ -15433,5 +15433,20 @@
     "dod_total": 12,
     "report": "docs/reviews/adr-0356-implementation-claude-opus-5-5-2.md",
     "notes": "round 2, funcd feat/infrastack-outputs 1d583a11: reach-function, output-changed and never-shown pass in addon-infrastack (PASS 280s), reach-engine in addon-frp-bunny (PASS 197s); 1 Minor (model): the reader steps retry their value; routed: infra-outputs-lists-them's test has no scenario marker (funcd-addons)"
+  },
+  {
+    "date": "2026-11-24",
+    "adr": "0355",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 13,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0355-amendment-implementation-claude-opus-5-5.md",
+    "notes": "amendment of 2026-11-24 (#1021), funcd 6e94910d and funcd-addons #22 583963a: pass on what it can meet; routed (adr, the decider): the closed variables record with no member is outside ADR-0058's profile, so funcdctl push refuses it and funcdctl infra push fails for every module with no plain variable, one with no variable included, which pushes on main (real funcdctl from fe2c6c2f); both merges wait for the ruling; Minor (model): the scenario's test never pushes its Given, and push_check.py pushes only a module with prefix; revert check fails 2 tests, 5 mutants caught"
   }
 ]
