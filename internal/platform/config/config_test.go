@@ -233,7 +233,8 @@ func TestIssue438_EveryKeyHasEnvOverride(t *testing.T) {
 		}
 	}
 	walk("", reflect.TypeFor[config.Config]())
-	require.Equalf(t, []string{"auth.credentials"}, missing, "config keys without a FUNCD_* env override (auth.credentials is file-only, ADR-0171)")
+	require.Equalf(t, []string{"server.trustedProxies", "auth.credentials"}, missing,
+		"config keys without a FUNCD_* env override (auth.credentials and server.trustedProxies are file-only, ADR-0171, ADR-0354)")
 
 	t.Setenv("FUNCD_TLS_HOSTS", "a.example,b.example")
 	t.Setenv("FUNCD_SHAPING_CORS_ALLOW_ORIGINS", "https://a.example,https://b.example")
@@ -779,5 +780,38 @@ func TestCredentialsRejected(t *testing.T) {
 			require.Contains(t, err.Error(), tc.key)
 			require.NotContains(t, err.Error(), "secret", "no token value in the error")
 		})
+	}
+}
+
+// ADR-0354 Decision 1: server.trustedProxies decodes from the file, its entries in order, and has no env var; an entry
+// with both lists or neither, a range that does not parse, or a header name that is not a token refuses the start.
+func TestTrustedProxies(t *testing.T) {
+	c, err := config.Load(writeCfg(t, `server:
+  trustedProxies:
+    - addonKinds:
+        - Tunnel
+      header: X-Real-IP
+    - cidrs:
+        - 203.0.113.0/24
+`), config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, []config.TrustedProxy{{AddonKinds: []string{"Tunnel"}, Header: "X-Real-IP"}, {CIDRs: []string{"203.0.113.0/24"}}},
+		c.Server.TrustedProxies)
+
+	t.Setenv("0_CIDRS", "10.0.0.0/8")
+	c, err = config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Empty(t, c.Server.TrustedProxies, "no env var adds an entry")
+
+	for name, tc := range map[string]struct{ body, key string }{
+		"both lists":     {"    - cidrs:\n        - 203.0.113.0/24\n      addonKinds:\n        - Tunnel\n", "server.trustedProxies[0]"},
+		"neither":        {"    - header: X-Real-IP\n", "server.trustedProxies[0]"},
+		"a bad range":    {"    - cidrs:\n        - 203.0.113.0/24\n    - cidrs:\n        - 203.0.113.0/99\n", "server.trustedProxies[1].cidrs[0]"},
+		"a bad header":   {"    - addonKinds:\n        - Tunnel\n      header: X Real IP\n", "server.trustedProxies[0].header"},
+		"an unknown key": {"    - cidrs:\n        - 203.0.113.0/24\n      hops: 2\n", "hops"},
+	} {
+		_, err := config.Load(writeCfg(t, "server:\n  trustedProxies:\n"+tc.body), config.Flags{})
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%s: %v", name, err)
+		require.Contains(t, err.Error(), tc.key, name)
 	}
 }

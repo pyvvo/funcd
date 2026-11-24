@@ -22,7 +22,7 @@ func TestScenarioEgressPolicyValidate(t *testing.T) {
 	t.Parallel()
 
 	good := egressPolicy(EgressPolicySpec{
-		AppliesTo: []WorkloadRef{FunctionOwner("etl")},
+		AppliesTo: []AppliesToRef{{Kind: "Function", Name: "etl"}, {Kind: "Tunnel", Name: "public"}},
 		Rules: []EgressRule{
 			{To: EgressTo{Domains: []string{"api.x.com", "*.x.com"}, CIDRs: []string{"10.0.0.0/8"}}, Ports: []int{443, 5432}},
 			{To: EgressTo{CIDRs: []string{"192.168.0.0/16"}}}, // no ports ⇒ any port
@@ -38,7 +38,7 @@ func TestScenarioEgressPolicyValidate(t *testing.T) {
 		"malformed cidr":  {Rules: []EgressRule{{To: EgressTo{CIDRs: []string{"10.0.0.0/999"}}}}},
 		"port zero":       {Rules: []EgressRule{{To: EgressTo{Domains: []string{"x.com"}}, Ports: []int{0}}}},
 		"port too high":   {Rules: []EgressRule{{To: EgressTo{Domains: []string{"x.com"}}, Ports: []int{70000}}}},
-		"bad appliesTo":   {AppliesTo: []WorkloadRef{FunctionOwner("Not A Name")}, Rules: []EgressRule{{To: EgressTo{Domains: []string{"x.com"}}}}},
+		"bad appliesTo":   {AppliesTo: []AppliesToRef{{Kind: "Function", Name: "Not A Name"}}, Rules: []EgressRule{{To: EgressTo{Domains: []string{"x.com"}}}}},
 	}
 	for name, spec := range bad {
 		spec := spec

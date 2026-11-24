@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
+	"github.com/pyvvo/funcd/internal/edge"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 )
@@ -117,7 +118,7 @@ func Chain(cfg Config, telemetry *observability.Telemetry, logger *slog.Logger) 
 				if cfg.AccessLog {
 					logger.Info("edge request",
 						"method", r.Method, "path", r.URL.Path, "function", fn, "namespace", ns,
-						"status", status, "duration", dur,
+						"status", status, "duration", dur, "client", client(r),
 						"request_id", gateway.RequestIDFromContext(r.Context()))
 				}
 			}()
@@ -188,4 +189,12 @@ func (r *recorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		return h.Hijack()
 	}
 	return nil, nil, errors.New("observ: underlying ResponseWriter does not support hijacking")
+}
+
+// client is the request's client address for the access log (ADR-0354 Decision 4).
+func client(r *http.Request) string {
+	if a := edge.ClientOf(r); a.IsValid() {
+		return a.String()
+	}
+	return r.RemoteAddr
 }

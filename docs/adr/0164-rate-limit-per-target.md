@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — Decision 2: on the `/function/<name>` form the key's namespace comes from the namespace host, else the header.
+- **Superseded in part by**: [ADR-0354](0354-the-edge-takes-the-client-address-from-a-proxy-it-trusts.md) (2026-11-24) — Decision 6 and its `KeyClientIP` Contracts comment (the client address behind a trusted proxy)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, ingress, rate-limit, dos, data-plane

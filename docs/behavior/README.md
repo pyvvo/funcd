@@ -40,6 +40,7 @@ the bug rule in `.claude/CLAUDE.md`: a row points at what to read and proves not
 | [Workers](workers.md) | a worker's boot, crash, liveness and stop, volumes, logs |
 | [Functions](functions.md) | phases, gates, wake and idle, revisions, pools |
 | [Calls](calls.md) | a call from the listener to a worker, routes, Sites, deadlines |
+| [Edge behind a tunnel](edge-behind-a-tunnel.md) | a caller on the bridge address pinned to its namespace, the client address behind a trusted proxy |
 | [Services](services.md) | KVStore, Bucket, SQLDatabase, Lake, the S3 gateway |
 | [Addons](addons.md) | the add-ons an admin registers, their objects and engines |
 | [Engineless kinds](engineless-kinds.md) | an add-on kind whose objects a Function reconciles, and the hold at their deletion |

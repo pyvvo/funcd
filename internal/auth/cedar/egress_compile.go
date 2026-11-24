@@ -123,18 +123,11 @@ func CompileEgressPolicy(ns v1.NamespaceName, ep *v1.EgressPolicy, funcs []v1.Ob
 }
 
 // EgressDomains returns ep's domain rules that apply to principal: the principals CompileEgressPolicy grants. With no
-// spec.appliesTo that is each Function of ep's namespace, with one each Function and Job it names by kind and name,
-// and never another owner kind (ADR-0175, ADR-0351 Decision 6). The DNS forwarder forwards only the names these allow
-// (ADR-0315).
-func EgressDomains(ep *v1.EgressPolicy, principal auth.EntityRef) []string {
-	if ep == nil || principal.Namespace != ep.Namespace {
-		return nil
-	}
-	ref := v1.WorkloadRef{Kind: principal.Type, Name: principal.Name}
-	switch {
-	case len(ep.Spec.AppliesTo) > 0 && !slices.Contains(ep.Spec.AppliesTo, ref):
-		return nil
-	case len(ep.Spec.AppliesTo) == 0 && principal.Type != v1.KindFunction:
+// spec.appliesTo that is each Function of ep's namespace; with one, each Function and Job it names by kind and name, and
+// each add-on object it names whose stored object's kind, kind here, is the item's, spelled the same (ADR-0175, ADR-0351
+// Decision 6, ADR-0352 Decision 4). The DNS forwarder forwards only the names these allow (ADR-0315).
+func EgressDomains(ep *v1.EgressPolicy, principal auth.EntityRef, kind string) []string {
+	if ep == nil || principal.Namespace != ep.Namespace || !appliesTo(ep.Spec.AppliesTo, principal, kind) {
 		return nil
 	}
 	var out []string
@@ -142,6 +135,19 @@ func EgressDomains(ep *v1.EgressPolicy, principal auth.EntityRef) []string {
 		out = append(out, ep.Spec.Rules[i].To.Domains...)
 	}
 	return out
+}
+
+// appliesTo reports whether items name principal: with none, a Function; else an item of its name and its kind, which for
+// an add-on object is kind, its stored object's.
+func appliesTo(items []v1.AppliesToRef, principal auth.EntityRef, kind string) bool {
+	if len(items) == 0 {
+		return principal.Type == v1.KindFunction
+	}
+	if principal.Type == v1.KindAddonObject {
+		return kind != "" && slices.Contains(items, v1.AppliesToRef{Kind: kind, Name: principal.Name})
+	}
+	return (principal.Type == v1.KindFunction || principal.Type == v1.KindJob) &&
+		slices.Contains(items, v1.AppliesToRef{Kind: string(principal.Type), Name: principal.Name})
 }
 
 // namespaceScope is the whole-namespace principal guard: principal is Function && principal.namespace ==
@@ -152,19 +158,33 @@ func namespaceScope(ns v1.NamespaceName) estNode {
 }
 
 // appliesToScope is the bounded named-appliesTo disjunction: (principal == Function::"<ns>/<fn>" || principal ==
-// Job::"<ns>/<job>" || …). Each id "<ns>/<name>" matches workloadUID exactly so it compares to the request principal
-// UID (ADR-0351 Decision 6).
-func appliesToScope(ns v1.NamespaceName, appliesTo []v1.WorkloadRef) estNode {
+// Job::"<ns>/<job>" || (principal == AddonObject::"<ns>/<name>" && principal.kind == "<kind>") || …). Each id
+// "<ns>/<name>" matches workloadUID exactly so it compares to the request principal UID (ADR-0351 Decision 6); an add-on
+// item also reads the object's kind, so it does not carry over to a later object of another kind that takes the name
+// (ADR-0352 Decision 4).
+func appliesToScope(ns v1.NamespaceName, appliesTo []v1.AppliesToRef) estNode {
 	var scope estNode
 	for i, ref := range appliesTo {
-		eq := estEq(estVar("principal"), estEntity(string(workloadUID(ns, ref).Type), string(ns)+"/"+string(ref.Name)))
+		item := appliesToItem(ns, ref)
 		if i == 0 {
-			scope = eq
+			scope = item
 			continue
 		}
-		scope = estOr(scope, eq)
+		scope = estOr(scope, item)
 	}
 	return scope
+}
+
+// appliesToItem is one appliesTo item's principal condition.
+func appliesToItem(ns v1.NamespaceName, ref v1.AppliesToRef) estNode {
+	id := string(ns) + "/" + string(ref.Name)
+	switch v1.Kind(ref.Kind) {
+	case v1.KindFunction:
+		return estEq(estVar("principal"), estEntity(entityTypeFunction, id))
+	case v1.KindJob:
+		return estEq(estVar("principal"), estEntity(entityTypeJob, id))
+	}
+	return estAnd(estEq(estVar("principal"), estEntity(entityTypeAddonObject, id)), estEq(estAccess(estVar("principal"), "kind"), estVal(ref.Kind)))
 }
 
 // ruleBody assembles one rule's `when` body: principalScope && [portSet] && destSet — the AND ordered so

@@ -635,3 +635,76 @@ func TestScenarioAddonFenceStays(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, dec.Allowed, "the engine of the object the Function binds is refused too")
 }
+
+// ADR-0352 Decision 3: Sources names a source by the worker index, else the engine index, and refuses an address the two
+// hold with different principals, as it refuses one neither holds.
+func TestSourcesNamesAWorkerElseAnEngine(t *testing.T) {
+	t.Parallel()
+	fn := auth.EntityRef{Type: v1.KindFunction, Namespace: "team", Name: "api"}
+	engine := auth.EntityRef{Type: v1.KindAddonObject, Namespace: "team", Name: "public"}
+	workers, engines := NewMemoryWorkerIndex(), NewMemoryWorkerIndex()
+	workers.Add(netip.MustParseAddr("10.63.0.2"), fn)
+	engines.Add(netip.MustParseAddr("10.63.0.3"), engine)
+	workers.Add(netip.MustParseAddr("10.63.0.4"), fn)
+	engines.Add(netip.MustParseAddr("10.63.0.4"), engine)
+	src := Sources(workers, engines)
+	for ip, want := range map[string]*auth.EntityRef{"10.63.0.2": &fn, "10.63.0.3": &engine, "10.63.0.4": nil, "10.63.0.9": nil} {
+		ref, ok := src.Lookup(netip.MustParseAddr(ip))
+		require.Equal(t, want != nil, ok, ip)
+		if want != nil {
+			require.Equal(t, *want, ref, ip)
+		} else {
+			require.Zero(t, ref, ip)
+		}
+	}
+	ref, ok := Sources(workers, nil).Lookup(netip.MustParseAddr("10.63.0.4"))
+	require.True(t, ok, "with no engine index the worker index alone names a source")
+	require.Equal(t, fn, ref)
+}
+
+// ADR-0353 Decision 2: with the data plane on every address, a connection to a node address at its port is refused
+// whatever rule permits it, a cidrs rule included, as the bridge address and a bound address are; the same address at
+// another port goes on to the PDP. The platform's case is pkg/funcd's TestScenarioGatewayNeverDialsTheEdge.
+func TestDecideRefusesTheEdgesAddresses(t *testing.T) {
+	t.Parallel()
+	worker := netip.MustParseAddr("10.63.0.6")
+	workers := NewMemoryWorkerIndex()
+	workers.Add(worker, auth.EntityRef{Type: v1.KindFunction, Namespace: "team", Name: "api"})
+	lan := netip.MustParseAddr("192.168.1.10")
+	node := func() ([]netip.Addr, error) { return []netip.Addr{netip.MustParseAddr("10.63.0.1"), lan}, nil }
+	for name, tc := range map[string]struct {
+		edge    []netip.AddrPort
+		dst     netip.AddrPort
+		refused bool
+	}{
+		"a node address under a wildcard bind": {[]netip.AddrPort{netip.MustParseAddrPort("10.63.0.1:8081"), netip.MustParseAddrPort("[::]:8081")}, netip.AddrPortFrom(lan, 8081), true},
+		"the bridge address":                   {[]netip.AddrPort{netip.MustParseAddrPort("10.63.0.1:8081"), netip.MustParseAddrPort("127.0.0.1:8081")}, netip.MustParseAddrPort("10.63.0.1:8081"), true},
+		"the bound address":                    {[]netip.AddrPort{netip.MustParseAddrPort("10.63.0.1:8081"), netip.MustParseAddrPort("192.168.1.10:8081")}, netip.AddrPortFrom(lan, 8081), true},
+		"a node address off a bound address":   {[]netip.AddrPort{netip.MustParseAddrPort("10.63.0.1:8081"), netip.MustParseAddrPort("127.0.0.1:8081")}, netip.AddrPortFrom(lan, 8081), false},
+		"a node address at another port":       {[]netip.AddrPort{netip.MustParseAddrPort("[::]:8081")}, netip.AddrPortFrom(lan, 8082), false},
+		"a mapped node address under wildcard": {[]netip.AddrPort{netip.MustParseAddrPort("0.0.0.0:8081")}, netip.AddrPortFrom(netip.AddrFrom16(lan.As16()), 8081), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d := Deps{Workers: workers, DNS: fakeDNS{}, Authz: cidrsRule{}, NodeAddrs: node, Edge: tc.edge}
+			dec, rec, err := decideConnect(context.Background(), d, worker, tc.dst, "")
+			require.NoError(t, err)
+			require.Equal(t, !tc.refused, dec.Allowed, rec.Reason)
+			if tc.refused {
+				require.Contains(t, rec.Reason, "edge")
+				require.Equal(t, "team", rec.Namespace)
+			}
+		})
+	}
+	failing := Deps{Workers: workers, DNS: fakeDNS{}, Authz: cidrsRule{}, Edge: []netip.AddrPort{netip.MustParseAddrPort("[::]:8081")},
+		NodeAddrs: func() ([]netip.Addr, error) { return nil, errors.New("no interfaces") }}
+	_, _, err := decideConnect(context.Background(), failing, worker, netip.AddrPortFrom(lan, 8081), "")
+	require.Error(t, err, "a failed read of the node's addresses permits nothing")
+}
+
+// cidrsRule permits every connection, as a cidrs rule over every address would.
+type cidrsRule struct{}
+
+func (cidrsRule) Authorize(context.Context, auth.Request) (auth.Decision, error) {
+	return auth.Decision{Allowed: true, Reason: "permitted"}, nil
+}

@@ -10,7 +10,6 @@ import (
 	"container/heap"
 	"crypto/sha256"
 	"math"
-	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/edge"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
@@ -29,7 +29,8 @@ const op = "edge.limit"
 type Key string
 
 const (
-	// KeyClientIP buckets per client IP: the RemoteAddr host; checked by Chain.
+	// KeyClientIP buckets per client address, the peer's unless a trusted proxy names another (ADR-0354 Decision 4);
+	// checked by Chain.
 	KeyClientIP Key = "clientIP"
 	// KeyFunction buckets per resolved (namespace, function); checked by TargetLimiter (ADR-0164).
 	KeyFunction Key = "function"
@@ -246,10 +247,10 @@ func (t *bucketTable) take(key string) (time.Duration, error) {
 	return 0, nil
 }
 
+// clientIP is the request's client address (ADR-0354 Decision 4), else its RemoteAddr as it came.
 func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+	if a := edge.ClientOf(r); a.IsValid() {
+		return a.String()
 	}
-	return host
+	return r.RemoteAddr
 }

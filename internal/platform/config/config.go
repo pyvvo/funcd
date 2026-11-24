@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -77,6 +78,9 @@ type Config struct {
 		// proxy that terminates TLS or listens on another port.
 		EdgePublicScheme string `json:"edgePublicScheme,omitempty" env:"FUNCD_EDGE_PUBLIC_SCHEME" validate:"omitempty,oneof=http https" doc:"The scheme browsers reach the data plane with, which the edge's sign-in callbacks use: https behind a proxy that terminates TLS makes them https, with Secure __Host- cookies. server.tls.enabled makes them https too. Empty means http."`
 		EdgePublicPort   int    `json:"edgePublicPort,omitempty" env:"FUNCD_EDGE_PUBLIC_PORT" validate:"min=0,max=65535" doc:"The port browsers reach the data plane on, which the edge's sign-in callbacks use; the scheme's own port, 443 or 80, is left out. 0 means the data plane's bound port, or none when only server.edgePublicScheme makes the scheme https."`
+		// TrustedProxies is file-only (ADR-0354 Decision 1), as auth.credentials is: caarlos0/env walks a slice of
+		// structs under an empty prefix.
+		TrustedProxies []TrustedProxy `json:"trustedProxies,omitempty" env:"-" doc:"The proxies whose word the edge takes for a request's client address, which the rate limit's clientIP key, the access log and the X-Forwarded-For a backend gets use. The first entry that matches the connection's peer decides; with none, the peer is the client. Set in the config file only."`
 		// Edge authn PEP (ADR-0113, F77): enable per-target auth-stance enforcement on the data plane.
 		Auth struct {
 			Edge bool `json:"edge,omitempty" env:"FUNCD_AUTH_EDGE" doc:"When true, the data plane authenticates a call to a target whose stance is authenticated with the control plane's credentials, and authorizes it with its policies. When false, such a call gets 401. An open target answers either way."`
@@ -758,6 +762,9 @@ func (c Config) Validate() error {
 		if err := c.validateCredentials(op); err != nil {
 			return err
 		}
+		if err := c.validateTrustedProxies(op); err != nil {
+			return err
+		}
 		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine(), c.CheckJob(), c.CheckKVSweep(), c.CheckFunctions(), c.CheckStorage(), c.CheckWorkloadBackup()} {
 			if len(fs) > 0 && fs[0].Error {
 				return fault.Invalidf(op, "%s", fs[0].Message)
@@ -776,6 +783,36 @@ func (c Config) Validate() error {
 		return fault.Invalidf(op, "config key %q has invalid value %q (want %s)", key, fmt.Sprint(fe.Value()), want)
 	}
 	return fault.Wrapf(err, fault.Invalid, op, "invalid config")
+}
+
+// TrustedProxy is one server.trustedProxies entry (ADR-0354 Decision 1): it trusts hops by CIDR range or by the add-on
+// kinds of the engines that reach the edge on the bridge address, and names the header such a hop sets to the client.
+type TrustedProxy struct {
+	CIDRs      []string `json:"cidrs,omitempty" doc:"The address ranges of the trusted hops, such as 203.0.113.0/24. An address of runtime.containerd.subnetCIDR, a workload's, never matches. Set this or addonKinds."`
+	AddonKinds []string `json:"addonKinds,omitempty" doc:"The add-on kinds whose engines are trusted hops, each spelled as its Addon spells it, for an engine that reaches the edge on the bridge address. It matches nothing without the egress gateway, as on the process runtime, and funcd warns at start. Set this or cidrs."`
+	Header     string   `json:"header,omitempty" doc:"The header that the trusted hop sets to the client address, such as X-Real-IP; a value that is not exactly one IP address leaves the peer as the client. Empty, the edge walks X-Forwarded-For from the right past each address that a cidrs entry trusts."`
+}
+
+// validateTrustedProxies refuses an entry with both lists or neither, a range that does not parse, or a header name
+// that is not a token (ADR-0354 Decision 1). Errors name the key.
+func (c Config) validateTrustedProxies(op string) error {
+	for i, e := range c.Server.TrustedProxies {
+		key := fmt.Sprintf("server.trustedProxies[%d]", i)
+		switch {
+		case len(e.CIDRs) > 0 && len(e.AddonKinds) > 0:
+			return fault.Invalidf(op, "config key %q sets both cidrs and addonKinds: an entry trusts one of them", key)
+		case len(e.CIDRs) == 0 && len(e.AddonKinds) == 0:
+			return fault.Invalidf(op, "config key %q sets neither cidrs nor addonKinds", key)
+		case e.Header != "" && !httpguts.ValidHeaderFieldName(e.Header):
+			return fault.Invalidf(op, "config key %q has a header %q that is not a header name", key+".header", e.Header)
+		}
+		for j, r := range e.CIDRs {
+			if _, err := netip.ParsePrefix(r); err != nil {
+				return fault.Invalidf(op, "config key %q has %q, which is not a CIDR range", fmt.Sprintf("%s.cidrs[%d]", key, j), r)
+			}
+		}
+	}
+	return nil
 }
 
 // CredentialList is auth.credentials (ADR-0171): nil means the key is absent. UnmarshalJSON makes a

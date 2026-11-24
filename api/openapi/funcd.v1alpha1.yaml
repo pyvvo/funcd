@@ -2594,6 +2594,23 @@ components:
           description: The spec.version of the current revision.
           type: string
       type: object
+    AppliesToRef:
+      additionalProperties: false
+      properties:
+        kind:
+          description: "The workload's kind: Function, Job, or the kind of an add-on whose objects run an engine, as its Addon spells it."
+          pattern: ^[A-Z][A-Za-z0-9]{1,62}$
+          type: string
+        name:
+          description: The workload's name, in the policy's namespace. It need not exist yet.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - kind
+        - name
+      type: object
     AssignmentEntry:
       additionalProperties: false
       properties:
@@ -3351,9 +3368,9 @@ components:
       additionalProperties: false
       properties:
         appliesTo:
-          description: The Functions and Jobs of the namespace that the rules apply to, each named with its kind; empty applies them to every Function of the namespace and to no Job.
+          description: "The workloads of the namespace that the rules apply to, each named with its kind: a Function, a Job, or an object of an add-on kind whose objects run an engine, spelled as its Addon spells it, whose engine the rules then let out. Empty applies them to every Function of the namespace, and to no Job or engine."
           items:
-            $ref: "#/components/schemas/WorkloadRef"
+            $ref: "#/components/schemas/AppliesToRef"
           type:
             - array
             - "null"

@@ -39,10 +39,13 @@ type executor struct {
 
 	egressWorkers   *egress.MemoryWorkerIndex // src-IP → Ref, filled by the containerd runtime (ADR-0117 §5); nil unless egress is on
 	egressEngines   *egress.MemoryWorkerIndex // the add-on engines' addresses, which the gateway never dials (ADR-0332); nil unless egress is on
+	egressSources   egress.WorkerIndex        // a source address's principal over both indexes (ADR-0352 Decision 3); nil unless egress is on
 	engineIndexMu   sync.Mutex                // one indexAddonEngines run at a time
 	addonNamespaces func() []v1.NamespaceName // the add-on runtime's engines' namespaces, a stopping engine's included
 	egressForwarder egress.Forwarder
 	egressGateway   egress.Gateway
+	edge            []netip.AddrPort       // the gateway's Deps.Edge, which edgeBound fills once the data plane is bound
+	gatewayDeps     egress.Deps            // what the gateway decides with, its Edge places among them
 	volumes         volume.Manager         // the Functions' volumes (ADR-0262); nil ⇒ off
 	functions       *function.Reconciler   // a volume's Restore reads its DataMissing and stops its workers (useFunctions)
 	sockets         *local.Manager         // one local API listener per worker (ADR-0064)
@@ -135,24 +138,39 @@ func (e *executor) buildEgress(authz auth.Authorizer) error {
 			"bridge address (WithBridgeAddress), else no lookup is answered")
 	}
 	e.egressWorkers, e.egressEngines = egress.NewMemoryWorkerIndex(), egress.NewMemoryWorkerIndex()
+	// ADR-0352 Decision 3: a source is a worker, else an engine, read through one view that refuses a conflict.
+	e.egressSources = egress.Sources(e.egressWorkers, e.egressEngines)
 	fwd := egress.NewForwarder(
 		netip.AddrPortFrom(bridge, c.dnsForwarderPort),
 		c.dnsUpstream,
-		e.egressWorkers,           // src-IP → principal (ADR-0117 §5)
+		e.egressSources,           // src-IP → principal (ADR-0117 §5)
 		storeDomainRules{c.store}, // principal → the domain rules that apply to it (ADR-0315)
 		c.logger.With("component", "egress.dns"),
 	)
 	e.egressForwarder = fwd
-	e.egressGateway = egress.New(true, egress.Deps{
+	// The data plane binds after the gateway is built, so the gateway's Edge holds the places of its two addresses, the
+	// bridge's and the bound one, which edgeBound fills before the gateway serves; an empty place matches nothing.
+	e.edge = make([]netip.AddrPort, 2)
+	e.gatewayDeps = egress.Deps{
 		GatewayPort: c.egressGatewayPort,
-		Workers:     e.egressWorkers,
+		Workers:     e.egressSources,
 		DNS:         fwd,
 		Authz:       authz,
 		Audit:       egressAuditSink{logger: c.logger.With("component", "egress.audit")},
 		Logger:      c.logger.With("component", "egress.gateway"),
 		Engines:     e.egressEngines,
-	})
+		Edge:        e.edge,
+	}
+	e.egressGateway = egress.New(true, e.gatewayDeps)
 	return nil
+}
+
+// edgeBound gives the gateway the bridge address and the bound address of the data plane, each at its bound port, which
+// it never dials (ADR-0353 Decision 2).
+func (e *executor) edgeBound(bridge, bound netip.AddrPort) {
+	if len(e.edge) == 2 {
+		e.edge[0], e.edge[1] = bridge, bound
+	}
 }
 
 // buildLogs builds, over the blob substrate, the trace sink the workflow engine shares (ADR-0103), the logs sink when the

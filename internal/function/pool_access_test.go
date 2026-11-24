@@ -84,7 +84,7 @@ func TestPoolKeyCountsNoJobsOwners(t *testing.T) {
 	h.createObj(t, v1.KindSecret, "creds", func(o v1.Object) { o.(*v1.Secret).Spec.Owner = v1.JobOwner("tofu") })
 	h.createObj(t, v1.KindSQLDatabase, "db", func(o v1.Object) { o.(*v1.SQLDatabase).Spec.Owner = v1.JobOwner("tofu") })
 	h.createObj(t, v1.KindEgressPolicy, "egress", func(o v1.Object) {
-		o.(*v1.EgressPolicy).Spec = v1.EgressPolicySpec{AppliesTo: []v1.WorkloadRef{v1.JobOwner("tofu")},
+		o.(*v1.EgressPolicy).Spec = v1.EgressPolicySpec{AppliesTo: []v1.AppliesToRef{{Kind: "Job", Name: "tofu"}},
 			Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"api.example.com"}}}}}
 	})
 	bound := v1.FunctionSpec{Bindings: v1.FunctionBindings{KV: []v1.FunctionKV{{Alias: "t", Store: "s", Table: "t"}},

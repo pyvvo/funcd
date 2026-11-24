@@ -64,21 +64,28 @@ func TestOwnersNameTheirKind(t *testing.T) {
 	require.JSONEq(t, `{"name":"t"}`, string(b), "no owner is left out")
 }
 
-// ADR-0351 Decision 6: an appliesTo item names a Function or a Job by kind and name; another kind, or an item that names
-// nothing, is refused.
+// ADR-0351 Decision 6 and ADR-0352 Decision 1: an appliesTo item names a Function, a Job or an add-on object by kind and
+// name, and reads on the wire as before; another funcd kind, a kind of any case that is no kind name, or an item that
+// names nothing, is refused. Which add-on kinds count is the admission's.
 func TestAppliesToNamesItsKind(t *testing.T) {
 	t.Parallel()
-	ep := func(refs ...WorkloadRef) error {
+	ep := func(refs ...AppliesToRef) error {
 		return (&EgressPolicy{TypeMeta: TypeMeta{APIVersion: KindEgressPolicy.GVK().APIVersion(), Kind: KindEgressPolicy},
 			ObjectMeta: ObjectMeta{Name: "egress", Namespace: "team", ResourceGroup: "rg1"},
 			Spec:       EgressPolicySpec{AppliesTo: refs, Rules: []EgressRule{{To: EgressTo{Domains: []string{"api.example.com"}}}}}}).Validate()
 	}
-	require.NoError(t, ep(FunctionOwner("etl"), JobOwner("tofu")))
-	for _, refs := range [][]WorkloadRef{{LakeOwner("lake")}, {{}}, {JobOwner("Tofu")}} {
-		err := ep(refs...)
-		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v: %v", refs, err)
+	require.NoError(t, ep(AppliesToRef{Kind: "Function", Name: "etl"}, AppliesToRef{Kind: "Job", Name: "tofu"},
+		AppliesToRef{Kind: "Tunnel", Name: "public"}))
+	for _, ref := range []AppliesToRef{{Kind: "Lake", Name: "lake"}, {}, {Kind: "Job", Name: "Tofu"}, {Kind: "FUNCTION", Name: "etl"},
+		{Kind: "tunnel", Name: "public"}, {Kind: "Secret", Name: "s"}, {Name: "public"}} {
+		err := ep(ref)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v: %v", ref, err)
 		require.True(t, strings.Contains(err.Error(), "spec.appliesTo[0]"), err.Error())
 	}
+
+	var spec EgressPolicySpec
+	require.NoError(t, json.Unmarshal([]byte(`{"rules":[],"appliesTo":[{"kind":"Job","name":"tofu"},{"kind":"Tunnel","name":"public"}]}`), &spec))
+	require.Equal(t, []AppliesToRef{{Kind: "Job", Name: "tofu"}, {Kind: "Tunnel", Name: "public"}}, spec.AppliesTo)
 }
 
 // ADR-0351 Decision 5: a RolesAssignment may name a Job as its principal.

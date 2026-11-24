@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -260,10 +261,14 @@ func (r *Reconciler) secretEnv(ctx context.Context, a *v1.Addon, o *v1.AddonObje
 }
 
 // engineSpec is the object's engine: its Addon's kind entry's image, port, probe and storage (ADR-0344 Decision 3), the
-// object's resources, one replica, fenced with no endpoint until an egress list exists, and reached only from funcd
-// (ADR-0332 Decision 3).
+// object's resources, one replica, and reached only from funcd (ADR-0332 Decision 3). With egress on it has no output
+// fence, so its connections pass the egress gateway under the EgressPolicies that name its object; off, it is fenced
+// with no endpoint (ADR-0352 Decision 2).
 func (r *Reconciler) engineSpec(a *v1.Addon, o *v1.AddonObject, env map[string]string) provider.ProviderSpec {
-	fence, _ := provider.EgressTo("")
+	var fence []netip.AddrPort
+	if !r.egress {
+		fence, _ = provider.EgressTo("")
+	}
 	entry, _ := a.Spec.KindRuntime()
 	at := a.Spec.KindAttributes()
 	spec := provider.ProviderSpec{

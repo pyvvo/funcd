@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"runtime"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/edge"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
@@ -81,6 +83,24 @@ func TestScenarioRateKeyClientIP(t *testing.T) {
 	require.Equal(t, http.StatusOK, do(h, "GET", "/function/x", "1.1.1.1:1", 0).Code)
 	require.Equal(t, http.StatusTooManyRequests, do(h, "GET", "/function/x", "1.1.1.1:1", 0).Code)
 	require.Equal(t, http.StatusOK, do(h, "GET", "/function/x", "2.2.2.2:1", 0).Code, "a different IP has its own bucket")
+}
+
+// ADR-0354 Decision 4: the clientIP key is the client address the edge named, so two visitors behind one tunnel engine
+// get a bucket each, and a visitor keeps its bucket whatever the peer.
+func TestRateKeyIsTheClientAddress(t *testing.T) {
+	next := &counter{}
+	h := limit.Chain(limit.Config{RatePerMin: 60, Burst: 1, Key: limit.KeyClientIP})(next)
+	from := func(client string) int {
+		req := httptest.NewRequest(http.MethodGet, "http://x/function/x", nil)
+		req.RemoteAddr = "10.63.0.3:40000"
+		req = req.WithContext(edge.WithClient(req.Context(), netip.MustParseAddr(client)))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	require.Equal(t, http.StatusOK, from("198.51.100.7"))
+	require.Equal(t, http.StatusOK, from("198.51.100.8"), "another visitor behind the same peer has its own bucket")
+	require.Equal(t, http.StatusTooManyRequests, from("198.51.100.7"))
 }
 
 // Under key: function the rate step is not Chain's (ADR-0164): Chain passes every call, and only a

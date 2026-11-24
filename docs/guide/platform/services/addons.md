@@ -23,8 +23,10 @@ Revision, and a deleted Addon fails its Functions at their next pass while their
 ## One engine per object
 
 funcd runs one engine per object on its add-on runtime, on containerd, from the image of the Addon's kind entry, with the
-object's resources, as it runs a Lake's engine. A process server runs no engine. The engine is fenced: it reaches no endpoint, and it admits new connections only from loopback and funcd's
-bridge address. The edge serves it at the object's `ingress.host` under the Addon's `basePath`, with the path kept, and
+object's resources, as it runs a Lake's engine. A process server runs no engine. The engine admits new connections only
+from loopback and funcd's bridge address. With egress control off it reaches no endpoint; with it on, its connections
+pass the egress gateway, as a Function's do, so it reaches what an EgressPolicy that names its object allows. The edge
+serves it at the object's `ingress.host` under the Addon's `basePath`, with the path kept, and
 refuses the Addon's private paths however they are spelled. A held object has no engine and no edge entry.
 
 ## Revisions

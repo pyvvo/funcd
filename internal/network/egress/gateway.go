@@ -44,6 +44,10 @@ type Deps struct {
 	// Engines holds the addresses of the add-on engines, which no rule reaches: only funcd's own components connect to
 	// them (ADR-0332 Decision 3). nil holds none.
 	Engines WorkerIndex
+	// Edge holds each address and port the data plane listens on, which no rule reaches either, a cidrs rule included: a
+	// workload reaches the edge only on the bridge address, which pins it to its namespace (ADR-0353 Decision 2). An
+	// unspecified address stands for every node address (NodeAddrs).
+	Edge []netip.AddrPort
 }
 
 // WorkerIndex resolves a worker's funcd0 source IP to the principal Ref of its owner kind (a Function or a
@@ -135,15 +139,37 @@ func (d Deps) restricted(ip netip.Addr) (bool, error) {
 	if !ip.IsValid() || slices.ContainsFunc(notGlobal, func(p netip.Prefix) bool { return p.Contains(ip) }) {
 		return true, nil
 	}
-	read := d.NodeAddrs
-	if read == nil {
-		read = interfaceAddrs
-	}
-	node, err := read()
+	node, err := d.nodeAddrs()
 	if err != nil {
 		return true, err
 	}
 	return slices.Contains(node, ip), nil
+}
+
+// nodeAddrs reads the addresses on the node's interfaces.
+func (d Deps) nodeAddrs() ([]netip.Addr, error) {
+	if d.NodeAddrs == nil {
+		return interfaceAddrs()
+	}
+	return d.NodeAddrs()
+}
+
+// onEdge reports whether dst is an address and port the data plane listens on (ADR-0353 Decision 2).
+func (d Deps) onEdge(dst netip.AddrPort) (bool, error) {
+	ip := dst.Addr().Unmap().WithZone("")
+	for _, e := range d.Edge {
+		switch {
+		case e.Port() != dst.Port():
+		case e.Addr().Unmap() == ip:
+			return true, nil
+		case e.Addr().IsUnspecified():
+			node, err := d.nodeAddrs()
+			if err != nil || slices.Contains(node, ip) {
+				return true, err
+			}
+		}
+	}
+	return false, nil
 }
 
 // GloballyReachable reports whether ip lies outside ADR-0317's table and off the node's interfaces: what a domain rule
@@ -171,8 +197,9 @@ func interfaceAddrs() ([]netip.Addr, error) {
 	return out, nil
 }
 
-// decideConnect is the pure decision flow: authenticate the source IP → build the forwarder-attested
-// destination, which carries no domains at a restricted address → ask the PDP. It returns the decision and the
+// decideConnect is the pure decision flow: authenticate the source IP → refuse an add-on engine's address and the
+// edge's → build the forwarder-attested destination, which carries no domains at a restricted address → ask the PDP.
+// It returns the decision and the
 // audit record; the driver handles I/O (splice/refuse) and emits the record. An unknown source IP is denied+audited
 // (fail-closed); a failed read of the node's addresses is an error, which permits nothing.
 func decideConnect(ctx context.Context, d Deps, src netip.Addr, dst netip.AddrPort, asserted string) (auth.Decision, AuditRecord, error) {
@@ -187,6 +214,15 @@ func decideConnect(ctx context.Context, d Deps, src netip.Addr, dst netip.AddrPo
 				Allowed: false, Reason: "an add-on engine's address, which only funcd reaches"}
 			return auth.Decision{Allowed: false, Reason: rec.Reason}, rec, nil
 		}
+	}
+	edge, err := d.onEdge(dst)
+	if err != nil {
+		return auth.Decision{}, AuditRecord{}, err
+	}
+	if edge {
+		rec := AuditRecord{Namespace: string(ref.Namespace), Function: string(ref.Name), IP: dst.Addr(), Port: dst.Port(),
+			Allowed: false, Reason: "an address funcd's edge listens on, which a workload reaches on the bridge address only"}
+		return auth.Decision{Allowed: false, Reason: rec.Reason}, rec, nil
 	}
 	attested := d.DNS.DomainsFor(src, dst.Addr())
 	if len(attested) > 0 {
@@ -218,6 +254,12 @@ func decideConnect(ctx context.Context, d Deps, src netip.Addr, dst netip.AddrPo
 		Reason:    dec.Reason,
 	}
 	return dec, rec, nil
+}
+
+// Decide is the gateway's decision on one connection from src to dst, as Serve makes it for a redirected one; asserted is
+// the name the client's SNI or Host gave, "" for none.
+func (d Deps) Decide(ctx context.Context, src netip.Addr, dst netip.AddrPort, asserted string) (auth.Decision, AuditRecord, error) {
+	return decideConnect(ctx, d, src, dst, asserted)
 }
 
 func contains(ss []string, s string) bool {

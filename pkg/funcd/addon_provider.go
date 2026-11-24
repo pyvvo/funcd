@@ -240,7 +240,7 @@ func (s *addonProvider) build(d addonDeps) error {
 		Logger: c.logger, SupervisionPeriod: c.pacing.SupervisionPeriod, ReferentPollInterval: c.pacing.ReferentPollInterval,
 		EnginePollInterval: c.pacing.EnginePollInterval, Files: s.files, Volumes: volumes, Hold: c.gate(),
 		QuarantinePeriod: c.quarantinePeriodOrDefault(), Now: c.quarantineNow, FollowCurrent: c.addonFollowCurrent,
-		Collect: d.collect,
+		Collect: d.collect, Egress: c.netManager != nil,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build the add-on object reconciler")

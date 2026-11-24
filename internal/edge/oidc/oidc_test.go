@@ -460,3 +460,28 @@ func TestCallbackReadsAFewStateCookies(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, callback(strings.Join(names, "; ")))
 	require.Equal(t, int64(maxStateCookies), counter.reads.Load(), "only the first few state cookies are read")
 }
+
+// ADR-0353 Decision 4: a callback from a caller the edge pins to another namespace than the provider's that its state
+// names is refused before the code exchange; pinned to the provider's own namespace, it signs in.
+func TestCallbackOfAPinnedCallerStaysInItsNamespace(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, harnessOptions{})
+	h.withClient(nil)
+	callback := h.startSignIn(appHost, "/")
+	answer := func(pinned v1.NamespaceName) *http.Response {
+		req := httptest.NewRequestWithContext(WithCallerNamespace(h.ctx, pinned), http.MethodGet, callback, nil)
+		u, err := url.Parse(callback)
+		require.NoError(t, err)
+		for _, c := range h.browser.Jar.Cookies(u) {
+			req.AddCookie(c)
+		}
+		rec := httptest.NewRecorder()
+		h.gate.Auth(rec, req)
+		return rec.Result()
+	}
+	res := answer("team")
+	require.Equal(t, http.StatusForbidden, res.StatusCode)
+	require.Zero(t, h.idp.Calls("token"), "no code exchange runs")
+	require.Equal(t, http.StatusFound, answer(staging).StatusCode, "the provider's own namespace signs in")
+	require.Equal(t, 1, h.idp.Calls("token"))
+}

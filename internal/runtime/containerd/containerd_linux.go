@@ -648,18 +648,20 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 
 // writeNetns writes what a worker's netns holds before its task starts: with egress on, no IPv6 on its eth0 (ADR-0318),
 // and an engine's fence (ADR-0269), which for a host-only worker admits only loopback and funcd's bridge address
-// (ADR-0332 Decision 3). A host-only worker without an egress fence is refused, so no inbound rule is ever left out.
+// (ADR-0332 Decision 3). A host-only worker without an egress fence gets the input chain alone while egress is on, so
+// its connections meet the egress gateway (ADR-0352 Decision 2), and is refused while egress is off, so no host-only
+// worker ever runs with neither.
 func (d *driver) writeNetns(netnsPath string, spec runtime.WorkerSpec) error {
 	const op = "runtime.containerd.writeNetns"
+	if spec.EgressOnly == nil && spec.HostOnly && !d.cfg.Egress {
+		return fault.Invalidf(op, "a host-only worker needs an egress fence while egress is off")
+	}
 	if d.cfg.Egress {
 		if err := network.DisableWorkerIPv6(netnsPath); err != nil {
 			return err
 		}
 	}
-	if spec.EgressOnly == nil {
-		if spec.HostOnly {
-			return fault.Invalidf(op, "a host-only worker needs an egress fence")
-		}
+	if spec.EgressOnly == nil && !spec.HostOnly {
 		return nil
 	}
 	var admit []netip.Addr

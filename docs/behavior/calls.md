@@ -123,6 +123,7 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. A
 | `server.tls.hosts` | none | config |
 | `server.tls.keyFile` | "" | config |
 | `server.tls.mode` | selfsigned | config |
+| `server.trustedProxies` | none | config |
 | `site.defaultIndex` | index.html | config |
 | `defaultActivationTimeout` | 30s | `internal/activator/activator.go` |
 | `defaultPollInterval` | 25ms | `internal/activator/activator.go` |

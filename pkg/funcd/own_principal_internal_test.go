@@ -61,7 +61,7 @@ func lakeResource(ns v1.NamespaceName) *v1.Lake {
 	return cs
 }
 
-func egressToExample(ns v1.NamespaceName, appliesTo ...v1.WorkloadRef) *v1.EgressPolicy {
+func egressToExample(ns v1.NamespaceName, appliesTo ...v1.AppliesToRef) *v1.EgressPolicy {
 	ep := &v1.EgressPolicy{TypeMeta: v1.TypeMeta{APIVersion: v1.KindEgressPolicy.GVK().APIVersion(), Kind: v1.KindEgressPolicy}}
 	ep.Name, ep.Namespace, ep.ResourceGroup = "egress", ns, "rg1"
 	ep.Spec = v1.EgressPolicySpec{
@@ -117,9 +117,9 @@ func TestScenarioJobEgressNamed(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name      string
-		appliesTo []v1.WorkloadRef
+		appliesTo []v1.AppliesToRef
 		run, fn   bool
-	}{{"appliesTo the Job", []v1.WorkloadRef{v1.JobOwner("tofu")}, true, false}, {"empty appliesTo", nil, false, true}} {
+	}{{"appliesTo the Job", []v1.AppliesToRef{{Kind: "Job", Name: "tofu"}}, true, false}, {"empty appliesTo", nil, false, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fn := lakeFunction("acme")
@@ -211,11 +211,13 @@ func TestStoreDomainRules(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(memory.New())
 	whole := egressToExample("acme")
-	named := egressToExample("acme", v1.FunctionOwner("etl"))
+	named := egressToExample("acme", v1.AppliesToRef{Kind: "Function", Name: "etl"})
 	named.Name, named.Spec.Rules[0].To.Domains = "named", []string{"*.named.example"}
 	other := egressToExample("beta")
 	other.Spec.Rules[0].To.Domains = []string{"beta.example"}
-	seedObjects(t, st, whole, named, other)
+	tunnel := egressToExample("acme", v1.AppliesToRef{Kind: "Tunnel", Name: "etl"}, v1.AppliesToRef{Kind: "Tunnel", Name: "gone"})
+	tunnel.Name, tunnel.Spec.Rules[0].To.Domains = "tunnel", []string{"tunnel.example"}
+	seedObjects(t, st, whole, named, other, tunnel, storedAddonObject("acme", "etl", "Tunnel"))
 	rules := storeDomainRules{st}
 
 	for _, tc := range []struct {
@@ -226,6 +228,8 @@ func TestStoreDomainRules(t *testing.T) {
 		{auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "web"}, []string{"example.com"}},
 		{auth.EntityRef{Type: v1.KindLake, Namespace: "acme", Name: "etl"}, nil},
 		{auth.EntityRef{Type: v1.KindFunction, Namespace: "empty", Name: "etl"}, nil},
+		{auth.EntityRef{Type: v1.KindAddonObject, Namespace: "acme", Name: "etl"}, []string{"tunnel.example"}},
+		{auth.EntityRef{Type: v1.KindAddonObject, Namespace: "acme", Name: "gone"}, nil},
 	} {
 		got, err := rules.For(ctx, tc.principal)
 		require.NoError(t, err)
@@ -245,8 +249,8 @@ func TestScenarioEngineEgressIsLake(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name      string
-		appliesTo []v1.WorkloadRef
-	}{{"whole namespace", nil}, {"appliesTo lake", []v1.WorkloadRef{v1.FunctionOwner("lake")}}} {
+		appliesTo []v1.AppliesToRef
+	}{{"whole namespace", nil}, {"appliesTo lake", []v1.AppliesToRef{{Kind: "Function", Name: "lake"}}}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			st := store.New(memory.New())

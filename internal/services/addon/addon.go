@@ -87,6 +87,9 @@ type Deps struct {
 	// Collect runs the owner garbage collector over a namespace (gc.CollectNamespace): once an App's last engineless
 	// part goes, the App's other parts go then, not at the next sweep (ADR-0345 Decision 8). nil collects nothing.
 	Collect func(ctx context.Context, ns v1.NamespaceName) error
+	// Egress is server.network.egress: on, an engine has no output fence and its egress passes the egress gateway, as a
+	// Function worker's does (ADR-0352 Decision 2); off, it is fenced with no endpoint.
+	Egress bool
 }
 
 // Reconciler is the controller.Reconciler for AddonObject.
@@ -107,6 +110,7 @@ type Reconciler struct {
 	now           func() time.Time
 	followCurrent bool
 	collect       func(ctx context.Context, ns v1.NamespaceName) error
+	egress        bool
 
 	mu       sync.Mutex
 	seen     map[provider.ProviderRef]seenObject // each object's UID and deletion policy at its last pass
@@ -163,6 +167,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		files:        d.Files, volumes: d.Volumes, gate: gate, quarantine: d.QuarantinePeriod, now: now,
 		followCurrent:   d.FollowCurrent,
 		collect:         d.Collect,
+		egress:          d.Egress,
 		seen:            map[provider.ProviderRef]seenObject{},
 		parts:           map[provider.ProviderRef]v1.UID{},
 		answered:        map[v1.UID]bool{},

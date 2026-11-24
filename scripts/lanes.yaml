@@ -516,7 +516,7 @@ funclog:
   venom: e2e/funclog.venom.yml
 
 egress:
-  description: The egress-probe JS function proves ADR-0117 (F81) egress enforcement on real containerd — default-deny with no EgressPolicy, allow via a wildcard-domain / CIDR EgressPolicy, and the audit trail.
+  description: The egress-probe JS function proves ADR-0117 (F81) egress enforcement on real containerd — default-deny with no EgressPolicy, allow via a wildcard-domain / CIDR EgressPolicy, and the audit trail — and an add-on engine, traefik/whoami as the Tunnel public, is let out by an EgressPolicy that names its object (ADR-0352) and reaches the edge on the bridge address for its own namespace only (ADR-0353).
   module: github.com/pyvvo/funcd-typescript
   dir: examples/egress-probe
   stage:
@@ -525,7 +525,14 @@ egress:
     - function.yaml
     - fixtures/egresspolicy-wildcard.yaml   # applied MID-SUITE by the Venom allow-cases (deny-then-allow ordering)
     - fixtures/egresspolicy-cidr.yaml       # applied MID-SUITE by the Venom CIDR allow-case
-    - funcdconfig.yaml             # the ONLY lane funcdconfig with server.network.egress on (F80+F81 armed)
+    # The example's config with a credential list and docker.io for the test Addon's engine (ADR-0352).
+    - from: e2e/fixtures/egress-funcdconfig.yaml
+      to: funcdconfig.yaml
+    - from: e2e/fixtures/egress-engine-probe.py   # run in the test Addon's engine's netns
+      to: engine-probe.py
+  tokens:
+    admin: egress-lane-admin
+    developer: egress-lane-developer
   push:
     - artifact: egress-probe.mjs
       ref: egress-probe

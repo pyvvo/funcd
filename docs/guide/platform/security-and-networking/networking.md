@@ -14,6 +14,13 @@ is ready. An idle Function scales back to zero.
 A worker reaches other Functions and its stores through its local API. When egress control is on, its outbound
 connections go through the egress gateway, which applies the namespace's EgressPolicy.
 
+With egress control on and the gateway running, the edge also listens on funcd's bridge address at the data plane's
+port, where a worker or an add-on engine, such as a tunnel's connector, reaches it directly. funcd names such a caller
+by its source address, as the gateway does, and serves it only what resolves to the caller's own namespace: another
+namespace's host, Function by name or sign-in callback, or an `X-Funcd-Namespace` header that names another namespace,
+gets 403. The gateway never connects a worker to an address the data plane listens on, so this is the one way from the
+container network to the edge. A request from outside the container network is served as before.
+
 ## Local API
 
 ![A Function's ctx calls go through the shim to the worker's local API. The kv, blob, sql and secret facets and the invoke and fetch calls ask Cedar, which either serves the call or refuses it with 403 Forbidden. The health call checks the worker's bindings](../../assets/networking-local-api.drawio.svg)
@@ -34,11 +41,13 @@ allows it. The local API also serves `health`, which checks the worker's binding
 Egress control is opt-in (`server.network.egress`) and is available on Linux with containerd. When it is off, a
 worker's outbound connections stay open. When it is on, nftables rules on the worker bridge, `funcd0`, block traffic
 between workers, redirect a worker's outbound TCP to the egress gateway and drop the rest. The rules also redirect a
-worker's DNS queries to funcd's DNS forwarder, which records the domain behind each answer.
+worker's DNS queries to funcd's DNS forwarder, which records the domain behind each answer. An add-on engine takes the
+same path: with egress control on, its own fence keeps only funcd's way in and no way out.
 
 For each connection, the egress gateway recovers the address that the worker dialled, identifies the worker by its
 source address, and takes the domain from the forwarder's records, never from what the client sends. It then asks
-Cedar whether the worker's Function, or Lake, may `egress::connect` there. Cedar decides from the namespace's
-EgressPolicies, whose rules name domains, exact or wildcard, CIDRs and ports, for the Functions they apply to. The
+Cedar whether the worker's Function, Job or Lake, or the add-on object of an engine, may `egress::connect` there. Cedar
+decides from the namespace's EgressPolicies, whose rules name domains, exact or wildcard, CIDRs and ports, for the
+workloads they apply to. The
 gateway connects an allowed connection through to its destination and closes a refused one. It audits every
 connection.

@@ -45,6 +45,7 @@ import (
 	"github.com/pyvvo/funcd/internal/bus"
 	"github.com/pyvvo/funcd/internal/bus/nats"
 	"github.com/pyvvo/funcd/internal/controlplane"
+	"github.com/pyvvo/funcd/internal/edge"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/observ"
 	"github.com/pyvvo/funcd/internal/edge/shape"
@@ -427,6 +428,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		funcd.WithBaseDomain(cfg.Server.BaseDomain),
 		funcd.WithEdgePublicScheme(cfg.Server.EdgePublicScheme),
 		funcd.WithEdgePublicPort(cfg.Server.EdgePublicPort),
+		funcd.WithTrustedProxies(trustedProxies(cfg)),
 		funcd.WithLogger(root),
 		funcd.WithBlobStoreURL(blobStoreURL(cfg)), // ADR-0222: a BackupSchedule's target is compared with it
 	)
@@ -1100,6 +1102,25 @@ func parseDuration(key, s string, def time.Duration, lo, hi v1.Duration) (time.D
 		return 0, err
 	}
 	return time.Duration(d), nil
+}
+
+// trustedProxies is server.trustedProxies, which config.Validate checked, over the worker subnet that a cidrs entry never
+// trusts: runtime.containerd.subnetCIDR under containerd, none on the process runtime (ADR-0354 Decision 3).
+func trustedProxies(cfg config.Config) edge.Proxies {
+	var p edge.Proxies
+	if cfg.Runtime.Mode == "containerd" {
+		p.Workers, _ = netip.ParsePrefix(cfg.Runtime.Containerd.SubnetCIDR)
+	}
+	for _, e := range cfg.Server.TrustedProxies {
+		entry := edge.TrustedProxy{AddonKinds: e.AddonKinds, Header: e.Header}
+		for _, r := range e.CIDRs {
+			if pfx, err := netip.ParsePrefix(r); err == nil {
+				entry.CIDRs = append(entry.CIDRs, pfx.Masked())
+			}
+		}
+		p.Entries = append(p.Entries, entry)
+	}
+	return p
 }
 
 // limitsConfig maps server.limits to the data-plane limiter's Config (ADR-0112, ADR-0164).

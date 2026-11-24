@@ -50,6 +50,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
 	"github.com/pyvvo/funcd/internal/dataplane"
+	"github.com/pyvvo/funcd/internal/edge"
 	"github.com/pyvvo/funcd/internal/edge/authn"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/observ"
@@ -247,6 +248,8 @@ type config struct {
 	edgePublicScheme string
 	edgePublicPort   int
 	oidcBackChannel  http.RoundTripper
+	// proxies are server.trustedProxies, which name each request's client address (ADR-0354).
+	proxies edge.Proxies
 
 	// edge observability (ADR-0114, F76) + shaping (F78): RED metrics/trace/access-log; CORS/headers/
 	// compression. Zero values are pass-throughs (off by default).
@@ -554,6 +557,7 @@ type Platform struct {
 
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
 	dataPlaneListener net.Listener
+	bridgeListen      netip.AddrPort // the edge's own listener on the bridge address (ADR-0353 Decision 1); invalid ⇒ none
 	dataPlaneAddr     string
 
 	workflowRuns      runstate.Store          // durable workflow run state (ADR-0094); closed on shutdown
@@ -1194,6 +1198,8 @@ func (p *Platform) buildControlPlane() error {
 			// ADR-0074 Policy validity: spec.cedar parses + references only the actions and entity types of the
 			// registered capabilities (ADR-0116) — so every stored Policy compiles.
 			admission.NewPolicyValidityAdmission(),
+			// ADR-0352 Decision 1: an EgressPolicy item of an add-on kind names a kind an Addon registers for engines.
+			admission.NewEgressAppliesToAdmission(r),
 			// ADR-0248 Decision 2: a binding names what its root declares; a Function's own stores default their
 			// owner to it and its config bindings name the stored ConfigMaps.
 			admission.NewBindingDeclaredAdmission(r),
@@ -1303,14 +1309,18 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0114 (F76/F78): observability wraps outer-than-limit (times the whole hop incl. rejects) but
 	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). The write stall
 	// bound is outermost, so every byte of every listener response passes it. Runtime order:
-	// WriteStall → Recover → RequestID → observ → limit → shape → dataplane.Handler.
-	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, c.baseDomain, edgeEnforcer, targetLimiter, staticHandler,
-		c.invokeDefaultTimeout, p.logger, dataplane.WithCallGate(c.callGate()), dataplane.WithChain(callChain),
+	// WriteStall → Recover → RequestID → client address (ADR-0354) → observ → limit → shape → dataplane.Handler.
+	dpOpts := []dataplane.Option{dataplane.WithCallGate(c.callGate()), dataplane.WithChain(callChain),
 		dataplane.WithOIDC(oidc.New(oidc.Deps{Store: c.store, CallbackURL: p.callbacks().URL, HTTPS: p.callbacks().HTTPS(),
-			BackChannel: c.oidcBackChannel, Addons: storedAddons{c.store}, Logger: p.logger})))
+			BackChannel: c.oidcBackChannel, Addons: storedAddons{c.store}, Logger: p.logger}))}
+	if bridge, ok := p.bridgeEdge(); ok { // ADR-0353: a caller on the bridge address gets only its namespace
+		dpOpts = append(dpOpts, dataplane.WithBridgeCallers(bridge, p.exec.egressSources))
+	}
+	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, c.baseDomain, edgeEnforcer, targetLimiter, staticHandler,
+		c.invokeDefaultTimeout, p.logger, dpOpts...)
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
 	dpHandler := gateway.Chain(dpCore, gateway.WriteStall(gateway.WriteStallTimeout), gateway.Recover(p.logger),
-		gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
+		gateway.RequestID, p.clientAddress, edgeObserv, limit.Chain(c.limits), edgeShape)
 	// Late-bind the worker-node local API invoker (ADR-0064) to the same chain minus the ingress
 	// limiter and edge observ: ADR-0112 guards the listener, so a nested fn-to-fn invoke never takes its
 	// caller's in-flight slot or rate token (#87); edge signals describe only listener requests, so an
@@ -1327,6 +1337,9 @@ func (p *Platform) buildControlPlane() error {
 	}
 	p.dataPlaneListener = dln
 	p.dataPlaneAddr = dln.Addr().String()
+	if tcp, ok := dln.Addr().(*net.TCPAddr); ok {
+		p.edgeOnTheBridge(tcp.AddrPort())
+	}
 
 	return nil
 }
@@ -1385,6 +1398,7 @@ func (p *Platform) WaitS3Gateway(ctx context.Context) error {
 func (p *Platform) Run(ctx context.Context) error {
 	p.logger.InfoContext(ctx, "platform starting", "addr", p.addr, "dataPlaneAddr", p.dataPlaneAddr)
 	p.logProviders(ctx)
+	p.warnUnmatchedKinds()
 
 	ctx, cancelLoops := context.WithCancel(ctx)
 	defer cancelLoops()
@@ -1517,6 +1531,9 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.logger.ErrorContext(ctx, "data-plane server stopped", "error", err)
 		}
 	}()
+	if p.bridgeListen.IsValid() {
+		go p.serveBridge(ctx, serve)
+	}
 
 	<-ctx.Done()
 
@@ -1942,6 +1959,10 @@ type storeDomainRules struct{ s store.Store }
 
 func (r storeDomainRules) For(ctx context.Context, principal auth.EntityRef) ([]string, error) {
 	const op = "funcd.storeDomainRules.For"
+	kind, err := addonKindOf(ctx, r.s, principal)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "read the add-on object")
+	}
 	res, err := r.s.List(ctx, v1.KindEgressPolicy.GVK(), store.ListOptions{Namespace: principal.Namespace})
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list egress policies")
@@ -1949,10 +1970,30 @@ func (r storeDomainRules) For(ctx context.Context, principal auth.EntityRef) ([]
 	var out []string
 	for _, o := range res.Items {
 		if ep, ok := o.(*v1.EgressPolicy); ok {
-			out = append(out, cedarauth.EgressDomains(ep, principal)...)
+			out = append(out, cedarauth.EgressDomains(ep, principal, kind)...)
 		}
 	}
 	return out, nil
+}
+
+// addonKindOf is the kind of the stored add-on object that principal names, as an EgressPolicy item names it (ADR-0352
+// Decision 4): "" for another principal, or for an object no longer stored.
+func addonKindOf(ctx context.Context, st store.Store, principal auth.EntityRef) (string, error) {
+	if principal.Type != v1.KindAddonObject {
+		return "", nil
+	}
+	obj, err := st.Get(ctx, v1.KindAddonObject.GVK(), principal.Namespace, principal.Name)
+	if fault.KindOf(err) == fault.NotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	o, _ := obj.(*v1.AddonObject)
+	if o == nil {
+		return "", nil
+	}
+	return o.Spec.Kind, nil
 }
 
 // egressAuditSink records each egress decision (ADR-0117): every connection (allowed + blocked) is

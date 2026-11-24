@@ -1,7 +1,6 @@
 package v1alpha1
 
 import (
-	"fmt"
 	"net/netip"
 	"strings"
 
@@ -54,13 +53,30 @@ type EgressPolicy struct {
 	Spec       EgressPolicySpec `json:"spec"`
 }
 
-// EgressPolicySpec is an allow-list of egress rules, optionally scoped to named Functions.
+// EgressPolicySpec is an allow-list of egress rules, optionally scoped to named workloads.
 type EgressPolicySpec struct {
 	// Rules is the allow-list; each grants egress to its `to` on its `ports`. At least one required.
 	Rules []EgressRule `json:"rules" doc:"One to 64 rules, each allowing outbound TCP connections; the rules of every EgressPolicy of the namespace add up. With server.network.egress on, on Linux with containerd, a connection that nothing allows is refused; otherwise the rules change nothing."`
-	// AppliesTo scopes every rule to these Functions and Jobs of the namespace, each named with its kind (ADR-0351
-	// Decision 6); empty ⇒ every Function of the namespace, and no Job.
-	AppliesTo []WorkloadRef `json:"appliesTo,omitempty" doc:"The Functions and Jobs of the namespace that the rules apply to, each named with its kind; empty applies them to every Function of the namespace and to no Job."`
+	// AppliesTo scopes every rule to these workloads of the namespace, each named with its kind: a Function, a Job
+	// (ADR-0351 Decision 6) or an add-on object, whose engine the rules then let out (ADR-0352 Decision 1); empty ⇒ every
+	// Function of the namespace, and no Job or engine.
+	AppliesTo []AppliesToRef `json:"appliesTo,omitempty" doc:"The workloads of the namespace that the rules apply to, each named with its kind: a Function, a Job, or an object of an add-on kind whose objects run an engine, spelled as its Addon spells it, whose engine the rules then let out. Empty applies them to every Function of the namespace, and to no Job or engine."`
+}
+
+// AppliesToRef names a workload of the policy's namespace by its kind and its name (ADR-0352 Decision 1), as a
+// WorkloadRef does, with a kind that is a kind name and no enum: Function, Job, or an add-on's kind, which the API
+// spec names none of (ADR-0332).
+type AppliesToRef struct {
+	Kind string     `json:"kind" pattern:"^[A-Z][A-Za-z0-9]{1,62}$" doc:"The workload's kind: Function, Job, or the kind of an add-on whose objects run an engine, as its Addon spells it."`
+	Name ObjectName `json:"name" doc:"The workload's name, in the policy's namespace. It need not exist yet."`
+}
+
+// IsZero reports whether no workload is named.
+func (r AppliesToRef) IsZero() bool { return r == AppliesToRef{} }
+
+// IsAddon reports whether the item names an add-on object: its kind is neither Function nor Job.
+func (r AppliesToRef) IsAddon() bool {
+	return r.Kind != string(KindFunction) && r.Kind != string(KindJob)
 }
 
 // EgressRule permits egress to a destination set on a port set.
@@ -122,11 +138,13 @@ func (ep *EgressPolicy) Validate() error {
 		}
 	}
 	for i, ref := range ep.Spec.AppliesTo {
-		if ref.IsZero() {
+		switch {
+		case ref.IsZero():
 			return fault.Invalidf(op, "spec.appliesTo[%d] names no workload", i)
-		}
-		if err := ref.validate(op, fmt.Sprintf("spec.appliesTo[%d]", i), KindFunction, KindJob); err != nil {
-			return err
+		case ref.IsAddon() && !IsAddonKind(ref.Kind):
+			return fault.Invalidf(op, "spec.appliesTo[%d].kind: kind %q is not Function, Job or an add-on's kind", i, ref.Kind)
+		case !dnsLabel.MatchString(string(ref.Name)):
+			return fault.Invalidf(op, "spec.appliesTo[%d].name: name %q is not a valid DNS-1123 label", i, ref.Name)
 		}
 	}
 	return nil

@@ -16,8 +16,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/edge"
 	"github.com/pyvvo/funcd/internal/edge/authn"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/observ"
@@ -32,6 +35,7 @@ import (
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/edge/static"
 	"github.com/pyvvo/funcd/internal/invoke"
+	"github.com/pyvvo/funcd/internal/network/egress"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/platform/pathx"
@@ -75,6 +79,10 @@ type Server struct {
 	chain *invoke.Chain
 	// signIn is the edge's sign-in (ADR-0335); nil answers 503 to an oidc stance and 404 under /.auth/.
 	signIn OIDCGate
+	// bridge is funcd's address on the container bridge, where callers names each caller by its source address
+	// (ADR-0353 Decision 3); with callers nil no request is pinned.
+	bridge  netip.Addr
+	callers egress.WorkerIndex
 }
 
 // OIDCGate is the edge's sign-in (ADR-0335): Serve answers a call on an oidc stance, or returns true for it to go on
@@ -92,6 +100,13 @@ type Option func(*Server)
 
 // WithCallGate makes the data plane refuse calls into a namespace that g holds (ADR-0290).
 func WithCallGate(g hold.CallGate) Option { return func(s *Server) { s.held = g } }
+
+// WithBridgeCallers makes the data plane serve a request whose local address is bridge, funcd's address on the container
+// bridge, only what it resolves to its caller's namespace; the caller is the principal callers names for the request's
+// source address, and a source it does not name gets 403 (ADR-0353 Decisions 3 and 4).
+func WithBridgeCallers(bridge netip.Addr, callers egress.WorkerIndex) Option {
+	return func(s *Server) { s.bridge, s.callers = bridge.Unmap(), callers }
+}
 
 // WithChain makes the data plane run ch on every function call (ADR-0302). Without it, Handler builds the built-in
 // chain from its own arguments.
@@ -136,11 +151,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	internal := isInternal(r.Context())
 	// ADR-0335 Decision 8: only the edge's sign-in sets the principal headers, on every way in.
 	oidc.Strip(r.Header)
+	pinned, ok := s.pin(w, r, internal)
+	if !ok {
+		return
+	}
 	// ADR-0335 Decision 3: /.auth/ is funcd's on every host, answered before the Route match.
 	if !internal && v1.UnderAuthPath(r.URL.Path) {
 		if s.signIn == nil {
 			fault.WriteProblem(w, fault.NotFoundf(op, "no route for %q", r.URL.Path))
 			return
+		}
+		if pinned != "" {
+			r = r.WithContext(oidc.WithCallerNamespace(r.Context(), pinned))
 		}
 		s.signIn.Auth(w, r)
 		return
@@ -156,6 +178,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Front door: try the Route matcher first (both exposure modes) — public requests only.
 	if s.router != nil && !internal {
 		if m, ok := s.router.Resolve(r.Host, r.URL.Path, r.Method); ok && (hostNS == "" || m.Namespace == hostNS && router.IsFunctionPath(m.Path)) {
+			if pinned != "" && m.Namespace != pinned {
+				fault.WriteProblem(w, outside())
+				return
+			}
 			if m.Refused != "" {
 				// ADR-0335 Decision 10: a refused oidc entry keeps its claims and fails closed.
 				fault.WriteProblem(w, fault.Unavailablef(op, "the route of this path cannot sign callers in: %s", m.Refused))
@@ -203,11 +229,62 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ns == "" {
 		ns = "default"
 	}
+	if pinned != "" && ns != pinned {
+		fault.WriteProblem(w, outside())
+		return
+	}
 	if internal {
 		s.serveFunction(w, r, ns, v1.ObjectName(name), rest, "", true, received, op, nil)
 		return
 	}
 	s.serveByName(w, r, ns, v1.ObjectName(name), rest, hostNS == "" && ns != "default", received, op)
+}
+
+// asClient makes r come from its client address, which a trusted proxy may have named (ADR-0354 Decisions 2 and 4): the
+// reverse proxy to a worker or an upstream entry writes X-Forwarded-For from RemoteAddr, so the backend gets the client
+// address alone, and the caller's own forwarding headers are dropped before it.
+func asClient(r *http.Request) {
+	client := edge.ClientOf(r)
+	if !client.IsValid() {
+		return
+	}
+	_, port, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		port = "0"
+	}
+	r.RemoteAddr = net.JoinHostPort(client.String(), port)
+}
+
+// outside refuses a pinned caller a request of another namespace, naming none (ADR-0353 Decision 4).
+func outside() error { return fault.Forbiddenf("dataplane.pin", "outside the caller's namespace") }
+
+// pin is the namespace that a request on the bridge address is served in, its caller's (ADR-0353 Decisions 3 and 4), and
+// "" for any other request. It answers 403 and returns false for a caller that callers does not name, and for one whose
+// X-Funcd-Namespace names another namespace, on any host.
+func (s *Server) pin(w http.ResponseWriter, r *http.Request, internal bool) (v1.NamespaceName, bool) {
+	if local := localAddr(r); internal || s.callers == nil || !local.IsValid() || local != s.bridge {
+		return "", true
+	}
+	src, err := netip.ParseAddrPort(r.RemoteAddr)
+	ref, known := s.callers.Lookup(src.Addr().Unmap())
+	if err != nil || !known {
+		fault.WriteProblem(w, fault.Forbiddenf("dataplane.pin", "the caller on funcd's bridge address is no workload funcd knows"))
+		return "", false
+	}
+	if h := r.Header.Values(namespaceHeader); len(h) > 0 && (len(h) != 1 || v1.NamespaceName(h[0]) != ref.Namespace) {
+		fault.WriteProblem(w, outside())
+		return "", false
+	}
+	return ref.Namespace, true
+}
+
+// localAddr is the address the request came in on; invalid when the listener set none.
+func localAddr(r *http.Request) netip.Addr {
+	a, _ := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr)
+	if a == nil {
+		return netip.Addr{}
+	}
+	return a.AddrPort().Addr().Unmap()
 }
 
 // serveByName serves a public call at a Function's default address (ADR-0241 Decision 4). It reads the Function
@@ -317,6 +394,12 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	out := c.Request
 	out.URL.Path = remainder
 	oidc.DropCookies(out) // funcd's sign-in cookies reach no backend (ADR-0335 Decision 8)
+	if !internal {
+		for _, name := range [...]string{"X-Forwarded-For", "Forwarded", "X-Real-IP"} {
+			out.Header.Del(name)
+		}
+		asClient(out)
+	}
 	out = activator.WithFunction(out, c.Target)
 	out = activator.WithAnswerCheck(out, func(res *http.Response) error {
 		if rf := s.chain.After(r.Context(), c, invoke.NewAnswer(res)); rf != nil {
@@ -412,10 +495,11 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	}
 	oidc.DropCookies(r) // funcd's sign-in cookies reach no backend (ADR-0335 Decision 8)
 	// An upstream that trusts funcd as its proxy reads the caller's address from these headers, and funcd honors no
-	// caller's own (ADR-0112): the proxy then sets X-Forwarded-For to the address funcd sees.
+	// caller's own: the proxy then sets X-Forwarded-For to the client address (ADR-0354 Decision 4).
 	for _, name := range [...]string{"X-Forwarded-For", "Forwarded", "X-Real-IP", "X-Forwarded-Host", "X-Forwarded-Proto"} {
 		r.Header.Del(name)
 	}
+	asClient(r)
 	// No edge PEP runs here, so the refusal says what an engine that is down says and names no hold (ADR-0290).
 	if _, held := s.held.NamespaceMarker(m.Namespace); held {
 		refuseHeld(w, fault.Unavailablef(op, "edge upstream unavailable"))

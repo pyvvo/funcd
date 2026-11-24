@@ -42,9 +42,29 @@ unless `kvstore.engine` is `badger`.
 [`examples/funcdconfig.yaml`](https://github.com/pyvvo/funcd/blob/main/examples/funcdconfig.yaml) shows every key
 with its default, and the [Spec](spec.md) tab lists each one with its type, limits and variable.
 
+Behind a proxy or a tunnel, `server.trustedProxies` names the hops whose word the edge takes for a request's client
+address, which the rate limit's `clientIP` key, the access log and the `X-Forwarded-For` a backend gets use. This entry
+trusts the engines of a tunnel add-on of kind `Tunnel`, which set `X-Real-IP` to the visitor, and this one a CDN's range,
+whose `X-Forwarded-For` the edge walks from the right:
+
+```yaml
+server:
+  trustedProxies:
+    - addonKinds:
+        - Tunnel
+      header: X-Real-IP
+    - cidrs:
+        - 203.0.113.0/24
+```
+
+The first entry that matches the connection's peer decides, and with none the peer is the client. A backend gets the
+client address alone in `X-Forwarded-For`, and none of the caller's own `X-Forwarded-For`, `Forwarded` or `X-Real-IP`.
+No header sets the edge's scheme or host.
+
 ## Keys from the environment
 
-Every key but `apiVersion`, `kind` and `auth.credentials` also has a variable, which the Spec tab names beside it:
+Every key but `apiVersion`, `kind`, `auth.credentials` and `server.trustedProxies` also has a variable, which the Spec
+tab names beside it:
 `FUNCD_LISTEN_ADDR` sets `server.listenAddr`, for example. A variable that is set wins over the file, and a flag wins
 over both:
 
