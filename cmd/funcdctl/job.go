@@ -165,8 +165,18 @@ func (a *cli) jobDescribeCmd() *cobra.Command {
 // termSafe.
 func (a *cli) renderJobRunDescribe(run *v1.JobRun) error {
 	lines := []string{"RUN " + string(run.Name) + "   job: " + string(run.Spec.Job) + "   phase: " + string(run.Status.Phase)}
-	if c, ok := run.Status.Conditions.Get("Ready"); ok && (c.Reason != "" || c.Message != "") {
-		lines = append(lines, "reason: "+termSafe(c.Reason)+"   message: "+termSafe(c.Message))
+	if c, ok := run.Status.Conditions.Get("Ready"); ok {
+		// each label only with its value, as a WorkflowRun's describe prints them (ADR-0347 Decision 10)
+		var why []string
+		if c.Reason != "" {
+			why = append(why, "reason: "+termSafe(c.Reason))
+		}
+		if c.Message != "" {
+			why = append(why, "message: "+termSafe(c.Message))
+		}
+		if len(why) > 0 {
+			lines = append(lines, strings.Join(why, "   "))
+		}
 	}
 	if run.Status.JobRevision != "" {
 		lines = append(lines, "revision: "+string(run.Status.JobRevision)+"   digest: "+run.Status.ImageDigest)

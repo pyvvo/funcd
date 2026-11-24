@@ -266,3 +266,28 @@ func TestCLIJobApproveAndReject(t *testing.T) {
 	require.ErrorContains(t, execCLI(&buf, c, "job", "reject", "tofu-a", "-n", "team-a", "--reason", strings.Repeat("x", 513)),
 		"more than 512")
 }
+
+// A run's describe prints the Ready condition's reason and message each only when it is set, as a WorkflowRun's
+// describe does: a run that waits for its approval has a message and no reason (ADR-0347 Decision 10).
+func TestJobRunDescribeLabelsOnlyWhatIsSet(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, reason, message, want string
+	}{
+		{"message only", "", "the run waits for a person", "\nmessage: the run waits for a person\n"},
+		{"reason only", "Queued", "", "\nreason: Queued\n"},
+		{"both", "Cancelled", "spec.cancel", "\nreason: Cancelled   message: spec.cancel\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			run := &v1.JobRun{ObjectMeta: v1.ObjectMeta{Name: "r1"}, Spec: v1.JobRunSpec{Job: "j"}}
+			run.Status.Phase = v1.JobRunAwaitingApproval
+			run.Status.Conditions = v1.Conditions{{Type: "Ready", Status: v1.ConditionFalse, Reason: tc.reason, Message: tc.message}}
+			var out bytes.Buffer
+			require.NoError(t, (&cli{out: &out}).renderJobRunDescribe(run))
+			require.Contains(t, out.String(), tc.want)
+			require.NotContains(t, out.String(), "reason:   ")
+			require.NotContains(t, out.String(), "message: \n")
+		})
+	}
+}
