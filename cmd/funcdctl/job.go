@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -312,15 +313,14 @@ func (a *cli) confirmPreview(cmd *cobra.Command, c *sdk.Client, ns v1.NamespaceN
 }
 
 // answerSource is where approve reads a person's answer: stdin when it is a terminal, or a reader a test set; none for
-// a pipe or a file.
+// a pipe, a file or /dev/null.
 func answerSource(cmd *cobra.Command) (io.Reader, bool) {
 	in := cmd.InOrStdin()
 	f, isFile := in.(*os.File)
 	if !isFile {
 		return in, true
 	}
-	st, err := f.Stat()
-	if err != nil || st.Mode()&os.ModeCharDevice == 0 {
+	if !isatty.IsTerminal(f.Fd()) && !isatty.IsCygwinTerminal(f.Fd()) {
 		return nil, false
 	}
 	return f, true

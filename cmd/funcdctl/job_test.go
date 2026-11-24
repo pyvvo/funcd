@@ -218,6 +218,11 @@ func TestCLIJobApproveAndReject(t *testing.T) {
 	t.Cleanup(func() { _ = pr.Close(); _ = pw.Close() })
 	_, err = approve(pr, "tofu-a")
 	require.ErrorContains(t, err, "--digest "+d2, "a pipe is no terminal to confirm on")
+	null, err := os.Open(os.DevNull)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = null.Close() })
+	_, err = approve(null, "tofu-a")
+	require.ErrorContains(t, err, "--digest "+d2, "/dev/null is a character device, and no terminal")
 
 	out, err = approve(strings.NewReader("y\n"), "tofu-a")
 	require.NoError(t, err)

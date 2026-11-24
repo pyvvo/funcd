@@ -37,6 +37,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.6
 	github.com/gofrs/flock v0.13.2
 	github.com/google/nftables v0.3.0
+	github.com/mattn/go-isatty v0.0.24
 	github.com/miekg/dns v1.1.73
 	github.com/moby/sys/mountinfo v0.7.3
 	github.com/nats-io/nats-server/v2 v2.15.3
@@ -294,7 +295,6 @@ require (
 	github.com/maratori/testpackage v1.1.2 // indirect
 	github.com/matoous/godox v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.16 // indirect
-	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.31 // indirect
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
 	github.com/mdlayher/socket v0.6.0 // indirect

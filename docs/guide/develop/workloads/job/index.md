@@ -34,7 +34,8 @@ day of the month. Its contract takes `month` alone, and a Job whose artifact car
 directory, which the server on the same machine reads; replace the Job's `image` with the reference that it prints.
 The manifest's `resourceGroup` names the [resource group](../../../platform/tenancy-and-limits/namespaces.md) of the
 Job within its namespace, [`timeout`](spec.md#jobspec) bounds each run's call, and [`concurrency`](spec.md#jobspec)
-lets two runs of the Job hold a worker at once.
+lets two runs of the Job hold a worker at once. [`approval.bypass`](spec.md#jobspecapproval) makes each run run at once;
+a Job without it previews each run and waits for a person's approval, as [Approve a run](approval.md) shows.
 
 After the apply, repeat `get` until `status.phase` is `Ready`. [`funcdctl job run`](../../tools/funcdctl/spec.md#funcdctl-job-run)
 starts a run and prints its name; without a name, funcd names the run after its Job with a suffix. Repeat
@@ -235,9 +236,9 @@ creates and changes both, and a viewer only reads them.
 - [`job.maxRunning`](../../running-funcd/spec.md#funcdconfigyaml): the runs of all Jobs that hold a worker at once on
   the node, 4 by default. A run past it, or past its Job's `concurrency`, waits in `Pending` with `Queued`, and a free
   slot goes to the oldest waiting run whose Job is below its own `concurrency`.
-- [`job.payloadLimit`](../../running-funcd/spec.md#funcdconfigyaml): 262144 bytes by default for an input and for a
-  result. A larger input is refused with 413 when the run is created; a larger result ends the run `Failed` with
-  `PayloadLimitExceeded`.
+- [`job.payloadLimit`](../../running-funcd/spec.md#funcdconfigyaml): 262144 bytes by default for an input, a preview and
+  a result. A larger input is refused with 413 when the run is created; a larger preview or result ends the run `Failed`
+  with `PayloadLimitExceeded`.
 - [`job.retention`](../../running-funcd/spec.md#funcdconfigyaml): funcd deletes a run 720h after it ends, by default.
 
 ## Status
@@ -249,17 +250,19 @@ creates and changes both, and a viewer only reads them.
 | `Pending` | `JobNotFound` | The Job does not exist yet. |
 | `Pending` | `JobNotReady` | The Job is not Ready at its latest spec. |
 | `Pending` | `Queued` | The Job's `concurrency` or the node's `job.maxRunning` is reached. |
+| `Previewing`, `AwaitingApproval` | | The run of a Job without `approval.bypass` previews, then waits for a person: [Approve a run](approval.md#status). |
 | `Running` | | The run's worker runs the handler. |
 | `Succeeded` | | The handler answered; `result` holds its answer. |
 | `Failed` | `StartFailed` | The run's worker could not be created or started, ended before it was ready, was not ready within `runtime.bootTimeout`, or a worker of the run's name still remained that long; the message says which. When the worker's last readiness answer named a binding whose check failed, the message names that binding too. |
 | `Failed` | `InputSchemaMismatch` | The input does not match the contract of the Revision that the run pinned, or the handler refused it with 422. |
 | `Failed` | `HandlerFailed` | The handler failed or its answer was not JSON; the message holds the first line of the cause. |
-| `Failed` | `PayloadLimitExceeded` | The result is larger than `job.payloadLimit`. |
+| `Failed` | `PayloadLimitExceeded` | The preview or the result is larger than `job.payloadLimit`. |
 | `Failed` | `RunTimedOut` | The call ran past the Job's `timeout`, and the worker was stopped. |
 | `Failed` | `Interrupted` | funcd stopped while the run was running; the run does not run again. |
 | `Cancelled` | `Cancelled` | The run was cancelled. |
 | `Cancelled` | `JobDeleted` | The Job was deleted or created again, or the Revision that the run pinned is gone. |
 | `Cancelled` | `Restored` | A restore of the platform ended the run: the backup cannot say whether it ran since. |
+| `Rejected` | `Rejected` | A person rejected the run before it ran: [Reject a run](approval.md#reject-a-run). |
 
 The Job itself is Ready once funcd has checked it as it checks a Function before its first worker. `funcdctl get job
 <job> -n <namespace> -o json` shows its `Ready` condition, with a Function's reasons, such as `ContractMissing` when the
