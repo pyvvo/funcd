@@ -34,9 +34,9 @@ This page lists the spec and status fields of Addon, AddonObject and AddonRevisi
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `basePath` | string | The path under which the edge serves an object's engine, which the engine gets as it was called. It begins with /, does not end with / unless it is /, and holds no empty, . or .. segment. Empty is /. |
-| `config` | any JSON value | The JSON Schema of the objects' spec.config, within funcd's contract profile: closed objects, and no $ref. funcd refuses an object whose config breaks it; an object stored before a change that its config breaks waits in Pending with ConfigInvalid, with no engine. |
+| `config` | any JSON value | An Engine entry's JSON Schema of the objects' spec.config, within funcd's contract profile: closed objects, and no $ref. funcd refuses an object whose config breaks it; an object stored before a change that its config breaks waits in Pending with ConfigInvalid, with no engine. An Engineless entry sets none: its Function's contract describes its objects. |
 | `env` | map of string to string | The engine's environment. Each value is a literal, or a single $&#123;&#123; &#125;&#125; expression over config, such as $&#123;&#123; config.issuer &#125;&#125;, which funcd checks against the config schema when the Addon is applied. A value that is not a string reaches the engine as its JSON; one that fails holds the object in Pending with EnvInvalid. |
-| `function` | object, [`Addon.spec.runtimes[].attributes.function`](#addonspecruntimesattributesfunction) | An Engineless entry's Function, which reconciles the objects of its kind: a Function of each object's namespace, named as a settings kind's is, which funcd calls with the list of objects it reconciles. An object may name its own in spec.functions. |
+| `function` | object, [`Addon.spec.runtimes[].attributes.function`](#addonspecruntimesattributesfunction) | An Engineless entry's Function, which reconciles the objects of its kind and which funcd calls with their list: an image, from which funcd creates one Function for each object, or an existing Function of each object's namespace. An object may name its own in spec.functions. |
 | `kind` | string, matching `^[A-Z][A-Za-z0-9]{1,62}$` | The namespaced kind that the entry runs: an upper-case letter, then 1 to 62 letters or digits. Its objects are served at /apis/funcd.io/v1alpha1/namespaces/&lt;namespace&gt;/&lt;plural&gt;, where the plural is the kind in lower case with an s. funcd refuses a kind that is its own, or whose plural is a path funcd serves or another Addon's plural, whatever the case. An Addon gains its kind once: it cannot change or go. |
 | `port` | integer, 1 to 65535 | The port that the engine serves on, in its own network namespace; an Engine entry requires it. Only funcd reaches it. |
 | `privatePaths` | array of string values | Paths under basePath that the edge answers with 404, however a caller spells them; funcd reaches them at the engine's own address. Each has basePath's form and lies under it. |
@@ -52,7 +52,8 @@ This page lists the spec and status fields of Addon, AddonObject and AddonRevisi
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `ref` | string, required, a DNS-1123 label | The name of an existing Function in the target's namespace, which funcd calls with each target's objects. funcd does not create or change it, and the objects wait while it is missing. |
+| `image` | string | A Function's artifact, pinned by digest, from a registry that addons.registries lists. funcd creates the Function from it and puts back what differs: it runs the export handle, has no address of its own, and binds the object that runs an engine, the object's Secrets and an engineless object's Jobs. The artifact's contract describes the objects, and funcd refuses one whose config breaks it. Set either image or ref. |
+| `ref` | string, a DNS-1123 label | The name of an existing Function in the object's namespace. funcd does not create or change it, and the objects wait while it is missing. Their config has no schema, and the kind takes no rules. Set either image or ref. |
 
 ### `Addon.spec.runtimes[].attributes.readiness`
 
@@ -72,12 +73,11 @@ This page lists the spec and status fields of Addon, AddonObject and AddonRevisi
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `constraints` | object, [`Addon.spec.runtimes[].attributes.settings[].constraints`](#addonspecruntimesattributessettingsconstraints) | What an object must keep at admission, beside its schema. |
-| `function` | object, [`Addon.spec.runtimes[].attributes.function`](#addonspecruntimesattributesfunction), required | The Function that applies a target's objects, named as a Workflow step names its Function. A target may name its own in its spec.functions. |
+| `constraints` | object, [`Addon.spec.runtimes[].attributes.settings[].constraints`](#addonspecruntimesattributessettingsconstraints) | What an object must keep at admission, beside its schema, which is its Function's contract. |
+| `function` | object, [`Addon.spec.runtimes[].attributes.function`](#addonspecruntimesattributesfunction), required | The Function that applies a target's objects: an image, from which funcd creates one Function for each target that an object of the kind names, or an existing Function of the target's namespace. A target may name its own in its spec.functions. |
 | `kind` | string, required | The settings kind, a kind name as the Addon's kind is, served at its plural. |
 | `resync` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How often funcd sends a target's objects again with no change, from 1s to 24h; unset is 10m. |
-| `schema` | any JSON value, required | The JSON Schema of the objects' spec.config, within funcd's contract profile. It must require the target field at each level. |
-| `target` | string, required | The string field under spec.config that names the object's target, such as spec.config.provider. |
+| `target` | string, required | The string field under spec.config that names the object's target, such as spec.config.provider. A replace of the Addon cannot change it. |
 
 ### `Addon.spec.runtimes[].attributes.settings[].constraints`
 
@@ -137,10 +137,10 @@ This page lists the spec and status fields of Addon, AddonObject and AddonRevisi
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`AddonObject.spec.bindings`](#addonobjectspecbindings) | What the object's engine uses. An object of a settings or an engineless kind, which runs no engine, takes none. |
-| `config` | any JSON value | The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object. |
+| `bindings` | object, [`AddonObject.spec.bindings`](#addonobjectspecbindings) | What the object's engine uses, and what the Functions that funcd creates for the object from its kinds' images use. An object of a settings kind takes none, nor does one of an engineless kind whose Function is a ref. |
+| `config` | any JSON value | The object's settings, which its kind's schema checks: the config schema of its Addon's kind entry when the object runs an engine, else the contract of the kind's Function. Unset is an empty object. |
 | `deletion` | string, one of `retain`, `delete` | What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it. |
-| `functions` | array of [`AddonObject.spec.functions[]`](#addonobjectspecfunctions) | The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none. |
+| `functions` | array of [`AddonObject.spec.functions[]`](#addonobjectspecfunctions) | The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function, so each copy of an App template applies its own objects. The objects it applies have no schema. A settings object names none. |
 | `ingress` | object, [`AddonObject.spec.ingress`](#addonobjectspecingress) | Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused. An object of a settings or an engineless kind takes none. |
 | `kind` | string | The add-on's kind, which funcd sets from the path the object is written at. |
 | `resources` | object, [`AddonObject.spec.resources`](#addonobjectspecresources) | The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine. An object of a settings or an engineless kind takes none. |
@@ -149,7 +149,15 @@ This page lists the spec and status fields of Addon, AddonObject and AddonRevisi
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `secret` | array of string values, each a DNS-1123 label | Secrets of the namespace whose keys, those that its Addon's kind entry lists in secretKeys, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine. |
+| `job` | array of [`AddonObject.spec.bindings.job[]`](#addonobjectspecbindingsjob) | The Jobs whose runs the Function that funcd creates for an engineless object starts and reads, by their alias. Only an object of an engineless kind whose function is an image takes them. |
+| `secret` | array of string values, each a DNS-1123 label | Secrets of the namespace whose keys, those that its Addon's kind entry lists in secretKeys, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine. The Functions that funcd creates for the object read every key of them. |
+
+### `AddonObject.spec.bindings.job[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `alias` | string, required, a DNS-1123 label | The name that the code passes to ctx.job.start and ctx.job.get. Unique in the list. |
+| `job` | string, required, a DNS-1123 label | A Job of the Function's namespace. While the Job is missing, a start on its alias answers 404, and a read still answers each run that a deleted Job left, until job.retention removes it. |
 
 ### `AddonObject.spec.functions[]`
 
@@ -216,6 +224,28 @@ This page lists the spec and status fields of Addon, AddonObject and AddonRevisi
 | `addon` | string, required, a DNS-1123 label | The Addon this revision belongs to. |
 | `number` | integer, required, at least 1 | The Addon's generation when funcd stamped this revision. Numbers may skip: funcd stamps the generation it reads. |
 | `spec` | object, [`Addon.spec`](#addonspec), required | The Addon's spec at that generation. It never changes: an object that pins this revision runs its engine from it. |
+
+### `AddonRevision.status`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `contracts` | array of [`AddonRevision.status.contracts[]`](#addonrevisionstatuscontracts) | The contract and the runtime of each kind whose function is an image, once funcd has read them from the registry. |
+
+### `AddonRevision.status.contracts[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `contract` | object, [`AddonRevision.status.contracts[].contract`](#addonrevisionstatuscontractscontract), required | The image's contract. What it says of one object's config is the kind's schema. |
+| `kind` | string, required | The kind whose function is the image. |
+| `runtime` | string, required, a DNS-1123 label | The runtime that the image declares, on which the kind's Functions run. |
+
+### `AddonRevision.status.contracts[].contract`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `dialect` | string | The URI of the JSON Schema dialect that input and output follow. funcd checks nothing against it. |
+| `input` | any JSON value | The JSON Schema of the input. A declared one must be an object, and each property it does not require must declare a default. |
+| `output` | any JSON value | The JSON Schema of the output. A declared one must be an object, and each property it does not require must declare a default. |
 
 ## Handler API
 

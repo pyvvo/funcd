@@ -362,6 +362,8 @@ type config struct {
 	addonCallPayload int64
 	// addonSettingsTimeout bounds a settings Function's call (WithAddonSettingsTimeout, ADR-0341); 0 ⇒ 30 s.
 	addonSettingsTimeout time.Duration
+	// addonImages reads the images of the add-ons' kinds (WithAddonImages, ADR-0358 Decision 4); nil ⇒ the registries.
+	addonImages addonsvc.ImageReader
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
 	sqlCallTimeout time.Duration
 	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075 with a

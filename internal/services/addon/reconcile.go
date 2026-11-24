@@ -66,10 +66,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if a == nil {
 		return r.hold(ctx, o, reasonAddonNotFound, fmt.Sprintf("no Addon registers the kind %q", o.Spec.Kind), 0)
 	}
-	// The engine runs the revision the object pins, never the Addon's spec of the pass (ADR-0339 Decision 2); the
-	// settings step reads the Addon as it is now (ADR-0341 Decision 1).
+	// The engine runs the revision the object pins, never the Addon's spec of the pass (ADR-0339 Decision 2), and so do
+	// its settings kinds, while the Addon declares them (ADR-0358 Decision 5).
 	current := a
-	a, ph, err := r.pinned(ctx, a, o)
+	a, rev, ph, err := r.pinned(ctx, a, o)
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -154,7 +154,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	case !st.Ready:
 		return controller.Result{RequeueAfter: r.enginePoll}, nil
 	}
-	next, err := r.syncSettings(ctx, current, o)
+	next, err := r.syncSettings(ctx, current, rev, o)
 	if err != nil {
 		return controller.Result{}, err
 	}

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,17 +27,19 @@ const (
 	condApplied = v1.ConditionType("Applied")
 )
 
-// Revisions is the controller.Reconciler of Addon (ADR-0339 Decisions 1 and 6): it stamps the revision of the Addon's
-// generation, names it current, and removes every other revision that no object pins and no AppRevision records.
+// Revisions is the controller.Reconciler of Addon (ADR-0339 Decisions 1 and 6, ADR-0358 Decision 4): it stamps the
+// revision of the Addon's generation, reads the images of its kinds, names it current, reports whether they were read
+// and its constraints fit them, and removes every other revision that no object pins and no AppRevision records.
 func (r *Reconciler) Revisions() controller.Reconciler { return addonRevisions{r} }
 
 type addonRevisions struct{ *Reconciler }
 
-// Reconcile stamps the revision of the Addon's generation when it has none, so numbers may skip, then sets
-// status.currentRevision and removes the revisions nothing uses. While a revision that is not current remains, it
-// requeues after the supervision period: an object's pin or an App's history can let it go with no event of the Addon.
-// Each pass is one step of the controller's one worker, so an object's pass that read the current revision pinned it
-// before this one lists the pins (ADR-0339 Decision 6).
+// Reconcile stamps the revision of the Addon's generation when it has none, so numbers may skip, then reads each image
+// of its kinds once, whatever comes of it, before it sets status.currentRevision, and removes the revisions nothing uses.
+// While a revision that is not current remains, or one has an image not read yet, it requeues after the supervision
+// period: an object's pin or an App's history can let a revision go with no event of the Addon, and a registry answers
+// with none. Each pass is one step of the controller's one worker, so an object's pass that read the current revision
+// pinned it before this one lists the pins (ADR-0339 Decision 6).
 func (r addonRevisions) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	const op = "services.addon.Revisions"
 	obj, err := r.store.Get(ctx, v1.KindAddon.GVK(), "", req.Name)
@@ -51,61 +54,114 @@ func (r addonRevisions) Reconcile(ctx context.Context, req controller.Request) (
 		return controller.Result{}, fault.Internalf(op, "object %s is not an Addon", req.Name)
 	}
 	name := v1.AddonRevisionName(a.Name, a.Generation)
-	cur, err := r.store.Get(ctx, v1.KindAddonRevision.GVK(), "", name)
+	rev, err := r.revision(ctx, name)
 	switch {
-	case fault.KindOf(err) == fault.NotFound:
-		if err := r.stampRevision(ctx, a, name); err != nil {
+	case err != nil:
+		return controller.Result{}, err
+	case rev == nil:
+		if rev, err = r.stampRevision(ctx, a, name); err != nil {
 			return controller.Result{}, err
 		}
-	case err != nil:
-		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "get AddonRevision %s", name)
-	case !v1.ControlledBy(cur.GetObjectMeta().OwnerReferences, v1.KindAddon, a.UID):
+	case !v1.ControlledBy(rev.OwnerReferences, v1.KindAddon, a.UID):
 		// A deleted Addon's of the same name: the GC collects it, and a later pass stamps this one's.
 		return controller.Result{RequeueAfter: r.period}, nil
 	}
-	if a.Status.CurrentRevision != name {
-		a.Status.CurrentRevision = name
-		if _, err := r.store.Update(ctx, a); err != nil {
-			if fault.KindOf(err) == fault.Conflict {
-				return controller.Result{}, nil // the Addon changed: its event brings the next pass
-			}
-			return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "set the current revision of Addon %s", a.Name)
-		}
+	rev, unread, err := r.readImages(ctx, rev)
+	if err != nil {
+		return controller.Result{}, retryOnConflict(err, op)
+	}
+	if err := r.report(ctx, a, rev, unread); err != nil {
+		return controller.Result{}, err
 	}
 	left, err := r.retire(ctx, a, name)
-	if err != nil || !left {
+	if err != nil || (!left && len(unread) == 0) {
 		return controller.Result{}, err
 	}
 	return controller.Result{RequeueAfter: r.period}, nil
 }
 
-// stampRevision creates the revision name of a: its generation and a frozen copy of its spec, controlled by a.
-func (r addonRevisions) stampRevision(ctx context.Context, a *v1.Addon, name v1.ObjectName) error {
+// report names rev the Addon's current revision and sets its Ready condition: True once every image of rev's kinds was
+// read and its constraints fit what they say (ADR-0358 Decision 4). Nothing waits for it. A Conflict is left to the pass
+// that the conflicting write brings.
+func (r addonRevisions) report(ctx context.Context, a *v1.Addon, rev *v1.AddonRevision, unread map[string]error) error {
+	cond, phase := readiness(a, rev, unread), v1.PhaseReady
+	if cond.Status != v1.ConditionTrue {
+		phase = v1.PhasePending
+	}
+	was, ok := a.Status.Conditions.Get(condReady)
+	if ok && a.Status.CurrentRevision == rev.Name && a.Status.Phase == phase && was.Status == cond.Status && was.Reason == cond.Reason &&
+		was.Message == cond.Message && was.ObservedGeneration == cond.ObservedGeneration {
+		return nil
+	}
+	a.Status.CurrentRevision, a.Status.Phase, a.Status.ObservedGeneration = rev.Name, phase, a.Generation
+	a.Status.Conditions.Set(cond)
+	if _, err := r.store.Update(ctx, a); err != nil {
+		return retryOnConflict(err, "services.addon.Revisions")
+	}
+	return nil
+}
+
+// readiness is the Addon's Ready condition for rev.
+func readiness(a *v1.Addon, rev *v1.AddonRevision, unread map[string]error) v1.Condition {
+	c := v1.Condition{Type: condReady, Status: v1.ConditionTrue, ObservedGeneration: a.Generation}
+	images := rev.Spec.Spec.KindImages()
+	for _, kind := range slices.Sorted(maps.Keys(unread)) {
+		c.Status, c.Reason = v1.ConditionFalse, reasonArtifactNotReady
+		c.Message = fmt.Sprintf("the image %s of the kind %s cannot be read: %v", images[kind], kind, unread[kind])
+		return c
+	}
+	settings := rev.Spec.Spec.KindAttributes().Settings
+	for i := range settings {
+		st := &settings[i]
+		kc := rev.ContractOf(st.Kind)
+		if kc == nil {
+			continue // a ref's Function, with no schema to fit
+		}
+		if err := CheckSettings(st, KindSchema(kc.Contract, st.Kind)); err != nil {
+			c.Status, c.Reason, c.Message = v1.ConditionFalse, reasonSettingsInvalid, fmt.Sprintf("the kind %s: %v", st.Kind, err)
+			return c
+		}
+	}
+	return c
+}
+
+// stampRevision creates the revision name of a: its generation and a frozen copy of its spec, controlled by a. One
+// created meanwhile is returned as it is.
+func (r addonRevisions) stampRevision(ctx context.Context, a *v1.Addon, name v1.ObjectName) (*v1.AddonRevision, error) {
+	const op = "services.addon.Revisions"
 	obj, _ := v1.NewObject(v1.KindAddonRevision)
 	rev := obj.(*v1.AddonRevision)
 	rev.ObjectMeta = v1.ObjectMeta{Name: name, OwnerReferences: []v1.OwnerReference{{
 		ObjectRef: v1.ObjectRef{Kind: v1.KindAddon, Name: a.Name}, UID: a.UID, Controller: true, BlockOwnerDeletion: true,
 	}}}
 	rev.Spec = v1.AddonRevisionSpec{Addon: a.Name, Number: a.Generation, Spec: a.Spec}
-	if _, err := r.store.Create(ctx, rev); err != nil && fault.KindOf(err) != fault.Conflict {
-		return fault.Wrapf(err, fault.KindOf(err), "services.addon.Revisions", "stamp AddonRevision %s", name)
+	out, err := r.store.Create(ctx, rev)
+	if fault.KindOf(err) == fault.Conflict {
+		return r.revision(ctx, name)
+	}
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "stamp AddonRevision %s", name)
+	}
+	stamped, ok := out.(*v1.AddonRevision)
+	if !ok {
+		return nil, fault.Internalf(op, "the stamped %s is a %T", name, out)
 	}
 	r.logger.InfoContext(ctx, "stamped", "addon", string(a.Name), "revision", string(name))
-	return nil
+	return stamped, nil
 }
 
 // retire removes each revision of a but current that no add-on object of its kind pins and no AppRevision records,
-// and reports whether a revision that is not current remains.
+// reads what is not read yet of the images of those that stay, and reports whether one stays.
 func (r addonRevisions) retire(ctx context.Context, a *v1.Addon, current v1.ObjectName) (bool, error) {
 	const op = "services.addon.retire"
 	revs, err := r.store.List(ctx, v1.KindAddonRevision.GVK(), store.ListOptions{})
 	if err != nil {
 		return false, fault.Wrapf(err, fault.KindOf(err), op, "list AddonRevisions")
 	}
-	var old []v1.Object
+	var old []*v1.AddonRevision
 	for _, o := range revs.Items {
-		if m := o.GetObjectMeta(); m.Name != current && v1.ControlledBy(m.OwnerReferences, v1.KindAddon, a.UID) {
-			old = append(old, o)
+		if rev, ok := o.(*v1.AddonRevision); ok && rev.Name != current && v1.ControlledBy(rev.OwnerReferences, v1.KindAddon, a.UID) {
+			old = append(old, rev)
 		}
 	}
 	if len(old) == 0 {
@@ -116,23 +172,25 @@ func (r addonRevisions) retire(ctx context.Context, a *v1.Addon, current v1.Obje
 		return false, err
 	}
 	left := false
-	for _, o := range old {
-		m := o.GetObjectMeta()
-		if used[m.Name] {
+	for _, rev := range old {
+		if used[rev.Name] {
 			left = true
+			if _, _, err := r.readImages(ctx, rev); err != nil && fault.KindOf(err) != fault.Conflict {
+				return false, err
+			}
 			continue
 		}
-		if err := r.store.Delete(ctx, v1.KindAddonRevision.GVK(), "", m.Name, m.ResourceVersion); err != nil {
+		if err := r.store.Delete(ctx, v1.KindAddonRevision.GVK(), "", rev.Name, rev.ResourceVersion); err != nil {
 			switch fault.KindOf(err) {
 			case fault.NotFound:
 			case fault.Conflict:
 				left = true
 			default:
-				return false, fault.Wrapf(err, fault.KindOf(err), op, "remove AddonRevision %s", m.Name)
+				return false, fault.Wrapf(err, fault.KindOf(err), op, "remove AddonRevision %s", rev.Name)
 			}
 			continue
 		}
-		r.logger.InfoContext(ctx, "removed an unused revision", "addon", string(a.Name), "revision", string(m.Name))
+		r.logger.InfoContext(ctx, "removed an unused revision", "addon", string(a.Name), "revision", string(rev.Name))
 	}
 	return left, nil
 }
@@ -169,15 +227,15 @@ func (r addonRevisions) usedRevisions(ctx context.Context, kind string) (map[v1.
 // pinHold is why an object runs no engine for want of a revision.
 type pinHold struct{ reason, message string }
 
-// pinned is a with the spec of the revision o's engine runs, after this pass moved o's pin (ADR-0339 Decisions 2, 3
-// and 7): under dev every object follows the current revision; an App's part follows its App's revisions forward; a
+// pinned is a with the spec of the revision o's engine runs, and that revision, after this pass moved o's pin (ADR-0339
+// Decisions 2, 3 and 7): under dev every object follows the current revision; an App's part follows its App's revisions forward; a
 // standalone object pins the current revision at its first pass and at each new generation. It holds o while it has
 // no revision to run, and while the one it pins is gone.
-func (r *Reconciler) pinned(ctx context.Context, a *v1.Addon, o *v1.AddonObject) (*v1.Addon, *pinHold, error) {
+func (r *Reconciler) pinned(ctx context.Context, a *v1.Addon, o *v1.AddonObject) (*v1.Addon, *v1.AddonRevision, *pinHold, error) {
 	app, part := partOf(o)
 	if part {
 		if err := r.followApp(ctx, a, o, app); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 	switch {
@@ -191,22 +249,18 @@ func (r *Reconciler) pinned(ctx context.Context, a *v1.Addon, o *v1.AddonObject)
 		if part && !r.followCurrent {
 			msg = fmt.Sprintf("waits for a revision of App %s to be applied", app.Name)
 		}
-		return nil, &pinHold{reasonProgressing, msg}, nil
+		return nil, nil, &pinHold{reasonProgressing, msg}, nil
 	}
-	obj, err := r.store.Get(ctx, v1.KindAddonRevision.GVK(), "", o.Status.AddonRevision)
-	if fault.KindOf(err) == fault.NotFound {
-		return nil, &pinHold{reasonAddonRevisionNotFound, fmt.Sprintf("the AddonRevision %s it pins is gone", o.Status.AddonRevision)}, nil
-	}
+	rev, err := r.revision(ctx, o.Status.AddonRevision)
 	if err != nil {
-		return nil, nil, fault.Wrapf(err, fault.KindOf(err), "services.addon.pinned", "get AddonRevision %s", o.Status.AddonRevision)
+		return nil, nil, nil, err
 	}
-	rev, ok := obj.(*v1.AddonRevision)
-	if !ok {
-		return nil, nil, fault.Internalf("services.addon.pinned", "object %s is not an AddonRevision", o.Status.AddonRevision)
+	if rev == nil {
+		return nil, nil, &pinHold{reasonAddonRevisionNotFound, fmt.Sprintf("the AddonRevision %s it pins is gone", o.Status.AddonRevision)}, nil
 	}
 	pinnedAddon := *a
 	pinnedAddon.Spec = rev.Spec.Spec
-	return &pinnedAddon, nil, nil
+	return &pinnedAddon, rev, nil, nil
 }
 
 // partOf is the App that controls o, when one does.
@@ -221,22 +275,9 @@ func partOf(o *v1.AddonObject) (v1.OwnerReference, bool) {
 // revision with no record for the kind, stamped while its Addon had none, gives the current revision, also to a part
 // that already follows it with none pinned, once the Addon has one (#1536).
 func (r *Reconciler) followApp(ctx context.Context, a *v1.Addon, o *v1.AddonObject, app v1.OwnerReference) error {
-	res, err := r.store.List(ctx, v1.KindAppRevision.GVK(), store.ListOptions{Namespace: o.Namespace})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), "services.addon.followApp", "list the AppRevisions of %s", o.Namespace)
-	}
-	var latest *v1.AppRevision
-	for _, obj := range res.Items {
-		if ar, ok := obj.(*v1.AppRevision); ok && v1.ControlledBy(ar.OwnerReferences, v1.KindApp, app.UID) &&
-			(latest == nil || ar.Spec.Number > latest.Spec.Number) {
-			latest = ar
-		}
-	}
-	if latest == nil {
-		return nil
-	}
-	if c, ok := latest.Status.Conditions.Get(condApplied); !ok || c.Status != v1.ConditionTrue {
-		return nil
+	latest, err := r.latestApplied(ctx, o, app)
+	if err != nil || latest == nil {
+		return err
 	}
 	moves := o.Status.AppRevision == "" || latest.Spec.Number > revisionNumber(app.Name, o.Status.AppRevision)
 	unpinned := o.Status.AppRevision == latest.Name && o.Status.AddonRevision == ""
@@ -248,6 +289,28 @@ func (r *Reconciler) followApp(ctx context.Context, a *v1.Addon, o *v1.AddonObje
 		o.Status.AddonRevision = cmp.Or(recordOf(latest, a.Spec.Kind()), a.Status.CurrentRevision)
 	}
 	return nil
+}
+
+// latestApplied is the latest AppRevision of app, o's App, nil while it has none or that one is not Applied.
+func (r *Reconciler) latestApplied(ctx context.Context, o *v1.AddonObject, app v1.OwnerReference) (*v1.AppRevision, error) {
+	res, err := r.store.List(ctx, v1.KindAppRevision.GVK(), store.ListOptions{Namespace: o.Namespace})
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), "services.addon.latestApplied", "list the AppRevisions of %s", o.Namespace)
+	}
+	var latest *v1.AppRevision
+	for _, obj := range res.Items {
+		if ar, ok := obj.(*v1.AppRevision); ok && v1.ControlledBy(ar.OwnerReferences, v1.KindApp, app.UID) &&
+			(latest == nil || ar.Spec.Number > latest.Spec.Number) {
+			latest = ar
+		}
+	}
+	if latest == nil {
+		return nil, nil
+	}
+	if c, ok := latest.Status.Conditions.Get(condApplied); !ok || c.Status != v1.ConditionTrue {
+		return nil, nil
+	}
+	return latest, nil
 }
 
 // recordOf is rev's revision for the add-on kind, "" when it records none.

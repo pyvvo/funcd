@@ -56,21 +56,33 @@ forwarding and `X-Funcd-*` headers, following no redirect. An App's Function bin
 ## Settings kinds
 
 An Addon can add settings kinds, such as rauthy's `RauthyPasswordPolicy`. An object of one runs no engine and names its
-target, an object of the Addon's kind. funcd checks each write against the kind's schema and its constraints, then
-sends each target's full list of objects to the kind's Function, or to one that the target names in `spec.functions`:
-at each change of the list, after a failed call's backoff, and at the kind's resync. The Function applies the list
-through its binding of the target, and its answer writes each object's status. funcd keeps what it knows of the calls in
-memory, so a start sends each list again.
+target, an object of the Addon's kind. The kind's Function applies it, and the Function's contract is the kind's schema:
+funcd checks each write against that contract and the kind's constraints, then sends each target's full list of objects
+to the Function: at each change of the list, after a failed call's backoff, and at the kind's resync. The Function
+applies the list through its binding of the target, and its answer writes each object's status. funcd keeps what it
+knows of the calls in memory, so a start sends each list again.
+
+The Addon names the Function's image, and funcd creates the Function from it, as a Workflow creates a step's, for each
+target that an object of the kind names. It binds the target and the target's Secrets, and has no address. Once the
+target's last object is gone, the Function gets the empty list, puts the engine's default back, and is removed. An Addon
+can name an existing Function of the namespace instead, and a target can name its own: funcd creates neither, and their
+contracts judge the call, not the write.
+
+A kind is read whole from the revision that its target pins: the image, its contract, the constraints and the resync.
+funcd reads an image's contract once, from the registry, when the Addon is registered, and keeps it with the revision,
+so no write and no pass waits on a registry. A change of the Addon reaches a target when the target moves.
 
 ## Engineless kinds
 
-An Addon's kind entry may serve `Engineless`: its objects run no engine and no image, and a Function of each object's
-namespace reconciles them, called with its group's full list as a settings kind's Function is, at each change, after a
-failed call's backoff, at the kind's resync, and once a JobRun of the namespace ends. An object's first pass stores
-`status.workload: Engineless` before any call carries it, and from then on an object with `deletion: delete` is held at
-its deletion: the API's DELETE, the owner collector and an App's prune set its `metadata.deletionTimestamp` instead of
-removing it, and only its Function's ok to a call that carried it as deleting removes it. An App's other parts outlive
-its engineless parts, so the Function and the Jobs that destroy a stack are still there to do it.
+An Addon's kind entry may serve `Engineless`: its objects run no engine, and a Function reconciles them, called with
+its group's full list as a settings kind's Function is, at each change, after a failed call's backoff, at the kind's
+resync, and once a JobRun of the namespace ends. funcd creates that Function for each object from the image that the
+Addon names, and it binds the Secrets and the Jobs that the object names, so a group is one object; or it is an
+existing Function of the namespace. An object's first pass stores `status.workload: Engineless` before any call carries
+it, and from then on an object with `deletion: delete` is held at its deletion: the API's DELETE, the owner collector
+and an App's prune set its `metadata.deletionTimestamp` instead of removing it, and only its Function's ok to a call
+that carried it as deleting removes it. An App's other parts outlive its engineless parts, so the Function and the Jobs
+that destroy a stack are still there to do it.
 
 ## Backups
 

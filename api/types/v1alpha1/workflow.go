@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	huma "github.com/danielgtaylor/huma/v2"
 	"github.com/pyvvo/funcd/api/fault"
@@ -218,6 +219,14 @@ type WorkflowRunLinks struct {
 	Failed    int          `json:"failed,omitempty" doc:"The number of runs that ended Failed since the Workflow was created. Deleting a run does not lower it."`
 	Cancelled int          `json:"cancelled,omitempty" doc:"The number of runs that ended Cancelled since the Workflow was created. Deleting a run does not lower it."`
 }
+
+// What a Function that funcd creates from an image declares, a Workflow's step Function (ADR-0094) and an add-on kind's
+// (ADR-0358 Decision 2): the export that the shims run by default, and the idle time after which minReplicas 0 scales it
+// to zero between calls (a Function with idleTimeout 0 is never reclaimed, ADR-0016).
+const (
+	MaterializedHandler     = "handle"
+	MaterializedIdleTimeout = Duration(5 * time.Minute)
+)
 
 // StepFunctionName is the name of the Function an image step materializes into: <workflow>-<step> (ADR-0094).
 func StepFunctionName(workflow, step ObjectName) ObjectName {

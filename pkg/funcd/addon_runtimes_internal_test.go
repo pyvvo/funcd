@@ -146,8 +146,7 @@ func infraStackAddon() *v1.Addon {
 	a := &v1.Addon{TypeMeta: tmeta(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "infrastack"}}
 	a.Spec.Runtimes = []v1.ShippedRuntime{{Name: "infrastack", Workloads: []v1.Workload{v1.WorkloadEngineless},
 		Attributes: &v1.AddonAttributes{Kind: "InfraStack",
-			Config:   json.RawMessage(`{"type":"object","properties":{"job":{"type":"string"}},"additionalProperties":false}`),
-			Function: &v1.AddonSettingsFunction{Ref: "infrastack-reconciler"}}}}
+			Function: &v1.AddonFunction{Ref: "infrastack-reconciler"}}}}
 	return a
 }
 
@@ -166,7 +165,7 @@ func TestScenarioEnginelessShapeRefused(t *testing.T) {
 		"settings": {func(rt *v1.ShippedRuntime) {
 			rt.Attributes.Settings = rauthySettingsAddon("x").Spec.Runtimes[0].Attributes.Settings
 		}, "spec.runtimes[0].attributes.settings"},
-		"no function":      {func(rt *v1.ShippedRuntime) { rt.Attributes.Function = nil }, "spec.runtimes[0].attributes.function.ref"},
+		"no function":      {func(rt *v1.ShippedRuntime) { rt.Attributes.Function = nil }, "spec.runtimes[0].attributes.function"},
 		"another workload": {func(rt *v1.ShippedRuntime) { rt.Workloads = append(rt.Workloads, v1.WorkloadJob) }, "spec.runtimes[0].workloads"},
 	} {
 		a := infraStackAddon()

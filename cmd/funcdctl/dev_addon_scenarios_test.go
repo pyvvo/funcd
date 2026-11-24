@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
@@ -222,4 +224,88 @@ func TestScenarioEngineLogsDev(t *testing.T) {
 	for _, line := range file {
 		require.NotContains(t, terminal, line, "no engine line reaches dev's terminal")
 	}
+}
+
+// kindImage is the image of a kind in a registry that refuses connections: dev reads its contract from here, and its
+// Function runs from the artifact cache, which holds what a pull left.
+type kindImage struct {
+	name     string
+	contract v1.WorkflowContract
+}
+
+func (k kindImage) Read(_ context.Context, image string) (v1.RuntimeName, v1.WorkflowContract, error) {
+	if image != k.name {
+		return "", v1.WorkflowContract{}, fault.NotFoundf("test", "%s is not %s", image, k.name)
+	}
+	return "nodejs22", k.contract, nil
+}
+
+// pulledKind pushes src as a kind's image and pulls it into the artifact cache of dev over dir with cfg.
+func pulledKind(t *testing.T, cfg devConfig, dir, src string) kindImage {
+	t.Helper()
+	ctx := context.Background()
+	contract := v1.WorkflowContract{Input: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{` +
+		`"kind":{"type":"string"},"cause":{"type":"string"},"objects":{"type":"array","items":{"type":"object","additionalProperties":false,` +
+		`"properties":{"name":{"type":"string"},"uid":{"type":"string"},"generation":{"type":"integer"},"deleting":{"type":"boolean"},` +
+		`"config":{"type":"object","additionalProperties":false,"properties":{"region":{"type":"string"}}}}}}}}`)}
+	blob, err := artifact.ContractBlob(contract.Input, []byte(`{}`))
+	require.NoError(t, err)
+	file := filepath.Join(t.TempDir(), "kind.mjs")
+	require.NoError(t, os.WriteFile(file, []byte(src), 0o600))
+	layout := "oci-layout://" + t.TempDir()
+	digest, err := artifact.Push(ctx, layout+":kind", file, blob, "nodejs22", "")
+	require.NoError(t, err)
+	state, err := devStateDir(cfg, dir)
+	require.NoError(t, err)
+	m, fn := artifact.NewOrasMaterializer(devArtifacts(state), v1.HostPlatform()), &v1.Function{}
+	fn.Spec.Image, fn.Spec.ImageDigest = layout+"@"+digest, digest
+	_, err = m.Materialize(ctx, fn)
+	require.NoError(t, err)
+	_, err = m.Platforms(ctx, fn.Spec.Image, digest)
+	require.NoError(t, err)
+	return kindImage{name: "127.0.0.1:1/pyvvo/kind@" + digest, contract: contract}
+}
+
+// scenario: addon-function-dev — a folder registers an Addon whose kind names an image: the Function that funcd creates
+// from it runs beside the folder's own, and the object turns Ready. Its contract judges the folder's objects.
+func TestScenarioAddonFunctionDev(t *testing.T) {
+	requireRuntime(t)
+	ctx := context.Background()
+	dir := devProject(t, nodeFunction("api", "", okBuild))
+	cfg := devConfig{cacheDir: t.TempDir(), addonDrivers: noEngine()}
+	image := pulledKind(t, cfg, dir, "export const handle = (ctx, event) => ({ results: event.data.objects.map((o) => ({ name: o.name, ok: true })) });\n")
+	cfg.addonImages = image
+	writeProject(t, dir, map[string]string{"stacks.yaml": `apiVersion: funcd.io/v1alpha1
+kind: Addon
+metadata:
+  name: infrastack
+spec:
+  runtimes:
+    - name: infrastack
+      workloads:
+        - Engineless
+      attributes:
+        kind: InfraStack
+        function:
+          image: ` + image.name + `
+`, "site.yaml": `apiVersion: funcd.io/v1alpha1
+kind: InfraStack
+metadata:
+  name: site
+spec:
+  config:
+    region: fra
+`})
+	inst, _ := startAddonDev(t, dir, cfg)
+	waitObject(t, inst, "InfraStack", "site", "Ready", ready)
+	obj, err := inst.client.Get(ctx, v1.KindFunction, devNamespace, "site-infrastack")
+	require.NoError(t, err)
+	require.Equal(t, image.name, obj.(*v1.Function).Spec.Image)
+
+	o, err := inst.client.Get(ctx, "InfraStack", devNamespace, "site")
+	require.NoError(t, err)
+	edited := o.(*v1.AddonObject)
+	edited.Spec.Config = json.RawMessage(`{"zone":"fra"}`)
+	_, err = inst.client.Apply(ctx, edited)
+	require.ErrorContains(t, err, "zone")
 }

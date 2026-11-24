@@ -388,7 +388,7 @@ func TestWatchSkipsTheSessionState(t *testing.T) {
 	p, err := resolvePersistPlan(devConfig{persist: true, persistTo: root})
 	require.NoError(t, err)
 	skips := p.watchSkips(filepath.Join(root, "process"))
-	for _, sub := range []string{"metastore", "kv", "blob", "lake", "sql", "bundles", "process"} {
+	for _, sub := range []string{"metastore", "kv", "blob", "lake", "sql", "bundles", "process", "artifacts"} {
 		require.Contains(t, skips, filepath.Join(root, sub))
 	}
 }

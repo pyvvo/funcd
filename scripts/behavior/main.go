@@ -64,6 +64,7 @@ func chapters() []chapter {
 		{"Edge behind a tunnel", nil, nil},
 		{"Services", []string{"internal/kvstore", "internal/blob", "internal/sql", "internal/lake", "internal/services", "internal/provider"}, []string{"kvstore", "blob", "s3gateway", "lake", "sql"}},
 		{"Addons", []string{"internal/services/addon"}, []string{"addons"}},
+		{"Settings kinds", nil, nil},
 		{"Engineless kinds", nil, nil},
 		{"Eventing", []string{"internal/bus", "internal/eventing", "internal/sensor", "internal/workflow", "internal/expr"}, []string{"workflow", "eventing"}},
 		{"Jobs", nil, nil},

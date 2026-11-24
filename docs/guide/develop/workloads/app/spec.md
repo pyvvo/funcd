@@ -42,10 +42,10 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`App.spec.addons[].bindings`](#appspecaddonsbindings) | What the object's engine uses. An object of a settings or an engineless kind, which runs no engine, takes none. |
-| `config` | any JSON value | The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object. |
+| `bindings` | object, [`App.spec.addons[].bindings`](#appspecaddonsbindings) | What the object's engine uses, and what the Functions that funcd creates for the object from its kinds' images use. An object of a settings kind takes none, nor does one of an engineless kind whose Function is a ref. |
+| `config` | any JSON value | The object's settings, which its kind's schema checks: the config schema of its Addon's kind entry when the object runs an engine, else the contract of the kind's Function. Unset is an empty object. |
 | `deletion` | string, one of `retain`, `delete` | What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it. |
-| `functions` | array of [`App.spec.addons[].functions[]`](#appspecaddonsfunctions) | The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none. |
+| `functions` | array of [`App.spec.addons[].functions[]`](#appspecaddonsfunctions) | The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function, so each copy of an App template applies its own objects. The objects it applies have no schema. A settings object names none. |
 | `ingress` | object, [`App.spec.addons[].ingress`](#appspecaddonsingress) | Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused. An object of a settings or an engineless kind takes none. |
 | `kind` | string | The add-on's kind: one that an Addon registers, as the Addon writes it. A ref entry leaves it unset. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
@@ -56,7 +56,15 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `secret` | array of string values, each a DNS-1123 label | Secrets of the namespace whose keys, those that its Addon's kind entry lists in secretKeys, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine. |
+| `job` | array of [`App.spec.addons[].bindings.job[]`](#appspecaddonsbindingsjob) | The Jobs whose runs the Function that funcd creates for an engineless object starts and reads, by their alias. Only an object of an engineless kind whose function is an image takes them. |
+| `secret` | array of string values, each a DNS-1123 label | Secrets of the namespace whose keys, those that its Addon's kind entry lists in secretKeys, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine. The Functions that funcd creates for the object read every key of them. |
+
+### `App.spec.addons[].bindings.job[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `alias` | string, required, a DNS-1123 label | The name that the code passes to ctx.job.start and ctx.job.get. Unique in the list. |
+| `job` | string, required, a DNS-1123 label | A Job of the Function's namespace. While the Job is missing, a start on its alias answers 404, and a read still answers each run that a deleted Job left, until job.retention removes it. |
 
 ### `App.spec.addons[].functions[]`
 
@@ -265,7 +273,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `addon` | array of [`App.spec.functions[].bindings.addon[]`](#appspecfunctionsbindingsaddon) | The add-on objects whose engines the code calls, each under its alias: through ctx.addon.fetch, or with any HTTP client at FUNCD_ADDON\_&lt;ALIAS&gt;\_URL with the header X-Funcd-Addon-Token set to FUNCD_ADDON\_&lt;ALIAS&gt;\_TOKEN. Each call goes through funcd, which asks Cedar for addon::call and serves only the paths that the object's edge entry serves. |
 | `blob` | array of [`App.spec.functions[].bindings.blob[]`](#appspecfunctionsbindingsblob) | The Bucket prefixes the code reaches through ctx.blob, and over S3 while the S3 gateway is on, each under its alias. The binding grants reads; only the prefix's owner and the writers that a RolesAssignment names may write. A Bucket or prefix that does not exist yet holds the Function in Pending with BucketNotFound. |
 | `config` | array of string values, each a DNS-1123 label | ConfigMaps whose keys each worker gets as environment variables when it starts, a later ConfigMap's value winning for a key that both hold. A key that starts with FUNCD\_, or that a bound Secret holds, is left out; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of a ConfigMap's. A missing ConfigMap holds the Function Failed with ConfigResolveFailed. |
-| `job` | array of [`App.spec.functions[].bindings.job[]`](#appspecfunctionsbindingsjob) | The Jobs whose runs the code starts with ctx.job.start and reads with ctx.job.get, each under its alias. The binding grants both, and a namespace Policy that forbids job::start or job::read to the Function revokes one. A run that the code starts passes the checks of a run that a person starts, and a Job's own spec refuses this list. |
+| `job` | array of [`App.spec.addons[].bindings.job[]`](#appspecaddonsbindingsjob) | The Jobs whose runs the code starts with ctx.job.start and reads with ctx.job.get, each under its alias. The binding grants both, and a namespace Policy that forbids job::start or job::read to the Function revokes one. A run that the code starts passes the checks of a run that a person starts, and a Job's own spec refuses this list. |
 | `kv` | array of [`App.spec.functions[].bindings.kv[]`](#appspecfunctionsbindingskv) | The KV tables the code reaches through ctx.kv, each under its alias. The binding grants reads; only the table's owner and the writers that a RolesAssignment names may write. A store or table that does not exist yet holds the Function in Pending with KVStoreNotFound. |
 | `lake` | array of [`App.spec.functions[].bindings.lake[]`](#appspecfunctionsbindingslake) | The Lakes the code queries, each under its alias. The Function waits in Pending with LakeNotReady until every bound Lake is Ready. |
 | `links` | array of [`App.spec.functions[].bindings.links[]`](#appspecfunctionsbindingslinks) | The Functions the code calls, each under its alias: through ctx.invoke one whose protocol is cloudevent, through ctx.fetch one whose protocol is http. Each target must exist in the namespace when this Function is applied, the namespace's links form no cycle, and a Function that a link targets cannot be deleted until the link goes. |
@@ -286,13 +294,6 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list; code that reaches the prefix through ctx.blob passes it. |
 | `bucket` | string, required, a DNS-1123 label | The Bucket, in the same namespace, that holds the prefix. |
 | `prefix` | string, required, a DNS-1123 label | The prefix, by its name in the Bucket's prefixes. |
-
-### `App.spec.functions[].bindings.job[]`
-
-| Field | Type and limits | Description |
-| --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label | The name that the code passes to ctx.job.start and ctx.job.get. Unique in the list. |
-| `job` | string, required, a DNS-1123 label | A Job of the Function's namespace. While the Job is missing, a start on its alias answers 404, and a read still answers each run that a deleted Job left, until job.retention removes it. |
 
 ### `App.spec.functions[].bindings.kv[]`
 

@@ -196,7 +196,7 @@ applied, so the pre-hooks run against the old engine and the post-hooks against 
 `addonRevisions` names each part's move. A rollback takes back the records of the revision it rolls back to, so the
 part returns to the older engine. A part only moves forward: a revision that fails does not move it back.
 
-An `addons` part is admitted against its Addon: a kind no Addon registers, a config that breaks the Addon's schema, or
+An `addons` part is admitted against its Addon: a kind no Addon registers, a config that breaks the kind's schema, or
 a Secret that the App's `secrets` do not declare is refused with 400 naming the entry. The part is Ready once its
 engine is, `status.children` names it under its add-on's kind (`IdentityProvider/web-auth-login`), a revision that drops
 it deletes it and its engine, and its storage follows its own `deletion`. Deleting the App deletes its parts; the

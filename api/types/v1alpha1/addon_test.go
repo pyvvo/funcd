@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,8 +140,7 @@ func infraStackAddon() *Addon {
 		TypeMeta:   typeMetaFor(KindAddon),
 		ObjectMeta: ObjectMeta{Name: "infrastack"},
 		Spec: AddonSpec{Runtimes: []ShippedRuntime{{Name: "infrastack", Workloads: []Workload{WorkloadEngineless},
-			Attributes: &AddonAttributes{Kind: "InfraStack", Config: json.RawMessage(`{"type":"object"}`),
-				Function: &AddonSettingsFunction{Ref: "infrastack-reconciler"}}}}},
+			Attributes: &AddonAttributes{Kind: "InfraStack", Function: &AddonFunction{Ref: "infrastack-reconciler"}}}}},
 	}
 }
 
@@ -162,20 +162,21 @@ func TestAddonEnginelessRefusals(t *testing.T) {
 		edit  func(rt *ShippedRuntime)
 		field string
 	}{
-		"an image":              {func(rt *ShippedRuntime) { rt.Image = "ghcr.io/example/stack@" + testDigest }, "spec.runtimes[0].image"},
-		"a Function beside it":  {func(rt *ShippedRuntime) { rt.Workloads = append(rt.Workloads, WorkloadFunction) }, "spec.runtimes[0].workloads"},
-		"Engine beside it":      {func(rt *ShippedRuntime) { rt.Workloads = append(rt.Workloads, WorkloadEngine) }, "spec.runtimes[0].workloads"},
-		"no attributes":         {func(rt *ShippedRuntime) { rt.Attributes = nil }, "spec.runtimes[0].attributes"},
-		"no kind":               {func(rt *ShippedRuntime) { rt.Attributes.Kind = "" }, "spec.runtimes[0].attributes.kind"},
-		"funcd's own kind":      {func(rt *ShippedRuntime) { rt.Attributes.Kind = "Job" }, "spec.runtimes[0].attributes.kind"},
-		"no function":           {func(rt *ShippedRuntime) { rt.Attributes.Function = nil }, "spec.runtimes[0].attributes.function.ref"},
-		"an empty function":     {func(rt *ShippedRuntime) { rt.Attributes.Function = &AddonSettingsFunction{} }, "spec.runtimes[0].attributes.function.ref"},
-		"a function no name":    {func(rt *ShippedRuntime) { rt.Attributes.Function.Ref = "Infra_Stack" }, "spec.runtimes[0].attributes.function.ref"},
-		"a resync under 1s":     {func(rt *ShippedRuntime) { rt.Attributes.Resync = Duration(500 * time.Millisecond) }, "spec.runtimes[0].attributes.resync"},
-		"a resync over 24h":     {func(rt *ShippedRuntime) { rt.Attributes.Resync = Duration(25 * time.Hour) }, "spec.runtimes[0].attributes.resync"},
-		"a config not a schema": {func(rt *ShippedRuntime) { rt.Attributes.Config = json.RawMessage(`[]`) }, "spec.runtimes[0].attributes.config"},
-		"a port":                {func(rt *ShippedRuntime) { rt.Attributes.Port = 8080 }, "spec.runtimes[0].attributes.port"},
-		"a readiness":           {func(rt *ShippedRuntime) { rt.Attributes.Readiness.Path = "/ping" }, "spec.runtimes[0].attributes.readiness"},
+		"an image":             {func(rt *ShippedRuntime) { rt.Image = "ghcr.io/example/stack@" + testDigest }, "spec.runtimes[0].image"},
+		"a Function beside it": {func(rt *ShippedRuntime) { rt.Workloads = append(rt.Workloads, WorkloadFunction) }, "spec.runtimes[0].workloads"},
+		"Engine beside it":     {func(rt *ShippedRuntime) { rt.Workloads = append(rt.Workloads, WorkloadEngine) }, "spec.runtimes[0].workloads"},
+		"no attributes":        {func(rt *ShippedRuntime) { rt.Attributes = nil }, "spec.runtimes[0].attributes"},
+		"no kind":              {func(rt *ShippedRuntime) { rt.Attributes.Kind = "" }, "spec.runtimes[0].attributes.kind"},
+		"funcd's own kind":     {func(rt *ShippedRuntime) { rt.Attributes.Kind = "Job" }, "spec.runtimes[0].attributes.kind"},
+		"no function":          {func(rt *ShippedRuntime) { rt.Attributes.Function = nil }, "spec.runtimes[0].attributes.function"},
+		"an empty function":    {func(rt *ShippedRuntime) { rt.Attributes.Function = &AddonFunction{} }, "exactly one of image and ref"},
+		"a function no name":   {func(rt *ShippedRuntime) { rt.Attributes.Function.Ref = "Infra_Stack" }, "spec.runtimes[0].attributes.function.ref"},
+		"a resync under 1s":    {func(rt *ShippedRuntime) { rt.Attributes.Resync = Duration(500 * time.Millisecond) }, "spec.runtimes[0].attributes.resync"},
+		"a resync over 24h":    {func(rt *ShippedRuntime) { rt.Attributes.Resync = Duration(25 * time.Hour) }, "spec.runtimes[0].attributes.resync"},
+		"a config":             {func(rt *ShippedRuntime) { rt.Attributes.Config = json.RawMessage(`{"type":"object"}`) }, "spec.runtimes[0].attributes.config"},
+		"an image and a ref":   {func(rt *ShippedRuntime) { rt.Attributes.Function.Image = "ghcr.io/pyvvo/stacks@" + testDigest }, "exactly one of image and ref"},
+		"a port":               {func(rt *ShippedRuntime) { rt.Attributes.Port = 8080 }, "spec.runtimes[0].attributes.port"},
+		"a readiness":          {func(rt *ShippedRuntime) { rt.Attributes.Readiness.Path = "/ping" }, "spec.runtimes[0].attributes.readiness"},
 		"settings": {func(rt *ShippedRuntime) {
 			rt.Attributes.Settings = []AddonSettings{{Kind: "StackPolicy"}}
 		}, "spec.runtimes[0].attributes.settings"},
@@ -189,7 +190,7 @@ func TestAddonEnginelessRefusals(t *testing.T) {
 	}
 
 	r := rauthyAddon()
-	engine(r).Function = &AddonSettingsFunction{Ref: "infrastack-reconciler"}
+	engine(r).Function = &AddonFunction{Ref: "infrastack-reconciler"}
 	require.ErrorContains(t, r.Validate(), "spec.runtimes[0].attributes.function", "an Engine entry takes no function")
 	r = rauthyAddon()
 	engine(r).Resync = Duration(time.Hour)
@@ -377,8 +378,7 @@ func TestAddonValidateSettings(t *testing.T) {
 		a := rauthyAddon()
 		engine(a).Settings = []AddonSettings{{
 			Kind: "RauthyPasswordPolicy", Target: "spec.config.provider", Resync: Duration(time.Minute),
-			Function: AddonSettingsFunction{Ref: "rauthy-settings"},
-			Schema:   json.RawMessage(`{"type":"object","properties":{"provider":{"type":"string"}},"required":["provider"]}`),
+			Function: AddonFunction{Image: "ghcr.io/pyvvo/rauthy-settings@" + testDigest},
 			Constraints: AddonConstraints{Count: AddonCount{PerTarget: 1}, Immutable: []string{"spec.config.provider"},
 				Unique: []string{"spec.config.provider"}, Rules: []AddonRule{{Rule: "${{ true }}", Message: "always"}}},
 		}}
@@ -393,10 +393,12 @@ func TestAddonValidateSettings(t *testing.T) {
 		"a kind that is no name":         func(s *AddonSettings) { s.Kind = "rauthy-policy" },
 		"funcd's own kind":               func(s *AddonSettings) { s.Kind = "Secret" },
 		"the Addon's own kind":           func(s *AddonSettings) { s.Kind = "Identityprovider" },
-		"no Function":                    func(s *AddonSettings) { s.Function.Ref = "" },
-		"a Function that is no name":     func(s *AddonSettings) { s.Function.Ref = "Rauthy_Settings" },
-		"no schema":                      func(s *AddonSettings) { s.Schema = nil },
-		"a schema that is no object":     func(s *AddonSettings) { s.Schema = json.RawMessage(`[]`) },
+		"no Function":                    func(s *AddonSettings) { s.Function.Image = "" },
+		"an image and a ref":             func(s *AddonSettings) { s.Function.Ref = "rauthy-settings" },
+		"a Function that is no name":     func(s *AddonSettings) { s.Function = AddonFunction{Ref: "Rauthy_Settings"} },
+		"an image with no digest":        func(s *AddonSettings) { s.Function.Image = "ghcr.io/pyvvo/rauthy-settings:0.2.0" },
+		"a kind too long for an image":   func(s *AddonSettings) { s.Kind = "R" + strings.Repeat("p", maxImageKind) },
+		"rules with a ref":               func(s *AddonSettings) { s.Function = AddonFunction{Ref: "rauthy-settings"} },
 		"a resync under 1s":              func(s *AddonSettings) { s.Resync = Duration(time.Millisecond) },
 		"a resync over 24h":              func(s *AddonSettings) { s.Resync = Duration(25 * time.Hour) },
 		"a target outside spec.config":   func(s *AddonSettings) { s.Target = "metadata.name" },

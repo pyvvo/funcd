@@ -1,8 +1,9 @@
 # ADR-0358: An add-on kind's Function comes from an image, and its contract is the kind's schema
 
-- **Status**: Accepted (2026-11-24), by the decider ("funcd should follow the contract. and yes let use image by
-  default"), after three rounds of an independent judge, every Blocker and Major folded; that the Function goes once its
-  empty list is applied came after them, on the decider's question, and the model checks it
+- **Status**: Reviewing (2026-11-25, implemented); Accepted (2026-11-24), by the decider ("funcd should follow the
+  contract. and yes let use image by default"), after three rounds of an independent judge, every Blocker and Major
+  folded; that the Function goes once its empty list is applied came after them, on the decider's question, and the model
+  checks it
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, functions, contracts, admission
@@ -282,6 +283,6 @@ None.
 
 ## References
 
-- FEAT-0019 (the feature issue is filed at acceptance); #1516 and #1558, which added the two schemas; #1574, the rule.
+- FEAT-0019 (feature issue #1576); #1516 and #1558, which added the two schemas; #1574, the rule.
 - The decider's choices of 2026-11-24: the contract is the schema (A); `image`, for settings and engineless kinds alike;
   a stack names its Job in `bindings.job` alone.

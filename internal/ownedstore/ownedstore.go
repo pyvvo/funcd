@@ -23,13 +23,14 @@ var ErrNotOwned = errors.New("ownedstore: the store exists and is not this owner
 
 // IsMarker reports whether r has the shape of a store marker: a non-controller reference naming a kind that stamps one,
 // a Workflow (ADR-0178), an App (ADR-0199 Decision 8), a Function or Site (ADR-0248), a Lake (ADR-0251), an
-// OIDCProvider on its client Secret (ADR-0336 Decision 2), or a Job (ADR-0347 Decision 1).
+// OIDCProvider on its client Secret (ADR-0336 Decision 2), a Job (ADR-0347 Decision 1), or an add-on object on the
+// Functions of its kinds' images (ADR-0358 Decision 2).
 func IsMarker(r v1.OwnerReference) bool {
 	if r.Controller {
 		return false
 	}
 	switch r.Kind {
-	case v1.KindWorkflow, v1.KindApp, v1.KindFunction, v1.KindSite, v1.KindLake, v1.KindOIDCProvider, v1.KindJob:
+	case v1.KindWorkflow, v1.KindApp, v1.KindFunction, v1.KindSite, v1.KindLake, v1.KindOIDCProvider, v1.KindJob, v1.KindAddonObject:
 		return true
 	}
 	return false

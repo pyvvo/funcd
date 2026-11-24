@@ -240,7 +240,7 @@ func (s *addonProvider) build(d addonDeps) error {
 		Logger: c.logger, SupervisionPeriod: c.pacing.SupervisionPeriod, ReferentPollInterval: c.pacing.ReferentPollInterval,
 		EnginePollInterval: c.pacing.EnginePollInterval, Files: s.files, Volumes: volumes, Hold: c.gate(),
 		QuarantinePeriod: c.quarantinePeriodOrDefault(), Now: c.quarantineNow, FollowCurrent: c.addonFollowCurrent,
-		Collect: d.collect, Egress: c.netManager != nil,
+		Collect: d.collect, Egress: c.netManager != nil, Images: c.addonImageReader(),
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build the add-on object reconciler")
@@ -257,12 +257,35 @@ func (s *addonProvider) build(d addonDeps) error {
 	d.ctrl.Register(v1.KindAddonObject.GVK(), rec)
 	d.ctrl.Register(v1.KindAddon.GVK(), rec.Revisions())
 	d.ctrl.Watches(v1.KindAddon.GVK(), rec.MapAddon)
+	d.ctrl.Watches(v1.KindAddonRevision.GVK(), rec.MapAddonRevision)
 	d.ctrl.Watches(v1.KindAppRevision.GVK(), rec.MapAppRevision)
 	d.ctrl.Watches(v1.KindSecret.GVK(), rec.MapSecret)
 	d.ctrl.Watches(v1.KindOIDCProvider.GVK(), rec.MapOIDCProvider)
 	d.ctrl.Watches(v1.KindRestore.GVK(), rec.MapRestore)
 	d.ctrl.Watches(v1.KindAddonObject.GVK(), rec.MapSettings)
 	return nil
+}
+
+// addonImages is the production addonsvc.ImageReader (ADR-0358 Decision 4): what an artifact's manifest says of it. An
+// Addon's images are pinned by digest in a registry, under funcdctl dev too, whose own resolvers know only the builds of
+// its session.
+type addonImages struct{}
+
+func (addonImages) Read(ctx context.Context, image string) (v1.RuntimeName, v1.WorkflowContract, error) {
+	rt, err := runtimeResolver{}.Runtime(ctx, image)
+	if err != nil {
+		return "", v1.WorkflowContract{}, err
+	}
+	c, _, err := contractResolver{}.Contract(ctx, image)
+	return rt, c, err
+}
+
+// addonImageReader reads the images of the add-ons' kinds: a test's, else the registries'.
+func (c *config) addonImageReader() addonsvc.ImageReader {
+	if c.addonImages != nil {
+		return c.addonImages
+	}
+	return addonImages{}
 }
 
 // storedAddons is the sign-in's view of the stored add-on objects (ADR-0335 Decisions 1 and 7): an OIDCProvider's

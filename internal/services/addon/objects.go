@@ -19,8 +19,8 @@ import (
 
 // An engineless kind's objects run no engine (ADR-0345): a Function of their namespace reconciles them, called as a
 // settings kind's Function is (ADR-0341), with the list of each group, the objects of one namespace and one kind that
-// one Function reconciles. An object with deletion: delete is held at its deletion until its Function answers ok to a
-// call that carried it as deleting.
+// one Function reconciles: one object when its Function comes from the kind's image (ADR-0358 Decision 2). An object
+// with deletion: delete is held at its deletion until its Function answers ok to a call that carried it as deleting.
 
 // ObjectsCaller calls an engineless kind's Function with one group's list (Decision 2).
 type ObjectsCaller interface {
@@ -63,18 +63,17 @@ func (r *Reconciler) SetObjectsCaller(c ObjectsCaller) {
 	r.objectsCaller = c
 }
 
-// enginelessFunction names the Function that reconciles o, an object of the engineless kind at's: its own in
-// spec.functions, else the kind's function.ref (Decision 2).
-func enginelessFunction(at v1.AddonAttributes, o *v1.AddonObject) v1.ObjectName {
-	for _, f := range o.Spec.Functions {
-		if v1.SameAddonKind(f.Kind, at.Kind) {
-			return f.Ref
-		}
+// enginelessFunction names the Function that reconciles o, an object of the engineless kind at's, and whether funcd
+// creates it: its own in spec.functions, else the kind's function (Decision 2).
+func enginelessFunction(at v1.AddonAttributes, o *v1.AddonObject) (v1.ObjectName, bool) {
+	var f v1.AddonFunction
+	if at.Function != nil {
+		f = *at.Function
 	}
-	if at.Function == nil {
-		return ""
+	if f == (v1.AddonFunction{}) {
+		return OwnFunction(o, at.Kind), false
 	}
-	return at.Function.Ref
+	return functionOf(f, at.Kind, o)
 }
 
 // enginelessObject is the pass of an object of an engineless kind, which runs no engine (Decisions 1 and 5 to 7). A
@@ -93,7 +92,7 @@ func (r *Reconciler) enginelessObject(ctx context.Context, current *v1.Addon, o 
 		return r.objectStatus(ctx, o, reasonAddonNotFound, fmt.Sprintf("no Addon registers the kind %q", o.Spec.Kind), false)
 	}
 	appRev, addonRev := o.Status.AppRevision, o.Status.AddonRevision
-	a, ph, err := r.pinned(ctx, current, o)
+	a, rev, ph, err := r.pinned(ctx, current, o)
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -114,14 +113,12 @@ func (r *Reconciler) enginelessObject(ctx context.Context, current *v1.Addon, o 
 		}
 	}
 	at := a.Spec.KindAttributes()
-	fnName := enginelessFunction(at, o)
-	fn, err := r.function(ctx, o.Namespace, fnName)
-	switch {
-	case err != nil:
+	fn, reason, msg, err := r.groupFunction(ctx, rev, at, o)
+	if err != nil {
 		return controller.Result{}, err
-	case fn == nil:
-		return r.objectStatus(ctx, o, reasonFunctionNotFound,
-			fmt.Sprintf("the namespace holds no Function %q, which reconciles the %s objects", fnName, at.Kind), false)
+	}
+	if reason != "" {
+		return r.objectStatus(ctx, o, reason, msg, false)
 	}
 	switch c, ok := o.Status.Conditions.Get(condReady); {
 	case o.DeletionTime != nil && !r.answeredDeleting(o.UID):
@@ -142,6 +139,31 @@ func (r *Reconciler) enginelessObject(ctx context.Context, current *v1.Addon, o 
 		return controller.Result{RequeueAfter: next}, nil
 	}
 	return controller.Result{RequeueAfter: r.period}, nil
+}
+
+// groupFunction is the Function that reconciles o, which funcd creates when it comes from the image of at's kind, or the
+// reason there is none to call, and why.
+func (r *Reconciler) groupFunction(ctx context.Context, rev *v1.AddonRevision, at v1.AddonAttributes,
+	o *v1.AddonObject) (*v1.Function, string, string, error) {
+	name, created := enginelessFunction(at, o)
+	if created {
+		if reason, msg, err := r.ensureFunction(ctx, rev, o, at.Kind, at.Function.Image); err != nil || reason != "" {
+			return nil, reason, msg, err
+		}
+	}
+	if err := r.pruneFunctions(ctx, o, map[v1.ObjectName]bool{name: created}); err != nil {
+		return nil, "", "", err
+	}
+	fn, err := r.function(ctx, o.Namespace, name)
+	switch {
+	case err != nil:
+		return nil, "", "", err
+	case fn == nil && created:
+		return nil, reasonProgressing, progressing(o), nil // its creation's event brings the next pass
+	case fn == nil:
+		return nil, reasonFunctionNotFound, fmt.Sprintf("the namespace holds no Function %q, which reconciles the %s objects", name, at.Kind), nil
+	}
+	return fn, "", "", nil
 }
 
 // progressing is a new or edited object's message until its Function answers for its generation.
@@ -200,8 +222,8 @@ func (r *Reconciler) syncGroup(ctx context.Context, at v1.AddonAttributes, o *v1
 }
 
 // groupObjects are the objects of kind in ns that fn reconciles and whose first pass stored their mark, sorted by
-// name, deleting ones included. An object's Function is its own in spec.functions, else its pinned revision's
-// function.ref: one whose revision is gone is in no group.
+// name, deleting ones included. An object's Function is its own in spec.functions, else its pinned revision's: one whose
+// revision is gone is in no group.
 func (r *Reconciler) groupObjects(ctx context.Context, kind string, ns v1.NamespaceName, fn v1.ObjectName) ([]*v1.AddonObject, error) {
 	const op = "services.addon.groupObjects"
 	list, err := r.store.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{Namespace: ns})
@@ -217,17 +239,16 @@ func (r *Reconciler) groupObjects(ctx context.Context, kind string, ns v1.Namesp
 		}
 		rev, seen := revs[o.Status.AddonRevision]
 		if !seen {
-			obj, gerr := r.store.Get(ctx, v1.KindAddonRevision.GVK(), "", o.Status.AddonRevision)
-			switch {
-			case fault.KindOf(gerr) == fault.NotFound:
-			case gerr != nil:
-				return nil, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get AddonRevision %s", o.Status.AddonRevision)
-			default:
-				rev, _ = obj.(*v1.AddonRevision)
+			var gerr error
+			if rev, gerr = r.revision(ctx, o.Status.AddonRevision); gerr != nil {
+				return nil, gerr
 			}
 			revs[o.Status.AddonRevision] = rev
 		}
-		if rev != nil && enginelessFunction(rev.Spec.Spec.KindAttributes(), o) == fn {
+		if rev == nil {
+			continue
+		}
+		if name, _ := enginelessFunction(rev.Spec.Spec.KindAttributes(), o); name == fn {
 			out = append(out, o)
 		}
 	}
@@ -235,11 +256,11 @@ func (r *Reconciler) groupObjects(ctx context.Context, kind string, ns v1.Namesp
 	return out, nil
 }
 
-// groupDigest names what a group's call sends (Decision 2): the Function, its uid and its current revision, and each
+// groupDigest names what a group's call sends (Decision 2): the Function, its uid and the revision that answers, and each
 // object's name, uid, generation and deleting state.
 func groupDigest(fn *v1.Function, objs []*v1.AddonObject) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s|%s|%s", fn.Name, fn.UID, fn.Status.CurrentRevision)
+	fmt.Fprintf(&b, "%s|%s|%s", fn.Name, fn.UID, answering(fn))
 	for _, o := range objs {
 		fmt.Fprintf(&b, "|%s:%s:%d:%t", o.Name, o.UID, o.Generation, o.DeletionTime != nil)
 	}
@@ -472,8 +493,8 @@ func (r *Reconciler) MapJobRun(ctx context.Context, obj v1.Object) []controller.
 
 // MapEnginelessFunction maps a Function's change to the engineless objects of its namespace that it reconciles: its
 // creation or deletion ends or starts a wait, and a new revision changes the next call's digest (Decision 2). An
-// object's Function is its own in spec.functions, else the function.ref of the revision it pins (Decision 1), or of its
-// kind as its Addon is now, which its next pass may pin: either maps it.
+// object's Function is its own in spec.functions, else the one of the revision it pins (Decision 1), or of its kind as
+// its Addon is now, which its next pass may pin: either maps it.
 func (r *Reconciler) MapEnginelessFunction(ctx context.Context, obj v1.Object) []controller.Request {
 	m := obj.GetObjectMeta()
 	addons, err := r.store.List(ctx, v1.KindAddon.GVK(), store.ListOptions{})
@@ -492,20 +513,19 @@ func (r *Reconciler) MapEnginelessFunction(ctx context.Context, obj v1.Object) [
 	}
 	revs := map[v1.ObjectName]*v1.AddonRevision{}
 	return r.objects(ctx, m.Namespace, func(o *v1.AddonObject) bool {
-		at, ok := kinds[v1.AddonPlural(o.Spec.Kind)]
-		if ok && enginelessFunction(at, o) == m.Name {
-			return true
+		if at, ok := kinds[v1.AddonPlural(o.Spec.Kind)]; ok {
+			if name, _ := enginelessFunction(at, o); name == m.Name {
+				return true
+			}
 		}
 		if o.Status.Workload != v1.WorkloadEngineless || o.Status.AddonRevision == "" {
 			return false
 		}
-		rev, seen := revs[o.Status.AddonRevision]
-		if !seen {
-			if got, err := r.store.Get(ctx, v1.KindAddonRevision.GVK(), "", o.Status.AddonRevision); err == nil {
-				rev, _ = got.(*v1.AddonRevision)
-			}
-			revs[o.Status.AddonRevision] = rev
+		rev := r.cachedRevision(ctx, revs, o.Status.AddonRevision)
+		if rev == nil {
+			return false
 		}
-		return rev != nil && enginelessFunction(rev.Spec.Spec.KindAttributes(), o) == m.Name
+		name, _ := enginelessFunction(rev.Spec.Spec.KindAttributes(), o)
+		return name == m.Name
 	})
 }

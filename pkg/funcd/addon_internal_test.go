@@ -30,7 +30,7 @@ import (
 )
 
 // addonRuntime is a fake add-on engine runtime: every engine is Ready at once and served by one httptest engine, which
-// records the path of each call and answers it with that path. It counts the engines it starts: a Converge with no
+// records the path and the body of each call and answers it with that path. It counts the engines it starts: a Converge with no
 // engine running, or with another spec than the running engine's, as the real runtime replaces one (#1195).
 type addonRuntime struct {
 	mu        sync.Mutex
@@ -40,6 +40,7 @@ type addonRuntime struct {
 	starts    map[provider.ProviderRef]int
 	teardowns map[provider.ProviderRef]int
 	paths     []string
+	bodies    []string
 	teardownHold
 }
 
@@ -70,8 +71,9 @@ func newAddonRuntime(t *testing.T) *addonRuntime {
 	r := &addonRuntime{specs: map[provider.ProviderRef]provider.ProviderSpec{}, running: map[provider.ProviderRef]bool{},
 		starts: map[provider.ProviderRef]int{}, teardowns: map[provider.ProviderRef]int{}}
 	r.engine = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
 		r.mu.Lock()
-		r.paths = append(r.paths, req.Method+" "+req.URL.Path)
+		r.paths, r.bodies = append(r.paths, req.Method+" "+req.URL.Path), append(r.bodies, string(body))
 		r.mu.Unlock()
 		_, _ = io.WriteString(w, req.URL.Path)
 	}))
@@ -120,11 +122,12 @@ const (
 	addonDigest     = "@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809"
 )
 
-// addonEnv is a running platform with the fake add-on runtime, an admin's and a developer's client.
+// addonEnv is a running platform with the fake add-on runtime and kind images, an admin's and a developer's client.
 type addonEnv struct {
 	ctx        context.Context
 	p          *Platform
 	rt         *addonRuntime
+	images     *kindImages
 	admin, dev *sdk.Client
 }
 
@@ -139,10 +142,11 @@ func startAddons(t *testing.T, opts ...Option) *addonEnv {
 func startAddonPlatform(t *testing.T, rt *addonRuntime, opts ...Option) *addonEnv {
 	t.Helper()
 	ctx := context.Background()
-	p, err := New(append([]Option{InMemory(),
+	images := newKindImages()
+	p, err := New(append([]Option{InMemory(), WithAddonImages(images),
 		WithCredentials(Credential{Token: addonAdminToken, Role: "admin"},
 			Credential{Token: addonDevToken, Role: "developer", Namespaces: []string{"default", "team"}}),
-		WithAddonRegistries("ghcr.io", "docker.io"),
+		WithAddonRegistries("ghcr.io", "docker.io", downRegistry),
 		WithPacing(Pacing{SupervisionPeriod: 100 * time.Millisecond, ReferentPollInterval: 50 * time.Millisecond,
 			EnginePollInterval: 50 * time.Millisecond})}, opts...)...)
 	require.NoError(t, err)
@@ -154,7 +158,7 @@ func startAddonPlatform(t *testing.T, rt *addonRuntime, opts ...Option) *addonEn
 	require.NoError(t, err)
 	dev, err := sdk.New("http://"+p.Addr(), sdk.WithToken(addonDevToken))
 	require.NoError(t, err)
-	return &addonEnv{ctx: ctx, p: p, rt: rt, admin: admin, dev: dev}
+	return &addonEnv{ctx: ctx, p: p, rt: rt, images: images, admin: admin, dev: dev}
 }
 
 // rauthyAddon is rauthy's Addon, as pyvvo/funcd-addons ships it in essence: an IdentityProvider at /auth/v1, whose

@@ -91,43 +91,49 @@ edge. The Function's own dial of the engine's address is refused: only funcd rea
 ## Apply its settings
 
 An Addon can add settings kinds. An object of one runs no engine and names its target, an object of the Addon's kind:
-rauthy's `RauthyPasswordPolicy` holds the password policy of one IdentityProvider. funcd checks each write against the
-kind's schema and its constraints, here one policy per IdentityProvider. It then sends each target's full list of
-objects to the kind's Function, `rauthy-settings`, which applies the list through its binding of the target
+rauthy's `RauthyPasswordPolicy` holds the password policy of one IdentityProvider. The kind's Function applies it, and
+funcd checks each write against that Function's contract and the kind's constraints, here one policy per
+IdentityProvider
 ([complete file](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/addons/settings.yaml)):
-
-::include[../../../../../api/types/v1alpha1/examples/addons/settings.yaml#function]
 
 ::include[../../../../../api/types/v1alpha1/examples/addons/settings.yaml#policy]
 
-funcd calls the Function at each change of a target's list, after a failed call's backoff, and at the kind's
-`resync`, so a setting changed at the engine's own API is put back. Each call is a CloudEvent of type
-`funcd.addon.settings`, whose data holds the kind, the cause, the target with the alias that binds it, and each
-object's name, uid, generation and config. The answer holds a result per object: `ok`, or a reason and a message.
-With no object left, the list is empty, and the Function puts the engine's default back. rauthy's Function puts the
-policy with rauthy's API key `settings`, which `funcdctl rauthy keys` has rauthy create at its first start:
+Once a policy names the IdentityProvider `login`, funcd creates the Function `login-rauthypasswordpolicy` from the
+image that the Addon names. The Function binds `login` and its Secrets, and has no address: only funcd calls it. funcd
+sends it the IdentityProvider's full list of policies, and each policy turns `Ready` on its answer.
+
+funcd calls the Function at each change of a target's list, after a failed call's backoff, and at the kind's `resync`,
+so a setting changed at the engine's own API is put back. Each call is a CloudEvent of type `funcd.addon.settings`,
+whose data holds the kind, the cause, the target with the alias that binds it, and each object's name, uid, generation
+and config. The answer holds a result per object: `ok`, or a reason and a message. With no object left, the list is
+empty: the Function puts the engine's default back, and funcd then removes it. While no policy has named an
+IdentityProvider, funcd creates no Function for it and leaves its engine's own settings as they are. rauthy's Function
+puts the policy with rauthy's API key `settings`, which `funcdctl rauthy keys` has rauthy create at its first start:
 
 ::include[../../../../../_repos/funcd-addons/rauthy/settings/rauthy-settings.mjs]
 
 A target may name its own Function for a kind in `spec.functions`, in place of the kind's, so two copies of an App
-template in one namespace each apply their own.
+template in one namespace each apply their own, and an Addon may name an existing Function of the namespace with
+`function.ref` instead of an image. Such a Function binds the target itself, and no schema checks a write of its
+objects: its contract refuses the call.
 
 ## Reconcile objects with a Function
 
 An Addon whose kind entry serves `Engineless` adds a kind whose objects run no engine, such as stacks that a Job
-applies outside funcd: a Function of each object's namespace reconciles them, the one the entry's `function.ref` names
-or the one an object names for its own kind in `spec.functions`
+applies outside funcd: a Function reconciles them. funcd creates one for each object from the entry's `function.image`,
+and it binds the Secrets and the Jobs of the object's `bindings`. With `function.ref`, it is an existing Function of the
+namespace, and an object may name its own for its kind in `spec.functions`
 ([complete file](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/addons/engineless.yaml)):
 
 ::include[../../../../../api/types/v1alpha1/examples/addons/engineless.yaml#addon]
 
 ::include[../../../../../api/types/v1alpha1/examples/addons/engineless.yaml#stack]
 
-funcd sends the Function the list of the namespace's objects it reconciles, deleting ones included, at each change of
-the list, after a failed call's backoff, at the kind's `resync`, 10 minutes when unset, and once a JobRun of the
-namespace ends. An object is `Pending` with `Progressing` until the Function answers for its generation, then `Ready`
-on an ok, or with the Function's reason, such as `AwaitingApproval`. [Build an add-on](build.md#engineless-kinds) shows
-the call and its answer.
+funcd sends the Function the list of the objects it reconciles, deleting ones included, at each change of the list,
+after a failed call's backoff, at the kind's `resync`, 10 minutes when unset, and once a JobRun of the namespace ends.
+A Function from an image gets its one object. An object is `Pending` with `Progressing` until the Function answers for
+its generation, then `Ready` on an ok, or with the Function's reason, such as `AwaitingApproval`. [Build an
+add-on](build.md#engineless-kinds) shows the call and its answer.
 
 An object with `deletion: delete` stays at its deletion until its Function has destroyed what it holds. The DELETE
 answers 202 with the object, which keeps `metadata.deletionTimestamp`, the reason `Deleting` until the Function's first
@@ -169,7 +175,10 @@ add-on](../../workloads/app/index.md#carry-an-add-on) shows the rest.
 An admin's change of an Addon stamps a revision, an AddonRevision named after the Addon and its generation, such as
 `rauthy-2`, and replaces no engine: each object keeps running the revision that `status.addonRevision` names. An edit
 of the object moves it to the Addon's current revision, and an App's next revision moves its parts, its hooks around
-the move. An admin lists the revisions with `funcdctl get addonrevisions`; funcd removes one that no object pins and no
+the move. A settings kind follows its target: its Function's image and contract and its constraints are those of the
+target's revision, so a field that a newer image takes gets a 422 until the target moves. A settings object that the
+newer contract refuses waits with `ReconcileFailed`, naming the path, and the target's other objects of the kind wait
+with it. An admin lists the revisions with `funcdctl get addonrevisions`; funcd removes one that no object pins and no
 App's revision records. Under `funcdctl dev`, every object follows the current revision at once.
 
 ## Back it up
@@ -210,6 +219,9 @@ permit(principal, action == Action::"addon::call", resource)
 A namespace [Policy](../../security-and-networking/security/spec.md#policy) can forbid a call that a binding allows,
 with 403. An alias the Function does not bind, and a proxy request with no token or a token of no Function, are 403 too.
 
+A Function that funcd creates from an image reads every key of the Secrets that its object binds, while an engine gets
+the keys that its Addon lists in `secretKeys`.
+
 ## Limits and quotas
 
 - A namespace holds at most `addons.maxObjectsPerNamespace` objects of add-on kinds, settings kinds apart, 20 by
@@ -225,6 +237,7 @@ with 403. An alias the Function does not bind, and a proxy request with no token
 ## Status
 
 ```sh
+funcdctl get addons rauthy -o json
 funcdctl get identityproviders login -n default -o json
 funcdctl get rauthypasswordpolicys strict -n default -o json
 funcdctl logs identityprovider/login -n default
@@ -235,6 +248,8 @@ funcdctl logs identityprovider/login -n default
 
 | Object | Reason | Meaning |
 | --- | --- | --- |
+| An Addon | `ArtifactNotReady` | The image of a kind's Function cannot be read. funcd tries again every `runtime.supervisionPeriod`; engines run meanwhile |
+| | `SettingsInvalid` | A settings kind's constraint names a field that its Function's contract lacks |
 | An object that runs an engine | `EngineNotReady` | The engine does not answer its readiness path yet |
 | | `AddonNotFound` | No Addon registers its kind |
 | | `ConfigInvalid`, `EnvInvalid` | Its config no longer fits the Addon's schema, or its env does not evaluate |
@@ -243,10 +258,12 @@ funcdctl logs identityprovider/login -n default
 | A settings object | `Progressing` | No answer of its Function for its generation yet |
 | | `ReconcileFailed`, `NoResult` | The call failed, or its answer left the object out; the Function's own reason when it gives one |
 | | `TargetNotFound`, `TargetNotReady` | Its target is missing or not Ready |
-| | `FunctionNotFound`, `FunctionNotBound` | Its Function is missing, or does not bind its target |
+| | `ArtifactNotReady` | The image of its kind's Function is not read yet |
+| | `FunctionNotFound`, `FunctionNotBound` | Its Function is missing, its target's revision lacks its kind, or its Function does not bind its target |
+| | `FunctionNotOwned` | Another Function has the name of the one that funcd would create |
 | An engineless object | `Progressing` | No answer of its Function for its generation yet |
 | | `ReconcileFailed`, `NoResult` | The call failed, or its answer left the object out; the Function's own reason when it gives one |
-| | `AddonNotFound`, `AddonRevisionNotFound`, `FunctionNotFound` | Its Addon, its pinned revision or its Function is missing, and no call carries it |
+| | `AddonNotFound`, `AddonRevisionNotFound`, `FunctionNotFound`, `ArtifactNotReady`, `FunctionNotOwned` | Its Addon, its pinned revision, its Function or its image's contract is missing, or another Function has its Function's name, and no call carries it |
 | | `Deleting` | Held at its deletion: its Function has not answered a call that carried it as deleting yet |
 | A Function or a Job on its runtime | `RuntimeUnavailable` | The entry does not serve the workload, no worker driver of the server runs an image, or the Addon that shipped the Revision's image is gone |
 | A Function that binds an object | `AddonObjectNotFound` | The object does not exist |

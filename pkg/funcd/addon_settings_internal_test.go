@@ -22,16 +22,14 @@ const (
 	clientsPath  = "/apis/funcd.io/v1alpha1/namespaces/%s/rauthyclients"
 )
 
-// rauthySettingsAddon is rauthy's Addon with two settings kinds: RauthyPasswordPolicy, one per IdentityProvider,
-// whose provider cannot change and whose lengthMin may not exceed lengthMax; and RauthyClient, at most two per
-// namespace, whose clientId is unique.
+// rauthySettingsAddon is rauthy's Addon with two settings kinds, whose image's contract is their schema (ADR-0358):
+// RauthyPasswordPolicy, one per IdentityProvider, whose provider cannot change and whose lengthMin may not exceed
+// lengthMax; and RauthyClient, at most two per namespace, whose clientId is unique.
 func rauthySettingsAddon(name v1.ObjectName) *v1.Addon {
 	a := rauthyAddon(name)
 	a.Spec.Runtimes[0].Attributes.Settings = []v1.AddonSettings{{
 		Kind: "RauthyPasswordPolicy", Target: "spec.config.provider", Resync: v1.Duration(time.Minute),
-		Function: v1.AddonSettingsFunction{Ref: "rauthy-settings"},
-		Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"provider":{"type":"string"},` +
-			`"lengthMin":{"type":"integer"},"lengthMax":{"type":"integer"}},"required":["provider","lengthMin","lengthMax"]}`),
+		Function: v1.AddonFunction{Image: settingsImage},
 		Constraints: v1.AddonConstraints{
 			Count:     v1.AddonCount{PerTarget: 1},
 			Immutable: []string{"spec.config.provider"},
@@ -40,9 +38,7 @@ func rauthySettingsAddon(name v1.ObjectName) *v1.Addon {
 		},
 	}, {
 		Kind: "RauthyClient", Target: "spec.config.provider",
-		Function: v1.AddonSettingsFunction{Ref: "rauthy-settings"},
-		Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"provider":{"type":"string"},` +
-			`"clientId":{"type":"string"}},"required":["provider"]}`),
+		Function:    v1.AddonFunction{Image: settingsImage},
 		Constraints: v1.AddonConstraints{Count: v1.AddonCount{PerNamespace: 2}, Unique: []string{"spec.config.clientId"}},
 	}}
 	return a
@@ -105,7 +101,7 @@ func created(status int) bool { return status/100 == 2 }
 func TestScenarioSettingsKindServed(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	status, detail := e.send(t, http.MethodGet, fmt.Sprintf(policiesPath, "default"), addonDevToken, nil)
 	require.Equal(t, http.StatusOK, status, detail)
 	status, detail = e.create(t, policiesPath, policy("default", "strict", "login", 16, 64))
@@ -114,8 +110,9 @@ func TestScenarioSettingsKindServed(t *testing.T) {
 	require.Equal(t, http.StatusOK, status)
 }
 
-// scenario: settings-kind-refused — a settings kind that is funcd's, the Addon's own or another Addon's, a schema that
-// does not require the target, or a rule over an undeclared field: refused, and nothing is stored.
+// scenario: settings-kind-refused — a settings kind that is funcd's, the Addon's own or another Addon's: refused, and
+// nothing is stored. A constraint that its schema does not fit is the Addon's status (ADR-0358 Decision 4,
+// TestScenarioAddonConstraintUnfit).
 func TestScenarioSettingsKindRefused(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
@@ -132,13 +129,6 @@ func TestScenarioSettingsKindRefused(t *testing.T) {
 		"funcd's kind":     {func(a *v1.Addon) { a.Spec.Runtimes[0].Attributes.Settings[0].Kind = "Function" }, http.StatusBadRequest, "funcd's own"},
 		"the Addon's kind": {func(a *v1.Addon) { a.Spec.Runtimes[0].Attributes.Settings[0].Kind = "Identityprovider" }, http.StatusBadRequest, "another kind of the Addon"},
 		"another Addon's":  {func(a *v1.Addon) { a.Spec.Runtimes[0].Attributes.Settings[0].Kind = "EchoService" }, http.StatusConflict, "EchoService"},
-		"target not required": {func(a *v1.Addon) {
-			a.Spec.Runtimes[0].Attributes.Settings[1].Schema = json.RawMessage(`{"type":"object","additionalProperties":false,` +
-				`"properties":{"provider":{"type":"string"}}}`)
-		}, http.StatusBadRequest, "requires at each level"},
-		"rule over an undeclared field": {func(a *v1.Addon) {
-			a.Spec.Runtimes[0].Attributes.Settings[0].Constraints.Rules[0].Rule = "${{ object.spec.config.lengthMinimum <= 3 }}"
-		}, http.StatusBadRequest, "lengthMinimum"},
 	} {
 		a := rauthySettingsAddon("rauthy")
 		c.mutate(a)
@@ -149,7 +139,7 @@ func TestScenarioSettingsKindRefused(t *testing.T) {
 		require.Equal(t, fault.NotFound, fault.KindOf(err), "%s: nothing is stored", name)
 	}
 
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	w := storedAddon(t, e, "whoami")
 	w.Spec.Runtimes[0].Attributes.Settings = rauthySettingsAddon("rauthy").Spec.Runtimes[0].Attributes.Settings[:1]
 	status, detail := e.send(t, http.MethodPut, addonsPath+"/whoami", addonAdminToken, w)
@@ -174,7 +164,7 @@ func storedAddon(t *testing.T, e *addonEnv, name v1.ObjectName) *v1.Addon {
 func TestScenarioSettingsObjectSchema(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	o := settingsObject("RauthyPasswordPolicy", "default", "strict", `{"provider":"login","lengthMin":"sixteen","lengthMax":64}`)
 	status, detail := e.create(t, policiesPath, o)
 	require.Equal(t, http.StatusUnprocessableEntity, status, detail)
@@ -186,7 +176,7 @@ func TestScenarioSettingsObjectSchema(t *testing.T) {
 func TestScenarioSettingsObjectNoEngine(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	for field, mutate := range map[string]func(*v1.AddonObject){
 		"ingress":   func(o *v1.AddonObject) { o.Spec.Ingress = &v1.Ingress{Host: "x.example.com"} },
 		"bindings":  func(o *v1.AddonObject) { o.Spec.Bindings.Secret = []v1.ObjectName{"rauthy-keys"} },
@@ -214,7 +204,7 @@ func TestScenarioSettingsObjectNoEngine(t *testing.T) {
 func TestScenarioSettingsCountPerTarget(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	status, detail := e.create(t, policiesPath, policy("default", "strict", "login", 16, 64))
 	require.True(t, created(status), "%d %s", status, detail)
 	status, detail = e.create(t, policiesPath, policy("default", "second", "login", 12, 64))
@@ -231,7 +221,7 @@ func TestScenarioSettingsCountPerTarget(t *testing.T) {
 func TestScenarioSettingsCountPerNamespace(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	for _, n := range []v1.ObjectName{"a", "b"} {
 		status, detail := e.create(t, clientsPath, client("team", n, string(n)))
 		require.True(t, created(status), "%d %s", status, detail)
@@ -247,7 +237,7 @@ func TestScenarioSettingsCountPerNamespace(t *testing.T) {
 func TestScenarioSettingsUnique(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	status, detail := e.create(t, clientsPath, client("default", "web-client", "web"))
 	require.True(t, created(status), "%d %s", status, detail)
 	status, detail = e.create(t, clientsPath, client("default", "web-2", "web"))
@@ -262,7 +252,7 @@ func TestScenarioSettingsUnique(t *testing.T) {
 func TestScenarioSettingsImmutable(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	status, detail := e.create(t, policiesPath, policy("default", "strict", "login", 16, 64))
 	require.True(t, created(status), "%d %s", status, detail)
 	status, detail = e.replace(t, policiesPath, policy("default", "strict", "other", 16, 64))
@@ -277,7 +267,7 @@ func TestScenarioSettingsImmutable(t *testing.T) {
 func TestScenarioSettingsRule(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	status, detail := e.create(t, policiesPath, policy("default", "strict", "login", 40, 20))
 	require.Equal(t, http.StatusBadRequest, status, detail)
 	require.Contains(t, detail, "lengthMin must not exceed lengthMax")
@@ -289,7 +279,7 @@ func TestScenarioSettingsRule(t *testing.T) {
 func TestScenarioSettingsConcurrentCreates(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	var mu sync.Mutex
 	var statuses []int
 	var wg sync.WaitGroup
@@ -318,7 +308,7 @@ func TestScenarioSettingsConcurrentCreates(t *testing.T) {
 func TestScenarioSettingsObjectCap(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t, WithAddonObjectQuota(1), WithAddonSettingsQuota(2))
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	for _, n := range []v1.ObjectName{"p1", "p2"} {
 		status, detail := e.create(t, policiesPath, policy("default", n, string(n)+"-login", 16, 64))
 		require.True(t, created(status), "%d %s", status, detail)
@@ -341,7 +331,7 @@ func TestScenarioSettingsObjectCap(t *testing.T) {
 func TestAddonSettingsChangeReplacesNoEngine(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	e.waitReason(t, "default", "login", v1.PhaseReady, "")
 	_, _, starts := e.rt.state(ref("default", "login"))
@@ -349,7 +339,7 @@ func TestAddonSettingsChangeReplacesNoEngine(t *testing.T) {
 	a := rauthySettingsAddon("rauthy")
 	a.Spec.Runtimes[0].Attributes.Settings[0].Resync = v1.Duration(2 * time.Minute)
 	a.Spec.Runtimes[0].Attributes.Settings = a.Spec.Runtimes[0].Attributes.Settings[:1]
-	e.apply(t, e.admin, a)
+	e.register(t, a)
 	require.True(t, poll.Never(func() bool {
 		_, _, n := e.rt.state(ref("default", "login"))
 		return n != starts

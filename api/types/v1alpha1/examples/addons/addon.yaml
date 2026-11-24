@@ -49,19 +49,7 @@ spec:
             target: spec.config.provider
             resync: 10m
             function:
-              ref: rauthy-settings
-            schema:
-              type: object
-              additionalProperties: false
-              properties:
-                provider:
-                  type: string
-                lengthMin:
-                  type: integer
-                  minimum: 8
-              required:
-                - provider
-                - lengthMin
+              image: ghcr.io/example/rauthy-settings@sha256:b8390e254d5f99832bdcfa0567d144725d1d96907c9da01dc5917f71c3989cba
             constraints:
               count:
                 perTarget: 1
