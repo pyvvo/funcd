@@ -508,6 +508,14 @@ tracked files; a shape the decider reviews is a decision input, and an unmarked 
   path, field, flag, status reason, or ADR number to satisfy the shape of the question. Read it or say
   it is unbuilt.
 
+## ⛔ Reuse before you design — one mechanism per job
+
+A design that needs a schema, a check, a reference, an owner rule, a schedule, a retry, a quota or an expression **uses
+the component that already does that job**. This binds chat answers, briefs and add-ons as hard as an ADR or code.
+Ask who reads the values, search how the shipped kinds do it, and cite what you found; a second mechanism is the
+decider's choice, made in *Alternatives considered*. The components, and the pull requests that show how a second one
+drifted, are in [reuse-before-design](rules/reuse-before-design.md). Read it before proposing a mechanism.
+
 ## Code & config style conventions
 
 Small house-style rules that apply to every file you write or edit:

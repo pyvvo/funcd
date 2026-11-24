@@ -40,6 +40,9 @@ Research **before** questioning, so questions are informed rather than lazy:
   what was checked and when; it feeds *Alternatives considered* and *References*.
 - Derive everything derivable from the blueprint, existing ADRs, and the repo. Only the
   genuinely open, user-owned decisions become questions.
+- **Reuse before you design** (`.claude/rules/reuse-before-design.md`): for each mechanism the topic needs, search the
+  shipped kinds, their reconcilers, the behavior registry and the ADRs for the component that already does that job.
+  It is the default, cited; a precedent is not a question.
 
 If a brief refine already recorded the decider's answers, they are the brainstorm; do not ask again.
 Then ask the user the open questions in one batch (AskUserQuestion, 2–4 questions,
@@ -87,7 +90,8 @@ Quality bar per section:
 - **Scope**: one altitude per ADR. If the draft starts deciding a neighboring topic,
   split it out and note it as a follow-up ADR instead.
 - **Alternatives considered**: each option gets honest pros/cons and the concrete reason
-  it lost — "rejected" without a reason is not a record.
+  it lost — "rejected" without a reason is not a record. A Decision that adds a mechanism has the existing component as
+  an option, with what it lacks, or says that none exists and what was searched.
 - **Temporary workarounds**: every workaround carries an explicit exit criterion; a
   workaround without one is undocumented debt.
 - **Contracts**: Go interfaces with full signatures (compilable, not pseudocode),
