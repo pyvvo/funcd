@@ -182,7 +182,8 @@ every object:
 
 ## Test it under funcdctl dev
 
-`funcdctl dev` runs an add-on's engine on the local Docker or containerd, and its admin token registers an Addon:
+`funcdctl dev` runs an add-on's engine on the local Docker or containerd, and a Function or Job on the add-on's
+runtimes there too. Its admin token registers an Addon:
 
 ```sh
 funcdctl --token funcd-dev-admin-token apply -f rauthy/app/addon.yaml

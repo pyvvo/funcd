@@ -55,9 +55,14 @@ funcd resolves `spec.runtime` to one of its own runtimes first, then to an Addon
 `runtime.containerd.imageOverride`. A Revision records the image of the Addon's runtime that serves it in
 `spec.runtimeImage`, and its workers run that image, pulled by digest as an engine's is: an upgrade of the Addon moves
 no Revision, and only a change of the Function's spec makes a Revision that runs the new image. A Function applied
-before its Addon turns `Ready` once the Addon ships its runtime for Functions. Such a worker runs on containerd; on a
-process server, and under `funcdctl dev`, it is `RuntimeUnavailable`. A Function on such a runtime is a cloudevent
-one, with the bindings its image's shim builds in.
+before its Addon turns `Ready` once the Addon ships its runtime for Functions. Such a worker runs on containerd, and
+under `funcdctl dev` on the Docker or nerdctl that runs dev's add-on engines; on a process server it is
+`RuntimeUnavailable`. A Function on such a runtime is a cloudevent one, with the bindings its image's shim builds in.
+
+Under `funcdctl dev`, the worker's bundle is copied into a volume of its own, and the worker reaches funcd's local API
+at `FUNCD_INVOKE_URL`, sending `FUNCD_INVOKE_TOKEN` in the `X-Funcd-Invoke-Token` header, as funcd's shims do. On a
+Linux host it shares the host's network; on an engine in a VM, as on macOS, it reaches funcd at `funcd.host`. With no
+container engine, or a rootless one, the Function or Job is `RuntimeUnavailable`, naming why.
 
 ## Call its engine from a Function
 
