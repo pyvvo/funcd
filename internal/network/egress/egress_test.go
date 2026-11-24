@@ -662,10 +662,10 @@ func TestSourcesNamesAWorkerElseAnEngine(t *testing.T) {
 	require.Equal(t, fn, ref)
 }
 
-// scenario: gateway-never-dials-the-edge — with the data plane on every address, a connection to a node address at its
-// port is refused whatever rule permits it, a cidrs rule included, as the bridge address and a bound address are; the
-// same address at another port goes on to the PDP (ADR-0353 Decision 2).
-func TestScenarioGatewayNeverDialsTheEdge(t *testing.T) {
+// ADR-0353 Decision 2: with the data plane on every address, a connection to a node address at its port is refused
+// whatever rule permits it, a cidrs rule included, as the bridge address and a bound address are; the same address at
+// another port goes on to the PDP. The platform's case is pkg/funcd's TestScenarioGatewayNeverDialsTheEdge.
+func TestDecideRefusesTheEdgesAddresses(t *testing.T) {
 	t.Parallel()
 	worker := netip.MustParseAddr("10.63.0.6")
 	workers := NewMemoryWorkerIndex()

@@ -45,6 +45,7 @@ type executor struct {
 	egressForwarder egress.Forwarder
 	egressGateway   egress.Gateway
 	edge            []netip.AddrPort       // the gateway's Deps.Edge, which edgeBound fills once the data plane is bound
+	gatewayDeps     egress.Deps            // what the gateway decides with, its Edge places among them
 	volumes         volume.Manager         // the Functions' volumes (ADR-0262); nil ⇒ off
 	functions       *function.Reconciler   // a volume's Restore reads its DataMissing and stops its workers (useFunctions)
 	sockets         *local.Manager         // one local API listener per worker (ADR-0064)
@@ -150,7 +151,7 @@ func (e *executor) buildEgress(authz auth.Authorizer) error {
 	// The data plane binds after the gateway is built, so the gateway's Edge holds the places of its two addresses, the
 	// bridge's and the bound one, which edgeBound fills before the gateway serves; an empty place matches nothing.
 	e.edge = make([]netip.AddrPort, 2)
-	e.egressGateway = egress.New(true, egress.Deps{
+	e.gatewayDeps = egress.Deps{
 		GatewayPort: c.egressGatewayPort,
 		Workers:     e.egressSources,
 		DNS:         fwd,
@@ -159,7 +160,8 @@ func (e *executor) buildEgress(authz auth.Authorizer) error {
 		Logger:      c.logger.With("component", "egress.gateway"),
 		Engines:     e.egressEngines,
 		Edge:        e.edge,
-	})
+	}
+	e.egressGateway = egress.New(true, e.gatewayDeps)
 	return nil
 }
 

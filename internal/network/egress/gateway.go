@@ -256,6 +256,12 @@ func decideConnect(ctx context.Context, d Deps, src netip.Addr, dst netip.AddrPo
 	return dec, rec, nil
 }
 
+// Decide is the gateway's decision on one connection from src to dst, as Serve makes it for a redirected one; asserted is
+// the name the client's SNI or Host gave, "" for none.
+func (d Deps) Decide(ctx context.Context, src netip.Addr, dst netip.AddrPort, asserted string) (auth.Decision, AuditRecord, error) {
+	return decideConnect(ctx, d, src, dst, asserted)
+}
+
 func contains(ss []string, s string) bool {
 	for _, x := range ss {
 		if x == s {

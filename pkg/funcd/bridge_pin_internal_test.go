@@ -319,3 +319,41 @@ func TestTheEdgeListensOnTheBridgeWhereTheGatewayRuns(t *testing.T) {
 	res, body := bridgeCall(nobody, "localhost", "/function/x", "").send(t, plain)
 	require.Equal(t, http.StatusNotFound, res.StatusCode, "and no pin: %s", body)
 }
+
+// nodeAddr is an IPv4 address on this host's interfaces, off loopback when it has one.
+func nodeAddr(t *testing.T) netip.Addr {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	require.NoError(t, err)
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && ipn.IP.To4() != nil && !ipn.IP.IsLoopback() {
+			return netip.MustParseAddr(ipn.IP.To4().String())
+		}
+	}
+	return netip.MustParseAddr("127.0.0.1")
+}
+
+// scenario: gateway-never-dials-the-edge — with server.dataPlaneAddr on every address and an EgressPolicy whose cidrs
+// rule holds the node's address, the gateway the platform builds refuses a worker's connection to that address at the
+// data plane's port, and to the bridge address there; at another port the rule lets the connection through
+// (ADR-0353 Decision 2).
+func TestScenarioGatewayNeverDialsTheEdge(t *testing.T) {
+	t.Parallel()
+	node := nodeAddr(t)
+	lan := &v1.EgressPolicy{TypeMeta: tmeta(v1.KindEgressPolicy)}
+	lan.Name, lan.Namespace, lan.ResourceGroup = "lan", "team", "rg1"
+	lan.Spec.Rules = []v1.EgressRule{{To: v1.EgressTo{CIDRs: []string{node.String() + "/32", testBridge().String() + "/32"}}}}
+	p := bridgePlatform(t, []v1.Object{lan}, WithDataPlaneAddr("0.0.0.0:0"))
+	port := netip.MustParseAddrPort(p.DataPlaneAddr()).Port()
+	worker := netip.MustParseAddr(teamWorker)
+	for _, dst := range []netip.AddrPort{netip.AddrPortFrom(node, port), netip.AddrPortFrom(testBridge(), port)} {
+		dec, rec, err := p.exec.gatewayDeps.Decide(context.Background(), worker, dst, "")
+		require.NoError(t, err)
+		require.False(t, dec.Allowed, "%s: %s", dst, rec.Reason)
+		require.Contains(t, rec.Reason, "edge listens on", dst.String())
+		require.Equal(t, "team", rec.Namespace)
+	}
+	dec, rec, err := p.exec.gatewayDeps.Decide(context.Background(), worker, netip.AddrPortFrom(node, port+1), "")
+	require.NoError(t, err)
+	require.True(t, dec.Allowed, "the cidrs rule permits the node at another port: %s", rec.Reason)
+}
