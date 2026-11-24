@@ -1,7 +1,7 @@
 # ADR-0345: A Function reconciles an engineless kind's objects, and a deletion waits for its destroy
 
 - **Status**: Implemented (2026-11-24), review passed in its third round, over the code and the amendment of
-  2026-11-24, one wording Minor open ([report](../reviews/adr-0345-implementation-claude-opus-5-5-3.md)); Reviewing
+  2026-11-24, its one wording Minor since fixed ([report](../reviews/adr-0345-implementation-claude-opus-5-5-3.md)); Reviewing
   (2026-11-24, implemented); Accepted (2026-11-23), by the decider, after five rounds of an independent judge, every
   Blocker and Major folded
 - **Amended in place**: 2026-11-24, on the decider's delegation ("shouldn't left anything open", then "Accept"), after
