@@ -35,6 +35,25 @@ you must *describe* a check, describe it generically ("grepped for the local use
 transcribe the real value**. The single exception: when genuinely operating inside a *separate* sibling project
 or a remote target (e.g. the homebox box), that project's own root is the path origin — still never an OS-absolute prefix.
 
+## ⛔ Not everything is an issue: funcd gives the constructs, the user builds
+
+funcd lets its users build what they want. Like Rust, its defaults and its checks keep a well-configured platform safe, and a user
+may still choose otherwise, even to break their own setup. A session that raises each of those choices costs more time than it
+saves, and each "fix" takes some of that freedom away: soon there are more issues than features. Before any finding, in chat too:
+
+1. **Can the spec, a Policy or a config key set it? Then it is not an issue**, security included: an open address, a wide
+   binding, a high limit, a default that someone would choose otherwise. No bug, advisory, issue, card or question to the decider,
+   and no changed default. (2026-11-24: a Function's address, on by default, came up as a security finding, and
+   `ingress.enabled: false` already made it private.)
+2. **It is one when funcd breaks its own promise**: what a spec, a Policy, a binding or a namespace boundary says is not enforced,
+   or there is a crash, lost data or a hang. Name the promise, then do the two checks below.
+3. **A best practice is guidance.** It goes into a guide page, an example or a path-scoped rule. funcd refuses what cannot work, or
+   what crosses a boundary between tenants; no admission, test or lint is added to force a user's choice.
+4. **Stay on the work.** Report what blocks the task, or what the change itself breaks. Do not search the rest for problems, and
+   leave out of the reply one met on the way, unless it is rule 2's.
+
+It binds subagents, judges and reviewers too.
+
 ## ⛔ Is it a bug? Verify twice before you say so
 
 Every package here is built from an ADR, so most surprising behavior was decided, accepted or deferred by someone. Calling it
@@ -64,13 +83,14 @@ Then give it one verdict, citing what you read:
 | Verdict | It means | What you do |
 |---|---|---|
 | `bug` | It breaks a clause you can cite, or no sound design could want it (a crash, lost data, a hang), and nothing above accepts it | `/fix`, or file it; its `### Design check` records this |
+| `configurable` | The spec, a Policy or a config key sets it, and funcd enforces what they say | Nothing: it is not an issue (above) |
 | `accepted` | An ADR decided it, named it as a cost or a risk, left it out on purpose or rejected its fix, or, where no clause says otherwise, a test pins it | No issue and no fix: report it with the citation. Changing it is the decider's new decision: a `kind/feature` with `needs-adr` and a superseding ADR, or a board card |
 | `deferred` | A board card, an ADR's open question or an open issue holds it (an open `kind/bug` is `bug`, already filed) | No new issue and no fix: add your evidence to the card or the issue |
 | `uncovered` | Nothing above speaks of it, and a sound design could want either | A question for the decider with the evidence, or a line of the report in a campaign. No fix until answered |
 
 Check a fix you would propose the same way: it can break the rule the behavior follows. `driver.py create --kind bug` refuses an
-issue with no Design check, and `/fix` and `/fix-review` stop on one that does not hold. A security finding takes the same two
-checks and stays in its private advisory.
+issue with no Design check, and `/fix` and `/fix-review` stop on one that does not hold. A security finding is a broken promise (rule
+2 above), takes the same two checks and stays in its private advisory.
 
 ## The four document layers (+ code)
 
