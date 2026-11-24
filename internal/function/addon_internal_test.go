@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/envresolve"
 )
@@ -15,8 +16,8 @@ import (
 func TestAddonBindingGivesTheProxyEnv(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, fakeResolver{})
-	r.addonProxy = AddonProxy{Address: func() (string, error) { return "10.63.0.1:40123", nil }, Token: func(ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) string {
-		return "token-of-" + string(kind) + "-" + string(ns) + "-" + string(name)
+	r.addonProxy = AddonProxy{Address: func() (string, error) { return "10.63.0.1:40123", nil }, Token: func(ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) (string, error) {
+		return "token-of-" + string(kind) + "-" + string(ns) + "-" + string(name), nil
 	}}
 	fn := sampleFn()
 	fn.Name = "rauthy-settings"
@@ -39,6 +40,13 @@ func TestAddonBindingGivesTheProxyEnv(t *testing.T) {
 	spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 	require.Equal(t, "http://10.63.0.1:40123/addon/idp", spec.Env["FUNCD_ADDON_IDP_URL"])
 	require.Equal(t, "token-of-Function-default-rauthy-settings", spec.Env["FUNCD_ADDON_IDP_TOKEN"])
+
+	r.addonProxy.Token = func(v1.NamespaceName, v1.Kind, v1.ObjectName) (string, error) {
+		return "", fault.Unavailablef("test", "no master of namespace default yet")
+	}
+	_, _, g = addonHook{r}.own(functionWorkload(fn))
+	require.NotNil(t, g, "a worker node without the namespace's master (FEAT-0002 decision 8)")
+	require.Equal(t, reasonNamespaceKeyMissing, g.reason)
 }
 
 // scenario: addon-binding-missing — a Function that binds an object that does not exist waits Pending,

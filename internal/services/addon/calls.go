@@ -10,6 +10,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/platform/pathx"
 	"github.com/pyvvo/funcd/internal/services"
 	"github.com/pyvvo/funcd/internal/store"
@@ -160,8 +161,8 @@ func tokenKey(master []byte) []byte {
 
 // Token is a workload's token at the add-on proxy, FUNCD_ADDON_<ALIAS>_TOKEN: its kind, namespace and name,
 // "<kind>/<ns>/<name>", so a Job's token is never a same-named Function's (ADR-0351 Decision 4), and an HMAC of them
-// under a key derived from the node master. It is deterministic, as the lake token is, so it is the same across
-// restarts; rotating the master rotates it.
+// under a key derived from master, the node's or, on a worker node, the namespace's own. It is deterministic, as the lake
+// token is, so it is the same across restarts; rotating the master rotates it.
 func Token(master []byte, ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) string {
 	subject := string(kind) + "/" + string(ns) + "/" + string(name)
 	m := hmac.New(sha256.New, tokenKey(master))
@@ -171,8 +172,9 @@ func Token(master []byte, ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName)
 }
 
 // TokenCaller is the Function or the Job a proxy token names, read back by its kind, ok false for any other value; a
-// Job's ref carries no run, which the proxy does not need.
-func TokenCaller(master []byte, token string) (local.Ref, bool) {
+// Job's ref carries no run, which the proxy does not need. The namespace that the token claims picks the master, so a
+// claim holds only under that namespace's own (FEAT-0002 decision 8).
+func TokenCaller(masterOf nsmaster.Source, token string) (local.Ref, bool) {
 	enc := base64.RawURLEncoding
 	head, sig, found := strings.Cut(token, ".")
 	if !found {
@@ -186,17 +188,21 @@ func TokenCaller(master []byte, token string) (local.Ref, bool) {
 	if err != nil {
 		return local.Ref{}, false
 	}
-	m := hmac.New(sha256.New, tokenKey(master))
-	m.Write(subject)
-	if !hmac.Equal(got, m.Sum(nil)) {
-		return local.Ref{}, false
-	}
 	parts := strings.Split(string(subject), "/")
 	if len(parts) != 3 || v1.NamespaceName(parts[1]).Validate() != nil || v1.ObjectName(parts[2]).Validate() != nil {
 		return local.Ref{}, false
 	}
 	kind := v1.Kind(parts[0])
 	if kind != v1.KindFunction && kind != v1.KindJob {
+		return local.Ref{}, false
+	}
+	master, err := masterOf(v1.NamespaceName(parts[1]))
+	if err != nil {
+		return local.Ref{}, false
+	}
+	m := hmac.New(sha256.New, tokenKey(master))
+	m.Write(subject)
+	if !hmac.Equal(got, m.Sum(nil)) {
 		return local.Ref{}, false
 	}
 	return local.Ref{Namespace: v1.NamespaceName(parts[1]), Kind: kind, Name: v1.ObjectName(parts[2])}, true

@@ -9,8 +9,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/services/addon"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
@@ -145,15 +147,40 @@ func TestProxyToken(t *testing.T) {
 	t.Parallel()
 	master := []byte("node master")
 	token := addon.Token(master, "default", v1.KindFunction, "rauthy-settings")
-	got, ok := addon.TokenCaller(master, token)
+	got, ok := addon.TokenCaller(oneMaster(master), token)
 	require.True(t, ok)
 	require.Equal(t, local.FunctionRef("default", "rauthy-settings"), got)
 	require.Equal(t, token, addon.Token(master, "default", v1.KindFunction, "rauthy-settings"), "deterministic")
 	for _, bad := range []string{"", "x", token + "a", addon.Token([]byte("another master"), "default", v1.KindFunction, "rauthy-settings"),
 		strings.Split(addon.Token(master, "default", v1.KindFunction, "other"), ".")[0] + "." + strings.Split(token, ".")[1]} {
-		_, ok := addon.TokenCaller(master, bad)
+		_, ok := addon.TokenCaller(oneMaster(master), bad)
 		require.False(t, ok, "%q", bad)
 	}
+}
+
+func oneMaster(master []byte) nsmaster.Source {
+	return func(v1.NamespaceName) ([]byte, error) { return master, nil }
+}
+
+// FEAT-0002 decision 8: on a worker node each namespace's tokens come from its own master, so one namespace's master
+// makes no token that names a workload of another, and a namespace without one names no one.
+func TestAProxyTokenNamesItsCallerOnlyUnderItsNamespacesMaster(t *testing.T) {
+	t.Parallel()
+	masters := nsmaster.Source(func(ns v1.NamespaceName) ([]byte, error) {
+		if ns == "gone" {
+			return nil, fault.Unavailablef("test", "no master of namespace %s", ns)
+		}
+		return []byte("master of " + ns), nil
+	})
+	for _, ns := range []v1.NamespaceName{"e1", "e2"} {
+		got, ok := addon.TokenCaller(masters, addon.Token([]byte("master of "+ns), ns, v1.KindFunction, "f"))
+		require.True(t, ok)
+		require.Equal(t, local.FunctionRef(ns, "f"), got)
+	}
+	_, ok := addon.TokenCaller(masters, addon.Token([]byte("master of e1"), "e2", v1.KindFunction, "f"))
+	require.False(t, ok, "e1's master signs no token of e2")
+	_, ok = addon.TokenCaller(masters, addon.Token([]byte("master of gone"), "gone", v1.KindFunction, "f"))
+	require.False(t, ok, "a namespace whose master the node lacks")
 }
 
 // ADR-0351 Decisions 2 and 4: a Job's call goes through the Job's own bindings, asked as the Job; the proxy token signs
@@ -184,9 +211,9 @@ func TestJobCallsAsItself(t *testing.T) {
 	master := []byte("node master")
 	jobToken := addon.Token(master, "default", v1.KindJob, "rauthy-settings")
 	require.NotEqual(t, addon.Token(master, "default", v1.KindFunction, "rauthy-settings"), jobToken)
-	got, ok := addon.TokenCaller(master, jobToken)
+	got, ok := addon.TokenCaller(oneMaster(master), jobToken)
 	require.True(t, ok)
 	require.Equal(t, v1.JobOwner("rauthy-settings"), got.Workload())
-	_, ok = addon.TokenCaller(master, addon.Token(master, "default", v1.KindLake, "rauthy-settings"))
+	_, ok = addon.TokenCaller(oneMaster(master), addon.Token(master, "default", v1.KindLake, "rauthy-settings"))
 	require.False(t, ok, "a token of another kind")
 }

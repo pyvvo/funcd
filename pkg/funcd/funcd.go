@@ -924,8 +924,8 @@ func (p *Platform) buildControlPlane() error {
 		return p.collector.CollectNamespace(ctx, ns)
 	}
 	if err := p.addon.build(addonDeps{secrets: p.secrets.resolver, routes: edgeAgg, ctrl: ctrl,
-		indexEngines: p.exec.indexAddonEngines, authz: cedarPDP, master: master, engineLine: p.exec.keepDevEngineLine,
-		collect: collect}); err != nil {
+		indexEngines: p.exec.indexAddonEngines, authz: cedarPDP, master: master, masters: masters,
+		follows: p.agent != nil, engineLine: p.exec.keepDevEngineLine, collect: collect}); err != nil {
 		return err
 	}
 	p.exec.addonNamespaces = p.addon.engineNamespaces
