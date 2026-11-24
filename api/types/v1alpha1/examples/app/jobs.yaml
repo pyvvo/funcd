@@ -1,0 +1,16 @@
+# region app
+apiVersion: funcd.io/v1alpha1
+kind: App
+metadata:
+  name: reports
+  namespace: default
+  resourceGroup: reports
+spec:
+  version: 1.0.0
+  jobs:
+    - name: report
+      runtime: nodejs22
+      handler: handle
+      image: registry.example.com/report:1.0.0
+      timeout: 10m
+# endregion app
