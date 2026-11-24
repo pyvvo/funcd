@@ -13,7 +13,10 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/contract"
+	"github.com/pyvvo/funcd/internal/contractcheck"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/services"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
@@ -35,9 +38,9 @@ func (g jobGrants) Grant(ctx context.Context, caller local.Ref, alias string, ac
 	if err != nil {
 		return "", err
 	}
-	principal := &auth.EntityRef{Type: caller.Kind, Namespace: caller.Namespace, Name: caller.Name}
-	dec, err := g.authz.Authorize(ctx, auth.Request{Identity: auth.Identity{Subject: caller.String(), Principal: principal},
-		Action: action, Resource: &auth.EntityRef{Type: v1.KindJob, Namespace: caller.Namespace, Name: job}})
+	dec, err := g.authz.Authorize(ctx, auth.Request{
+		Identity: auth.Identity{Subject: caller.String(), Principal: services.Principal(caller.Namespace, caller.Workload())},
+		Action:   action, Resource: &auth.EntityRef{Type: v1.KindJob, Namespace: caller.Namespace, Name: job}})
 	if err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "authorize %s", action)
 	}
@@ -48,28 +51,23 @@ func (g jobGrants) Grant(ctx context.Context, caller local.Ref, alias string, ac
 }
 
 // bound is the Job that caller's spec.bindings.job names under alias, read from its current spec. A Job's worker binds
-// none, since a Job's spec refuses the list.
+// none, since a Job's spec refuses the list, and neither does a caller that is not stored.
 func (g jobGrants) bound(ctx context.Context, caller local.Ref, alias string) (v1.ObjectName, error) {
 	const op = "funcd.jobGrants.bound"
-	none := local.ErrJobNoBinding.Errorf(op, "%s binds no Job under the alias %q", caller, alias)
-	if caller.Kind != v1.KindFunction {
-		return "", none
-	}
-	obj, err := g.store.Get(ctx, v1.KindFunction.GVK(), caller.Namespace, caller.Name)
-	if fault.KindOf(err) == fault.NotFound {
-		return "", none
+	bindings, err := services.CallerBindings(ctx, g.store, caller.Namespace, caller.Workload())
+	switch fault.KindOf(err) {
+	case fault.NotFound, fault.Forbidden:
+		return "", local.ErrJobNoBinding.Errorf(op, "%s binds no Job under the alias %q", caller, alias)
 	}
 	if err != nil {
-		return "", fault.Wrapf(err, fault.KindOf(err), op, "read Function %s", caller)
+		return "", fault.Wrapf(err, fault.KindOf(err), op, "read the bindings of %s", caller)
 	}
-	if fn, ok := obj.(*v1.Function); ok {
-		for _, b := range fn.Spec.Bindings.Job {
-			if b.Alias == alias {
-				return b.Job, nil
-			}
+	for _, b := range bindings.Job {
+		if b.Alias == alias {
+			return b.Job, nil
 		}
 	}
-	return "", none
+	return "", local.ErrJobNoBinding.Errorf(op, "%s binds no Job under the alias %q", caller, alias)
 }
 
 // jobRunStarter creates and reads the runs that a Function starts (ADR-0349 Decisions 2 and 3). A create passes the
@@ -105,9 +103,9 @@ func (s *jobRunStarter) Start(ctx context.Context, caller local.Ref, job, name v
 	}
 	principal := cedarPrincipal(caller)
 	admitted, err := s.admit.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindJobRun.GVK(), Object: run,
-		Identity: auth.Identity{Subject: principal, Principal: &auth.EntityRef{Type: caller.Kind, Namespace: caller.Namespace, Name: caller.Name}}})
+		Identity: auth.Identity{Subject: principal, Principal: services.Principal(caller.Namespace, caller.Workload())}})
 	if err != nil {
-		return "", false, admissionCause(op, err)
+		return "", false, admissionRefusal(op, j, input, err)
 	}
 	created, ok := admitted.(*v1.JobRun)
 	if !ok {
@@ -179,14 +177,15 @@ func cedarPrincipal(caller local.Ref) string {
 	return fmt.Sprintf("%s::%q", caller.Kind, string(caller.Namespace)+"/"+string(caller.Name))
 }
 
-// admissionCause maps the admission's refusal of a run to the start's declared cause (ADR-0349 Decision 4): its input
-// over job.payloadLimit is ErrJobInputTooLarge, off the Job's contract ErrJobInputRefused, whose message names each
-// path as the control plane's 422 does, and any other refusal of the body ErrJobStartBodyInvalid.
-func admissionCause(op string, err error) error {
+// admissionRefusal maps the admission's refusal of a run to the start's answer (ADR-0349 Decision 4): an input off the
+// Job's contract is the 422 that a Function's call answers for it, a ContractViolation that the facet relays as it is,
+// as invoke relays a target's (the decider, 2026-11-24); an input over job.payloadLimit is ErrJobInputTooLarge, and any
+// other refusal of the body ErrJobStartBodyInvalid.
+func admissionRefusal(op string, job *v1.Job, input json.RawMessage, err error) error {
 	var refused huma.StatusError
 	switch {
 	case errors.As(err, &refused) && refused.GetStatus() == http.StatusUnprocessableEntity:
-		return local.ErrJobInputRefused.Errorf(op, "%s", refused.Error())
+		return contractRefusal(op, job, input, refused)
 	case fault.KindOf(err) == fault.PayloadTooLarge:
 		return local.ErrJobInputTooLarge.Errorf(op, "%v", err)
 	case fault.KindOf(err) == fault.Invalid:
@@ -195,9 +194,27 @@ func admissionCause(op string, err error) error {
 	return fault.Wrapf(err, fault.KindOf(err), op, "admit the run")
 }
 
+// contractRefusal is the 422 of an input off job's contract: the admission's message, and each value that breaks the
+// contract from the check the admission ran (admission.JobRunInputDetails).
+func contractRefusal(op string, job *v1.Job, input json.RawMessage, refused huma.StatusError) error {
+	details, err := admission.JobRunInputDetails(job, input)
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "check the run input")
+	}
+	violation := contractcheck.ContractViolation{Error: admission.JobRunInputMismatch(job.Name), Details: details}
+	if len(details) == 0 { // the Job changed since its admission: the admission's text names what broke
+		violation = contractcheck.ContractViolation{Error: refused.Error(), Details: []contract.Detail{}}
+	}
+	body, err := json.Marshal(violation)
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "encode the refusal")
+	}
+	return &local.UpstreamError{Status: http.StatusUnprocessableEntity, Body: body}
+}
+
 // sameJSONValue reports whether a and b hold the same JSON value: an object equal key by key in any order, an array
-// item by item, any other value as the same compact text. An empty value is null, as a run with no input calls its
-// handler with null data.
+// item by item, a string by its decoded text, whatever its escapes, any other value as the same compact text. An
+// empty value is null, as a run with no input calls its handler with null data.
 func sameJSONValue(a, b json.RawMessage) bool {
 	a, b = nullIfEmpty(a), nullIfEmpty(b)
 	switch {
@@ -223,6 +240,10 @@ func sameJSONValue(a, b json.RawMessage) bool {
 			}
 		}
 		return true
+	}
+	var sa, sb string
+	if json.Unmarshal(a, &sa) == nil && json.Unmarshal(b, &sb) == nil {
+		return sa == sb // the store writes &, < and > in a string as \u0026, \u003c and \u003e
 	}
 	var ca, cb bytes.Buffer
 	return json.Compact(&ca, a) == nil && json.Compact(&cb, b) == nil && bytes.Equal(ca.Bytes(), cb.Bytes())

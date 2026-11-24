@@ -64,7 +64,6 @@ func (jobRunContract) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 }
 
 func (a jobRunContract) Admit(ctx context.Context, req Request) (v1.Object, error) {
-	const op = "admission.jobrun-contract"
 	run, ok := req.Object.(*v1.JobRun)
 	if !ok {
 		return req.Object, nil
@@ -74,17 +73,42 @@ func (a jobRunContract) Admit(ctx context.Context, req Request) (v1.Object, erro
 		return req.Object, nil
 	}
 	job, ok := obj.(*v1.Job)
-	if !ok || job.Status.Contract == nil || len(job.Status.Contract.Input) == 0 {
+	if !ok {
 		return req.Object, nil
 	}
+	details, err := JobRunInputDetails(job, run.Spec.Input)
+	if err != nil || len(details) == 0 {
+		return req.Object, err
+	}
+	errs := make([]error, len(details))
+	for i, d := range details {
+		errs[i] = &huma.ErrorDetail{Message: d.Message, Location: "body.spec.input" + strings.ReplaceAll(d.Path, "/", ".")}
+	}
+	return nil, huma.Error422UnprocessableEntity(JobRunInputMismatch(run.Spec.Job), errs...)
+}
+
+// JobRunInputMismatch is the message of a run whose input breaks its Job's input schema, on a create and on a start
+// from a Function's code (ADR-0349 Decision 4).
+func JobRunInputMismatch(job v1.ObjectName) string {
+	return "run input does not match the input schema of Job " + string(job) + " (InputSchemaMismatch)"
+}
+
+// JobRunInputDetails is each value of input that breaks the input schema in job's status.contract, checked with the
+// rules and bounds of a call's contract check (ADR-0303); none when the Job has no contract yet, or one of an earlier
+// generation (#756), which leaves the input to the run's start. A run that a Function starts takes the same check
+// (ADR-0349 Decision 4).
+func JobRunInputDetails(job *v1.Job, input json.RawMessage) ([]contract.Detail, error) {
+	const op = "admission.jobrun-contract"
+	if job.Status.Contract == nil || len(job.Status.Contract.Input) == 0 {
+		return nil, nil
+	}
 	if c, found := job.Status.Conditions.Get("Ready"); found && c.ObservedGeneration != job.Generation {
-		return req.Object, nil // an edited Job keeps an earlier generation's contract until its pass, as a Workflow does (#756)
+		return nil, nil // an edited Job keeps an earlier generation's contract until its pass, as a Workflow does (#756)
 	}
 	v, err := contract.Compile(job.Status.Contract.Input, contract.WithCallBounds(contractcheck.CallBudget, contractcheck.MaxDigits))
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "compile the input schema of Job %q", run.Spec.Job)
+		return nil, fault.Wrapf(err, fault.Internal, op, "compile the input schema of Job %q", job.Name)
 	}
-	input := run.Spec.Input
 	if len(input) == 0 {
 		input = json.RawMessage("null") // the call's event carries null data for a run without input
 	}
@@ -92,15 +116,7 @@ func (a jobRunContract) Admit(ctx context.Context, req Request) (v1.Object, erro
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "spec.input")
 	}
-	if len(details) == 0 {
-		return req.Object, nil
-	}
-	errs := make([]error, len(details))
-	for i, d := range details {
-		errs[i] = &huma.ErrorDetail{Message: d.Message, Location: "body.spec.input" + strings.ReplaceAll(d.Path, "/", ".")}
-	}
-	return nil, huma.Error422UnprocessableEntity("run input does not match the input schema of Job "+
-		string(run.Spec.Job)+" (InputSchemaMismatch)", errs...)
+	return details, nil
 }
 
 // --- jobrun-spec (ADR-0347 Decision 3): Update on JobRun ---------------------------------------------------------

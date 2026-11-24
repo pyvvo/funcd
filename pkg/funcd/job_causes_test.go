@@ -9,8 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/contractcheck"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -28,7 +31,9 @@ type jobEnvs struct {
 // Decision 4).
 func jobCauseRows(envs jobEnvs) []causeRow {
 	const start, read = "POST /job/{alias}", "GET /job/{alias}/{run}"
-	post := func(path, body string) causeRequest { return causeRequest{method: http.MethodPost, path: path, body: body} }
+	post := func(path, body string) causeRequest {
+		return causeRequest{method: http.MethodPost, path: path, body: body}
+	}
 	get := func(path string) causeRequest { return causeRequest{method: http.MethodGet, path: path} }
 	row := func(endpoint string, cause *fault.KnownCause, caller v1.ObjectName, req causeRequest, before ...causeRequest) causeRow {
 		return causeRow{endpoint: endpoint, cause: cause, env: envs.start, caller: caller, before: before, request: req}
@@ -46,7 +51,6 @@ func jobCauseRows(envs jobEnvs) []causeRow {
 		row(start, local.ErrJobRunNameTaken, "planner", post("/job/stack", `{"input": {"n": 2}, "name": "taken"}`),
 			post("/job/stack", `{"input": {"n": 1}, "name": "taken"}`)),
 		row(start, local.ErrJobInputTooLarge, "planner", post("/job/stack", `{"input": "`+strings.Repeat("x", 262144)+`"}`)),
-		row(start, local.ErrJobInputRefused, "planner", post("/job/typed", `{"input": {}}`)),
 		row(read, local.ErrJobNoBinding, "planner", get("/job/other/tofu-1")),
 		row(read, local.ErrJobDenied, "denied", get("/job/stack/tofu-1")),
 		row(read, local.ErrJobRunNotFound, "planner", get("/job/stack/tofu-9")),
@@ -59,6 +63,33 @@ func TestJobCauseMatrix(t *testing.T) {
 	p := answersPlatform(t)
 	create(t, answersClient(), "http://"+p.Addr(), function("reader"))
 	runCauseMatrix(t, jobCauseRows(jobEnvs{main: &causeEnv{p: p}, start: jobStartEnv(t)}))
+}
+
+// ADR-0349 Decision 4 with the decider's ruling of 2026-11-24: a start whose input breaks the Job's contract answers
+// what a Function's call answers for it, 422 and a ContractViolation naming each path, with no cause of the local
+// API's, and starts no run.
+func TestJobStartOffTheContractAnswersAsACall(t *testing.T) {
+	t.Parallel()
+	env := jobStartEnv(t)
+	status, header, body := env.send(t, "planner", causeRequest{method: http.MethodPost, path: "/job/typed", body: `{"input": {"n": 1}}`})
+	require.Equal(t, http.StatusUnprocessableEntity, status, body)
+	require.Equal(t, "application/json", header.Get("Content-Type"))
+	var violation contractcheck.ContractViolation
+	require.NoError(t, json.Unmarshal([]byte(body), &violation), body)
+	require.Equal(t, "run input does not match the input schema of Job typed (InputSchemaMismatch)", violation.Error)
+	require.Len(t, violation.Details, 1, body)
+	require.Equal(t, "/name", violation.Details[0].Path, body)
+	require.NotEmpty(t, violation.Details[0].Message)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		"http://"+env.p.Addr()+"/apis/funcd.io/v1alpha1/namespaces/default/jobruns", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+answersAdmin)
+	resp, err := answersClient().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	var runs []json.RawMessage
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&runs))
+	require.Empty(t, runs, "no run is created")
 }
 
 // jobMatrixContract is the input schema that the Job typed's status holds in the start env: an object with a name.

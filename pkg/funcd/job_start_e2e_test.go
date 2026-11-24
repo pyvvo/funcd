@@ -156,8 +156,8 @@ func TestScenarioJobStartForbiddenByPolicy(t *testing.T) {
 	require.Empty(t, h.runsOf(t, "tofu"), "no run is created")
 }
 
-// scenario: job-start-input-refused — an input off the Job's contract is refused, naming the path. The local API answers
-// the cause, an Invalid one, with 400, as it answers every body it refuses; the ADR's 422 is the control plane's.
+// scenario: job-start-input-refused — an input off the Job's contract answers 422, naming the path, with the body that a
+// Function's call answers for the same refusal (the decider's ruling of 2026-11-24).
 func TestScenarioJobStartInputRefused(t *testing.T) {
 	t.Parallel()
 	h := newShimRig(t, "")
@@ -167,8 +167,9 @@ func TestScenarioJobStartInputRefused(t *testing.T) {
 	h.deployPlanner(t, stack())
 
 	got := h.plan(t, `{"input": {}}`)
-	require.Equal(t, http.StatusBadRequest, got.Status, got.Message)
-	require.Contains(t, got.Message, "spec.input.name", "the refusal names the path")
+	require.Equal(t, http.StatusUnprocessableEntity, got.Status, got.Message)
+	require.Contains(t, got.Message, `"error":"run input does not match the input schema of Job tofu (InputSchemaMismatch)"`)
+	require.Contains(t, got.Message, `"path":"/name"`, "the refusal names the path")
 	require.Empty(t, h.runsOf(t, "tofu"))
 }
 
@@ -180,8 +181,9 @@ func TestScenarioJobStartNamedTwice(t *testing.T) {
 	h.deployJob(t, "tofu", plansSrc, "", bypass)
 	h.deployPlanner(t, stack())
 
-	in := `{"input": {"op": "plan", "stack": "net"}, "name": "tofu-gen-7"}`
-	first, again := h.plan(t, in), h.plan(t, `{"name": "tofu-gen-7", "input": {"stack": "net", "op": "plan"}}`)
+	// &, < and > reach the store escaped, as json.Marshal writes them, and keep the input equal
+	in := `{"input": {"op": "plan", "stack": "net&dev <a>"}, "name": "tofu-gen-7"}`
+	first, again := h.plan(t, in), h.plan(t, `{"name": "tofu-gen-7", "input": {"stack": "net&dev <a>", "op": "plan"}}`)
 	// oracle: docs/design/job/start.fizz#CallerSucceeds
 	require.Equal(t, "tofu-gen-7", first.Run, first.Message)
 	require.Equal(t, "tofu-gen-7", again.Run, "the call sent again succeeds: %s", again.Message)
@@ -198,12 +200,12 @@ func TestScenarioJobStartNameTaken(t *testing.T) {
 	_, err := h.c.Create(context.Background(), &v1.JobRun{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindJobRun.GVK().APIVersion(), Kind: v1.KindJobRun},
 		ObjectMeta: v1.ObjectMeta{Name: "tofu-gen-7", Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       v1.JobRunSpec{Job: "backfill"}})
+		Spec:       v1.JobRunSpec{Job: "backfill", Input: json.RawMessage(`{"op": "plan"}`)}})
 	require.NoError(t, err)
 	h.deployPlanner(t, stack())
 
-	got := h.plan(t, `{"name": "tofu-gen-7"}`)
-	require.Equal(t, http.StatusConflict, got.Status, "a run of another Job holds the name: %s", got.Message)
+	got := h.plan(t, `{"name": "tofu-gen-7", "input": {"op": "plan"}}`)
+	require.Equal(t, http.StatusConflict, got.Status, "a run of another Job holds the name, with the same input: %s", got.Message)
 	require.Equal(t, "tofu-gen-8", h.plan(t, `{"name": "tofu-gen-8", "input": {"op": "plan"}}`).Run)
 	got = h.plan(t, `{"name": "tofu-gen-8", "input": {"op": "apply"}}`)
 	require.Equal(t, http.StatusConflict, got.Status, "a run with another input holds the name: %s", got.Message)

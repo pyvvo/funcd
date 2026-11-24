@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -21,7 +22,8 @@ import (
 type JobRunStarter interface {
 	// Start creates a run of job through ADR-0347's admission, named name or <job>-<id>, started by caller. A name a
 	// run of job with the same input holds returns that run with created false; one another run holds is
-	// ErrJobRunNameTaken.
+	// ErrJobRunNameTaken. An input off the Job's contract is an *UpstreamError, the 422 and the body that a Function's
+	// call answers for it, which the facet relays as it is.
 	Start(ctx context.Context, caller Ref, job v1.ObjectName, name v1.ObjectName, input json.RawMessage) (run v1.ObjectName, created bool, err error)
 	// Get returns run of namespace ns when it is a run of job; ErrJobRunNotFound otherwise.
 	Get(ctx context.Context, ns v1.NamespaceName, job, run v1.ObjectName) (v1.JobRun, error)
@@ -54,9 +56,6 @@ var (
 	ErrJobInputTooLarge = fault.NewKnownCause(fault.PayloadTooLarge, "job.input-too-large",
 		"The run's input is larger than job.payloadLimit.",
 		"Pass large data by reference, such as the key of an object in a Bucket.")
-	ErrJobInputRefused = fault.NewKnownCause(fault.Invalid, "job.input-refused",
-		"The run's input does not match the input schema of the Job's contract; the message names each path.",
-		"Send an input that the Job's contract accepts.")
 	ErrJobStartBodyInvalid = fault.NewKnownCause(fault.Invalid, "job.start-body-invalid",
 		`The body of the start is not {"input": <JSON>, "name": "<run>"}, or the name is not a DNS-1123 name.`,
 		"Send the input as JSON, and a name of lowercase letters, digits and dashes, or no name.")
@@ -86,7 +85,7 @@ type JobRunState struct {
 // registerJobStart adds POST /job/{alias} and GET /job/{alias}/{run}, each declaring its causes.
 func registerJobStart(mux facetMux, caller Ref, starter JobRunStarter, grants JobGrants, logger *slog.Logger) {
 	start := []*fault.KnownCause{ErrBodyTooLarge, ErrBodyUnreadable, ErrJobNoBinding, ErrJobDenied, ErrJobStartBodyInvalid,
-		ErrJobNotFound, ErrJobRunNameTaken, ErrJobInputTooLarge, ErrJobInputRefused}
+		ErrJobNotFound, ErrJobRunNameTaken, ErrJobInputTooLarge}
 	read := []*fault.KnownCause{ErrJobNoBinding, ErrJobDenied, ErrJobRunNotFound}
 	handle(mux, logger, "POST /job/{alias}", start, func(w http.ResponseWriter, r *http.Request) error {
 		const op = "workernode.local.job.start"
@@ -105,6 +104,15 @@ func registerJobStart(mux facetMux, caller Ref, starter JobRunStarter, grants Jo
 			return err
 		}
 		run, created, err := starter.Start(r.Context(), caller, job, in.Name, in.Input)
+		var refused *UpstreamError
+		if errors.As(err, &refused) { // an input off the contract: a Function's call answers it so, as no error of ours
+			logger.Warn("job start refused by the Job's contract", "caller", caller.String(), "alias", alias, "job", job,
+				"status", refused.Status)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(refused.Status)
+			_, _ = w.Write(refused.Body)
+			return nil
+		}
 		if err != nil {
 			logger.Warn("job start failed", "caller", caller.String(), "alias", alias, "job", job, "err", err.Error())
 			return err

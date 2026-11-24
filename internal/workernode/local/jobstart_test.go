@@ -129,12 +129,21 @@ func TestJobStartAnswers(t *testing.T) {
 		require.Len(t, s.calls(), before, "%s: nothing is started", name)
 	}
 
-	for _, refusal := range []*fault.KnownCause{local.ErrJobNotFound, local.ErrJobRunNameTaken, local.ErrJobInputTooLarge,
-		local.ErrJobInputRefused} {
+	for _, refusal := range []*fault.KnownCause{local.ErrJobNotFound, local.ErrJobRunNameTaken, local.ErrJobInputTooLarge} {
 		err := refusal.Errorf("test.Start", "refused")
 		rec := do(t, startHandler(plannerRef(), &startedRuns{err: err}, plannerGrants{}), http.MethodPost, "/job/stack", `{"input": {}}`)
 		require.Equal(t, fault.StatusOf(err), rec.Code, "%s: %s", refusal.Name(), rec.Body.String())
 	}
+
+	// ADR-0349 Decision 4 with the decider's ruling of 2026-11-24: an input off the Job's contract is answered as a
+	// Function's call answers it, the 422 and the body relayed as they are.
+	violation := `{"error": "run input does not match the input schema of Job tofu (InputSchemaMismatch)",` +
+		` "details": [{"path": "/name", "message": "missing property \"name\""}]}`
+	off := &startedRuns{err: &local.UpstreamError{Status: http.StatusUnprocessableEntity, Body: []byte(violation)}}
+	rec = do(t, startHandler(plannerRef(), off, plannerGrants{}), http.MethodPost, "/job/stack", `{"input": {}}`)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	require.JSONEq(t, violation, rec.Body.String())
 }
 
 // ADR-0349 Decisions 3 and 4: a read of a run of the bound Job answers its name, phase, reason and times, and its
@@ -182,8 +191,7 @@ func TestJobStartIsDescribed(t *testing.T) {
 		causes[e.Pattern] = e.Causes
 	}
 	require.Subset(t, causes["POST /job/{alias}"], []*fault.KnownCause{local.ErrJobNoBinding, local.ErrJobDenied,
-		local.ErrJobNotFound, local.ErrJobRunNameTaken, local.ErrJobInputTooLarge, local.ErrJobInputRefused,
-		local.ErrJobStartBodyInvalid})
+		local.ErrJobNotFound, local.ErrJobRunNameTaken, local.ErrJobInputTooLarge, local.ErrJobStartBodyInvalid})
 	require.ElementsMatch(t, []*fault.KnownCause{local.ErrJobNoBinding, local.ErrJobDenied, local.ErrJobRunNotFound},
 		causes["GET /job/{alias}/{run}"])
 }
