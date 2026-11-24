@@ -699,8 +699,8 @@ type AddonObjectBindings struct {
 // AddonObjectStatus is the observed state of an add-on object.
 type AddonObjectStatus struct {
 	Status `json:",inline"`
-	// Workload is the workload of the object's kind, stored at its first pass (ADR-0345 Decision 1).
-	Workload Workload           `json:"workload,omitempty" doc:"The workload of the object's kind, which funcd stores at the object's first pass: Engineless for a kind whose objects run no engine. No call of its Function carries the object before then, and a deletion holds only an object that has it."`
+	// Workload is the workload of the object's kind, stored at its first pass, Engineless or Engine (ADR-0345 Decision 1).
+	Workload Workload           `json:"workload,omitempty" doc:"The workload of the object's kind, which funcd stores at the object's first pass: Engineless for a kind whose objects run no engine, Engine once its engine has run. No call of its Function carries the object before then, and a deletion holds only an Engineless object. An Addon created again for the kind keeps it."`
 	Address  string             `json:"address,omitempty" doc:"The engine's own address, its host and port, which only funcd reaches."`
 	Restore  *AddonRestoreState `json:"restore,omitempty" doc:"The in-place Restore whose copy the engine loads: it goes once an engine started without restore.env is Ready, or once that Restore has failed or is gone. While it stands, the namespace is held."`
 	// AddonRevision is the revision the engine runs, and AppRevision, for an App's part, the App revision whose record

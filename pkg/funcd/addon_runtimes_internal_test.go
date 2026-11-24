@@ -308,3 +308,30 @@ func TestEnginelessKindKeepsItsWorkloadAcrossDeletion(t *testing.T) {
 	status, detail = e.send(t, http.MethodPost, addonsPath, addonAdminToken, infraStackAddon())
 	require.Equal(t, http.StatusOK, status, detail)
 }
+
+// ADR-0345 Decision 1 the other way: an object whose engine ran keeps its Engine mark once its Addon and the Addon's
+// revisions are gone, so an Addon created again for its kind as an Engineless kind is refused 409.
+func TestEngineKindKeepsItsWorkloadAcrossDeletion(t *testing.T) {
+	t.Parallel()
+	e := startAddons(t)
+	e.apply(t, e.admin, rauthyAddon("rauthy"))
+	logins := "/apis/funcd.io/v1alpha1/namespaces/default/identityproviders"
+	require.Eventually(t, func() bool {
+		status, _ := e.send(t, http.MethodPost, logins, addonDevToken, identityProvider("default"))
+		return status == http.StatusOK
+	}, 5*time.Second, 20*time.Millisecond, "the kind is served")
+	require.Eventually(t, func() bool {
+		stored, ok := e.object(t, "default", "login")
+		return ok && stored.Status.Workload == v1.WorkloadEngine
+	}, 5*time.Second, 10*time.Millisecond, "its engine's pass stores the mark")
+	status, detail := e.send(t, http.MethodDelete, addonsPath+"/rauthy", addonAdminToken, nil)
+	require.Equal(t, http.StatusNoContent, status, detail)
+
+	engineless := infraStackAddon()
+	engineless.Name, engineless.Spec.Runtimes[0].Name, engineless.Spec.Runtimes[0].Attributes.Kind = "rauthy", "rauthy", "IdentityProvider"
+	status, detail = e.send(t, http.MethodPost, addonsPath, addonAdminToken, engineless)
+	require.Equal(t, http.StatusConflict, status, detail)
+	require.Contains(t, detail, "default/login ran an engine")
+	status, detail = e.send(t, http.MethodPost, addonsPath, addonAdminToken, rauthyAddon("rauthy"))
+	require.Equal(t, http.StatusOK, status, detail)
+}

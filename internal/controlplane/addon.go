@@ -717,8 +717,9 @@ func engineFields(k servedKind, s v1.AddonObjectSpec) error {
 }
 
 // objectsKeepTheirWorkload refuses, 409, the create of an Addon whose kind has a stored object that ran the other way,
-// Engine or Engineless, by its mark or by the revision it pins (ADR-0345 Decision 1): an Addon deleted and created
-// again keeps the workload of its kind's objects, as a replace does (addonRules). An object that never ran is no bar.
+// by the mark its passes store, Engine once its engine ran or Engineless (ADR-0345 Decision 1): an Addon deleted and
+// created again keeps the workload of its kind's objects, as a replace does (addonRules). An object that never ran is no
+// bar. The mark outlives the Addon, whose revisions go with it.
 func (a addonUnique) objectsKeepTheirWorkload(ctx context.Context, ad *v1.Addon) error {
 	const op = "admission.addon-unique"
 	kind := ad.Spec.Kind()
@@ -729,26 +730,12 @@ func (a addonUnique) objectsKeepTheirWorkload(ctx context.Context, ad *v1.Addon)
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "list add-on objects")
 	}
-	var revs map[v1.ObjectName]*v1.AddonRevision
 	for _, obj := range objs {
 		o, ok := obj.(*v1.AddonObject)
-		if !ok || !v1.SameAddonKind(o.Spec.Kind, kind) || (o.Status.Workload == "" && o.Status.AddonRevision == "") {
+		if !ok || o.Status.Workload == "" || !v1.SameAddonKind(o.Spec.Kind, kind) {
 			continue
 		}
-		engineless := o.Status.Workload == v1.WorkloadEngineless
-		if !engineless {
-			if revs == nil {
-				if revs, err = addonRevisions(ctx, a.Store); err != nil {
-					return fault.Wrapf(err, fault.Internal, op, "list AddonRevisions")
-				}
-			}
-			rev, found := revs[o.Status.AddonRevision]
-			if !found {
-				continue
-			}
-			engineless = rev.Spec.Spec.Engineless()
-		}
-		if engineless != ad.Spec.Engineless() {
+		if engineless := o.Status.Workload == v1.WorkloadEngineless; engineless != ad.Spec.Engineless() {
 			ran := "an engine"
 			if engineless {
 				ran = "no engine"
@@ -758,21 +745,6 @@ func (a addonUnique) objectsKeepTheirWorkload(ctx context.Context, ad *v1.Addon)
 		}
 	}
 	return nil
-}
-
-// addonRevisions are the stored AddonRevisions by name.
-func addonRevisions(ctx context.Context, r admission.StoreReader) (map[v1.ObjectName]*v1.AddonRevision, error) {
-	list, err := r.List(ctx, v1.KindAddonRevision.GVK(), "")
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[v1.ObjectName]*v1.AddonRevision, len(list))
-	for _, obj := range list {
-		if rev, ok := obj.(*v1.AddonRevision); ok {
-			out[rev.Name] = rev
-		}
-	}
-	return out, nil
 }
 
 // settingsFunctions checks an object's own Functions (ADR-0341 Decision 3, ADR-0345 Decision 3): each entry names a

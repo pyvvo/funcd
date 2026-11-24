@@ -122,7 +122,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if !st.Ready {
 		r.seeTarget(o.Namespace, o.Name, false)
 	}
-	o.Status.Address = st.Address
+	o.Status.Address, o.Status.Workload = st.Address, v1.WorkloadEngine // the mark outlives the Addon (ADR-0345 Decision 1)
 	o.Status.Phase, o.Status.ObservedGeneration = v1.PhasePending, o.Generation
 	if st.Ready {
 		o.Status.Phase = v1.PhaseReady
