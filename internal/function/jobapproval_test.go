@@ -188,6 +188,47 @@ func TestJobRunExpiryIsCheckedWhenTheSlotFrees(t *testing.T) {
 	require.Equal(t, []function.RunCall{function.CallPreview, function.CallPreview}, h.exec.kindsOf("tofu-a"))
 }
 
+// A Job edit that sets approval.bypass while its runs wait, which no ADR clause decides (the Jobs chapter's uncovered
+// row): the bypass is read from the Job when a slot frees, so an approved run that waits for one runs at once, its old
+// preview unchecked, while a run AwaitingApproval keeps waiting for a person.
+func TestJobRunBypassSetWhileRunsWait(t *testing.T) {
+	t.Parallel()
+	h := newRunHarness(t, 1)
+	h.readyJob(t, "tofu", func(s *v1.JobSpec) { s.Approval = v1.JobApproval{Expiry: v1.Duration(time.Hour)} })
+	h.readyJob(t, "busy", nil)
+	h.run(t, "tofu-a", "tofu", "", nil)
+	h.reconcileRun(t, "tofu-a")
+	first := h.previewRun(t, "tofu-a", `{"summary":"2 to add"}`)
+	h.run(t, "tofu-w", "tofu", "", nil)
+	h.reconcileRun(t, "tofu-w")
+	require.Equal(t, v1.JobRunAwaitingApproval, h.previewRun(t, "tofu-w", `{"summary":"1 to change"}`).Status.Phase)
+
+	h.run(t, "busy-a", "busy", "", nil)
+	h.reconcileRun(t, "busy-a")
+	require.Equal(t, v1.JobRunRunning, h.getRun(t, "busy-a").Status.Phase)
+	h.approve(t, "tofu-a", first.Status.Preview.Digest)
+	h.reconcileRun(t, "tofu-a")
+	requireRun(t, h.getRun(t, "tofu-a"), v1.JobRunPending, v1.JobRunQueued)
+
+	job := h.getJob(t, "tofu")
+	job.Spec.Approval.Bypass = true
+	_, err := h.st.Update(context.Background(), job)
+	require.NoError(t, err)
+	h.reconcileJob(t, "tofu")
+	require.Equal(t, v1.ConditionTrue, readyOf(t, h.getJob(t, "tofu")).Status)
+
+	h.clk.Advance(time.Hour + time.Second)
+	h.exec.answerOf("busy-a") <- function.NewRunAnswer(v1.JobRunSucceeded, "", "", nil)
+	h.waitEnded(t, "busy-a")
+	h.reconcileRun(t, "busy-a")
+	h.reconcileRun(t, "tofu-a")
+	require.Equal(t, v1.JobRunRunning, h.getRun(t, "tofu-a").Status.Phase, "the approved run runs at once, its old preview unchecked")
+	require.Eventually(t, func() bool { return len(h.exec.kindsOf("tofu-a")) == 2 }, 5*time.Second, time.Millisecond)
+	require.Equal(t, []function.RunCall{function.CallPreview, function.CallApply}, h.exec.kindsOf("tofu-a"))
+	h.reconcileRun(t, "tofu-w")
+	require.Equal(t, v1.JobRunAwaitingApproval, h.getRun(t, "tofu-w").Status.Phase, "a run AwaitingApproval keeps waiting")
+}
+
 // ADR-0348 Decision 2: a Previewing run holds a slot as a Running one does, and one AwaitingApproval holds none; the
 // run that leaves its slot to wait for a person reaches the runs that wait for one.
 func TestJobRunPreviewHoldsASlot(t *testing.T) {
