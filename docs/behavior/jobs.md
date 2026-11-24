@@ -19,9 +19,10 @@ stateDiagram-v2
 A Job is built as a Function is, from the fields it shares with one, and each of its executions is a JobRun, created
 through the API as a WorkflowRun is (ADR-0347). This chapter holds what the API does with them: their checks, a run's
 admission and who may act, the Job's pass, its revisions and its contract, then a run's start, its worker, its call and
-its end, a restart, its logs and its retention, and a run's preview and approval (ADR-0348), whose phases are the state
-machine of [approval.md](../design/job/approval.md). The job.* keys are in [Limits](limits.md), and a restore's end of the open
-runs in [Disaster recovery](disaster-recovery.md). New words: Admitted, Refused, Kept.
+its end, a restart, its logs and its retention, a run's preview and approval (ADR-0348), whose phases are the state
+machine of [approval.md](../design/job/approval.md), and a Function's start and read of a run through its bindings.job
+(ADR-0349). The job.* keys are in [Limits](limits.md), and a restore's end of the open runs in
+[Disaster recovery](disaster-recovery.md). New words: Admitted, Refused, Kept.
 
 | Where | What happens | Time | You see | Status | Source |
 |---|---|---|---|---|---|
@@ -65,6 +66,11 @@ runs in [Disaster recovery](disaster-recovery.md). New words: Admitted, Refused,
 | A rejection | spec.reject, one-way, with spec.rejectReason, of a run not yet Running, by a caller who may update the Job: the run ends Rejected, the reason as its message, a preview's worker stopped. It wins over an approval no pass acted on | `MaxJobRunRejectReason` 512 | `Rejected` | decided | ADR-0348 Decision 5, `TestJobRunRejection`, `TestScenarioJobRejectEndsRun` |
 | A run's own run read | GET /job/run answers a Job's worker its run and recorded approval, null with none; the shim fills context.approval from it in the run's call and fails the call when it cannot. A Function's worker is refused | none | 403 `job.not-a-job-worker` | decided | ADR-0348 Decision 6, `TestGetJobRunAnswersTheCallersOwnRun`, `TestScenarioJobApproveRuns` |
 | An ended run | Deleted job.retention after its endedAt by a sweep, at most an hour apart, that skips held runs | `job.retention` 720h | the JobRun gone | decided | ADR-0347 Decision 8, `TestJobRunRetention` |
+| A Function's start of a run | `ctx.job.start` on an alias of spec.bindings.job, once Cedar allows job::start, creates the run through the control plane's admission and answers its name at once; startedBy is the caller's Cedar principal, `Function::"<ns>/<name>"` | none | 201 `{"run": "<job>-<id>"}` | decided | ADR-0349 Decision 2, `TestScenarioFunctionStartsJobRun`, `TestJobRunStarterStarts` |
+| A named start sent again | A name that a run of the bound Job holds with an input equal as a JSON value answers that run and starts nothing; a name another run holds, of another Job or with another input, is refused | none | 200 `{"run": "<name>"}`; 409 `job.run-name-taken` | decided | ADR-0349 Decision 2, `TestScenarioJobStartNamedTwice`, `TestScenarioJobStartNameTaken` |
+| A Function's read of a run | `ctx.job.get` answers a run of the bound Job: name, phase, reason, times and, once Succeeded, result; a run no pass reached reads Pending. Another Job's run, or one job.retention removed, is not found | none | 404 `job.run-not-found` | decided | ADR-0349 Decision 3, `TestScenarioFunctionReadsJobRun`, `TestScenarioJobGetOtherJob` |
+| A start or read refused | No binding of the alias, or a Policy's forbid of job::start or job::read, refuses it and starts nothing; a start on a deleted bound Job is not found | none | 403 `job.no-binding`, `job.denied`; 404 `job.job-not-found` | decided | ADR-0349 Decisions 1 and 4, `TestScenarioJobStartWithoutBinding`, `TestScenarioJobStartForbiddenByPolicy`, `TestScenarioJobStartJobGone` |
+| A start's input refused | An input over job.payloadLimit, or off the Job's contract, is refused, naming each path. The local API answers an Invalid cause with 400, where ADR-0349 says 422, as the control plane's create answers | none | 413 `job.input-too-large`; 400 `job.input-refused` | differs | ADR-0349 Decision 4, `TestScenarioJobStartInputRefused`, `TestJobCauseMatrix` |
 
 <!-- generated values, do not edit: just behavior-values -->
 <details>
