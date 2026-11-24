@@ -2,8 +2,9 @@
 // container per add-on object, started from its Addon's image with its port published on 127.0.0.1, its storage a named
 // volume mounted with no copy-up, and its files reached only through a helper container. Runtime implements
 // provider.Runtime, provider.Volumes and ADR-0333's AddonFiles over an Engine: Docker's Engine API over a unix socket
-// here, the nerdctl CLI in internal/provider/nerdctl. Every container and volume carries the session's key in its name
-// and in its funcd/dev-key label, and a Runtime touches no other.
+// here, the nerdctl CLI in internal/provider/nerdctl. NewWorkers runs the session's Function and Job workers on an
+// Addon's runtime on the same Engine (ADR-0346). Every container and volume carries the session's key in its name and in
+// its funcd/dev-key label, and a Runtime touches no other.
 package docker
 
 import (
@@ -59,6 +60,7 @@ const (
 	roleHelper     = "helper"
 	roleStorage    = "storage"
 	roleQuarantine = "quarantine"
+	roleWorker     = "worker" // a Function's or Job's worker and its volumes (ADR-0346 Decision 7)
 )
 
 const (
@@ -139,6 +141,10 @@ type Container struct {
 	Labels  map[string]string
 	// Published maps each published port, "<port>/tcp", to the host address it is published at.
 	Published map[string]string
+	// ExitCode is the status a stopped container ended with, 128 and the signal's number when one ended it; Pid is a
+	// running container's process, as its host sees it (ADR-0346 Decision 4).
+	ExitCode int
+	Pid      int
 }
 
 // Volume is a volume and its labels.
@@ -147,30 +153,40 @@ type Volume struct {
 	Labels map[string]string
 }
 
-// RunSpec is an engine's container (Decision 2): Port published on 127.0.0.1 at a free port, Volume, when set, mounted
-// at Target with no copy-up, no restart policy, the stop signal SIGTERM and StopGrace before a kill. The image's own
-// user runs it.
+// RunSpec is a container to run (Decision 2): Port, when set, published on 127.0.0.1 at a free port, each of Mounts with
+// no copy-up, no restart policy, the stop signal SIGTERM and StopGrace before a kill. The image's own user runs it, its
+// entrypoint or Cmd, which replaces the whole of it. A worker (ADR-0346 Decisions 4 and 5) runs on the host's network or
+// with ExtraHosts, within NanoCPUs and MemoryBytes when they are set.
 type RunSpec struct {
-	Name      string
-	Image     string
-	Env       map[string]string
-	Labels    map[string]string
-	Port      int
-	Volume    string
-	Target    string
-	StopGrace time.Duration
+	Name        string
+	Image       string
+	Cmd         []string
+	Env         map[string]string
+	Labels      map[string]string
+	Port        int // unused with HostNetwork
+	Mounts      []Mount
+	StopGrace   time.Duration
+	HostNetwork bool
+	ExtraHosts  []string // "funcd.host:host-gateway"
+	NanoCPUs    int64
+	MemoryBytes int64
 }
 
-// Helper is a helper container of Image, the volumes of Mounts at their targets (Decision 4).
+// Helper is a helper container of Image, the volumes of Mounts at their targets (Decision 4), on the host's network when
+// HostNetwork is set (ADR-0346 Decision 5).
 type Helper struct {
-	Name   string
-	Image  string
-	Labels map[string]string
-	Mounts []Mount
+	Name        string
+	Image       string
+	Labels      map[string]string
+	Mounts      []Mount
+	HostNetwork bool
 }
 
-// Mount is a volume mounted at an absolute path.
-type Mount struct{ Volume, Target string }
+// Mount is a volume mounted at an absolute path, read-only when ReadOnly is set.
+type Mount struct {
+	Volume, Target string
+	ReadOnly       bool
+}
 
 // Runtime is the add-on runtime of one dev session over an Engine.
 type Runtime struct {
@@ -396,6 +412,9 @@ func NewRuntime(ctx context.Context, eng Engine, key string, persist bool, logge
 	return r, nil
 }
 
+// Engine is the engine the runtime drives, on which funcdctl dev also runs its workers (ADR-0346 Decision 4).
+func (r *Runtime) Engine() Engine { return r.eng }
+
 // name is ref's container and volume name (Decision 6).
 func (r *Runtime) name(ref provider.ProviderRef) string {
 	return namePrefix + r.key + "-" + string(ref.Namespace) + "-" + string(ref.Name)
@@ -506,7 +525,7 @@ func (r *Runtime) start(ctx context.Context, spec provider.ProviderSpec, name, h
 		if err := r.prepareStorage(ctx, spec.Ref, name, st); err != nil {
 			return Container{}, err
 		}
-		run.Volume, run.Target = name, st.Path
+		run.Mounts = []Mount{{Volume: name, Target: st.Path}}
 	}
 	if err := r.eng.Run(pctx, run); err != nil {
 		return Container{}, err
@@ -657,15 +676,17 @@ func (r *Runtime) ready(ctx context.Context, addr string, p provider.ReadinessPr
 }
 
 // retire stops a container with its stop signal and the grace, then removes it (Decision 2).
-func (r *Runtime) retire(ctx context.Context, name string) error {
+func (r *Runtime) retire(ctx context.Context, name string) error { return retire(ctx, r.eng, name) }
+
+func retire(ctx context.Context, eng Engine, name string) error {
 	sctx, cancel := context.WithTimeout(ctx, stopGrace+requestTimeout)
 	defer cancel()
-	if err := r.eng.Stop(sctx, name, stopGrace); err != nil {
+	if err := eng.Stop(sctx, name, stopGrace); err != nil {
 		return err
 	}
 	rctx, rcancel := context.WithTimeout(ctx, requestTimeout)
 	defer rcancel()
-	return r.eng.Remove(rctx, name)
+	return eng.Remove(rctx, name)
 }
 
 // Teardown stops and removes ref's engine; its volume stays.
@@ -706,7 +727,8 @@ func (r *Runtime) List(ctx context.Context) ([]provider.ProviderRef, error) {
 }
 
 // StopAll stops every container of the key at once, with SIGTERM and the grace, removes them, then removes the key's
-// volumes unless persist (Decision 7). funcdctl dev calls it once its platform has stopped.
+// volumes; under persist, its workers' only (Decision 7, ADR-0346 Decision 7). funcdctl dev calls it once its platform
+// has stopped.
 func (r *Runtime) StopAll() {
 	if err := r.reap(context.Background()); err != nil {
 		r.logger.Warn("could not remove every add-on engine of this session", "key", r.key, "err", err)
@@ -716,27 +738,37 @@ func (r *Runtime) StopAll() {
 
 // reap is StopAll's work, which New does first.
 func (r *Runtime) reap(ctx context.Context) error {
+	vols := map[string]string{KeyLabel: r.key}
+	if r.persist {
+		vols[roleLabel] = roleWorker // --persist keeps the engines' volumes only (ADR-0346 Decision 7)
+	}
+	return reapKey(ctx, r.eng, map[string]string{KeyLabel: r.key}, vols)
+}
+
+// reapKey stops and removes every container that carries the labels of containers, at once, with SIGTERM and the
+// grace, then removes every volume that carries those of volumes.
+func reapKey(ctx context.Context, eng Engine, containers, volumes map[string]string) error {
 	lctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
-	names, err := r.eng.Containers(lctx, map[string]string{KeyLabel: r.key})
+	names, err := eng.Containers(lctx, containers)
 	if err != nil {
 		return err
 	}
 	errs := make([]error, len(names))
 	var wg sync.WaitGroup
 	for i, n := range names {
-		wg.Go(func() { errs[i] = r.retire(ctx, n) })
+		wg.Go(func() { errs[i] = retire(ctx, eng, n) })
 	}
 	wg.Wait()
-	if err := errors.Join(errs...); err != nil || r.persist {
+	if err := errors.Join(errs...); err != nil {
 		return err
 	}
-	vols, err := r.eng.Volumes(lctx, map[string]string{KeyLabel: r.key})
+	vols, err := eng.Volumes(lctx, volumes)
 	if err != nil {
 		return err
 	}
 	for _, v := range vols {
-		errs = append(errs, r.eng.RemoveVolume(lctx, v.Name))
+		errs = append(errs, eng.RemoveVolume(lctx, v.Name))
 	}
 	return errors.Join(errs...)
 }
@@ -1219,7 +1251,9 @@ func (e *engineAPI) Inspect(ctx context.Context, name string) (Container, bool, 
 	}
 	var in struct {
 		State struct {
-			Running bool `json:"Running"`
+			Running  bool `json:"Running"`
+			ExitCode int  `json:"ExitCode"`
+			Pid      int  `json:"Pid"`
 		} `json:"State"`
 		Config struct {
 			Labels map[string]string `json:"Labels"`
@@ -1231,7 +1265,8 @@ func (e *engineAPI) Inspect(ctx context.Context, name string) (Container, bool, 
 	if err := json.Unmarshal(b, &in); err != nil {
 		return Container{}, false, fault.Wrapf(err, fault.Internal, "docker", "decode the container %s", name)
 	}
-	c := Container{Running: in.State.Running, Labels: in.Config.Labels, Published: map[string]string{}}
+	c := Container{Running: in.State.Running, Labels: in.Config.Labels, Published: map[string]string{}, ExitCode: in.State.ExitCode,
+		Pid: in.State.Pid}
 	for port, binds := range in.NetworkSettings.Ports {
 		for _, bd := range binds {
 			if bd.HostPort != "" && (bd.HostIP == "" || bd.HostIP == "127.0.0.1") {
@@ -1288,6 +1323,7 @@ type portBinding struct {
 
 type createBody struct {
 	Image        string              `json:"Image"`
+	Entrypoint   []string            `json:"Entrypoint,omitempty"`
 	Cmd          []string            `json:"Cmd,omitempty"`
 	Env          []string            `json:"Env,omitempty"`
 	Labels       map[string]string   `json:"Labels,omitempty"`
@@ -1302,22 +1338,32 @@ type createHostConfig struct {
 	RestartPolicy struct {
 		Name string `json:"Name"`
 	} `json:"RestartPolicy"`
-	Mounts []mountBody `json:"Mounts,omitempty"`
+	Mounts      []mountBody `json:"Mounts,omitempty"`
+	NetworkMode string      `json:"NetworkMode,omitempty"`
+	ExtraHosts  []string    `json:"ExtraHosts,omitempty"`
+	NanoCPUs    int64       `json:"NanoCpus,omitempty"`
+	Memory      int64       `json:"Memory,omitempty"`
 }
 
 type mountBody struct {
 	Type          string `json:"Type"`
 	Source        string `json:"Source"`
 	Target        string `json:"Target"`
+	ReadOnly      bool   `json:"ReadOnly,omitempty"`
 	VolumeOptions struct {
 		NoCopy bool `json:"NoCopy"`
 	} `json:"VolumeOptions"`
 }
 
-func volumeMount(volume, target string) mountBody {
-	m := mountBody{Type: "volume", Source: volume, Target: target}
-	m.VolumeOptions.NoCopy = true
-	return m
+// volumeMounts are ms as the Engine API mounts volumes: with no copy-up (Decision 3).
+func volumeMounts(ms []Mount) []mountBody {
+	out := make([]mountBody, 0, len(ms))
+	for _, m := range ms {
+		b := mountBody{Type: "volume", Source: m.Volume, Target: m.Target, ReadOnly: m.ReadOnly}
+		b.VolumeOptions.NoCopy = true
+		out = append(out, b)
+	}
+	return out
 }
 
 // create creates a container of body named name and returns its id.
@@ -1342,16 +1388,21 @@ func (e *engineAPI) create(ctx context.Context, name string, body createBody) (s
 
 func (e *engineAPI) Run(ctx context.Context, spec RunSpec) error {
 	grace := int(spec.StopGrace / time.Second)
-	port := portKey(spec.Port)
-	body := createBody{Image: spec.Image, Labels: spec.Labels, ExposedPorts: map[string]struct{}{port: {}},
-		StopSignal: "SIGTERM", StopTimeout: &grace}
+	body := createBody{Image: spec.Image, Entrypoint: spec.Cmd, Labels: spec.Labels, StopSignal: "SIGTERM", StopTimeout: &grace}
 	for _, k := range slices.Sorted(maps.Keys(spec.Env)) {
 		body.Env = append(body.Env, k+"="+spec.Env[k])
 	}
-	body.HostConfig.PortBindings = map[string][]portBinding{port: {{HostIP: "127.0.0.1"}}}
-	if spec.Volume != "" {
-		body.HostConfig.Mounts = []mountBody{volumeMount(spec.Volume, spec.Target)}
+	switch {
+	case spec.HostNetwork:
+		body.HostConfig.NetworkMode = "host"
+	case spec.Port > 0:
+		port := portKey(spec.Port)
+		body.ExposedPorts = map[string]struct{}{port: {}}
+		body.HostConfig.PortBindings = map[string][]portBinding{port: {{HostIP: "127.0.0.1"}}}
 	}
+	body.HostConfig.Mounts = volumeMounts(spec.Mounts)
+	body.HostConfig.ExtraHosts = spec.ExtraHosts
+	body.HostConfig.NanoCPUs, body.HostConfig.Memory = spec.NanoCPUs, spec.MemoryBytes
 	id, err := e.create(ctx, spec.Name, body)
 	if err != nil {
 		return err
@@ -1474,8 +1525,9 @@ func (e *engineAPI) helperContainer(ctx context.Context, h Helper, argv []string
 		return "", err
 	}
 	body := createBody{Image: h.Image, Cmd: argv, Labels: h.Labels}
-	for _, m := range h.Mounts {
-		body.HostConfig.Mounts = append(body.HostConfig.Mounts, volumeMount(m.Volume, m.Target))
+	body.HostConfig.Mounts = volumeMounts(h.Mounts)
+	if h.HostNetwork {
+		body.HostConfig.NetworkMode = "host"
 	}
 	return e.create(ctx, h.Name, body)
 }

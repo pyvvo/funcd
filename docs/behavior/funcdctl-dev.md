@@ -99,6 +99,9 @@ Phases: [Functions](functions.md). New words: Reading, Waiting, Starting, Servin
 | `pullTimeout` | 10m | `internal/provider/docker/docker.go` |
 | `requestTimeout` | 30s | `internal/provider/docker/docker.go` |
 | `stopGrace` | 10s | `internal/provider/docker/docker.go` |
+| `maxPortFileBytes` | 32 | `internal/provider/docker/workers.go` |
+| `workerOutputWait` | 1s | `internal/provider/docker/workers.go` |
+| `workerProbeTimeout` | 1s | `internal/provider/docker/workers.go` |
 | `maxOutputBytes` | 8MiB | `internal/provider/nerdctl/nerdctl.go` |
 
 </details>

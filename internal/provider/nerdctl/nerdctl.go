@@ -165,7 +165,9 @@ func (c cli) Inspect(ctx context.Context, name string) (docker.Container, bool, 
 	}
 	var in []struct {
 		State struct {
-			Running bool `json:"Running"`
+			Running  bool `json:"Running"`
+			ExitCode int  `json:"ExitCode"`
+			Pid      int  `json:"Pid"`
 		} `json:"State"`
 		Config struct {
 			Labels map[string]string `json:"Labels"`
@@ -180,7 +182,8 @@ func (c cli) Inspect(ctx context.Context, name string) (docker.Container, bool, 
 	if err := json.Unmarshal(out, &in); err != nil || len(in) == 0 {
 		return docker.Container{}, false, fault.Internalf("nerdctl", "decode the container %s: %v", name, err)
 	}
-	ct := docker.Container{Running: in[0].State.Running, Labels: in[0].Config.Labels, Published: map[string]string{}}
+	ct := docker.Container{Running: in[0].State.Running, Labels: in[0].Config.Labels, Published: map[string]string{},
+		ExitCode: in[0].State.ExitCode, Pid: in[0].State.Pid}
 	for port, binds := range in[0].NetworkSettings.Ports {
 		for _, b := range binds {
 			if b.HostPort != "" && (b.HostIP == "" || b.HostIP == "127.0.0.1") {
@@ -197,16 +200,38 @@ func (cli) Pull(context.Context, string) error { return nil }
 
 func (c cli) Run(ctx context.Context, spec docker.RunSpec) error {
 	args := []string{"run", "-d", "--name", spec.Name, "--pull", "missing", "--restart", "no", "--stop-signal", "SIGTERM",
-		"--stop-timeout", strconv.Itoa(int(spec.StopGrace / time.Second)), "-p", "127.0.0.1::" + strconv.Itoa(spec.Port)}
+		"--stop-timeout", strconv.Itoa(int(spec.StopGrace / time.Second))}
+	switch {
+	case spec.HostNetwork:
+		args = append(args, "--network", "host")
+	case spec.Port > 0:
+		args = append(args, "-p", "127.0.0.1::"+strconv.Itoa(spec.Port))
+	}
+	for _, h := range spec.ExtraHosts {
+		args = append(args, "--add-host", h)
+	}
+	if spec.NanoCPUs > 0 {
+		args = append(args, "--cpus", strconv.FormatFloat(float64(spec.NanoCPUs)/1e9, 'f', -1, 64))
+	}
+	if spec.MemoryBytes > 0 {
+		args = append(args, "--memory", strconv.FormatInt(spec.MemoryBytes, 10))
+	}
 	args = append(args, labelArgs("--label", spec.Labels)...)
-	if spec.Volume != "" {
+	for _, m := range spec.Mounts {
 		// nerdctl's releases take no volume-nocopy, so the engine mounts the volume's own directory as a bind, which
 		// never copies the image's files up (ADR-0334 Decision 3).
-		dir, err := c.mountpoint(ctx, spec.Volume)
+		dir, err := c.mountpoint(ctx, m.Volume)
 		if err != nil {
 			return err
 		}
-		args = append(args, "--mount", "type=bind,source="+dir+",target="+spec.Target)
+		mount := "type=bind,source=" + dir + ",target=" + m.Target
+		if m.ReadOnly {
+			mount += ",readonly"
+		}
+		args = append(args, "--mount", mount)
+	}
+	if len(spec.Cmd) > 0 {
+		args = append(args, "--entrypoint", spec.Cmd[0])
 	}
 	// An env file on nerdctl's standard input keeps the values, Secrets among them, off its command line; an env file
 	// holds no newline, so a value with one goes on it.
@@ -222,7 +247,11 @@ func (c cli) Run(ctx context.Context, spec docker.RunSpec) error {
 	if envFile.Len() > 0 {
 		args, stdin = append(args, "--env-file", "/dev/stdin"), &envFile
 	}
-	_, err := c.run(ctx, stdin, append(args, spec.Image)...)
+	args = append(args, spec.Image)
+	if len(spec.Cmd) > 1 {
+		args = append(args, spec.Cmd[1:]...)
+	}
+	_, err := c.run(ctx, stdin, args...)
 	return err
 }
 
@@ -321,9 +350,16 @@ func helperArgs(h docker.Helper, interactive bool) []string {
 	if interactive {
 		args = append(args, "-i")
 	}
+	if h.HostNetwork {
+		args = append(args, "--network", "host")
+	}
 	args = append(args, labelArgs("--label", h.Labels)...)
 	for _, m := range h.Mounts {
-		args = append(args, "-v", m.Volume+":"+m.Target)
+		v := m.Volume + ":" + m.Target
+		if m.ReadOnly {
+			v += ":ro"
+		}
+		args = append(args, "-v", v)
 	}
 	return append(args, h.Image)
 }
