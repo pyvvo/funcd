@@ -1,6 +1,7 @@
 # ADR-0356: A stack's outputs, plain and sensitive, reach its readers through the Secret its Job owns
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-11-24), on the decider's bar of 2026-11-24, after three independent judge rounds, the
+  third with no finding
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: infrastack, secrets, outputs, funcdctl, addons
