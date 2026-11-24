@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/platform/config"
+	"github.com/pyvvo/funcd/internal/store"
+	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
 )
 
 func TestAWorkerNodeKeepsItsSecretsEncryptedWithAKeyOfItsOwn(t *testing.T) {
@@ -84,4 +89,27 @@ func TestAJoinedNodeRestoresFromItsOwnPrefix(t *testing.T) {
 	cfg, err = f.load()
 	require.NoError(t, err)
 	require.Equal(t, "file:///srv/backup/nodes/vm1", cfg.Backup.Target)
+}
+
+// The pre-upgrade generation of a joined node goes under the node's own prefix too, not at the root of the target, which is
+// the control plane's.
+func TestAJoinedNodesUpgradeWritesUnderItsOwnPrefix(t *testing.T) {
+	target := t.TempDir()
+	n := newNode(t, upgradeKey(), backupYAML(target))
+	cfg, err := config.Load(n.cfgPath, config.Flags{})
+	require.NoError(t, err)
+	eng, err := badgerstore.Open(cfg.Storage.MetastoreDir)
+	require.NoError(t, err)
+	st := store.New(eng)
+	_, err = st.Create(context.Background(), &v1.Namespace{TypeMeta: tmeta(v1.KindNamespace), ObjectMeta: v1.ObjectMeta{Name: "team"}})
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+	require.NoError(t, os.MkdirAll(cfg.Cluster.DataDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Cluster.DataDir, "name"), []byte("vm1\n"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(target, "nodes", "vm1"), 0o700)) // the node made it at its first start
+	var out bytes.Buffer
+	require.NoError(t, runUpgrade(context.Background(), &out, upgradeFlags{config: n.cfgPath}, fakeFuncd(t, "v0.9.0"),
+		fakeFuncd(t, "dev")), out.String())
+	require.DirExists(t, filepath.Join(target, "nodes", "vm1", "gen", "pre-upgrade"))
+	require.NoDirExists(t, filepath.Join(target, "gen"))
 }
