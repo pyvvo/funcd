@@ -118,3 +118,11 @@ docs/reviews/model-scorecard.md.
 
 Stamped: ADR-0356 `Implemented`, F144 `implemented`. The PR that merges this branch carries `Fixes #1022`. The builder
 may fix the Minor in that PR.
+
+### Follow-up
+
+Minor fixed in 79fe62e7, verified. Both reader steps lost `retry` and `delay`, so each asserts on the reader's first
+answer. The script sends a call again only when `curl -sf` fails, 15 times at most, 2 s apart, and a reader that never
+answers fails the step. That run's step dumps hold the new script. `addon-infrastack @ 79fe62e7: PASS (273s)` printed
+`READ_NAME=example-helping-snipe … TOKEN_LEN=24`, then `READ_NAME=changed-relative-turtle …`, and its log has no
+`ERRO` line. The lane guards exit 0.
