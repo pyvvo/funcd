@@ -47,6 +47,14 @@ func stackPacing() funcd.Pacing {
 		SupervisionPeriod: 500 * time.Millisecond}
 }
 
+// hookPacing is stackPacing for the scenarios with hooks, whose hook Functions keep a replica: a boot or a wake gets a
+// few seconds, as the hooks suite paces them, so a loaded host fails no hook call. app.upgradeTimeout 6 s >
+// runtime.bootTimeout 4 s > invoke.activationTimeout 3 s (ADR-0200 Decision 10).
+func hookPacing() funcd.Pacing {
+	return funcd.Pacing{AppUpgradeTimeout: 6 * time.Second, BootTimeout: 4 * time.Second, ActivationTimeout: 3 * time.Second,
+		SupervisionPeriod: 500 * time.Millisecond}
+}
+
 // stackReconciler is the InfraStack kind's Function: its %q is the directory of the approvals.
 const stackReconciler = `import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -400,7 +408,7 @@ export async function handle(event) { return event; }`)
 // migrate is written and called as before, and finds no output, before the stack bunny is written at all.
 func TestScenarioAppPreHookIgnoresStack(t *testing.T) {
 	t.Parallel()
-	e := startStacks(t, stackPacing())
+	e := startStacks(t, hookPacing())
 	f := newHookFiles(t)
 	writeStep(t, e.src, "migrate", fmt.Sprintf(`import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -409,7 +417,6 @@ export async function handle(ctx, event) {
   return { ok: true };
 }`, f.calls))
 	migrate := readsOutputs("migrate", pushStepImage(t, e.layout, e.src, "migrate"))
-	migrate.Scaling.MinReplicas = 0
 	revs, stacks := watchKind(t, e.st, v1.KindAppRevision), watchKind(t, e.st, v1.KindAddonObject)
 	e.apply(t, e.edgeApp("de", func(a *v1.App) {
 		a.Spec.Functions = []v1.AppFunction{migrate}
@@ -436,53 +443,112 @@ export async function handle(ctx, event) {
 	require.Less(t, recorded, written, "the pre-hook runs before the stack is written")
 }
 
-// scenario: app-post-hook-after-stack — edge-1 switches while the stack bunny lags and relay waits for FRP_TOKEN: the
-// post-hook warm is not called then, nor once relay is written and Ready while bunny still lags, and is called once
-// bunny is Ready too.
+// scenario: app-post-hook-after-stack — edge-1 switches while the stack bunny lags and relay waits for FRP_TOKEN, and
+// the post-hook warm is called only once bunny is Ready and relay is written and Ready, in either order: with the key
+// written first, relay is Ready while bunny still lags; with the approved run writing the key as it applies bunny,
+// bunny is Ready while relay still boots.
 //
 // oracle: docs/design/app/stack-rollout.fizz#PostHookAfterStacks
 func TestScenarioAppPostHookAfterStack(t *testing.T) {
 	t.Parallel()
-	e := startStacks(t, stackPacing())
+	t.Run("the key first", func(t *testing.T) {
+		t.Parallel()
+		e := startStacks(t, hookPacing())
+		f := e.warmHook(t, readsOutputs("relay", e.image(t)))
+		e.waitEdge(t, "edge-1 switches while bunny and relay lag", func(a *v1.App) bool {
+			return a.Status.CurrentRevision == "edge-1" && lineOf(a, "InfraStack", "bunny") == bunnyAwaits() &&
+				lineOf(a, v1.KindFunction, "relay") == waitsForToken(v1.KindFunction, "relay")
+		})
+		stays(t, func() bool { return f.count(t) == 0 }, stackQuiet, stackTick, "warm is not called while bunny and relay lag")
+
+		e.writeOutputs(t, frpToken())
+		e.waitEdge(t, "relay is written and Ready", func(a *v1.App) bool {
+			return lineOf(a, v1.KindFunction, "relay") == edgeLine(v1.KindFunction, "relay", v1.AppChildReady, "")
+		})
+		stays(t, func() bool { return f.count(t) == 0 }, stackQuiet, stackTick, "warm is not called while bunny lags")
+
+		stacks, revs := watchKind(t, e.st, v1.KindAddonObject), watchKind(t, e.st, v1.KindAppRevision)
+		e.approveStack(t, "bunny", 1)
+		e.warmCalled(t, f)
+		require.Less(t, readyRV(t, stacks.events(t), "bunny"), warmRV(t, revs.events(t)), "warm runs after bunny is Ready")
+	})
+	t.Run("the approved run writes the key", func(t *testing.T) {
+		t.Parallel()
+		e := startStacks(t, funcd.Pacing{AppUpgradeTimeout: 10 * time.Second, BootTimeout: 8 * time.Second,
+			ActivationTimeout: 3 * time.Second, SupervisionPeriod: 500 * time.Millisecond})
+		booted := filepath.Join(shortDataDir(t), "booted")
+		writeStep(t, e.src, "relay", fmt.Sprintf(`import { existsSync } from 'node:fs';
+while (!existsSync(%q)) await new Promise((resolve) => setTimeout(resolve, 50));
+export async function handle(event) { return event; }`, booted))
+		f := e.warmHook(t, readsOutputs("relay", pushStepImage(t, e.layout, e.src, "relay")))
+		e.waitEdge(t, "edge-1 switches while bunny and relay lag", func(a *v1.App) bool {
+			return a.Status.CurrentRevision == "edge-1" && lineOf(a, "InfraStack", "bunny") == bunnyAwaits() &&
+				lineOf(a, v1.KindFunction, "relay") == waitsForToken(v1.KindFunction, "relay")
+		})
+
+		fns, revs := watchKind(t, e.st, v1.KindFunction), watchKind(t, e.st, v1.KindAppRevision)
+		e.approveStack(t, "bunny", 1)
+		e.writeOutputs(t, frpToken())
+		e.waitEdge(t, "bunny is Ready while relay boots", func(a *v1.App) bool {
+			return lineOf(a, "InfraStack", "bunny") == edgeLine("InfraStack", "bunny", v1.AppChildReady, "") &&
+				lineOf(a, v1.KindFunction, "relay").State == v1.AppChildPending
+		})
+		stays(t, func() bool { return f.count(t) == 0 }, stackQuiet, stackTick, "warm is not called while relay boots")
+
+		require.NoError(t, os.WriteFile(booted, nil, 0o600))
+		e.warmCalled(t, f)
+		require.Less(t, readyRV(t, fns.events(t), "relay"), warmRV(t, revs.events(t)), "warm runs after relay is Ready")
+	})
+}
+
+// warmHook applies App edge with reader and the post-hook warm, which keeps a replica, and returns the files warm marks
+// each of its calls in.
+func (e *stackEnv) warmHook(t *testing.T, reader v1.AppFunction) hookFiles {
+	t.Helper()
 	f := newHookFiles(t)
 	writeStep(t, e.src, "warm", fmt.Sprintf(`import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 export async function handle(ctx, event) { writeFileSync(join(%q, event.id), ''); return { ok: true }; }`, f.calls))
-	warm := v1.AppFunction{Name: "warm", FunctionSpec: v1.FunctionSpec{Runtime: "nodejs22", Handler: "handle", Image: pushStepImage(t, e.layout, e.src, "warm")}}
+	warm := v1.AppFunction{Name: "warm", FunctionSpec: v1.FunctionSpec{Runtime: "nodejs22", Handler: "handle",
+		Image: pushStepImage(t, e.layout, e.src, "warm"), Scaling: v1.Scaling{MinReplicas: 1}}}
 	e.apply(t, e.edgeApp("de", func(a *v1.App) {
-		a.Spec.Functions = []v1.AppFunction{readsOutputs("relay", e.image(t)), warm}
+		a.Spec.Functions = []v1.AppFunction{reader, warm}
 		a.Spec.Hooks = &v1.AppHooks{PostApply: []v1.AppHook{{Function: "warm"}}}
 	}))
-	e.waitEdge(t, "edge-1 switches while bunny and relay lag", func(a *v1.App) bool {
-		return a.Status.CurrentRevision == "edge-1" && lineOf(a, "InfraStack", "bunny") == bunnyAwaits() &&
-			lineOf(a, v1.KindFunction, "relay") == waitsForToken(v1.KindFunction, "relay")
-	})
-	stays(t, func() bool { return f.count(t) == 0 }, stackQuiet, stackTick, "warm is not called while bunny and relay lag")
+	return f
+}
 
-	e.writeOutputs(t, frpToken())
-	e.waitEdge(t, "relay is written and Ready", func(a *v1.App) bool {
-		return lineOf(a, v1.KindFunction, "relay") == edgeLine(v1.KindFunction, "relay", v1.AppChildReady, "")
-	})
-	stays(t, func() bool { return f.count(t) == 0 }, stackQuiet, stackTick, "warm is not called while bunny lags")
-
-	stacks, revs := watchKind(t, e.st, v1.KindAddonObject), watchKind(t, e.st, v1.KindAppRevision)
-	e.approveStack(t, "bunny", 1)
+// warmCalled waits until edge-1 records one Ready postApply call of warm, and checks that warm was called once.
+func (e *stackEnv) warmCalled(t *testing.T, f hookFiles) {
+	t.Helper()
 	require.Eventually(t, func() bool {
 		hooks := e.appRevision(t, "edge-1").Status.Hooks
 		return len(hooks) == 1 && hooks[0].Phase == v1.PhaseReady
-	}, stackWithin, stackTick, "warm is called once bunny is Ready")
+	}, stackWithin, stackTick, "warm is called")
 	require.Equal(t, 1, f.count(t), "warm is called once")
-	applied := firstRV(t, stacks.events(t), "bunny is Ready", func(ev store.Event) bool {
-		o, ok := ev.Object.(*v1.AddonObject)
-		if !ok || o.Name != "bunny" {
-			return false
-		}
-		c, _ := o.Status.Conditions.Get("Ready")
-		return c.Status == v1.ConditionTrue
-	})
-	called := firstRV(t, revs.events(t), "edge-1 records warm's call", hookRecorded("edge-1", v1.PhaseReady))
-	require.Less(t, applied, called, "warm runs after bunny is Ready")
 	require.Equal(t, "postApply", e.appRevision(t, "edge-1").Status.Hooks[0].Point)
+}
+
+// readyRV is the resourceVersion at which the part name first turned Ready in evs: an add-on object's Ready condition
+// True, or a Function's phase Ready.
+func readyRV(t *testing.T, evs []store.Event, name v1.ObjectName) uint64 {
+	t.Helper()
+	return firstRV(t, evs, string(name)+" is Ready", func(ev store.Event) bool {
+		switch o := ev.Object.(type) {
+		case *v1.AddonObject:
+			c, _ := o.Status.Conditions.Get("Ready")
+			return o.Name == name && c.Status == v1.ConditionTrue
+		case *v1.Function:
+			return o.Name == name && o.Status.Phase == v1.PhaseReady
+		}
+		return false
+	})
+}
+
+// warmRV is the resourceVersion at which edge-1 recorded warm's call in evs.
+func warmRV(t *testing.T, evs []store.Event) uint64 {
+	t.Helper()
+	return firstRV(t, evs, "edge-1 records warm's call", hookRecorded("edge-1", v1.PhaseReady))
 }
 
 // scenario: app-prune-waits-for-lagging — an upgrade drops the Function old and adds new, which binds outputs before
