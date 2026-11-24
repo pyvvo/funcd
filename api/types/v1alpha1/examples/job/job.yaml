@@ -11,4 +11,6 @@ spec:
   image: registry.example.com/report:1.0.0
   timeout: 10m
   concurrency: 2
+  approval:
+    bypass: true
 # endregion job
