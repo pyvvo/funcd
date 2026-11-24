@@ -57,6 +57,7 @@ import (
 	"github.com/pyvvo/funcd/internal/lake/embedengine"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/platform/stopsignal"
+	fnruntime "github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	sqldevengine "github.com/pyvvo/funcd/internal/sql/devengine"
 	sqlembedengine "github.com/pyvvo/funcd/internal/sql/embedengine"
@@ -1070,14 +1071,17 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		return nil, fault.Wrapf(rerr, fault.KindOf(rerr), op, "open the process runtime in %s", stateDir)
 	}
 	inst.cleanup = append(inst.cleanup, func() { _ = rt.Close() })
-	addonOpts, aerr := devAddonOptions(ctx, stateDir, cfg, inst, a.writef)
+	addonOpts, images, aerr := devAddonOptions(ctx, stateDir, cfg, inst, a.writef)
 	if aerr != nil {
 		return nil, aerr
 	}
+	// A worker on an Addon's runtime runs on dev's container engine, every other on the process driver (ADR-0346
+	// Decision 3).
+	workers := fnruntime.Pair(rt, images)
 
 	opts := []funcd.Option{
 		funcd.InMemory(),
-		funcd.WithRuntime(rt),
+		funcd.WithRuntime(workers),
 		funcd.WithMaterializer(function.NewFileMaterializer()),
 		// A step's file:// copy carries no OCI artifact for the production resolvers to inspect: its runtime and its
 		// contract come from its build's contract file (ADR-0247 Decision 7), so the F65 gate checks the Workflow's edges
@@ -1089,7 +1093,7 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		// An App's parts are OCI images in dev's layout, pulled and resolved as a deploy pulls them (ADR-0253).
 		opts = []funcd.Option{
 			funcd.InMemory(),
-			funcd.WithRuntime(rt),
+			funcd.WithRuntime(workers),
 			funcd.WithMaterializer(artifact.NewOrasMaterializer(inst.artifactDir, v1.HostPlatform())),
 		}
 	}
