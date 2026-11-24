@@ -258,6 +258,42 @@ func TestScenarioOperatorRuntimeUnchanged(t *testing.T) {
 	require.Equal(t, denoImageA, h.workerImage("rb", "rb-1"))
 }
 
+// ADR-0344 Decision 8: a pass that replaces one of two replicas records no image while the other still runs, so the
+// replacement runs the operator's image.
+func TestAddonRuntimeFillWaitsForEveryWorker(t *testing.T) {
+	t.Parallel()
+	const override = "registry.example.com/ruby@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	h := newContainerHarness(t, http.StatusOK, withPeriod, func(d *function.Deps) {
+		d.ImageFor = func(rt string) string {
+			if rt == "ruby3" {
+				return override
+			}
+			return "funcd/runtime-" + rt + ":latest"
+		}
+	})
+	h.create(t, "rb", func(fn *v1.Function) { fn.Spec.Runtime, fn.Spec.Replicas = "ruby3", 2 })
+	h.reconcile(t, "rb")
+	require.Equal(t, 2, h.getFn(t, "rb").Status.Replicas)
+
+	obj, _ := v1.NewObject(v1.KindAddon)
+	a := obj.(*v1.Addon)
+	a.Name, a.Spec.Runtimes = "ruby", []v1.ShippedRuntime{{Name: "ruby3", Image: denoImageA, Workloads: []v1.Workload{v1.WorkloadFunction}}}
+	_, err := h.st.Create(context.Background(), a)
+	require.NoError(t, err)
+
+	replica0 := runtime.NewInstanceID("default", "rb", "rb-1", 0)
+	h.rt.exit("rb", runtime.StateStopped, time.Hour)
+	require.Eventually(t, func() bool {
+		h.reconcile(t, "rb")
+		return h.rt.stateOf(replica0) == runtime.StateRunning
+	}, 5*time.Second, 10*time.Millisecond, "replica 0 is replaced")
+	require.Equal(t, runtime.StateRunning, h.rt.stateOf(runtime.NewInstanceID("default", "rb", "rb-1", 1)))
+	rev, err := h.revision(t, "rb-1")
+	require.NoError(t, err)
+	require.Empty(t, rev.Spec.RuntimeImage, "replica 1 still runs, so the Revision records no image")
+	require.Equal(t, override, h.workerImage("rb", "rb-1"), "the replacement runs the operator's image")
+}
+
 // ADR-0344 Decision 7: an Addon's change requeues every Function whose runtime is none of funcd's own.
 func TestAddonWatchMapsFunctionsOffFuncdsRuntimes(t *testing.T) {
 	t.Parallel()

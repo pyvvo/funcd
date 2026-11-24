@@ -16,7 +16,7 @@ The server's `addons.registries` must list the registry of the add-on's image, `
 registers the add-on from a release, piping its manifest to `funcdctl apply -f -`:
 
 ```sh
-curl -fsSL https://github.com/pyvvo/funcd-addons/releases/download/v0.2.0/rauthy.yaml | funcdctl apply -f -
+curl -fsSL https://github.com/pyvvo/funcd-addons/releases/download/v0.3.0/rauthy.yaml | funcdctl apply -f -
 ```
 
 The Addon lists the runtimes the add-on ships, each with its image pinned by digest. rauthy's one entry serves the

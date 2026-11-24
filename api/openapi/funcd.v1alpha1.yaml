@@ -185,7 +185,7 @@ components:
       additionalProperties: false
       properties:
         secret:
-          description: "Secrets of the namespace whose keys, those that the Addon's spec.secretKeys lists, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine."
+          description: "Secrets of the namespace whose keys, those that its Addon's kind entry lists in secretKeys, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine."
           items:
             maxLength: 63
             minLength: 1
@@ -218,7 +218,7 @@ components:
           $ref: "#/components/schemas/AddonObjectBindings"
           description: What the object's engine uses.
         config:
-          description: The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object.
+          description: The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object.
         deletion:
           description: "What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it."
           enum:
@@ -905,7 +905,7 @@ components:
                 $ref: "#/components/schemas/AddonObjectBindings"
                 description: What the object's engine uses.
               config:
-                description: The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object.
+                description: The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object.
               deletion:
                 description: "What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it."
                 enum:
@@ -25688,7 +25688,7 @@ paths:
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
             - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
-            - `about:blank`: spec.config breaks the schema of the Addon's spec.config; the detail names the property. Correct spec.config to fit the add-on's schema.
+            - `about:blank`: spec.config breaks the config schema of the Addon's kind entry; the detail names the property. Correct spec.config to fit the add-on's schema.
           x-funcd-cases:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
@@ -25703,7 +25703,7 @@ paths:
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
               fix: Correct the field at the location that the detail gives.
             - type: about:blank
-              when: spec.config breaks the schema of the Addon's spec.config; the detail names the property.
+              when: spec.config breaks the config schema of the Addon's kind entry; the detail names the property.
               fix: Correct spec.config to fit the add-on's schema.
       security:
         - bearer: []
@@ -26069,7 +26069,7 @@ paths:
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
             - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
-            - `about:blank`: spec.config breaks the schema of the Addon's spec.config; the detail names the property. Correct spec.config to fit the add-on's schema.
+            - `about:blank`: spec.config breaks the config schema of the Addon's kind entry; the detail names the property. Correct spec.config to fit the add-on's schema.
           x-funcd-cases:
             - type: about:blank
               when: The namespace or the name in the path is not a DNS-1123 label.
@@ -26084,7 +26084,7 @@ paths:
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
               fix: Correct the field at the location that the detail gives.
             - type: about:blank
-              when: spec.config breaks the schema of the Addon's spec.config; the detail names the property.
+              when: spec.config breaks the config schema of the Addon's kind entry; the detail names the property.
               fix: Correct spec.config to fit the add-on's schema.
       security:
         - bearer: []

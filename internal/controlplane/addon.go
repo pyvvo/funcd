@@ -526,7 +526,7 @@ func addonObjectOperations() restOperations {
 	unregistered := problem(fault.NotFound, "No Addon registers the kind whose plural the path names.",
 		"Register the add-on first, or check the plural: the kind in lower case with an s.")
 	writes := []ErrorCase{unregistered,
-		blank(http.StatusUnprocessableEntity, "spec.config breaks the schema of the Addon's spec.config; the detail "+
+		blank(http.StatusUnprocessableEntity, "spec.config breaks the config schema of the Addon's kind entry; the detail "+
 			"names the property.", "Correct spec.config to fit the add-on's schema."),
 		problem(fault.Invalid, "The body's kind is not the kind whose plural the path names.",
 			"Send the object to its own kind's plural."),

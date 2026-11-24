@@ -25,8 +25,8 @@ import (
 // holds the object Pending, with no engine and no edge entry, while that Addon is gone, its config breaks the Addon's
 // schema, the provider runtime runs no image (ADR-0344 Decision 9), its env does not evaluate, or a bound Secret is
 // missing or forbidden. Otherwise it converges one engine with the kind entry's image, port, probe and storage and the
-// object's
-// resources, fenced with no endpoint and admitting only funcd, and programs the object's edge entry once it is Ready.
+// object's resources, fenced with no endpoint and admitting only funcd, and programs the object's edge entry once it is
+// Ready.
 // While an in-place Restore's mark stands, it starts the engine with restore.env, removes the copy once that engine is
 // Ready, then starts it without restore.env and clears the mark once that one is Ready (ADR-0333 Decision 4). A
 // deleted object loses its entry, its engine and then its storage.

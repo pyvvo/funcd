@@ -677,7 +677,7 @@ type AddonObject struct {
 // AddonObjectSpec is what a user declares in an object of an add-on's kind.
 type AddonObjectSpec struct {
 	Kind      string                `json:"kind,omitempty" doc:"The add-on's kind, which funcd sets from the path the object is written at."`
-	Config    json.RawMessage       `json:"config,omitempty" doc:"The object's settings, which the schema in its Addon's spec.config checks. Unset is an empty object."`
+	Config    json.RawMessage       `json:"config,omitempty" doc:"The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object."`
 	Bindings  AddonObjectBindings   `json:"bindings,omitempty" doc:"What the object's engine uses."`
 	Ingress   *Ingress              `json:"ingress,omitempty" doc:"Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused."`
 	Resources ResourceSpec          `json:"resources,omitempty" doc:"The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine."`
@@ -693,7 +693,7 @@ type AddonObjectFunction struct {
 
 // AddonObjectBindings are what an add-on object's engine uses (ADR-0332 Decision 4).
 type AddonObjectBindings struct {
-	Secret []ObjectName `json:"secret,omitempty" doc:"Secrets of the namespace whose keys, those that the Addon's spec.secretKeys lists, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine."`
+	Secret []ObjectName `json:"secret,omitempty" doc:"Secrets of the namespace whose keys, those that its Addon's kind entry lists in secretKeys, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine."`
 }
 
 // AddonObjectStatus is the observed state of an add-on object.
