@@ -29,7 +29,7 @@ func settingsFn(ns v1.NamespaceName, object v1.ObjectName) *v1.Function {
 // root entry, and Cedar's built-in permits its calls once the object is Ready.
 func TestScenarioAddonBindingStandalone(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	e.waitReason(t, "default", "login", v1.PhaseReady, "")
@@ -51,7 +51,7 @@ func TestScenarioAddonBindingStandalone(t *testing.T) {
 // permitted.
 func TestAddonCallForbiddenByAPolicy(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	e.waitReason(t, "default", "login", v1.PhaseReady, "")
@@ -70,7 +70,7 @@ func TestAddonCallForbiddenByAPolicy(t *testing.T) {
 // nor by ref: 400 naming the binding. Declared by ref, it is admitted.
 func TestScenarioAddonBindingUndeclared(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	a := &v1.App{TypeMeta: tmeta(v1.KindApp), ObjectMeta: v1.ObjectMeta{Name: "settings", Namespace: "default", ResourceGroup: "settings"}}
@@ -90,7 +90,7 @@ func TestScenarioAddonBindingUndeclared(t *testing.T) {
 // ADR-0199 Decision 6).
 func TestAddonBoundObjectIsInUseForPrune(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, loginApp("default", "web-auth"))
 	e.waitApp(t, "default", "web-auth")

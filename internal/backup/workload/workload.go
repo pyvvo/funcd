@@ -302,8 +302,8 @@ func addonMembers(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1
 	}
 	snapshots := map[string]bool{} // by plural: an object's Addon is the one of its kind's plural (ADR-0332 Decision 1)
 	for _, o := range addons.Items {
-		if a, ok := o.(*v1.Addon); ok && a.Spec.Snapshot != nil {
-			snapshots[v1.AddonPlural(a.Spec.Kind)] = true
+		if a, ok := o.(*v1.Addon); ok && a.Spec.KindAttributes().Snapshot != nil {
+			snapshots[v1.AddonPlural(a.Spec.Kind())] = true
 		}
 	}
 	var objs []v1.Object

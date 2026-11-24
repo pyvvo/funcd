@@ -197,7 +197,7 @@ func (r *Reconciler) function(ctx context.Context, ns v1.NamespaceName, name v1.
 func (r *Reconciler) syncSettings(ctx context.Context, a *v1.Addon, o *v1.AddonObject) (time.Duration, error) {
 	const op = "services.addon.syncSettings"
 	epoch := r.seeTarget(o.Namespace, o.Name, true)
-	if a == nil || len(a.Spec.Settings) == 0 {
+	if a == nil || len(a.Spec.KindAttributes().Settings) == 0 {
 		return 0, nil
 	}
 	list, err := r.store.List(ctx, v1.KindAddonObject.GVK(), store.ListOptions{Namespace: o.Namespace})
@@ -205,8 +205,8 @@ func (r *Reconciler) syncSettings(ctx context.Context, a *v1.Addon, o *v1.AddonO
 		return 0, fault.Wrapf(err, fault.KindOf(err), op, "list the add-on objects of %s", o.Namespace)
 	}
 	var next time.Duration
-	for i := range a.Spec.Settings {
-		st := &a.Spec.Settings[i]
+	for i := range a.Spec.KindAttributes().Settings {
+		st := &a.Spec.KindAttributes().Settings[i]
 		fn, err := r.function(ctx, o.Namespace, functionFor(st, o))
 		if err != nil {
 			return 0, err
@@ -223,7 +223,7 @@ func (r *Reconciler) syncSettings(ctx context.Context, a *v1.Addon, o *v1.AddonO
 		digest := settingsDigest(epoch, o.Status.Address, fn, alias, objs)
 		cause, wait := r.settingsDue(key, digest, st.EffectiveResync())
 		if cause != "" {
-			call := SettingsCall{Kind: st.Kind, Cause: cause, Target: SettingsTarget{Kind: a.Spec.Kind, Name: o.Name, Alias: alias},
+			call := SettingsCall{Kind: st.Kind, Cause: cause, Target: SettingsTarget{Kind: a.Spec.Kind(), Name: o.Name, Alias: alias},
 				Objects: make([]SettingsObject, len(objs))}
 			for j, so := range objs {
 				call.Objects[j] = SettingsObject{Name: so.Name, UID: so.UID, Generation: so.Generation, Config: configOf(so)}
@@ -444,12 +444,12 @@ func (r *Reconciler) settingsWait(ctx context.Context, a *v1.Addon, st *v1.Addon
 	obj, err := r.store.Get(ctx, v1.KindAddonObject.GVK(), o.Namespace, name)
 	t, isObj := obj.(*v1.AddonObject)
 	switch {
-	case fault.KindOf(err) == fault.NotFound || (err == nil && (!isObj || !v1.SameAddonKind(t.Spec.Kind, a.Spec.Kind))):
-		return reasonTargetNotFound, fmt.Sprintf("the namespace holds no %s %q", a.Spec.Kind, name), nil
+	case fault.KindOf(err) == fault.NotFound || (err == nil && (!isObj || !v1.SameAddonKind(t.Spec.Kind, a.Spec.Kind()))):
+		return reasonTargetNotFound, fmt.Sprintf("the namespace holds no %s %q", a.Spec.Kind(), name), nil
 	case err != nil:
 		return "", "", fault.Wrapf(err, fault.KindOf(err), "services.addon.settingsWait", "get the target %s/%s", o.Namespace, name)
 	case t.Status.Phase != v1.PhaseReady:
-		return reasonTargetNotReady, fmt.Sprintf("%s %q is not Ready", a.Spec.Kind, name), nil
+		return reasonTargetNotReady, fmt.Sprintf("%s %q is not Ready", a.Spec.Kind(), name), nil
 	}
 	fnName := functionFor(st, t)
 	fn, err := r.function(ctx, o.Namespace, fnName)
@@ -458,11 +458,11 @@ func (r *Reconciler) settingsWait(ctx context.Context, a *v1.Addon, st *v1.Addon
 		return "", "", err
 	case fn == nil:
 		return reasonFunctionNotFound, fmt.Sprintf("the namespace holds no Function %q, which applies the %s objects of %s %q",
-			fnName, st.Kind, a.Spec.Kind, name), nil
+			fnName, st.Kind, a.Spec.Kind(), name), nil
 	}
 	if _, bound := aliasOf(fn, name); !bound {
 		return reasonFunctionNotBound, fmt.Sprintf("the Function %q does not bind %s %q in spec.bindings.addon", fnName,
-			a.Spec.Kind, name), nil
+			a.Spec.Kind(), name), nil
 	}
 	return "", "", nil
 }
@@ -492,11 +492,11 @@ func (r *Reconciler) MapSettings(ctx context.Context, obj v1.Object) []controlle
 			}
 			return nil
 		}
-		if v1.SameAddonKind(a.Spec.Kind, o.Spec.Kind) {
+		if v1.SameAddonKind(a.Spec.Kind(), o.Spec.Kind) {
 			owner = a
 		}
 	}
-	if owner == nil || len(owner.Spec.Settings) == 0 {
+	if owner == nil || len(owner.Spec.KindAttributes().Settings) == 0 {
 		return nil
 	}
 	return r.objects(ctx, o.Namespace, func(so *v1.AddonObject) bool {
@@ -521,7 +521,7 @@ func (r *Reconciler) MapFunction(ctx context.Context, obj v1.Object) []controlle
 	}
 	var withSettings []*v1.Addon
 	for _, item := range addons.Items {
-		if a, ok := item.(*v1.Addon); ok && len(a.Spec.Settings) > 0 {
+		if a, ok := item.(*v1.Addon); ok && len(a.Spec.KindAttributes().Settings) > 0 {
 			withSettings = append(withSettings, a)
 		}
 	}
@@ -549,9 +549,9 @@ func (r *Reconciler) MapFunction(ctx context.Context, obj v1.Object) []controlle
 	}
 	for _, o := range targets {
 		for _, a := range withSettings {
-			if v1.SameAddonKind(a.Spec.Kind, o.Spec.Kind) {
-				for i := range a.Spec.Settings {
-					if functionFor(&a.Spec.Settings[i], o) == m.Name {
+			if v1.SameAddonKind(a.Spec.Kind(), o.Spec.Kind) {
+				for i := range a.Spec.KindAttributes().Settings {
+					if functionFor(&a.Spec.KindAttributes().Settings[i], o) == m.Name {
 						add(o.Name)
 					}
 				}

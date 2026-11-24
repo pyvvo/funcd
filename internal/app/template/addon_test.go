@@ -15,13 +15,32 @@ kind: Addon
 metadata:
   name: rauthy
 spec:
-  kind: IdentityProvider
-  image: ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809
-  port: 8080
-  readiness:
-    path: /auth/v1/ping
-  env:
-    PUB_URL: ${{ values.publicHost }}
+  runtimes:
+    - name: identityprovider
+      image: ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809
+      workloads:
+        - Engine
+      attributes:
+        kind: IdentityProvider
+        port: 8080
+        readiness:
+          path: /auth/v1/ping
+        env:
+          PUB_URL: ${{ values.publicHost }}
+`
+
+// runtimesOnlyAddonYAML is an addon.yaml whose Addon ships a runtime for Functions and adds no kind (ADR-0344
+// Decision 10).
+const runtimesOnlyAddonYAML = `apiVersion: funcd.io/v1alpha1
+kind: Addon
+metadata:
+  name: deno
+spec:
+  runtimes:
+    - name: deno2
+      image: ghcr.io/example/funcd-deno@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809
+      workloads:
+        - Function
 `
 
 const loginFragment = `addons:
@@ -39,8 +58,8 @@ func TestLoadReadsTheAddon(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, tpl.Addon)
 	require.Equal(t, v1.ObjectName("rauthy"), tpl.Addon.Name)
-	require.Equal(t, "IdentityProvider", tpl.Addon.Spec.Kind)
-	require.Equal(t, "${{ values.publicHost }}", tpl.Addon.Spec.Env["PUB_URL"], "scenario: addon-yaml-as-written")
+	require.Equal(t, "IdentityProvider", tpl.Addon.Spec.Kind())
+	require.Equal(t, "${{ values.publicHost }}", tpl.Addon.Spec.Runtimes[0].Attributes.Env["PUB_URL"], "scenario: addon-yaml-as-written")
 
 	plain, err := Load(writeTemplate(t, baseApp, map[string]string{"resources/api.yaml": apiFragment}))
 	require.NoError(t, err)
@@ -57,6 +76,7 @@ func TestLoadRefusesABadAddon(t *testing.T) {
 			"names no namespace"},
 		"another kind": {"apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\nmetadata:\n  name: x\nspec:\n  data:\n    k: v\n",
 			"holds a ConfigMap"},
+		"no kind": {runtimesOnlyAddonYAML, "addon.yaml: its Addon adds no kind"},
 	} {
 		dir := writeTemplate(t, baseApp, map[string]string{"resources/api.yaml": apiFragment, AddonFile: c.body})
 		_, err := Load(dir)
@@ -81,5 +101,5 @@ func TestScenarioAddonTemplateRender(t *testing.T) {
 		require.Equal(t, name+"-login", app.Spec.Addons[0].Name)
 		require.Equal(t, "IdentityProvider", app.Spec.Addons[0].Kind)
 	}
-	require.Equal(t, "${{ values.publicHost }}", tpl.Addon.Spec.Env["PUB_URL"], "render leaves the Addon as written")
+	require.Equal(t, "${{ values.publicHost }}", tpl.Addon.Spec.Runtimes[0].Attributes.Env["PUB_URL"], "render leaves the Addon as written")
 }

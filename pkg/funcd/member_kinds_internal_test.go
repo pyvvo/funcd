@@ -55,7 +55,7 @@ func newKindsRig(t *testing.T, shared blob.Bucket, fns, dbs []v1.ObjectName, set
 	t.Helper()
 	engines, addons := newFileEngines(t), fakeaddon.New(t)
 	opts := []Option{WithSQLProviderRuntime(engines), WithFunctionVolumes(volume.Options{Root: t.TempDir()}, false),
-		WithAddonRuntime(addons, v1.AddonRuntimeContainerd)}
+		WithAddonRuntime(addons)}
 	if shared != nil {
 		opts = append(opts, WithBlob(shared))
 	}

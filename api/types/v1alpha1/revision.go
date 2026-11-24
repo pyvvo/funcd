@@ -28,6 +28,8 @@ type RevisionSpec struct {
 	Handler     string      `json:"handler,omitempty" pattern:"^[A-Za-z_][A-Za-z0-9_.]*$" doc:"The export that the Revision's workers call: the spec.handler of its Function or Job when funcd created the Revision."`
 	Image       string      `json:"image,omitempty" doc:"The artifact that the Revision's workers run: the spec.image of its Function or Job when funcd created the Revision."`
 	ImageDigest string      `json:"imageDigest,omitempty" pattern:"^sha256:[a-f0-9]{64}$" doc:"The digest that the Revision's workers pull the image by: the spec.imageDigest of its Function or Job, or the digest that its image resolved to when funcd created the Revision. It never changes, even when a tag moves."`
+	// RuntimeImage is the image of the Addon runtime that serves the Revision (ADR-0344 Decision 8).
+	RuntimeImage string `json:"runtimeImage,omitempty" doc:"The image of the Addon runtime that serves the Revision, which its workers run: the image of the Addon's entry when funcd created the Revision, or, for a Revision created before its runtime served it, when a pass first found the entry while no worker of the Revision ran. It never changes after: an Addon update moves no Revision. Empty for any other runtime."`
 }
 
 // RevisionStatus holds the observed state.

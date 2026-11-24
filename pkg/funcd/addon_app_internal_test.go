@@ -48,7 +48,7 @@ func (e *addonEnv) waitApp(t *testing.T, ns v1.NamespaceName, name v1.ObjectName
 // the keyword; nothing is stored.
 func TestScenarioAddonPartRefused(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	for name, c := range map[string]struct {
 		edit func(*v1.AppAddon)
@@ -77,7 +77,7 @@ func TestScenarioAddonPartRefused(t *testing.T) {
 // the App is Ready once the part is, its line naming the add-on's kind.
 func TestScenarioAddonPartReady(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, loginApp("default", "web-auth"))
 	app := e.waitApp(t, "default", "web-auth")
@@ -96,7 +96,7 @@ func TestScenarioAddonPartReady(t *testing.T) {
 // owning its own part, each part with its own engine.
 func TestScenarioAddonTemplateTwice(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	for _, name := range []v1.ObjectName{"web-auth", "admin-auth"} {
 		e.apply(t, e.dev, loginApp("team", name))
@@ -116,7 +116,7 @@ func TestScenarioAddonTemplateTwice(t *testing.T) {
 // scenario: addon-part-pruned — a revision that drops the addons entry deletes web-auth-login, and its engine goes.
 func TestScenarioAddonPartPruned(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, loginApp("default", "web-auth"))
 	e.waitApp(t, "default", "web-auth")
@@ -135,7 +135,7 @@ func TestScenarioAddonPartPruned(t *testing.T) {
 // scenario: addon-app-delete — deleting web-auth deletes web-auth-login and its engine, and the Addon stays.
 func TestScenarioAddonAppDelete(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, loginApp("default", "web-auth"))
 	e.waitApp(t, "default", "web-auth")

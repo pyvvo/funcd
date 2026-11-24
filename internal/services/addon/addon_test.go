@@ -85,7 +85,8 @@ func TestMapAddonAndSecret(t *testing.T) {
 	req := func(ns v1.NamespaceName, name v1.ObjectName) controller.Request {
 		return controller.Request{GVK: v1.KindAddonObject.GVK(), Namespace: ns, Name: name}
 	}
-	idp := &v1.Addon{ObjectMeta: v1.ObjectMeta{Name: "any-name"}, Spec: v1.AddonSpec{Kind: "IdentityProvider"}}
+	idp := &v1.Addon{ObjectMeta: v1.ObjectMeta{Name: "any-name"}, Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: "IdentityProvider"}}}}}
 	require.ElementsMatch(t, []controller.Request{req("a", "login"), req("b", "login")}, r.MapAddon(ctx, idp))
 	keys := &v1.Secret{ObjectMeta: v1.ObjectMeta{Name: "keys", Namespace: "a"}}
 	require.ElementsMatch(t, []controller.Request{req("a", "login"), req("a", "echo")}, r.MapSecret(ctx, keys))
@@ -139,8 +140,8 @@ func stored(t *testing.T, st store.Store, addonKind, kind string, env map[string
 	ctx := context.Background()
 	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}}
 	a.Name = "rauthy"
-	a.Spec = v1.AddonSpec{Kind: addonKind, Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"}, Env: env,
-		Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d"}
+	a.Spec = v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: v1.RuntimeName(strings.ToLower(addonKind)), Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d", Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: addonKind, Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"}, Env: env}}}}
 	register(t, st, a)
 	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject}}
 	o.Name, o.Namespace, o.ResourceGroup, o.Spec.Kind = "login", "a", "rg1", kind
@@ -166,13 +167,14 @@ func TestReconcileFindsTheAddonByPlural(t *testing.T) {
 	st := store.New(memory.New())
 	t.Cleanup(func() { _ = st.Close() })
 	req := stored(t, st, "Identityprovider", "IdentityProvider", nil)
-	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: noRuntime{}, Modes: []string{v1.AddonRuntimeContainerd}})
+	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: noRuntime{}, RunsImages: true})
 	require.NoError(t, err)
 
 	_, err = r.Reconcile(context.Background(), req)
 	require.Error(t, err, "noRuntime's converge fails")
 	require.Equal(t, "EngineConvergeFailed", readyReason(t, st), "the object found its Addon and converged")
-	idp := &v1.Addon{ObjectMeta: v1.ObjectMeta{Name: "rauthy"}, Spec: v1.AddonSpec{Kind: "Identityprovider"}}
+	idp := &v1.Addon{ObjectMeta: v1.ObjectMeta{Name: "rauthy"}, Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: "Identityprovider"}}}}}
 	require.Equal(t, []controller.Request{req}, r.MapAddon(context.Background(), idp))
 }
 
@@ -183,7 +185,7 @@ func TestReconcileHoldsAnObjectWhoseEnvFails(t *testing.T) {
 	st := store.New(memory.New())
 	t.Cleanup(func() { _ = st.Close() })
 	req := stored(t, st, "IdentityProvider", "IdentityProvider", map[string]string{"PUB_URL": "${{ config. }}"})
-	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: noRuntime{}, Modes: []string{v1.AddonRuntimeContainerd}})
+	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: noRuntime{}, RunsImages: true})
 	require.NoError(t, err)
 
 	_, err = r.Reconcile(context.Background(), req)
@@ -207,14 +209,14 @@ func TestRuntimeUnavailableNamesWhy(t *testing.T) {
 	st := store.New(memory.New())
 	t.Cleanup(func() { _ = st.Close() })
 	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}}
-	a.Name, a.Spec = "whoami", v1.AddonSpec{Kind: "EchoService", Image: "traefik/whoami@sha256:" + strings.Repeat("a", 64), Port: 80,
-		Readiness: v1.AddonReadiness{Path: "/health"}}
+	a.Name, a.Spec = "whoami", v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "echoservice", Image: "traefik/whoami@sha256:" + strings.Repeat("a", 64), Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: "EchoService", Port: 80, Readiness: v1.AddonReadiness{Path: "/health"}}}}}
 	register(t, st, a)
 	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject}}
 	o.Name, o.Namespace, o.ResourceGroup, o.Spec.Kind = "echo", "default", "rg1", "EchoService"
 	_, err := st.Create(ctx, o)
 	require.NoError(t, err)
-	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: unavailableRuntime{}, Modes: []string{v1.AddonRuntimeContainerd}})
+	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: unavailableRuntime{}, RunsImages: true})
 	require.NoError(t, err)
 
 	res, err := r.Reconcile(ctx, controller.Request{GVK: v1.KindAddonObject.GVK(), Namespace: "default", Name: "echo"})

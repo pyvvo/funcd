@@ -38,12 +38,8 @@ func newAddonRig(t *testing.T, mutate func(*v1.AddonSpec)) *addonRig {
 	t.Helper()
 	ctx := context.Background()
 	st := store.New(storemem.New())
-	a := &v1.Addon{TypeMeta: tm(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "rauthy"}, Spec: v1.AddonSpec{
-		Kind: "IdentityProvider", Image: testImage, Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"},
-		Storage:  &v1.AddonStorage{Path: "/app/data", UID: os.Geteuid(), GID: os.Getegid()},
-		Snapshot: &v1.AddonSnapshot{Path: "/app/data/state_machine/backups"},
-		Restore:  &v1.AddonRestore{Path: "/app/data/restore", Timeout: v1.MinAddonRestoreTimeout},
-	}}
+	a := &v1.Addon{TypeMeta: tm(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "rauthy"}, Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Image: testImage, Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"}, Storage: &v1.AddonStorage{Path: "/app/data", UID: os.Geteuid(), GID: os.Getegid()}, Snapshot: &v1.AddonSnapshot{Path: "/app/data/state_machine/backups"}, Restore: &v1.AddonRestore{Path: "/app/data/restore", Timeout: v1.MinAddonRestoreTimeout}}}}}}
 	if mutate != nil {
 		mutate(&a.Spec)
 	}
@@ -140,7 +136,7 @@ func TestAddons_WriteFailsNoSnapshot(t *testing.T) {
 	require.ErrorContains(t, err, "has written no snapshot under /app/data/state_machine/backups yet")
 	require.Empty(t, keys)
 
-	r = newAddonRig(t, func(s *v1.AddonSpec) { s.Snapshot = nil })
+	r = newAddonRig(t, func(s *v1.AddonSpec) { s.Runtimes[0].Attributes.Snapshot = nil })
 	_, _, _, err = r.write(t, login())
 	require.ErrorIs(t, err, workload.ErrNoSnapshot)
 	require.ErrorContains(t, err, "the add-on rauthy declares no snapshot.path")
@@ -172,8 +168,8 @@ func TestServes(t *testing.T) {
 func TestResolve_AddonMembers(t *testing.T) {
 	t.Parallel()
 	r := newAddonRig(t, nil)
-	echo := &v1.Addon{TypeMeta: tm(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "whoami"}, Spec: v1.AddonSpec{Kind: "EchoService",
-		Image: testImage, Port: 80, Readiness: v1.AddonReadiness{Path: "/"}}}
+	echo := &v1.Addon{TypeMeta: tm(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "whoami"}, Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "echoservice", Image: testImage, Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: "EchoService", Port: 80, Readiness: v1.AddonReadiness{Path: "/"}}}}}}
 	for _, o := range []v1.Object{echo, idp("alpha", "app"), idp("other", "elsewhere"),
 		&v1.AddonObject{TypeMeta: tm(v1.KindAddonObject), ObjectMeta: meta("echo", "app"), Spec: v1.AddonObjectSpec{Kind: "EchoService"}},
 		&v1.KVStore{TypeMeta: tm(v1.KindKVStore), ObjectMeta: meta("orders-state", "app")}} {
@@ -199,8 +195,8 @@ func TestResolve_AddonMembers(t *testing.T) {
 func TestScenarioAddonAppBackup(t *testing.T) {
 	t.Parallel()
 	r := newAddonRig(t, nil)
-	echo := &v1.Addon{TypeMeta: tm(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "whoami"}, Spec: v1.AddonSpec{Kind: "EchoService",
-		Image: testImage, Port: 80, Readiness: v1.AddonReadiness{Path: "/"}}}
+	echo := &v1.Addon{TypeMeta: tm(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "whoami"}, Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "echoservice", Image: testImage, Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: "EchoService", Port: 80, Readiness: v1.AddonReadiness{Path: "/"}}}}}}
 	app := &v1.App{TypeMeta: tm(v1.KindApp), ObjectMeta: meta("web-auth", "web-auth")}
 	app.Spec.KV = []v1.KVStoreEntry{{Name: "web-auth-state"}}
 	app.Spec.Addons = []v1.AppAddon{{Ref: "login"}, {Name: "web-auth-echo", AddonObjectSpec: v1.AddonObjectSpec{Kind: "EchoService"}}}
@@ -252,7 +248,7 @@ func inPlace() v1.RestoreMember {
 // Restore and the copy's file, and waits until the mark is gone, which the reconciler does once the engine is back.
 func TestAddons_LoadPlacesTheCopyAndWaitsForTheMarkToGo(t *testing.T) {
 	t.Parallel()
-	r := newAddonRig(t, func(s *v1.AddonSpec) { s.Restore.Timeout = v1.MaxAddonRestoreTimeout })
+	r := newAddonRig(t, func(s *v1.AddonSpec) { s.Runtimes[0].Attributes.Restore.Timeout = v1.MaxAddonRestoreTimeout })
 	require.NoError(t, os.MkdirAll(filepath.Join(r.dir, "restore"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(r.dir, "restore", "stale"), []byte("x"), 0o600))
 	d := r.destination(t, inPlace())
@@ -354,7 +350,7 @@ func TestAddons_DestinationRules(t *testing.T) {
 	_, err = kind.Destination(r.ctx, "orders", inPlace())
 	require.Equal(t, fault.Internal, fault.KindOf(err), "a load that no Restore names would leave a mark no Restore ends")
 
-	r = newAddonRig(t, func(s *v1.AddonSpec) { s.Restore = nil })
+	r = newAddonRig(t, func(s *v1.AddonSpec) { s.Runtimes[0].Attributes.Restore = nil })
 	_, err = workload.Addons(r.st, r.files).Destination(r.ctx, "orders", inPlace())
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.ErrorContains(t, err, "declares no restore.path")
@@ -371,7 +367,7 @@ func TestAddons_DestinationRules(t *testing.T) {
 // another case keeps the object a member of a group Backup and in place for a Restore.
 func TestAddons_AnAddonOfTheSamePluralKeepsItsObjects(t *testing.T) {
 	t.Parallel()
-	r := newAddonRig(t, func(s *v1.AddonSpec) { s.Kind = "Identityprovider" })
+	r := newAddonRig(t, func(s *v1.AddonSpec) { s.Runtimes[0].Attributes.Kind = "Identityprovider" })
 	ms, err := workload.Resolve(r.ctx, r.st, "orders", v1.BackupScope{ResourceGroup: "app"}, workload.Limits{}.OrDefaults())
 	require.NoError(t, err)
 	require.Contains(t, ms, workload.Member{Kind: "IdentityProvider", Name: "login"}, "the group scope takes the object")

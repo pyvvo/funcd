@@ -344,6 +344,30 @@ func TestContainerdModeGivesTheDriverContainerdsExit(t *testing.T) {
 	require.Equal(t, 6*time.Second, got.StopGrace, "the driver must get runtime.containerd.stopGrace (ADR-0277)")
 }
 
+// The driver pulls an image an Addon's runtime names from a registry that addons.registries lists, by digest, as it
+// pulls an engine's (ADR-0344 Decision 5); one from another registry, or by tag, it does not.
+func TestContainerdModePullsAnAddonsRuntimeImage(t *testing.T) {
+	cfg := cfgProcess(t.TempDir())
+	cfg.Runtime.Mode = "containerd"
+	cfg.Addons.Registries = []string{"registry.example.com"}
+	cfg.Runtime.Containerd.ImagePrefix = config.DefaultImagePrefix // under it, funcd pulls no runtime image of its own
+	var got containerd.Config
+	_, closeExec, err := containerdOptions(context.Background(), cfg, 6*time.Second, slog.New(slog.DiscardHandler),
+		func(ctrmanager.Config) (ctrmanager.Manager, error) {
+			return exitingManager{exited: make(chan struct{})}, nil
+		},
+		func(c containerd.Config) (fnruntime.Runtime, error) {
+			got = c
+			return &sweptRuntime{}, nil
+		})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = closeExec() })
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	require.True(t, got.Pullable("registry.example.com/deno"+digest), "a listed registry's image, pinned by digest")
+	require.False(t, got.Pullable("quay.io/example/deno"+digest), "an unlisted registry")
+	require.False(t, got.Pullable("registry.example.com/deno:2"), "a tag")
+}
+
 // The driver gets server.network.egress, so each worker's eth0 gets no IPv6 with egress on (ADR-0318).
 func TestContainerdModeGivesTheDriverTheEgressSwitch(t *testing.T) {
 	for _, egress := range []bool{true, false} {

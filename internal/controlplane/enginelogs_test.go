@@ -35,13 +35,11 @@ func TestScenarioEngineLogsNoEngine(t *testing.T) {
 	st := store.New(memory.New())
 	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddon.GVK().APIVersion(), Kind: v1.KindAddon}}
 	a.Name = "rauthy"
-	a.Spec = v1.AddonSpec{Kind: "IdentityProvider", Port: 8080, BasePath: "/auth/v1",
-		Image:     "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d",
-		Readiness: v1.AddonReadiness{Path: "/auth/v1/ping"},
-		Settings: []v1.AddonSettings{{Kind: "RauthyPasswordPolicy", Target: "spec.config.provider",
+	a.Spec = v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5edcb27399e23f8386fecb03b13f909966d2c3c4708095e2c31ccfe2d", Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080, BasePath: "/auth/v1", Readiness: v1.AddonReadiness{Path: "/auth/v1/ping"}, Settings: []v1.AddonSettings{{Kind: "RauthyPasswordPolicy", Target: "spec.config.provider",
 			Function: v1.AddonSettingsFunction{Ref: "rauthy-settings"},
 			Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"provider":` +
-				`{"type":"string"}},"required":["provider"]}`)}}}
+				`{"type":"string"}},"required":["provider"]}`)}}}}}}
 	_, err := st.Create(context.Background(), a)
 	require.NoError(t, err)
 	q := &queries{}

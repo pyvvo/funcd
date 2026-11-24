@@ -18,28 +18,41 @@ This page lists the spec and status fields of Addon, AddonObject and AddonRevisi
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `runtimes` | array of [`Addon.spec.runtimes[]`](#addonspecruntimes), required | The runtimes that the add-on ships, each an image and the workloads it serves. At most one entry runs the add-on's kind; an Addon whose entries run none adds no kind, and may gain one once. |
+
+### `Addon.spec.runtimes[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `attributes` | object, [`Addon.spec.runtimes[].attributes`](#addonspecruntimesattributes) | The entry's fields for its workloads: an Engine entry's kind, config, settings and engine fields. A Function or Job entry takes none. |
+| `image` | string, matching `^[^:@\s]+(:[0-9]+/[^:@\s]+)?@sha256:[a-f0-9]{64}$` | The image, pinned by digest as &lt;repository&gt;@sha256:&lt;64 hex digits&gt;, from a registry that addons.registries lists, and pulled as an engine's. A registry taken out of that list stops no worker or engine, and refuses the Addon's next change. |
+| `name` | string, required, a DNS-1123 label | The runtime's name, which a Function's or a Job's spec.runtime names: a DNS label that is none of funcd's runtimes (nodejs22, python314, duckdb, rqlite), does not start with node or python, is no key of runtime.containerd.imageOverride, and that no other Addon ships. |
+| `workloads` | array of string values, required, each one of `Function`, `Job`, `Engine` | What the image serves: Function and Job, which Functions and Jobs may name in spec.runtime, or Engine, alone, which runs one engine of the image per object of the entry's kind. |
+
+### `Addon.spec.runtimes[].attributes`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
 | `basePath` | string | The path under which the edge serves an object's engine, which the engine gets as it was called. It begins with /, does not end with / unless it is /, and holds no empty, . or .. segment. Empty is /. |
 | `config` | any JSON value | The JSON Schema of the objects' spec.config, within funcd's contract profile: closed objects, and no $ref. funcd refuses an object whose config breaks it; an object stored before a change that its config breaks waits in Pending with ConfigInvalid, with no engine. |
 | `env` | map of string to string | The engine's environment. Each value is a literal, or a single $&#123;&#123; &#125;&#125; expression over config, such as $&#123;&#123; config.issuer &#125;&#125;, which funcd checks against the config schema when the Addon is applied. A value that is not a string reaches the engine as its JSON; one that fails holds the object in Pending with EnvInvalid. |
-| `image` | string, required, matching `^[^:@\s]+(:[0-9]+/[^:@\s]+)?@sha256:[a-f0-9]{64}$` | The engine image, pinned by digest as &lt;repository&gt;@sha256:&lt;64 hex digits&gt;, from a registry that addons.registries lists. A registry taken out of that list stops no engine, and refuses the Addon's next change. |
-| `kind` | string, required, matching `^[A-Z][A-Za-z0-9]{1,62}$` | The namespaced kind that the add-on adds: an upper-case letter, then 1 to 62 letters or digits. Its objects are served at /apis/funcd.io/v1alpha1/namespaces/&lt;namespace&gt;/&lt;plural&gt;, where the plural is the kind in lower case with an s. funcd refuses a kind that is its own, or whose plural is a path funcd serves or another Addon's plural, whatever the case. It cannot change. |
-| `port` | integer, required, 1 to 65535 | The port that the engine serves on, in its own network namespace. Only funcd reaches it. |
+| `kind` | string, matching `^[A-Z][A-Za-z0-9]{1,62}$` | The namespaced kind that the entry runs: an upper-case letter, then 1 to 62 letters or digits. Its objects are served at /apis/funcd.io/v1alpha1/namespaces/&lt;namespace&gt;/&lt;plural&gt;, where the plural is the kind in lower case with an s. funcd refuses a kind that is its own, or whose plural is a path funcd serves or another Addon's plural, whatever the case. An Addon gains its kind once: it cannot change or go. |
+| `port` | integer, 1 to 65535 | The port that the engine serves on, in its own network namespace; an Engine entry requires it. Only funcd reaches it. |
 | `privatePaths` | array of string values | Paths under basePath that the edge answers with 404, however a caller spells them; funcd reaches them at the engine's own address. Each has basePath's form and lies under it. |
-| `readiness` | object, [`Addon.spec.readiness`](#addonspecreadiness), required | How funcd learns that an object's engine is ready. |
-| `restore` | object, [`Addon.spec.restore`](#addonspecrestore) | How the engine loads a copy at its start, which an in-place Restore of an object puts in place. Unset, an object of the add-on cannot be restored. |
-| `runtimes` | array of string values, each one of `containerd` | The runtime.mode values that the engine runs on. Only containerd is admitted, which is also the default, since the process runtime runs no image. On a server whose mode the list lacks, each object waits in Pending with RuntimeUnavailable. |
+| `readiness` | object, [`Addon.spec.runtimes[].attributes.readiness`](#addonspecruntimesattributesreadiness) | How funcd learns that an object's engine is ready; an Engine entry requires it. |
+| `restore` | object, [`Addon.spec.runtimes[].attributes.restore`](#addonspecruntimesattributesrestore) | How the engine loads a copy at its start, which an in-place Restore of an object puts in place. Unset, an object of the add-on cannot be restored. |
 | `secretKeys` | array of string values | The keys of an object's bound Secrets that reach the engine's environment. A bound Secret's other keys do not. |
-| `settings` | array of [`Addon.spec.settings[]`](#addonspecsettings) | Kinds of settings objects that the add-on adds beside spec.kind. An object of one runs no engine: the kind's Function applies the objects of each target through the target's engine. |
-| `snapshot` | object, [`Addon.spec.snapshot`](#addonspecsnapshot) | Where the engine writes its own consistent copies, which a Backup of an object copies. Unset, a Backup that names an object of the add-on fails with reason NoSnapshot, and a resourceGroup scope leaves the add-on's objects out. |
-| `storage` | object, [`Addon.spec.storage`](#addonspecstorage) | A directory that outlives each object's engine, kept across a replaced engine and funcd's restarts. Unset, the engine keeps nothing. |
+| `settings` | array of [`Addon.spec.runtimes[].attributes.settings[]`](#addonspecruntimesattributessettings) | Kinds of settings objects that the add-on adds beside kind. An object of one runs no engine: the kind's Function applies the objects of each target through the target's engine. |
+| `snapshot` | object, [`Addon.spec.runtimes[].attributes.snapshot`](#addonspecruntimesattributessnapshot) | Where the engine writes its own consistent copies, which a Backup of an object copies. Unset, a Backup that names an object of the add-on fails with reason NoSnapshot, and a resourceGroup scope leaves the add-on's objects out. |
+| `storage` | object, [`Addon.spec.runtimes[].attributes.storage`](#addonspecruntimesattributesstorage) | A directory that outlives each object's engine, kept across a replaced engine and funcd's restarts. Unset, the engine keeps nothing. |
 
-### `Addon.spec.readiness`
+### `Addon.spec.runtimes[].attributes.readiness`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `path` | string, required | The path that funcd sends GET to on the engine's port. The object turns Ready once it answers 200. |
 
-### `Addon.spec.restore`
+### `Addon.spec.runtimes[].attributes.restore`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
@@ -47,53 +60,53 @@ This page lists the spec and status fields of Addon, AddonObject and AddonRevisi
 | `path` | string, required | The folder in the engine where funcd puts the copy that the next start loads: under storage.path, and neither snapshot.path nor inside it. funcd empties it before it writes the copy, and removes the copy once the engine that loaded it is Ready. |
 | `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How long an in-place Restore waits for the engine to load the copy and start again without restore.env, from 1s to 1h; unset is 10m. Past it, the Restore fails with reason RestoreTimedOut and the namespace stays held. |
 
-### `Addon.spec.settings[]`
+### `Addon.spec.runtimes[].attributes.settings[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `constraints` | object, [`Addon.spec.settings[].constraints`](#addonspecsettingsconstraints) | What an object must keep at admission, beside its schema. |
-| `function` | object, [`Addon.spec.settings[].function`](#addonspecsettingsfunction), required | The Function that applies a target's objects, named as a Workflow step names its Function. A target may name its own in its spec.functions. |
-| `kind` | string, required | The settings kind, a kind name as spec.kind is, served at its plural. |
+| `constraints` | object, [`Addon.spec.runtimes[].attributes.settings[].constraints`](#addonspecruntimesattributessettingsconstraints) | What an object must keep at admission, beside its schema. |
+| `function` | object, [`Addon.spec.runtimes[].attributes.settings[].function`](#addonspecruntimesattributessettingsfunction), required | The Function that applies a target's objects, named as a Workflow step names its Function. A target may name its own in its spec.functions. |
+| `kind` | string, required | The settings kind, a kind name as the Addon's kind is, served at its plural. |
 | `resync` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How often funcd sends a target's objects again with no change, from 1s to 24h; unset is 10m. |
 | `schema` | any JSON value, required | The JSON Schema of the objects' spec.config, within funcd's contract profile. It must require the target field at each level. |
 | `target` | string, required | The string field under spec.config that names the object's target, such as spec.config.provider. |
 
-### `Addon.spec.settings[].constraints`
+### `Addon.spec.runtimes[].attributes.settings[].constraints`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `count` | object, [`Addon.spec.settings[].constraints.count`](#addonspecsettingsconstraintscount) | How many objects of the kind a target or a namespace holds at most; 0 is no limit. |
+| `count` | object, [`Addon.spec.runtimes[].attributes.settings[].constraints.count`](#addonspecruntimesattributessettingsconstraintscount) | How many objects of the kind a target or a namespace holds at most; 0 is no limit. |
 | `immutable` | array of string values | Fields under spec.config that a replace cannot change. |
-| `rules` | array of [`Addon.spec.settings[].constraints.rules[]`](#addonspecsettingsconstraintsrules) | Conditions over object, oldObject and others that a write must meet. |
+| `rules` | array of [`Addon.spec.runtimes[].attributes.settings[].constraints.rules[]`](#addonspecruntimesattributessettingsconstraintsrules) | Conditions over object, oldObject and others that a write must meet. |
 | `unique` | array of string values | Fields under spec.config whose value no two objects of the kind in a namespace share. |
 
-### `Addon.spec.settings[].constraints.count`
+### `Addon.spec.runtimes[].attributes.settings[].constraints.count`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `perNamespace` | integer, at least 0 | The most objects of the kind in a namespace. |
 | `perTarget` | integer, at least 0 | The most objects of the kind that name one target. |
 
-### `Addon.spec.settings[].constraints.rules[]`
+### `Addon.spec.runtimes[].attributes.settings[].constraints.rules[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `message` | string, required | What a refusal says. |
 | `rule` | string, required | A single $&#123;&#123; &#125;&#125; condition over object, oldObject (on a replace) and others. |
 
-### `Addon.spec.settings[].function`
+### `Addon.spec.runtimes[].attributes.settings[].function`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `ref` | string, required, a DNS-1123 label | The name of an existing Function in the target's namespace, which funcd calls with each target's objects. funcd does not create or change it, and the objects wait while it is missing. |
 
-### `Addon.spec.snapshot`
+### `Addon.spec.runtimes[].attributes.snapshot`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `path` | string, required | The folder in the engine where it writes its copies: under storage.path, and neither restore.path nor inside it. A Backup copies the newest regular file there whose name does not end in \~ and that has not changed for 2 s, as it is. |
 
-### `Addon.spec.storage`
+### `Addon.spec.runtimes[].attributes.storage`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |

@@ -50,7 +50,7 @@ func (e *addonEnv) revision(t *testing.T, name v1.ObjectName) (*v1.AddonRevision
 func (e *addonEnv) updateImage(t *testing.T, image string) {
 	t.Helper()
 	a := rauthyAddon("rauthy")
-	a.Spec.Image = image
+	a.Spec.Runtimes[0].Image = image
 	e.apply(t, e.admin, a)
 }
 
@@ -68,20 +68,20 @@ func (e *addonEnv) pin(t *testing.T, ns v1.NamespaceName, name, revision v1.Obje
 // and rauthy-1, which login pins, keeps the old one.
 func TestScenarioAddonRevisionStamped(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.waitCurrent(t, "rauthy-1")
 	e.apply(t, e.dev, identityProvider("default"))
-	e.pin(t, "default", "login", "rauthy-1", rauthyAddon("rauthy").Spec.Image)
+	e.pin(t, "default", "login", "rauthy-1", rauthyAddon("rauthy").Spec.Runtimes[0].Image)
 	e.updateImage(t, newerImage)
 	e.waitCurrent(t, "rauthy-2")
 	second, ok := e.revision(t, "rauthy-2")
 	require.True(t, ok)
-	require.Equal(t, newerImage, second.Spec.Spec.Image)
+	require.Equal(t, newerImage, second.Spec.Spec.Runtimes[0].Image)
 	require.Equal(t, int64(2), second.Spec.Number)
 	first, ok := e.revision(t, "rauthy-1")
 	require.True(t, ok)
-	require.Equal(t, rauthyAddon("rauthy").Spec.Image, first.Spec.Spec.Image, "rauthy-1 is unchanged")
+	require.Equal(t, rauthyAddon("rauthy").Spec.Runtimes[0].Image, first.Spec.Spec.Runtimes[0].Image, "rauthy-1 is unchanged")
 }
 
 // scenario: addon-revision-no-move — login pinned to rauthy-1 keeps rauthy-1's image when the Addon moves to rauthy-2,
@@ -90,11 +90,11 @@ func TestScenarioAddonRevisionStamped(t *testing.T) {
 // scenario: addon-revision-edit-moves — then an edit of login's spec pins rauthy-2, whose image its engine runs.
 func TestScenarioAddonRevisionNoMove(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	e.waitReason(t, "default", "login", v1.PhaseReady, "")
-	e.pin(t, "default", "login", "rauthy-1", rauthyAddon("rauthy").Spec.Image)
+	e.pin(t, "default", "login", "rauthy-1", rauthyAddon("rauthy").Spec.Runtimes[0].Image)
 	_, _, starts := e.rt.state(ref("default", "login"))
 
 	e.updateImage(t, newerImage)
@@ -102,7 +102,7 @@ func TestScenarioAddonRevisionNoMove(t *testing.T) {
 	require.True(t, poll.Never(func() bool {
 		o, _ := e.object(t, "default", "login")
 		spec, _, n := e.rt.state(ref("default", "login"))
-		return n != starts || spec.Image != rauthyAddon("rauthy").Spec.Image || o.Status.AddonRevision != "rauthy-1"
+		return n != starts || spec.Image != rauthyAddon("rauthy").Spec.Runtimes[0].Image || o.Status.AddonRevision != "rauthy-1"
 	}, 500*time.Millisecond, 20*time.Millisecond), "a newer revision moves no engine")
 	_, kept := e.revision(t, "rauthy-1")
 	require.True(t, kept, "login pins rauthy-1, so it stays")
@@ -120,7 +120,7 @@ func TestScenarioAddonRevisionNoMove(t *testing.T) {
 // scenario: addon-revision-new-object — an object created after the Addon moved pins the current revision.
 func TestScenarioAddonRevisionNewObject(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.waitCurrent(t, "rauthy-1")
 	e.updateImage(t, newerImage)
@@ -133,7 +133,7 @@ func TestScenarioAddonRevisionNewObject(t *testing.T) {
 // admin lists and reads them, and a developer reads none.
 func TestScenarioAddonRevisionReadOnly(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.waitCurrent(t, "rauthy-1")
 	rev, _ := e.revision(t, "rauthy-1")
@@ -172,12 +172,12 @@ func revisionJSON(t *testing.T, rev *v1.AddonRevision) string {
 // applied; the Addon's change moves it only through the App's next revision, and the App is Ready once it runs it.
 func TestAddonRevisionAppPartMoves(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.waitCurrent(t, "rauthy-1")
 	e.apply(t, e.dev, loginApp("default", "web-auth"))
 	e.waitApp(t, "default", "web-auth")
-	e.pin(t, "default", "web-auth-login", "rauthy-1", rauthyAddon("rauthy").Spec.Image)
+	e.pin(t, "default", "web-auth-login", "rauthy-1", rauthyAddon("rauthy").Spec.Runtimes[0].Image)
 
 	e.updateImage(t, newerImage)
 	e.waitCurrent(t, "rauthy-2")

@@ -37,22 +37,27 @@ kind: Addon
 metadata:
   name: rauthy
 spec:
-  kind: IdentityProvider
-  image: ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809
-  port: 8080
-  basePath: /auth/v1
-  readiness:
-    path: /auth/v1/ping
-  config:
-    type: object
-    additionalProperties: false
-    properties:
-      issuer:
-        type: string
-    required:
-      - issuer
-  env:
-    PUB_URL: ${{ config.issuer }}
+  runtimes:
+    - name: identityprovider
+      image: ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809
+      workloads:
+        - Engine
+      attributes:
+        kind: IdentityProvider
+        port: 8080
+        basePath: /auth/v1
+        readiness:
+          path: /auth/v1/ping
+        config:
+          type: object
+          additionalProperties: false
+          properties:
+            issuer:
+              type: string
+          required:
+            - issuer
+        env:
+          PUB_URL: ${{ config.issuer }}
 `
 
 // addonCLIEnv is a control plane with the Addon admissions, and an admin's and a developer's client.
@@ -179,6 +184,24 @@ func (e *addonCLIEnv) register(t *testing.T, name v1.ObjectName, body string) *v
 	return written
 }
 
+// scenario: addon-template-needs-kind — a template whose addon.yaml adds no kind is refused: deploy exits 1 naming the
+// file, and applies neither the Addon nor the App (ADR-0344 Decision 10).
+func TestScenarioAddonTemplateNeedsKind(t *testing.T) {
+	t.Parallel()
+	e := newAddonCLIEnv(t)
+	runtimesOnly := strings.Replace(rauthyTemplateAddon, "workloads:\n        - Engine", "workloads:\n        - Function", 1)
+	runtimesOnly = runtimesOnly[:strings.Index(runtimesOnly, "      attributes:")]
+	_, err := deployAs(e.admin, addonTemplate(t, runtimesOnly), "-n", "team-a", "--no-wait")
+	require.Error(t, err)
+	require.Equal(t, 1, exitCode(err))
+	require.ErrorContains(t, err, template.AddonFile)
+	require.ErrorContains(t, err, "adds no kind")
+	_, ok := e.addon(t, "rauthy")
+	require.False(t, ok, "no Addon is applied")
+	_, ok = e.app(t, "rauthy")
+	require.False(t, ok, "no App is applied")
+}
+
 // scenario: addon-template-admin-install — with no Addon of the kind, an admin's deploy creates the template's Addon,
 // then applies the App, whose part is the IdentityProvider rauthy-login.
 func TestScenarioAddonTemplateAdminInstall(t *testing.T) {
@@ -189,7 +212,7 @@ func TestScenarioAddonTemplateAdminInstall(t *testing.T) {
 	require.Equal(t, "created Addon/rauthy\n", out)
 	a, ok := e.addon(t, "rauthy")
 	require.True(t, ok)
-	require.Equal(t, "IdentityProvider", a.Spec.Kind)
+	require.Equal(t, "IdentityProvider", a.Spec.Kind())
 	app, ok := e.app(t, "rauthy")
 	require.True(t, ok, "the App is applied after the Addon")
 	require.Equal(t, v1.ObjectName("rauthy-login"), app.Spec.Addons[0].Name)
@@ -232,7 +255,7 @@ func TestScenarioAddonTemplateAdminUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "updated Addon/login-provider\n", out)
 	updated, _ := e.addon(t, "login-provider")
-	require.Equal(t, "/auth/v1/health", updated.Spec.Readiness.Path)
+	require.Equal(t, "/auth/v1/health", updated.Spec.Runtimes[0].Attributes.Readiness.Path)
 	_, made := e.addon(t, "rauthy")
 	require.False(t, made, "deploy finds the Addon by its kind, under any name")
 }
@@ -275,7 +298,7 @@ func TestScenarioAddonTemplateDeveloperDeploy(t *testing.T) {
 	require.Empty(t, out, "a developer writes no Addon")
 	after, _ := e.addon(t, "rauthy")
 	require.Equal(t, before.Generation, after.Generation, "the Addon is unchanged")
-	require.Equal(t, before.Spec.Port, after.Spec.Port)
+	require.Equal(t, before.Spec.Runtimes[0].Attributes.Port, after.Spec.Runtimes[0].Attributes.Port)
 	_, ok := e.app(t, "rauthy")
 	require.True(t, ok)
 }
@@ -320,7 +343,7 @@ func TestScenarioAddonYAMLAsWritten(t *testing.T) {
 	body := strings.Replace(rauthyTemplateAddon, "${{ config.issuer }}", "${{ values.publicHost }}", 1)
 	_, err := deployAs(e.admin, addonTemplate(t, body), "-n", "team-a", "--no-wait")
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
-	require.ErrorContains(t, err, "spec.env")
+	require.ErrorContains(t, err, "attributes.env")
 	_, ok := e.addon(t, "rauthy")
 	require.False(t, ok)
 	_, ok = e.app(t, "rauthy")

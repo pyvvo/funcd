@@ -56,7 +56,8 @@ func TestAddonRulesAnyRegistry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	write := func(image string) admission.Request {
-		a := &v1.Addon{Spec: v1.AddonSpec{Kind: "IdentityProvider", Image: image, Port: 8080}}
+		a := &v1.Addon{Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Image: image, Workloads: []v1.Workload{v1.WorkloadEngine},
+			Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080}}}}}
 		return admission.Request{Operation: admission.Create, GVK: v1.KindAddon.GVK(), Object: a}
 	}
 	digested := "quay.io/pyvvo/funcd-rauthy@sha256:" + strings.Repeat("a", 64)
