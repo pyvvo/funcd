@@ -3,13 +3,13 @@ title: Networking
 description: How a call reaches a worker, and how a worker reaches the rest.
 ---
 
-![A call goes through funcd's edge to a Site's static files, to a Function through the activator and its worker, or to a Lake's gateway. The worker reaches the rest through its local API and the egress gateway](../../assets/networking.drawio.svg)
+![A call goes through funcd's edge, which signs the caller in with an OIDC provider when its Route asks, to a Site's static files, to a Function through the activator and its worker, to a Lake's gateway or to an add-on's engine. The worker reaches the rest through its local API and the egress gateway](../../assets/networking.drawio.svg)
 
 A call reaches funcd's edge, which terminates TLS, matches the call to a Route, authenticates it when the Route asks
 for it, and applies the rate and size limits. A Route serves a Site's static files or calls a Function, and a Function
-can also be called at `/function/<name>`. The edge also passes a Lake's queries to the Lake's gateway. When the
-Function has no worker running, the activator holds the call, starts a worker and passes the call on once the worker
-is ready. An idle Function scales back to zero.
+can also be called at `/function/<name>`. The edge also passes a Lake's queries to the Lake's gateway, and an
+add-on object's requests to its engine. When the Function has no worker running, the activator holds the call, starts a
+worker and passes the call on once the worker is ready. An idle Function scales back to zero.
 
 A worker reaches other Functions and its stores through its local API. When egress control is on, its outbound
 connections go through the egress gateway, which applies the namespace's EgressPolicy.
@@ -21,22 +21,30 @@ namespace's host, Function by name or sign-in callback, or an `X-Funcd-Namespace
 gets 403. The gateway never connects a worker to an address the data plane listens on, so this is the one way from the
 container network to the edge. A request from outside the container network is served as before.
 
+## OIDC sign-in
+
+A Route, a workload's own address or a namespace can ask the edge to sign its callers in with an OpenID Connect
+provider. The edge does it before it wakes a worker. A call with a session, or with a token of the provider, goes on
+with the user's identity in headers that only the edge sets. A page load with neither goes to the provider, which sends
+the browser back to the edge, and any other call gets 401. [OIDC sign-in](sign-in.md) shows the whole exchange.
+
 ## Local API
 
-![A Function's ctx calls go through the shim to the worker's local API. The kv, blob, sql and secret facets and the invoke and fetch calls ask Cedar, which either serves the call or refuses it with 403 Forbidden. The health call checks the worker's bindings](../../assets/networking-local-api.drawio.svg)
+![A worker's ctx calls go through the shim to its local API. The kv, blob, sql, secret, job and addon facets and the invoke and fetch calls ask Cedar, which either serves the call or refuses it with 403 Forbidden. The health call checks the worker's bindings](../../assets/networking-local-api.drawio.svg)
 
 Each worker has its own local API, an HTTP socket that funcd opens for it under `<dataDir>/invoke` and that only the
 shim calls. funcd sets the caller's identity when it provisions the worker, so a request can never act for another
 Function. A pooled worker's socket serves each Function in the pool as the member that the request names.
 
-The providers serve their parts of the local API, called facets, each under its own path. The `kv`, `blob`, `sql` and
-`secret` facets ask Cedar before each call. The local API also serves `invoke` and `fetch`,
-which call another Function over a link that the caller declares. Such a call goes through the data plane once Cedar
-allows it. The local API also serves `health`, which checks the worker's bindings.
+The providers serve their parts of the local API, called facets, each under its own path. The `kv`, `blob`, `sql`,
+`secret`, `job` and `addon` facets ask Cedar before each call: `job` starts a run of a Job that the Function binds, and
+`addon` passes a request to the engine of an add-on object that it binds. The local API also serves `invoke` and
+`fetch`, which call another Function over a link that the caller declares. Such a call goes through the data plane once
+Cedar allows it. The local API also serves `health`, which checks the worker's bindings.
 
 ## Egress
 
-![A worker's DNS queries go to funcd's DNS forwarder. nftables rules on funcd0 redirect its outbound TCP to the egress gateway, which asks Cedar (egress::connect, compiled from EgressPolicies) and connects the allowed connections through to their destination](../../assets/networking-egress.drawio.svg)
+![The DNS queries of a worker or an engine go to funcd's DNS forwarder. nftables rules on funcd0 redirect its outbound TCP to the egress gateway, which asks Cedar (egress::connect, compiled from EgressPolicies) and connects the allowed connections through to their destination](../../assets/networking-egress.drawio.svg)
 
 Egress control is opt-in (`server.network.egress`) and is available on Linux with containerd. When it is off, a
 worker's outbound connections stay open. When it is on, nftables rules on the worker bridge, `funcd0`, block traffic

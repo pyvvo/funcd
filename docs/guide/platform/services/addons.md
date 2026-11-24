@@ -3,7 +3,7 @@ title: Add-ons
 description: Runtimes and engines built outside funcd that an admin registers. Functions and Jobs run on an add-on's runtime, and funcd runs one engine per object, reached only through funcd.
 ---
 
-![An admin's Addon registers a kind, and each change of it is an AddonRevision. A developer's add-on object, such as an IdentityProvider, pins a revision and runs one fenced engine, which the edge serves at its host and a Function that binds it reaches through funcd's facet or proxy, Cedar's addon::call checked on each call. A settings object runs no engine: its target's list goes to the kind's Function. Backups copy the engine's own snapshot](../../assets/addons.drawio.svg)
+![An admin's Addon, with an AddonRevision for each change of it, can add four things. A runtime for Functions and Jobs gives their workers its image. A kind with an engine, such as IdentityProvider, runs one engine per object. The objects of an engineless kind, such as InfraStack, are reconciled by their kind's Function. The objects of a settings kind, such as RauthyPasswordPolicy, are applied by a settings Function](../../assets/addons.drawio.svg)
 
 An add-on is built outside funcd, such as rauthy, an OpenID Connect provider. An admin registers it with an Addon: the
 runtimes it ships, each an image pinned by digest from a registry that `addons.registries` lists and the workloads it
@@ -22,12 +22,14 @@ Revision, and a deleted Addon fails its Functions at their next pass while their
 
 ## One engine per object
 
-funcd runs one engine per object on its add-on runtime, on containerd, from the image of the Addon's kind entry, with the
-object's resources, as it runs a Lake's engine. A process server runs no engine. The engine admits new connections only
-from loopback and funcd's bridge address. With egress control off it reaches no endpoint; with it on, its connections
-pass the egress gateway, as a Function's do, so it reaches what an EgressPolicy that names its object allows. The edge
-serves it at the object's `ingress.host` under the Addon's `basePath`, with the path kept, and
-refuses the Addon's private paths however they are spelled. A held object has no engine and no edge entry.
+![An add-on object pins a revision and runs one fenced engine. Only funcd reaches the engine: an HTTP client's call goes through the edge, at the object's host and under its basePath, and a call of a Function that binds the object goes through funcd's facet or proxy, where Cedar checks addon::call. Backups copy the engine's own snapshot](../../assets/addons-engine.drawio.svg)
+
+funcd runs one engine per object on its add-on runtime, on containerd, from the image of the Addon's kind entry, with
+the object's resources, as it runs a Lake's engine. A process server runs no engine. The engine admits new connections
+only from loopback and funcd's bridge address. With egress control off it reaches no endpoint; with it on, its
+connections pass the egress gateway, as a Function's do, so it reaches what an EgressPolicy that names its object
+allows. The edge serves it at the object's `ingress.host` under the Addon's `basePath`, with the path kept, and refuses
+the Addon's private paths however they are spelled. A held object has no engine and no edge entry.
 
 ## Revisions
 

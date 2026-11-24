@@ -7,9 +7,9 @@ description: How a call goes through the edge, the invoke chain and the activato
 
 The data plane serves the calls. An HTTP client's call reaches the edge, which has a listener of its own and routes the
 call to a Site's files, a Lake's gateway, an add-on object's engine or a Function. A call to a Function runs the invoke
-chain, whether it comes from the edge or from inside funcd. The calls from inside funcd are a Function's call over a
-link, a workflow step, a Sensor's action and an App's hook. The activator then hands the call to a ready worker, and
-starts one when the Function has none. The Executor runs the workers.
+chain, whether it comes from the edge or from inside funcd. The calls from inside funcd are a Function's or a Job's call
+over a link, a workflow step, a Sensor's action, an App's hook and an add-on kind's objects. The activator then hands
+the call to a ready worker, and starts one when the Function has none. The Executor runs the workers.
 
 ## Edge
 
@@ -17,10 +17,10 @@ starts one when the Function has none. The Executor runs the workers.
 
 The edge listens on `server.dataPlaneAddr`, apart from the API. By default, it uses a free port on loopback. It
 terminates TLS when `server.tls.enabled` is set, with a self-signed certificate by default, with a certificate that the
-operator provides (`provided`), or with one from Let's Encrypt (`acme`). Its limits are off by default.
-`server.limits` sets a rate per minute for each client IP, a cap on the calls in flight and a body size. The edge
-refuses a call over these limits with 429, 503 and 413 respectively, before any worker starts. It can also log each call, record metrics and traces
-(`server.observability`), and set CORS, compression and headers (`server.shaping`).
+operator provides (`provided`), or with one from Let's Encrypt (`acme`). Its limits are off by default. `server.limits`
+sets a rate per minute for each client IP, a cap on the calls in flight and a body size. The edge refuses a call over
+these limits with 429, 503 and 413 respectively, before any worker starts. It can also log each call, record metrics and
+traces (`server.observability`), and set CORS, compression and headers (`server.shaping`).
 
 The edge then matches the call against the rules of the Ready Routes. The longest path wins, and a host breaks a tie.
 A rule with no host answers on `<namespace>.<baseDomain>`, or on any host when its namespace is `default`. When no rule
@@ -63,12 +63,12 @@ With `replicas` above 1, every call goes to the lowest listening replica, and th
 
 ## Executor
 
-![The controller's pass of a Function, or of an object that runs an engine, asks the Executor to start or stop its workers. runtime.mode picks the process driver, the default, or containerd with crun on Linux as root. Around each worker, the Executor sets up its local API socket, its egress, its volumes and the capture of its logs](../../assets/data-plane-executor.drawio.svg)
+![The controller's pass of a Function, of a JobRun, or of an object that runs an engine, asks the Executor to start or stop its workers. runtime.mode picks the process driver, the default, or containerd with crun on Linux as root. Around each worker, the Executor sets up its local API socket, its egress, its volumes and the capture of its logs](../../assets/data-plane-executor.drawio.svg)
 
-The Executor runs the workers that the controller's pass of a Function asks for. `runtime.mode` picks its driver. The
-default, `process`, runs each worker as a host process, without isolation, enforced limits or volumes. `containerd`,
-on Linux as root, runs each worker in its own container with crun, on its own network. Several Functions can share
-one pooled worker, but only on `process`.
+The Executor runs the workers that the controller's pass of a Function or of a JobRun asks for. `runtime.mode` picks its
+driver. The default, `process`, runs each worker as a host process, without isolation, enforced limits or volumes.
+`containerd`, on Linux as root, runs each worker in its own container with crun, on its own network. Several Functions
+can share one pooled worker, but only on `process`.
 
 The passes of Lakes, SQLDatabases and add-on objects ask the Executor for their engines, which it runs on the same
 driver. On containerd, an add-on's engine is fenced: it admits connections only from loopback and funcd's bridge
