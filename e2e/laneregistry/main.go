@@ -6,27 +6,21 @@
 package main
 
 import (
-	"archive/tar"
-	"bufio"
-	"compress/gzip"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"os"
-	"strconv"
-	"strings"
 	"time"
+
+	"github.com/pyvvo/funcd/internal/testkit/imageregistry"
 )
 
 // headerTimeout bounds the read of a request's header.
@@ -46,17 +40,6 @@ func main() {
 	}
 }
 
-// image is an OCI layout read into memory: its blobs by digest, and the descriptor of index.json's first manifest.
-type image struct {
-	blobs map[string][]byte
-	top   descriptor
-}
-
-type descriptor struct {
-	MediaType string `json:"mediaType"`
-	Digest    string `json:"digest"`
-}
-
 func run(tarPath, repository, addr, certOut, digestOut string) error {
 	img, err := readLayout(tarPath)
 	if err != nil {
@@ -66,124 +49,30 @@ func run(tarPath, repository, addr, certOut, digestOut string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(digestOut, []byte(img.top.Digest+"\n"), 0o644); err != nil { //nolint:gosec // the guest reads it
+	if err := os.WriteFile(digestOut, []byte(img.Digest()+"\n"), 0o644); err != nil { //nolint:gosec // the guest reads it
 		return err
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: img.handler(repository), ReadHeaderTimeout: headerTimeout,
+	srv := &http.Server{Handler: img.Handler(repository), ReadHeaderTimeout: headerTimeout,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}
 	return srv.ServeTLS(ln, "", "")
 }
 
-// readLayout reads every blob and index.json of the tar at path.
-func readLayout(path string) (*image, error) {
+// readLayout reads the image of the tar at path.
+func readLayout(path string) (*imageregistry.Image, error) {
 	f, err := os.Open(path) //nolint:gosec // the lane's staged image
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	r := bufio.NewReader(f)
-	var src io.Reader = r
-	if magic, _ := r.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
-		zr, err := gzip.NewReader(r)
-		if err != nil {
-			return nil, err
-		}
-		src = zr
+	img, err := imageregistry.Read(f)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	img := &image{blobs: map[string][]byte{}}
-	var index []byte
-	tr := tar.NewReader(src)
-	for {
-		h, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		name := strings.TrimPrefix(h.Name, "./")
-		hex, isBlob := strings.CutPrefix(name, "blobs/sha256/")
-		if name != "index.json" && !isBlob {
-			continue
-		}
-		b, err := io.ReadAll(tr)
-		if err != nil {
-			return nil, err
-		}
-		if isBlob {
-			img.blobs["sha256:"+hex] = b
-		} else {
-			index = b
-		}
-	}
-	var idx struct {
-		Manifests []descriptor `json:"manifests"`
-	}
-	if err := json.Unmarshal(index, &idx); err != nil || len(idx.Manifests) == 0 {
-		return nil, fmt.Errorf("%s holds no OCI index.json with a manifest", path)
-	}
-	img.top = idx.Manifests[0]
 	return img, nil
-}
-
-// handler serves the distribution API's reads of repository: /v2/, its manifests by digest or by the tag latest, and
-// its blobs by digest.
-func (img *image) handler(repository string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		if r.URL.Path == "/v2/" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		rest, ok := strings.CutPrefix(r.URL.Path, "/v2/"+repository+"/")
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		switch kind, ref, _ := strings.Cut(rest, "/"); kind {
-		case "manifests":
-			if ref == "latest" {
-				ref = img.top.Digest
-			}
-			img.serve(w, r, ref, img.mediaType(ref))
-		case "blobs":
-			img.serve(w, r, ref, "application/octet-stream")
-		default:
-			http.NotFound(w, r)
-		}
-	})
-}
-
-// mediaType is the media type of the manifest or index of digest: its own mediaType field, else the index's.
-func (img *image) mediaType(digest string) string {
-	var m struct {
-		MediaType string `json:"mediaType"`
-	}
-	if err := json.Unmarshal(img.blobs[digest], &m); err == nil && m.MediaType != "" {
-		return m.MediaType
-	}
-	return img.top.MediaType
-}
-
-func (img *image) serve(w http.ResponseWriter, r *http.Request, digest, mediaType string) {
-	b, ok := img.blobs[digest]
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", mediaType)
-	w.Header().Set("Docker-Content-Digest", digest)
-	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
-	if r.Method == http.MethodGet {
-		_, _ = w.Write(b)
-	}
 }
 
 // selfSigned makes a self-signed certificate for 127.0.0.1, which may sign itself as a root, and writes it to out.
