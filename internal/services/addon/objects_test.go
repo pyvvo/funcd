@@ -584,3 +584,51 @@ func TestEnginelessFunctionChangeRequeuesByPinnedRevision(t *testing.T) {
 	require.Equal(t, []controller.Request{{GVK: v1.KindAddonObject.GVK(), Namespace: "default", Name: "site"}},
 		g.r.MapEnginelessFunction(g.ctx, fn), "site pins revision 1, whose Function this is")
 }
+
+// ADR-0339 Decision 3, as ADR-0345 Decision 1 applies it to an engineless object: an App's part whose spec an upgrade
+// leaves unchanged still follows the App's newer applied revision. The pass stores the moved pin although the part's
+// Ready condition does not change, and the next call's answer keeps it.
+func TestEnginelessPartPinFollowsItsApp(t *testing.T) {
+	t.Parallel()
+	g := newEnginelessRig(t)
+	const appUID v1.UID = "edge-uid"
+	app := v1.OwnerReference{ObjectRef: v1.ObjectRef{Kind: v1.KindApp, Namespace: "default", Name: "edge"}, UID: appUID,
+		Controller: true, BlockOwnerDeletion: true}
+	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject}}
+	o.Name, o.Namespace, o.ResourceGroup, o.Spec.Kind = "bunny", "default", "rg1", "InfraStack"
+	o.Spec.Config, o.OwnerReferences = json.RawMessage(`{"job":"bunny"}`), []v1.OwnerReference{app}
+	_, err := g.st.Create(g.ctx, o)
+	require.NoError(t, err)
+	applied := func(n int64) {
+		t.Helper()
+		r := &v1.AppRevision{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAppRevision}}
+		r.Name, r.Namespace, r.ResourceGroup, r.OwnerReferences = v1.AppRevisionName("edge", n), "default", "rg1", []v1.OwnerReference{app}
+		r.Spec = v1.AppRevisionSpec{App: app.ObjectRef, Number: n}
+		created, err := g.st.Create(g.ctx, r)
+		require.NoError(t, err)
+		r = created.(*v1.AppRevision)
+		r.Status.Conditions.Set(v1.Condition{Type: "Applied", Status: v1.ConditionTrue})
+		_, err = g.st.Update(g.ctx, r)
+		require.NoError(t, err)
+	}
+	applied(1)
+	g.caller.set(func(_ context.Context, c addon.ObjectsCall) (addon.SettingsReply, error) {
+		return answerAll(c, true, ""), nil
+	})
+	g.marked("bunny")
+	g.pass("bunny")
+	g.callEnds("bunny")
+	require.Equal(t, v1.PhaseReady, g.object("bunny").Status.Phase)
+	require.Equal(t, v1.ObjectName("edge-1"), g.object("bunny").Status.AppRevision)
+
+	applied(2)
+	g.pass("bunny")
+	got := g.object("bunny")
+	require.Equal(t, v1.ObjectName("edge-2"), got.Status.AppRevision, "the part follows its App's applied revision")
+	require.Equal(t, v1.PhaseReady, got.Status.Phase, "a moved pin leaves the answer for its generation")
+
+	g.advance(2 * time.Minute)
+	g.pass("bunny")
+	g.callEnds("bunny")
+	require.Equal(t, v1.ObjectName("edge-2"), g.object("bunny").Status.AppRevision, "the next answer keeps the stored pin")
+}
