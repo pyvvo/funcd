@@ -3,6 +3,8 @@ package multinode
 import (
 	"context"
 	"crypto/x509"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -296,6 +299,13 @@ func TestANodeWritesBackOnlyTheKindsItsReconcilersMake(t *testing.T) {
 	for _, k := range []v1.Kind{v1.KindPolicy, v1.KindRole, v1.KindRolesAssignment, v1.KindIdentity, v1.KindEgressPolicy, v1.KindApp} {
 		require.False(t, WrittenBack(k, true), "no %s, even owned", k)
 	}
+	owned := map[v1.Kind]bool{}
+	for _, p := range gc.Pairs() {
+		if p.Child.Namespaced() {
+			owned[p.Child] = true
+		}
+	}
+	require.ElementsMatch(t, slices.Collect(maps.Keys(owned)), childKinds(), "each child kind a reconciler stamps, and no other")
 	require.True(t, WrittenBack(v1.KindWorkflowRun, false), "a WorkflowRun a Sensor fires")
 	require.True(t, WrittenBack(v1.KindBackup, false), "a Backup record a sync finds")
 	require.False(t, WrittenBack(v1.KindConfigMap, false), "a person's ConfigMap")
