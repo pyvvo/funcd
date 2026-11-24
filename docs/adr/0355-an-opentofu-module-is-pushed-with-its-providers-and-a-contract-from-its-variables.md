@@ -136,8 +136,9 @@ where the runtime installs providers from.
    The build reaches the providers' registries; a run reaches none.
 3. **The contract.** Its runtime is `opentofu1`. Its input is the run's `{action, variables}`: `action` one of `apply`,
    `destroy` and `plan`; `variables` a closed record of the module's variables, typed by Contracts' table, the required
-   ones those with no default, and itself required only when one is (amended 2026-11-24). A sensitive variable is left out, so no run's input holds it: its value comes from a
-   bound Secret's `TF_VAR_<name>` key, which the runtime gives OpenTofu already. The runtime's work copy of a module
+   ones those with no default, and itself required only when one is (amended 2026-11-24). A sensitive variable is left
+   out, so no run's input holds it: its value comes from a bound Secret's `TF_VAR_<name>` key, which the runtime gives
+   OpenTofu already. The runtime's work copy of a module
    leaves out the files that step 1 of Decision 2 refuses, so a run's variables come only from its input, the
    `TF_VAR_<name>` keys of its bound ConfigMaps and Secrets, and the module's defaults, a module pushed by hand
    included. Its output is a closed record of two
@@ -297,7 +298,8 @@ In pyvvo/funcd-addons, on the InfraStack add-on; funcd's code does not change:
 
 Tests, each written to pass: the type table, row by row, `infra-remote-module-refused`, the push's half of
 `infra-local-files-refused` and `infra-sensitive-only-module` (amended 2026-11-24) in `plugin_test.py`, its run's half
-in `handler_test.py`;
+in `handler_test.py`; `infra-sensitive-only-module`'s push through a real funcdctl also in `push_check.py` (amended
+2026-11-24);
 `infra-push-builds-index` with the fakes, and in the add-on's CI against an OCI layout with real OpenTofu;
 `infra-run-downloads-nothing`, `infra-provider-mismatch`, `infra-plan-run` and `infra-module-pushed-by-hand` in
 `image_check.py`; `infra-variables-refused` and `infra-sensitive-variable-refused` as cases of the InfraStack lane that
