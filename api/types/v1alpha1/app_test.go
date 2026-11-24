@@ -57,11 +57,22 @@ func todoApp(mutate func(*App)) *App {
 	return a
 }
 
-// fullApp extends todoApp with a part in every other section and a ref entry in four sections.
+// todoMigrate is a jobs entry of the todo App: a Job that binds the App's todo-files Bucket (ADR-0350 Decision 1).
+func todoMigrate() AppJob {
+	return AppJob{Name: "todo-migrate", JobSpec: JobSpec{
+		Runtime:  "nodejs22",
+		Handler:  "handle",
+		Image:    "oci-layout://todo-migrate:1",
+		Bindings: FunctionBindings{Blob: []FunctionBlob{{Alias: "files", Bucket: "todo-files", Prefix: "attachments"}}},
+	}}
+}
+
+// fullApp extends todoApp with a part in every other section and a ref entry in five sections.
 func fullApp() *App {
 	return todoApp(func(a *App) {
 		a.Spec.KV = append(a.Spec.KV, KVStoreEntry{Ref: "shared-store"})
 		a.Spec.Functions = append(a.Spec.Functions, AppFunction{Ref: "mailer"})
+		a.Spec.Jobs = []AppJob{todoMigrate(), {Ref: "cleanup"}}
 		a.Spec.EventSources = []AppEventSource{{Name: "todo-tick", EventSourceSpec: EventSourceSpec{
 			Timer: &TimerSource{Events: []TimerEvent{{Name: "hourly", Interval: Duration(time.Hour)}}},
 		}}}
@@ -103,6 +114,11 @@ func TestAppValidateAcceptsFixtures(t *testing.T) {
 		}),
 		"one name in two sections": todoApp(func(a *App) {
 			a.Spec.Buckets = append(a.Spec.Buckets, BucketEntry{Name: "todo-api"})
+		}),
+		"a Job named like a Function": todoApp(func(a *App) {
+			j := todoMigrate()
+			j.Name = "todo-api"
+			a.Spec.Jobs = []AppJob{j}
 		}),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -164,6 +180,21 @@ func TestAppValidateRefusals(t *testing.T) {
 		}, "spec.workflows[0].steps[0].name and spec.functions[1].name both write Function/todo-plan-due"},
 		{"workflow part with a kv entry", func(a *App) { a.Spec.Workflows[0].KVStores = []KVStoreEntry{{Name: "todo-store"}} },
 			"spec.workflows[0].kv: an App's part declares nothing at its root"},
+		{"job part with a buckets entry", func(a *App) {
+			j := todoMigrate()
+			j.Buckets = []BucketEntry{{Name: "todo-files"}}
+			a.Spec.Jobs = []AppJob{j}
+		}, "spec.jobs[0].buckets: an App's part declares nothing at its root"},
+		{"job name repeated", func(a *App) { a.Spec.Jobs = []AppJob{todoMigrate(), todoMigrate()} },
+			`spec.jobs[1] repeats the name "todo-migrate" of spec.jobs[0]`},
+		{"job ref entry with an image", func(a *App) {
+			a.Spec.Jobs = []AppJob{{Ref: "todo-migrate", JobSpec: JobSpec{Image: "oci-layout://x:1"}}}
+		}, "spec.jobs[0] sets ref and another field"},
+		{"job part refused as a Job", func(a *App) {
+			j := todoMigrate()
+			j.Concurrency = MaxJobConcurrency + 1
+			a.Spec.Jobs = []AppJob{j}
+		}, "spec.jobs[0].concurrency 16"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := todoApp(tc.mutate).Validate()
@@ -234,8 +265,8 @@ func TestAppParts(t *testing.T) {
 	}
 	want := []string{
 		"KVStore/todo-store", "KVStore/todo-cache", "Bucket/todo-files", "Bucket/todo-tmp", "Function/todo-api",
-		"Workflow/todo-plan", "EventSource/todo-tick", "Sensor/todo-on-tick", "Route/todo-api", "Site/todo-web",
-		"Lake/todo-lake",
+		"Job/todo-migrate", "Workflow/todo-plan", "EventSource/todo-tick", "Sensor/todo-on-tick", "Route/todo-api",
+		"Site/todo-web", "Lake/todo-lake",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("Parts = %v, want %v", got, want)
@@ -243,6 +274,9 @@ func TestAppParts(t *testing.T) {
 	fn, ok := parts[4].(*Function)
 	if !ok || !reflect.DeepEqual(fn.Spec, a.Spec.Functions[0].FunctionSpec) {
 		t.Fatalf("Parts[4] = %#v, want the Function with the entry's spec", parts[4])
+	}
+	if job, ok := parts[5].(*Job); !ok || job.Kind != KindJob || !reflect.DeepEqual(job.Spec, a.Spec.Jobs[0].JobSpec) {
+		t.Fatalf("Parts[5] = %#v, want the Job with the entry's spec", parts[5])
 	}
 	if st, ok := parts[1].(*KVStore); !ok || !reflect.DeepEqual(st.Spec, a.Spec.KV[1].KVStoreSpec) {
 		t.Fatalf("Parts[1] = %#v, want the KVStore with the entry's spec", parts[1])
@@ -253,6 +287,7 @@ func TestAppRefs(t *testing.T) {
 	want := []ObjectRef{
 		{Kind: KindKVStore, Namespace: "default", Name: "shared-store"},
 		{Kind: KindFunction, Namespace: "default", Name: "mailer"},
+		{Kind: KindJob, Namespace: "default", Name: "cleanup"},
 		{Kind: KindSite, Namespace: "default", Name: "docs"},
 		{Kind: KindLake, Namespace: "default", Name: "lake"},
 	}
@@ -272,7 +307,7 @@ func TestAppJSONRoundtrip(t *testing.T) {
 		t.Fatalf("marshal App: %v", err)
 	}
 	for _, want := range []string{
-		`"sites":[{"name":"todo-web",`, `{"ref":"docs"}]`, `{"ref":"lake"}]`, `{"ref":"shared-store"}]`,
+		`"sites":[{"name":"todo-web",`, `{"ref":"docs"}]`, `{"ref":"lake"}]`, `{"ref":"shared-store"}]`, `{"ref":"cleanup"}]`,
 		`{"name":"todo-cache","deletion":"delete","tables":[`, `{"name":"todo-tmp","deletion":"delete"}`,
 	} {
 		if !strings.Contains(string(data), want) {
@@ -293,8 +328,8 @@ func TestAppEntrySchemas(t *testing.T) {
 	r := huma.NewMapRegistry("#/components/schemas/", huma.DefaultSchemaNamer)
 	spec := r.Schema(reflect.TypeFor[AppSpec](), false, "")
 	for section, field := range map[string]string{
-		"kv": "tables", "buckets": "prefixes", "functions": "image", "workflows": "steps", "eventSources": "timer",
-		"sensors": "do", "routes": "rules", "sites": "ingress", "lakes": "location",
+		"kv": "tables", "buckets": "prefixes", "functions": "image", "jobs": "concurrency", "workflows": "steps",
+		"eventSources": "timer", "sensors": "do", "routes": "rules", "sites": "ingress", "lakes": "location",
 	} {
 		sec := spec.Properties[section]
 		if sec == nil || sec.Items == nil {
@@ -312,7 +347,7 @@ func TestAppEntrySchemas(t *testing.T) {
 	}
 	refs, err := json.Marshal(AppSpec{
 		KV: []KVStoreEntry{{Ref: "a"}}, Buckets: []BucketEntry{{Ref: "a"}}, Functions: []AppFunction{{Ref: "a"}},
-		Workflows: []AppWorkflow{{Ref: "a"}}, EventSources: []AppEventSource{{Ref: "a"}}, Sensors: []AppSensor{{Ref: "a"}},
+		Jobs: []AppJob{{Ref: "a"}}, Workflows: []AppWorkflow{{Ref: "a"}}, EventSources: []AppEventSource{{Ref: "a"}}, Sensors: []AppSensor{{Ref: "a"}},
 		Routes: []AppRoute{{Ref: "a"}}, Sites: []AppSite{{Ref: "a"}}, Lakes: []LakeEntry{{Ref: "a"}},
 	})
 	if err != nil {
@@ -332,6 +367,7 @@ func TestAppEntrySchemas(t *testing.T) {
 		{"an unknown section", `{"deployments":[{"name":"a"}]}`, false},
 		{"an unknown entry field", `{"functions":[{"name":"a","replicaz":1}]}`, false},
 		{"a deletion on a function", `{"functions":[{"name":"a","deletion":"delete"}]}`, false},
+		{"a scaling on a job", `{"jobs":[{"name":"a","scaling":{"minReplicas":1}}]}`, false},
 		{"an unknown deletion", `{"kv":[{"name":"a","deletion":"keep"}]}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

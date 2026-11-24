@@ -37,9 +37,10 @@ const appRevisionTimeout = 2 * time.Second
 // registry and a lock of those pushes, and applies the App as `app deploy` does. The App reconciler then writes the
 // parts, stores, Routes and Sites, and stamps a revision per change.
 
-// Part kinds an image serves.
+// Part kinds an image serves. A Job part's build is found and pushed as a Function part's (ADR-0350 Decision 6).
 const (
 	partFunction = "function"
+	partJob      = "job"
 	partStep     = "step"
 	partSite     = "site"
 )
@@ -643,6 +644,9 @@ func probeImages(t *template.Template, in template.RenderInput) (map[string]*dev
 	for _, f := range app.Spec.Functions {
 		note(f.Image, partFunction, f.Runtime)
 	}
+	for _, j := range app.Spec.Jobs {
+		note(j.Image, partJob, j.Runtime)
+	}
 	for _, w := range app.Spec.Workflows {
 		for _, st := range w.Steps {
 			if st.Function != nil {
@@ -947,7 +951,7 @@ func (s *devAppSession) inputsStamp() (string, error) {
 
 // platformFolder is the devFolder devPlatformOptions reads for app: the template directory, the --apply documents and
 // a Lake per lakes entry (which wire the SQL engine and name the lakes served at start, as in folder mode, Decision 5),
-// and a Function per function part and per step that dev built (which pick the shims).
+// a Function per function part and per step that dev built, and the build of each Job part (which pick the shims).
 func (s *devAppSession) platformFolder(app *v1.App, docs []v1.Object) *devFolder {
 	byDigest := map[string]*devImage{}
 	for _, img := range s.images {
@@ -973,6 +977,11 @@ func (s *devAppSession) platformFolder(app *v1.App, docs []v1.Object) *devFolder
 			fn := &v1.Function{Spec: part.FunctionSpec}
 			fn.Name = part.Name
 			f.functions = append(f.functions, &devFunction{fn: fn, build: img.build})
+		}
+	}
+	for _, part := range app.Spec.Jobs {
+		if img := imageOf(part.Image); img != nil && part.Ref == "" {
+			f.jobs = append(f.jobs, img.build)
 		}
 	}
 	for _, w := range app.Spec.Workflows {

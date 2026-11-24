@@ -59,7 +59,7 @@ $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run report
 approved-1
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe approved-1
 RUN approved-1   job: report-approved   phase: AwaitingApproval
-reason:    message: the run waits for a person to approve or reject its preview sha256:9863a692738143645a1b931167c58787669f0f636ccd44a7bb031b381cbb7d51
+message: the run waits for a person to approve or reject its preview sha256:9863a692738143645a1b931167c58787669f0f636ccd44a7bb031b381cbb7d51
 revision: report-approved-v1   digest: sha256:aff19a7ace15032acd1aea667bd124dfd5e408ae0bd30bced659559cb86735e8
 started by: dev
 preview: sha256:9863a692738143645a1b931167c58787669f0f636ccd44a7bb031b381cbb7d51   previewed: 2026-11-24T02:35:29.465Z
@@ -129,7 +129,7 @@ $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run pyrepo
 pyapproved-1
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe pyapproved-1
 RUN pyapproved-1   job: pyreport-approved   phase: AwaitingApproval
-reason:    message: the run waits for a person to approve or reject its preview sha256:9863a692738143645a1b931167c58787669f0f636ccd44a7bb031b381cbb7d51
+message: the run waits for a person to approve or reject its preview sha256:9863a692738143645a1b931167c58787669f0f636ccd44a7bb031b381cbb7d51
 revision: pyreport-approved-v1   digest: sha256:06645d8829109d45a1a31457612bf3e0d4bb82b15a2efeb2ea559ce74db0f31b
 started by: dev
 preview: sha256:9863a692738143645a1b931167c58787669f0f636ccd44a7bb031b381cbb7d51   previewed: 2026-11-24T02:35:36.813Z
@@ -177,7 +177,7 @@ $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run report
 approved-2
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe approved-2
 RUN approved-2   job: report-approved   phase: AwaitingApproval
-reason:    message: the run waits for a person to approve or reject its preview sha256:f854072eb22b9a0fa4cc2cd4eff6188b97b7f9a4b6913500a11133d71ba9da49
+message: the run waits for a person to approve or reject its preview sha256:f854072eb22b9a0fa4cc2cd4eff6188b97b7f9a4b6913500a11133d71ba9da49
 revision: report-approved-v1   digest: sha256:aff19a7ace15032acd1aea667bd124dfd5e408ae0bd30bced659559cb86735e8
 started by: dev
 preview: sha256:f854072eb22b9a0fa4cc2cd4eff6188b97b7f9a4b6913500a11133d71ba9da49   previewed: 2026-11-24T02:35:33.009Z
@@ -213,7 +213,7 @@ started by: dev
 full logs: funcdctl job logs approved-3
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe approved-3
 RUN approved-3   job: report-approved   phase: AwaitingApproval
-reason:    message: the run waits for a person to approve or reject its preview sha256:343569053d58fd0a385b51dbc9a77e3d084df9c48bf6dbbcd4747df671c9b90e
+message: the run waits for a person to approve or reject its preview sha256:343569053d58fd0a385b51dbc9a77e3d084df9c48bf6dbbcd4747df671c9b90e
 revision: report-approved-v1   digest: sha256:aff19a7ace15032acd1aea667bd124dfd5e408ae0bd30bced659559cb86735e8
 started by: dev
 preview: sha256:343569053d58fd0a385b51dbc9a77e3d084df9c48bf6dbbcd4747df671c9b90e   previewed: 2026-11-24T02:35:36.396Z

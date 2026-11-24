@@ -49,6 +49,7 @@ type AppSpec struct {
 	// Addons declares objects of add-ons' kinds that the App owns (ADR-0337 Decision 3).
 	Addons       []AppAddon       `json:"addons,omitempty" doc:"The objects of add-ons' kinds that the App declares or refers to; no two entries name the same one, whatever their kinds, since one name is one add-on object per namespace. An entry's kind is an Addon's, its config fits that Addon's schema, and each Secret it binds is one that the App's secrets declare. Its deletion is the object's own: what becomes of its engine's storage once it is deleted."`
 	Functions    []AppFunction    `json:"functions,omitempty" doc:"The Functions that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret it binds is one that the App's lists of those names declare. A workflows step that sets function.image is written as a Function named <workflow>-<step>, a name no entry may declare."`
+	Jobs         []AppJob         `json:"jobs,omitempty" doc:"The Jobs that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret it binds is one that the App's lists of those names declare. A Job part is Ready when its Job is, and its runs count for nothing in the App's readiness: an upgrade waits for no run, and a run that has not ended keeps the revision it pinned. Deleting the App, or dropping the entry, deletes the Job, which ends its runs that have not ended as deleting a Job does."`
 	Workflows    []AppWorkflow    `json:"workflows,omitempty" doc:"The Workflows that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret its steps bind is one that the App's lists of those names declare. A step that sets function.image is written as a Function named <workflow>-<step>, a name that no functions entry or other step may take."`
 	EventSources []AppEventSource `json:"eventSources,omitempty" doc:"The EventSources that the App declares or refers to; no two entries name the same one."`
 	Sensors      []AppSensor      `json:"sensors,omitempty" doc:"The Sensors that the App declares or refers to; no two entries name the same one."`
@@ -168,6 +169,13 @@ type AppFunction struct {
 	Name         ObjectName `json:"name,omitempty"`
 	Ref          ObjectName `json:"ref,omitempty"`
 	FunctionSpec `json:",inline"`
+}
+
+// AppJob is a jobs entry: a Job the App declares by name, or only the ref of an existing one (ADR-0350 Decision 1).
+type AppJob struct {
+	Name    ObjectName `json:"name,omitempty"`
+	Ref     ObjectName `json:"ref,omitempty"`
+	JobSpec `json:",inline"`
 }
 
 // AppWorkflow is a workflows entry: a Workflow the App declares by name, or only the ref of an existing one.
@@ -299,6 +307,11 @@ func (AppFunction) Schema(r huma.Registry) *huma.Schema {
 	return entrySchema(r, reflect.TypeFor[FunctionSpec](), false)
 }
 
+// Schema is JobSpec's schema plus name and ref (see entrySchema).
+func (AppJob) Schema(r huma.Registry) *huma.Schema {
+	return entrySchema(r, reflect.TypeFor[JobSpec](), false)
+}
+
 // Schema is WorkflowSpec's schema plus name and ref (see entrySchema).
 func (AppWorkflow) Schema(r huma.Registry) *huma.Schema {
 	return entrySchema(r, reflect.TypeFor[WorkflowSpec](), false)
@@ -370,6 +383,11 @@ func (e AppFunction) MarshalJSON() ([]byte, error) {
 }
 
 // MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
+func (e AppJob) MarshalJSON() ([]byte, error) {
+	return marshalEntry(entryHead{Name: e.Name, Ref: e.Ref}, e.JobSpec)
+}
+
+// MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
 func (e AppWorkflow) MarshalJSON() ([]byte, error) {
 	return marshalEntry(entryHead{Name: e.Name, Ref: e.Ref}, e.WorkflowSpec)
 }
@@ -409,7 +427,7 @@ type AppStatus struct {
 	LatestRevision  ObjectName `json:"latestRevision,omitempty" doc:"The newest AppRevision, created for the latest spec. It differs from currentRevision while a rollout waits or runs, and after one fails."`
 	// Version is the spec.version of the current revision.
 	Version      string       `json:"version,omitempty" doc:"The spec.version of the current revision."`
-	Children     []AppChild   `json:"children,omitempty" doc:"One line per entry of configMaps, kv, buckets, sql, addons, functions, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them; an addons line names the add-on's kind. Then one Pruning line per dropped object not deleted yet."`
+	Children     []AppChild   `json:"children,omitempty" doc:"One line per entry of configMaps, kv, buckets, sql, addons, functions, jobs, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them; an addons line names the add-on's kind. Then one Pruning line per dropped object not deleted yet."`
 	LastSelfHeal *AppSelfHeal `json:"lastSelfHeal,omitempty" doc:"The last part that funcd wrote back after another writer changed or deleted it, and when."`
 	// Requires is the state of each spec.requires entry, in its order (ADR-0219 Decision 5).
 	Requires []AppRequirementState `json:"requires,omitempty" doc:"The state of each spec.requires entry, in its order."`
@@ -534,6 +552,13 @@ func (a *App) validatePartRoots(op string) error {
 		if field := rootEntryField(len(f.KVStores), len(f.Buckets), len(f.SQLDatabases), len(f.Lakes),
 			len(f.ConfigMaps), len(f.SecretDeclarations)); field != "" {
 			return refuse(fmt.Sprintf("spec.functions[%d]", i), field)
+		}
+	}
+	for i := range a.Spec.Jobs {
+		j := &a.Spec.Jobs[i]
+		if field := rootEntryField(len(j.KVStores), len(j.Buckets), len(j.SQLDatabases), len(j.Lakes),
+			len(j.ConfigMaps), len(j.SecretDeclarations)); field != "" {
+			return refuse(fmt.Sprintf("spec.jobs[%d]", i), field)
 		}
 	}
 	for i := range a.Spec.Workflows {
@@ -789,6 +814,12 @@ func (a *App) entries() []appEntry {
 		out = append(out, newEntry("functions", i, entryHead{Name: e.Name, Ref: e.Ref}, e.FunctionSpec,
 			&Function{TypeMeta: typeMetaFor(KindFunction), ObjectMeta: meta(e.Name), Spec: spec}))
 	}
+	for i, e := range s.Jobs {
+		spec := e.JobSpec
+		spec.Bindings.Config = repoint(spec.Bindings.Config, stored)
+		out = append(out, newEntry("jobs", i, entryHead{Name: e.Name, Ref: e.Ref}, e.JobSpec,
+			&Job{TypeMeta: typeMetaFor(KindJob), ObjectMeta: meta(e.Name), Spec: spec}))
+	}
 	for i, e := range s.Workflows {
 		out = append(out, newEntry("workflows", i, entryHead{Name: e.Name, Ref: e.Ref}, e.WorkflowSpec,
 			&Workflow{TypeMeta: typeMetaFor(KindWorkflow), ObjectMeta: meta(e.Name), Spec: repointSteps(e.WorkflowSpec, stored)}))
@@ -952,8 +983,8 @@ type entryHead struct {
 
 // partSpec is the spec of a kind that has a section.
 type partSpec interface {
-	ConfigMapSpec | KVStoreSpec | BucketSpec | FunctionSpec | WorkflowSpec | EventSourceSpec | SensorSpec | RouteSpec |
-		SiteSpec | LakeSpec | BackupScheduleSpec | SQLDatabaseSpec | AddonObjectSpec
+	ConfigMapSpec | KVStoreSpec | BucketSpec | FunctionSpec | JobSpec | WorkflowSpec | EventSourceSpec | SensorSpec |
+		RouteSpec | SiteSpec | LakeSpec | BackupScheduleSpec | SQLDatabaseSpec | AddonObjectSpec
 }
 
 // marshalEntry writes an entry's head, then its spec's fields only when the spec is set: a ref entry goes out as

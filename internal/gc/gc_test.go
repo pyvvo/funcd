@@ -404,11 +404,12 @@ func writers() map[string][]gc.Pair {
 	}
 }
 
-// appPairs is the pairs the App reconciler stamps on its parts (ADR-0199 Decision 7, ADR-0222 Decision 2).
+// appPairs is the pairs the App reconciler stamps on its parts (ADR-0199 Decision 7, ADR-0222 Decision 2, ADR-0350
+// Decision 2).
 func appPairs() []gc.Pair {
 	var out []gc.Pair
 	for _, k := range []v1.Kind{
-		v1.KindFunction, v1.KindWorkflow, v1.KindEventSource, v1.KindSensor, v1.KindRoute, v1.KindSite,
+		v1.KindFunction, v1.KindJob, v1.KindWorkflow, v1.KindEventSource, v1.KindSensor, v1.KindRoute, v1.KindSite,
 		v1.KindLake, v1.KindBackupSchedule, v1.KindKVStore, v1.KindSQLDatabase, v1.KindAddonObject, v1.KindBucket,
 		v1.KindConfigMap,
 	} {

@@ -11,6 +11,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/app"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -380,8 +381,8 @@ func TestAppConfigChangeRolls(t *testing.T) {
 	})
 }
 
-// Decisions 7 and 9: app-parts refuses a Secret a Function, a Lake or an image step names and spec.secrets
-// does not declare, on create and on update; a ref step is exempt.
+// Decisions 7 and 9: app-parts refuses a Secret a Function, a Job (ADR-0350 Decision 1), a Lake or an image step names
+// and spec.secrets does not declare, on create and on update; a ref step is exempt.
 func TestAdmissionRefusesUndeclaredSecret(t *testing.T) {
 	st := store.New(memory.New())
 	billing := []v1.ObjectName{"todo-billing"}
@@ -402,6 +403,11 @@ func TestAdmissionRefusesUndeclaredSecret(t *testing.T) {
 			a.Spec.Functions[0].Bindings.Secret = append(a.Spec.Functions[0].Bindings.Secret, "todo-billing")
 		},
 			`spec.functions[0].bindings.secret[1]: Function/todo-api names Secret "todo-billing", which spec.secrets does not declare`},
+		{"a Job", func(a *v1.App) {
+			a.Spec.Jobs = []v1.AppJob{{Name: "todo-migrate", JobSpec: v1.JobSpec{Runtime: "nodejs22", Handler: "handle",
+				Image: "oci-layout://todo-migrate:1", Bindings: v1.FunctionBindings{Secret: billing}}}}
+		},
+			`spec.jobs[0].bindings.secret[0]: Job/todo-migrate names Secret "todo-billing", which spec.secrets does not declare`},
 		{"an image step", func(a *v1.App) { a.Spec.Workflows[0].Steps[0].Function.Bindings.Secret = billing },
 			`spec.workflows[0].steps[0].function.bindings.secret[0]: Workflow/todo-plan names Secret "todo-billing", which spec.secrets does not declare`},
 		{"a Lake", lake(billing),
@@ -425,7 +431,44 @@ func TestAdmissionRefusesUndeclaredSecret(t *testing.T) {
 				Function: &v1.FunctionStep{Ref: "todo-api", Bindings: v1.StepBindings{Secret: billing}}})
 		},
 		"a declared Lake Secret": lake([]v1.ObjectName{"todo-stripe-key"}),
+		"a declared Job Secret": func(a *v1.App) {
+			a.Spec.Jobs = []v1.AppJob{{Name: "todo-migrate", JobSpec: v1.JobSpec{Runtime: "nodejs22", Handler: "handle",
+				Image: "oci-layout://todo-migrate:1", Bindings: v1.FunctionBindings{Secret: []v1.ObjectName{"todo-stripe-key"}}}}}
+		},
 	} {
 		require.NoError(t, admit(t, st, partAdmissions(0), configApp(mutate), nil), name)
 	}
+}
+
+// ADR-0350 Decision 1: a Job entry follows a Function entry's rules for what it binds. A store that the App does not
+// declare is refused, as a Function entry's is (ADR-0248), and a ConfigMap that the App defines is bound under its
+// stored name in the written Job, the App's spec kept as declared (ADR-0213 Decision 3).
+func TestAppJobEntryBindsWhatTheAppDeclares(t *testing.T) {
+	job := func(bindings v1.FunctionBindings) func(*v1.App) {
+		return func(a *v1.App) {
+			a.Spec.Jobs = []v1.AppJob{{Name: "todo-migrate", JobSpec: v1.JobSpec{Runtime: "nodejs22", Handler: "handle",
+				Image: "oci-layout://todo-migrate:1", Bindings: bindings}}}
+		}
+	}
+	t.Run("an undeclared store is refused", func(t *testing.T) {
+		st := store.New(memory.New())
+		parts := func(r admission.StoreReader) []admission.Admission {
+			return append(partAdmissions(0)(r), admission.NewBindingDeclaredAdmission(r))
+		}
+		undeclared := configApp(job(v1.FunctionBindings{Blob: []v1.FunctionBlob{{Alias: "files", Bucket: "nowhere", Prefix: "uploads"}}}))
+		err := admit(t, st, parts, undeclared, nil)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+		require.ErrorContains(t, err, `spec.jobs[0] (Job/todo-migrate)`)
+		require.ErrorContains(t, err, `Bucket "nowhere" is not declared in spec.buckets`)
+	})
+	t.Run("a defined ConfigMap is bound under its stored name", func(t *testing.T) {
+		h := newHarness(t, nil)
+		h.putSecret(stripeKey("v1"))
+		h.create(configApp(job(v1.FunctionBindings{Config: []v1.ObjectName{"todo-settings"}})))
+		h.reconcile()
+		written := h.get(v1.KindJob, "todo-migrate")
+		require.NotNil(t, written)
+		require.Equal(t, []v1.ObjectName{storedSettings(paris())}, written.(*v1.Job).Spec.Bindings.Config)
+		require.Equal(t, []v1.ObjectName{"todo-settings"}, h.app().Spec.Jobs[0].Bindings.Config, "the App's spec stays as declared")
+	})
 }

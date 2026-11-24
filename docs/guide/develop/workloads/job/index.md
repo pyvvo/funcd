@@ -7,7 +7,7 @@ description: Run code once with an input, read the run's result and logs, cancel
 
 A [Job](../../../platform/workloads/job.md) is code that runs to its end, such as a report or an import. Each run of
 the Job is a **JobRun**, which carries an input. funcd calls the Job's handler once for the run and keeps its answer as
-the run's **result**.
+the run's **result**. An App can declare a Job as one of its parts, as [Jobs in an App](../app/jobs.md) shows.
 
 This example applies the Job `report`, or `pyreport` in Python, to a running server, starts a run for the month
 `2026-10`, reads its result and its logs, then cancels a second run. It needs funcdctl

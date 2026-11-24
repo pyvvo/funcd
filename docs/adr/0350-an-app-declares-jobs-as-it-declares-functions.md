@@ -1,6 +1,6 @@
 # ADR-0350: An App declares Jobs as it declares Functions
 
-- **Status**: Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
+- **Status**: Implemented (2026-11-24), review passed with one Minor; Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: apps, jobs, templates

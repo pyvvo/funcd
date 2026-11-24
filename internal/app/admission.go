@@ -107,9 +107,9 @@ func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Ob
 	return req.Object, nil
 }
 
-// undeclaredSecret refuses the first name in a declared Function's, Lake's or add-on object's spec.bindings.secret, or
-// in a declared Workflow's image step function.bindings.secret, that spec.secrets does not declare (ADR-0213 Decision
-// 7, ADR-0337 Decision 3). A ref entry, which
+// undeclaredSecret refuses the first name in a declared Function's, Job's, Lake's or add-on object's
+// spec.bindings.secret, or in a declared Workflow's image step function.bindings.secret, that spec.secrets does not
+// declare (ADR-0213 Decision 7, ADR-0337 Decision 3, ADR-0350 Decision 1). A ref entry, which
 // sets no spec field, and a ref step are exempt: the App does not define them. The rule is admission-only, so an App
 // stored before ADR-0213 still writes its status (Decision 9).
 func undeclaredSecret(app *v1.App) error {
@@ -128,6 +128,11 @@ func undeclaredSecret(app *v1.App) error {
 	s := &app.Spec
 	for i, f := range s.Functions {
 		if err := check(fmt.Sprintf("spec.functions[%d]", i), v1.KindFunction, f.Name, f.Bindings.Secret); err != nil {
+			return err
+		}
+	}
+	for i, j := range s.Jobs {
+		if err := check(fmt.Sprintf("spec.jobs[%d]", i), v1.KindJob, j.Name, j.Bindings.Secret); err != nil {
 			return err
 		}
 	}

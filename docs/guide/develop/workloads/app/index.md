@@ -6,7 +6,8 @@ description: Install an App from its template, read its status and its parts, ch
 ## Usage
 
 An [App](../../../platform/workloads/app.md) declares a whole app in one resource: its Functions, Routes, stores and
-other objects, which funcd writes as the App's **parts** and installs, upgrades, rolls back and deletes as one.
+other objects, which funcd writes as the App's **parts** and installs, upgrades, rolls back and deletes as one. A Job
+that an App declares is a part too, as [Jobs in an App](jobs.md) shows.
 
 The volumes example installs from an **App template**: a folder with `app.yaml`, which names the App, its version, its
 images and the **values** that it takes, and a `resources` folder of spec sections. funcdctl renders the template with
@@ -258,8 +259,9 @@ A new revision rolls out in this order:
 
 1. It waits for the Apps that `spec.requires` names, writing nothing.
 2. It calls the pre-hooks.
-3. It writes the parts in the order of `status.children`: ConfigMaps, KV stores, Buckets, SQL databases, Functions,
-   Workflows, EventSources, Sensors, Routes, Sites, Lakes and BackupSchedules. An unchanged part stays as it is.
+3. It writes the parts in the order of `status.children`: ConfigMaps, KV stores, Buckets, SQL databases, add-on
+   objects, Functions, Jobs, Workflows, EventSources, Sensors, Routes, Sites, Lakes and BackupSchedules. An unchanged
+   part stays as it is.
 4. Once no part is pending, it becomes current, and funcd calls the post-hooks.
 5. Then funcd deletes the dropped parts, `Pruning` until then: a dropped store whose `deletion` is `delete` goes with
    its data, and one with `retain`, the default, stays. A part still in use by a Workflow run or another object stays.

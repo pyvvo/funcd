@@ -198,6 +198,9 @@ func entries(a *v1.App) []entry {
 	for i, e := range s.Functions {
 		add("functions", v1.KindFunction, i, e.Name, e.Ref, "")
 	}
+	for i, e := range s.Jobs {
+		add("jobs", v1.KindJob, i, e.Name, e.Ref, "")
+	}
 	for i, e := range s.Workflows {
 		add("workflows", v1.KindWorkflow, i, e.Name, e.Ref, "")
 	}

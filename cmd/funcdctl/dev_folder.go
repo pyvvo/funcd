@@ -27,6 +27,7 @@ type devFolder struct {
 	resources []devDoc
 	functions []*devFunction
 	steps     []*devStep
+	jobs      []devBuild        // an App's Job parts' builds (ADR-0350 Decision 6); the App reconciler writes the Jobs
 	stamps    map[string]string // file → its stamp when read; a folder listing is keyed "<dir>/"
 }
 
@@ -358,7 +359,7 @@ func (b devBuild) fingerprint(stateDirs []string) (string, error) {
 	return fmt.Sprintf("sha256:%x", sum.Sum(nil)), nil
 }
 
-// builds are the builds of every Function and step of the folder.
+// builds are the builds of every Function, step and Job part of the folder.
 func (f *devFolder) builds() []devBuild {
 	var out []devBuild
 	for _, fn := range f.functions {
@@ -367,5 +368,5 @@ func (f *devFolder) builds() []devBuild {
 	for _, st := range f.steps {
 		out = append(out, st.build)
 	}
-	return out
+	return append(out, f.jobs...)
 }
