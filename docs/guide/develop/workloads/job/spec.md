@@ -318,7 +318,7 @@ This page lists the spec and status fields of Job and JobRun, each with its type
 | `input` | any JSON value | The run input, the data of the event that the handler receives. Over job.payloadLimit bytes, or off the input schema in the Job's status.contract, it is refused when the run is created. It is fixed once the run is created. |
 | `job` | string, required, a DNS-1123 label | The Job to run, in the run's namespace, fixed once the run is created. The run waits in Pending while that Job is missing or not Ready. |
 | `reject` | boolean | When true, the run ends Rejected and its handler never runs. A create that sets it is refused. An update may turn it true only while the run is Pending, Previewing or AwaitingApproval, and only from a caller who may update the run's Job; it may not turn false again. A rejection wins over an approval that funcd has not acted on yet. funcdctl job reject sets it. |
-| `rejectReason` | string, 0 to 512 characters | Why the run is rejected: the message of its Ready condition once it ends Rejected. It is set with spec.reject, and a create that sets it is refused. |
+| `rejectReason` | string, 0 to 512 characters | Why the run is rejected: the message of its Ready condition once it ends Rejected, at most 512 bytes, which a text of more than one byte per character reaches before 512 characters. It is set with spec.reject, and a create that sets it is refused. |
 
 ### `JobRun.status`
 
