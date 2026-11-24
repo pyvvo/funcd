@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +21,9 @@ import (
 type workerEnv struct {
 	shared, own map[string]string
 	issue       func() map[string]string
+	// endpoints are the keys of shared and own that hold funcd's loopback address, which a worker in a container
+	// reaches by another host (ADR-0346 Decision 5).
+	endpoints []string
 }
 
 // into writes w into the env of a solo worker: shared, then own, then a freshly issued part, so a worker's own and
@@ -40,9 +44,10 @@ type boundEnv struct {
 
 // workloadHook is one binding provider's part in starting a workload's workers, a Function's or a Job's (ADR-0306
 // Decision 1, ADR-0347 Decision 5). Its check runs before any worker exists: it holds w (a gate), fails the pass (an
-// error), or returns the env w's workers share with the members of a pool that bind alike.
+// error), or returns the env w's workers share with the members of a pool that bind alike, and the keys of its env,
+// shared or own, that hold funcd's loopback address (ADR-0346 Decision 5).
 type workloadHook interface {
-	check(ctx context.Context, w workload) (shared map[string]string, gate *gateFailure, err error)
+	check(ctx context.Context, w workload) (shared map[string]string, endpoints []string, gate *gateFailure, err error)
 }
 
 // ownWorkloadHook is a workload hook that also gives w's workers env of w's own: own is stable across passes, issue
@@ -76,20 +81,23 @@ type AddonProxy struct {
 // Function's own token there (ADR-0338 Decision 3). A missing object is the data references' gate.
 type addonHook struct{ r *Reconciler }
 
-func (h addonHook) check(_ context.Context, w workload) (map[string]string, *gateFailure, error) {
+func (h addonHook) check(_ context.Context, w workload) (map[string]string, []string, *gateFailure, error) {
 	p := h.r.addonProxy
 	if len(w.spec.Bindings.Addon) == 0 || p.Address == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	addr, err := p.Address()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	env := make(map[string]string, len(w.spec.Bindings.Addon))
+	var endpoints []string
 	for _, b := range w.spec.Bindings.Addon {
-		env["FUNCD_ADDON_"+strings.ToUpper(b.Alias)+"_URL"] = "http://" + addr + "/addon/" + b.Alias
+		k := "FUNCD_ADDON_" + strings.ToUpper(b.Alias) + "_URL"
+		env[k] = "http://" + addr + "/addon/" + b.Alias
+		endpoints = append(endpoints, k)
 	}
-	return env, nil, nil
+	return env, endpoints, nil, nil
 }
 
 func (h addonHook) own(w workload) (map[string]string, func() map[string]string, *gateFailure) {
@@ -108,7 +116,7 @@ func (h addonHook) own(w workload) (map[string]string, func() map[string]string,
 // bindings resolves w's current bindings before any worker boots, every hook's check and then their own parts: the env
 // they give w's workers, or the first gate that holds w.
 func (r *Reconciler) bindings(ctx context.Context, w workload) (boundEnv, error) {
-	shared, g, err := checkAll(ctx, w, r.workloadHooks())
+	shared, endpoints, g, err := checkAll(ctx, w, r.workloadHooks())
 	if err != nil || g != nil {
 		return boundEnv{gate: g}, err
 	}
@@ -116,25 +124,27 @@ func (r *Reconciler) bindings(ctx context.Context, w workload) (boundEnv, error)
 	if g != nil {
 		return boundEnv{gate: g}, nil
 	}
-	return boundEnv{worker: workerEnv{shared: shared, own: own, issue: issue}}, nil
+	return boundEnv{worker: workerEnv{shared: shared, own: own, issue: issue, endpoints: endpoints}}, nil
 }
 
 // checkAll runs each hook's check in order until one holds w or fails, and merges the env they share, an earlier
 // hook's key winning, so a bound config key overrides a provider's shared default (ADR-0306 Decision 3).
-func checkAll(ctx context.Context, w workload, hooks []workloadHook) (map[string]string, *gateFailure, error) {
+func checkAll(ctx context.Context, w workload, hooks []workloadHook) (map[string]string, []string, *gateFailure, error) {
 	shared := map[string]string{}
+	var endpoints []string
 	for _, h := range hooks {
-		env, g, err := h.check(ctx, w)
+		env, eps, g, err := h.check(ctx, w)
 		if err != nil || g != nil {
-			return nil, g, err
+			return nil, nil, g, err
 		}
 		for k, v := range env {
 			if _, ok := shared[k]; !ok {
 				shared[k] = v
 			}
 		}
+		endpoints = append(endpoints, eps...)
 	}
-	return shared, nil, nil
+	return shared, endpoints, nil, nil
 }
 
 // ownWorkerEnv is the env w's workload hooks give w alone: their own parts, and a func that issues their parts for
@@ -172,18 +182,18 @@ func (r *Reconciler) ownWorkerEnv(w workload) (map[string]string, func() map[str
 // (ADR-0248).
 type rootEntriesHook struct{ r *Reconciler }
 
-func (h rootEntriesHook) check(ctx context.Context, w workload) (map[string]string, *gateFailure, error) {
+func (h rootEntriesHook) check(ctx context.Context, w workload) (map[string]string, []string, *gateFailure, error) {
 	g, err := h.r.ensureRootEntries(ctx, w)
-	return nil, g, err
+	return nil, nil, g, err
 }
 
 // volumesHook reserves fn's local volumes, as fn's, before any worker mounts them (ADR-0262). A worker's mounts and
 // their env come with its spec (workerVolumes).
 type volumesHook struct{ r *Reconciler }
 
-func (h volumesHook) check(ctx context.Context, w workload) (map[string]string, *gateFailure, error) {
+func (h volumesHook) check(ctx context.Context, w workload) (map[string]string, []string, *gateFailure, error) {
 	g, err := h.r.ensureVolumes(ctx, w)
-	return nil, g, err
+	return nil, nil, g, err
 }
 
 // configHook resolves fn's bound ConfigMaps and Secrets (ADR-0057, F15 last mile) and gives its workers the config keys
@@ -193,7 +203,7 @@ func (h volumesHook) check(ctx context.Context, w workload) (map[string]string, 
 // requeue. A running worker of the serving revision keeps its start-time env (ADR-0221 Decision 3).
 type configHook struct{ r *Reconciler }
 
-func (h configHook) check(ctx context.Context, w workload) (map[string]string, *gateFailure, error) {
+func (h configHook) check(ctx context.Context, w workload) (map[string]string, []string, *gateFailure, error) {
 	res, err := h.r.resolveBindingEnv(ctx, w.fn())
 	if err != nil {
 		reason := "SecretResolveFailed"
@@ -204,23 +214,23 @@ func (h configHook) check(ctx context.Context, w workload) (map[string]string, *
 		if fault.KindOf(err) == fault.NotFound {
 			requeue = h.r.referentPoll
 		}
-		return nil, &gateFailure{reason: reason, message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: requeue}, nil
+		return nil, nil, &gateFailure{reason: reason, message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: requeue}, nil
 	}
 	env := map[string]string{}
 	h.r.addBindingEnv(env, res)
-	return env, nil, nil
+	return env, nil, nil, nil
 }
 
 // dataReferencesHook holds fn not-Ready while a spec.bindings.blob or spec.bindings.kv binding names a Bucket prefix or
 // a KVStore table not applied yet, and requeues (ADR-0121): the PDP denies the bound access until the referent exists.
 type dataReferencesHook struct{ r *Reconciler }
 
-func (h dataReferencesHook) check(ctx context.Context, w workload) (map[string]string, *gateFailure, error) {
+func (h dataReferencesHook) check(ctx context.Context, w workload) (map[string]string, []string, *gateFailure, error) {
 	requeue, reason, msg, err := h.r.resolveDataReferences(ctx, w.fn())
 	if err != nil || !requeue {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return nil, &gateFailure{reason: reason, message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: h.r.referentPoll}, nil
+	return nil, nil, &gateFailure{reason: reason, message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: h.r.referentPoll}, nil
 }
 
 // s3Hook gives a Function that binds a Bucket the S3 gateway's region and endpoint, shared, and its key pair, issued
@@ -233,9 +243,9 @@ func (h s3Hook) binds(w workload) bool {
 	return g.Enabled && g.Derive != nil && len(w.spec.Bindings.Blob) > 0
 }
 
-func (h s3Hook) check(_ context.Context, w workload) (map[string]string, *gateFailure, error) {
+func (h s3Hook) check(_ context.Context, w workload) (map[string]string, []string, *gateFailure, error) {
 	if !h.binds(w) {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	// The sandbox-facing endpoint: Endpoint when set (the node address a netns'd worker can reach, the CNI bridge
 	// gateway IP under containerd), else derived from the bind ListenAddr (loopback dev).
@@ -243,7 +253,7 @@ func (h s3Hook) check(_ context.Context, w workload) (map[string]string, *gateFa
 	if endpoint == "" {
 		endpoint = "http://" + h.r.s3Gateway.ListenAddr
 	}
-	return map[string]string{"AWS_REGION": "us-east-1", "AWS_ENDPOINT_URL_S3": endpoint}, nil, nil
+	return map[string]string{"AWS_REGION": "us-east-1", "AWS_ENDPOINT_URL_S3": endpoint}, []string{"AWS_ENDPOINT_URL_S3"}, nil, nil
 }
 
 func (h s3Hook) own(w workload) (map[string]string, func() map[string]string, *gateFailure) {
@@ -262,20 +272,21 @@ func (h s3Hook) own(w workload) (map[string]string, func() map[string]string, *g
 // and requeues fail-closed (LakeNotReady, F61).
 type lakeHook struct{ r *Reconciler }
 
-func (h lakeHook) check(ctx context.Context, w workload) (map[string]string, *gateFailure, error) {
+func (h lakeHook) check(ctx context.Context, w workload) (map[string]string, []string, *gateFailure, error) {
 	if len(w.spec.Bindings.Lake) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	urls, requeue, err := h.r.resolveLakeEnv(ctx, w.fn())
 	if err != nil {
-		return nil, lakeResolveFailed(err), nil
+		return nil, nil, lakeResolveFailed(err), nil
 	}
 	if requeue {
 		const waiting = "a bound Lake is not Ready yet (no endpoint, token or live proxy); waiting"
-		return nil, &gateFailure{reason: "LakeNotReady", message: waiting, readyMessage: waiting, phase: v1.PhasePending, requeue: h.r.referentPoll}, nil
+		return nil, nil, &gateFailure{reason: "LakeNotReady", message: waiting, readyMessage: waiting, phase: v1.PhasePending, requeue: h.r.referentPoll}, nil
 	}
+	endpoints := slices.Sorted(maps.Keys(urls)) // each key resolveLakeEnv returns is a Lake's proxy URL
 	h.r.addLakeExtensionDir(urls, w.fn())
-	return urls, nil, nil
+	return urls, endpoints, nil, nil
 }
 
 // own derives w's lake token, the one place it is derived (ADR-0306 Decision 7). It is keyed by (ns, kind, name), so it
