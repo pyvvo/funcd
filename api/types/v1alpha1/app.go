@@ -60,7 +60,7 @@ type AppSpec struct {
 	// BackupSchedules backs up the App's stores (ADR-0222 Decision 2); an entry with an empty scope backs up this App.
 	BackupSchedules []AppBackupSchedule `json:"backupSchedules,omitempty" doc:"The BackupSchedules that the App declares or refers to; no two entries name the same one. An entry with an empty scope backs up this App: each object that its kv, buckets, sql and lakes entries name, and its Functions' local volumes."`
 	// Secrets declares the Secrets the parts name, never their values (ADR-0213 Decision 6).
-	Secrets []SecretDeclaration `json:"secrets,omitempty" doc:"The Secrets that the App's parts read and the keys they read, never their values; no two entries name the same one. An apply whose parts name an undeclared Secret is refused, and while a declared Secret or key is missing, funcd writes no part and reports SecretNotFound or SecretKeyMissing."`
+	Secrets []SecretDeclaration `json:"secrets,omitempty" doc:"The Secrets that the App's parts read and the keys they read, never their values; no two entries name the same one. An apply whose parts name an undeclared Secret is refused, and while a declared Secret or key is missing, funcd writes no part and reports SecretNotFound or SecretKeyMissing. A Secret that one of the App's Jobs owns may lack a key without that stop: each part that names it, other than that Job and the preApply hook Functions, is Lagging with SecretKeyMissing and is not written until the Job writes the key."`
 	// Hooks names the Functions of this App called before its parts change and after a new revision is current
 	// (ADR-0214).
 	Hooks *AppHooks `json:"hooks,omitempty" doc:"Functions of this App that funcd calls for each new revision whose spec has them: preApply before the revision's parts change, postApply once it is current. Each call is recorded in the revision's status.hooks; a call that ends during a stop of funcd, a hold or a pause is not recorded and is made again, so a hook must be safe to repeat."`
@@ -419,8 +419,8 @@ func (e LakeEntry) MarshalJSON() ([]byte, error) {
 
 // AppStatus is the observed state (ADR-0199 Decision 5): phase Deploying, Ready, Degraded or Failed (ADR-0200
 // Decision 6), the Ready condition, the current and latest AppRevision, the state of each child, the last part the
-// App wrote back (ADR-0212), its requirements in both directions (ADR-0219) and, in a dry-run answer only, the plan
-// (ADR-0220).
+// App wrote back (ADR-0212), when a part's wait last ended (ADR-0357 Decision 3), its requirements in both directions
+// (ADR-0219) and, in a dry-run answer only, the plan (ADR-0220).
 type AppStatus struct {
 	Status          `json:",inline"`
 	CurrentRevision ObjectName `json:"currentRevision,omitempty" doc:"The AppRevision whose rollout last completed, empty until one has. After a failed rollout the parts keep the newer spec, so it names the last complete rollout, not what runs."`
@@ -429,6 +429,8 @@ type AppStatus struct {
 	Version      string       `json:"version,omitempty" doc:"The spec.version of the current revision."`
 	Children     []AppChild   `json:"children,omitempty" doc:"One line per entry of configMaps, kv, buckets, sql, addons, functions, jobs, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them; an addons line names the add-on's kind. Then one Pruning line per dropped object not deleted yet."`
 	LastSelfHeal *AppSelfHeal `json:"lastSelfHeal,omitempty" doc:"The last part that funcd wrote back after another writer changed or deleted it, and when."`
+	// LagEndedAt is a start term of the rollout deadline (ADR-0357 Decision 3).
+	LagEndedAt *Timestamp `json:"lagEndedAt,omitempty" doc:"When a part last stopped being Lagging while the latest revision was rolling out. The rollout's deadline counts from it too, so a part written once its wait ends has a full app.upgradeTimeout to turn Ready."`
 	// Requires is the state of each spec.requires entry, in its order (ADR-0219 Decision 5).
 	Requires []AppRequirementState `json:"requires,omitempty" doc:"The state of each spec.requires entry, in its order."`
 	// RequiredBy is every App of the namespace whose spec.requires names this one, sorted by name.
@@ -489,24 +491,27 @@ type AppSelfHeal struct {
 type AppChild struct {
 	Kind   Kind          `json:"kind" doc:"The object's kind."`
 	Name   ObjectName    `json:"name" doc:"The object's name: a ref entry's target, and for a defined ConfigMap its stored name."`
-	State  AppChildState `json:"state" doc:"Ready when the part exists and is ready. NotStarted for a Function that has not run since it changed, such as one scaled to zero: it does not hold up the rollout, and it makes the App's Ready condition Unknown rather than True. Pending while the part is missing or not ready, and Pruning for a dropped object not deleted yet, which the App's Ready condition leaves out."`
-	Reason string        `json:"reason,omitempty" doc:"Why the part is not Ready, such as RefNotFound, Progressing, ChildNotOwned, ChildInvalid, StepNotReady or the part's own reason. For a Pruning object, why it is kept, such as NotCurrent until the new revision is current, RunHeld while a run holds the Function, or InUse: <Kind>/<name>."`
+	State  AppChildState `json:"state" doc:"Ready when the part exists and is ready. NotStarted for a Function that has not run since it changed, such as one scaled to zero: it does not hold up the rollout, and it makes the App's Ready condition Unknown rather than True. Pending while the part is missing or not ready. Lagging for a part that waits for what funcd does not run: an add-on part whose kind runs no engine, such as a stack, while it is not Ready at its generation, or a part that names a Secret one of the App's Jobs owns while that Secret lacks a declared key, which funcd does not write until then. Pruning for a dropped object not deleted yet. The App's Ready condition, its rollout and its deadline leave out a Lagging part and a Pruning object, while its post-hooks and prune wait for every Lagging part."`
+	Reason string        `json:"reason,omitempty" doc:"Why the part is not Ready, such as RefNotFound, Progressing, ChildNotOwned, ChildInvalid, StepNotReady or the part's own reason, such as AwaitingApproval for a stack. For a part that waits for a Secret's key, SecretKeyMissing: Secret/<name> <key>. For a Pruning object, why it is kept, such as NotCurrent until the new revision is current, RunHeld while a run holds the Function, or InUse: <Kind>/<name>."`
 }
 
 // AppChildState is the state of an App's child (Decision 5).
 type AppChildState string
 
-// The states of an App's child: a part counts toward the App's Ready condition; a Pruning object does not.
+// The states of an App's child: a part counts toward the App's Ready condition; a Lagging part (ADR-0357 Decisions 1
+// and 2) and a Pruning object do not.
 const (
 	AppChildReady      AppChildState = "Ready"
 	AppChildNotStarted AppChildState = "NotStarted"
 	AppChildPending    AppChildState = "Pending"
+	AppChildLagging    AppChildState = "Lagging"
 	AppChildPruning    AppChildState = "Pruning"
 )
 
 // Schema carries AppChildState's enum into the generated OpenAPI (ADR-0048).
 func (AppChildState) Schema(huma.Registry) *huma.Schema {
-	return enumSchema(string(AppChildReady), string(AppChildNotStarted), string(AppChildPending), string(AppChildPruning))
+	return enumSchema(string(AppChildReady), string(AppChildNotStarted), string(AppChildPending), string(AppChildLagging),
+		string(AppChildPruning))
 }
 
 // GroupVersionKind returns the constant GVK for App.

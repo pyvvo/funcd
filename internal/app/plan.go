@@ -20,8 +20,10 @@ func NewPlanner(st store.Store) *Planner { return &Planner{reader: reader{store:
 // revision is the one the stamp would name. A namesake held by another owner stops it: the plan lists only that
 // AppRevision. Otherwise the parts are the first stop of the pass alone, ChildNotOwned then a declared Secret missing
 // or lacking a key, or else every part a write would create or update, in section order, then every object the App
-// controls that no entry names, as prune. The hooks are listed when a revision is named. A hold, a pause and an unmet
-// requirement delay the rollout and are not shown (ADR-0220 open question 1).
+// controls that no entry names, as prune. A Secret that a Job of the App owns and that lacks a key is no stop, and the
+// parts that wait for it are listed as any part, since a plan says what the rollout does, not when (ADR-0357
+// Decision 5). The hooks are listed when a revision is named. A hold, a pause and an unmet requirement delay the
+// rollout and are not shown (ADR-0220 open question 1).
 func (p *Planner) PlanApp(ctx context.Context, a *v1.App) (v1.AppPlan, error) {
 	var plan v1.AppPlan
 	next, halt, err := p.planRevision(ctx, a)
@@ -43,7 +45,7 @@ func (p *Planner) PlanApp(ctx context.Context, a *v1.App) (v1.AppPlan, error) {
 		plan.Parts = []v1.PlanPart{stopLine(halt, v1.PlanUpdate)}
 		return plan, nil
 	}
-	if halt, err = p.checkSecrets(ctx, a); err != nil {
+	if halt, _, err = p.checkSecrets(ctx, a); err != nil {
 		return v1.AppPlan{}, err
 	}
 	if halt != nil {

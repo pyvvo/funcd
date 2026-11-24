@@ -214,9 +214,9 @@ type hookPass struct {
 // hooks reads the latest revision's hook state and starts its first due call when Decision 4 allows: a pre-hook of a
 // Deploying latest that is not current, in a pass not stopped that wrote no part and is not busy, whose Function is
 // Ready or NotStarted; a post-hook once the stored App status names the latest current (current), in a pass that is
-// not busy.
+// not busy, wrote no part and judged no part (vs) Lagging or Pending (ADR-0357 Decision 4).
 func (r *Reconciler) hooks(ctx context.Context, a *v1.App, latest *v1.AppRevision, current bool, objs map[v1.ObjectRef]v1.Object,
-	halt *stop, wrote *v1.ObjectRef, busy bool) (hookPass, error) {
+	vs []verdict, halt *stop, wrote *v1.ObjectRef, busy bool) (hookPass, error) {
 	hp := hookPass{busy: busy}
 	if latest == nil {
 		return hp, nil
@@ -239,7 +239,7 @@ func (r *Reconciler) hooks(ctx context.Context, a *v1.App, latest *v1.AppRevisio
 		hp.failure, err = r.hookFailure(ctx, a.Namespace, p)
 		return hp, err
 	case current:
-		hp.started = !busy && r.startCall(ctx, a, latest, point, p.fn)
+		hp.started = !busy && wrote == nil && !anyPending(vs) && !anyLagging(vs) && r.startCall(ctx, a, latest, point, p.fn)
 		return hp, nil
 	}
 	hp.waiting = "Function/" + string(p.fn) + ": not ready"

@@ -559,14 +559,15 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         reason:
-          description: "Why the part is not Ready, such as RefNotFound, Progressing, ChildNotOwned, ChildInvalid, StepNotReady or the part's own reason. For a Pruning object, why it is kept, such as NotCurrent until the new revision is current, RunHeld while a run holds the Function, or InUse: <Kind>/<name>."
+          description: "Why the part is not Ready, such as RefNotFound, Progressing, ChildNotOwned, ChildInvalid, StepNotReady or the part's own reason, such as AwaitingApproval for a stack. For a part that waits for a Secret's key, SecretKeyMissing: Secret/<name> <key>. For a Pruning object, why it is kept, such as NotCurrent until the new revision is current, RunHeld while a run holds the Function, or InUse: <Kind>/<name>."
           type: string
         state:
-          description: "Ready when the part exists and is ready. NotStarted for a Function that has not run since it changed, such as one scaled to zero: it does not hold up the rollout, and it makes the App's Ready condition Unknown rather than True. Pending while the part is missing or not ready, and Pruning for a dropped object not deleted yet, which the App's Ready condition leaves out."
+          description: "Ready when the part exists and is ready. NotStarted for a Function that has not run since it changed, such as one scaled to zero: it does not hold up the rollout, and it makes the App's Ready condition Unknown rather than True. Pending while the part is missing or not ready. Lagging for a part that waits for what funcd does not run: an add-on part whose kind runs no engine, such as a stack, while it is not Ready at its generation, or a part that names a Secret one of the App's Jobs owns while that Secret lacks a declared key, which funcd does not write until then. Pruning for a dropped object not deleted yet. The App's Ready condition, its rollout and its deadline leave out a Lagging part and a Pruning object, while its post-hooks and prune wait for every Lagging part."
           enum:
             - Ready
             - NotStarted
             - Pending
+            - Lagging
             - Pruning
           type: string
       required:
@@ -864,7 +865,7 @@ components:
             - Terminating
           type: string
         startedAt:
-          description: "When the rollout started: when the revision was created, or, when it waited for required Apps, once they were all met; unset while it waits. The rollout fails if it is not complete app.upgradeTimeout after the latest of this time, a resume of the App, the release of a hold and the end of the last pre-hook call, unless a pre-hook call is running."
+          description: "When the rollout started: when the revision was created, or, when it waited for required Apps, once they were all met; unset while it waits. The rollout fails if it is not complete app.upgradeTimeout after the latest of this time, a resume of the App, the release of a hold, the end of the last pre-hook call and the end of a part's wait, the App's status.lagEndedAt, unless a pre-hook call is running."
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
@@ -2012,7 +2013,7 @@ components:
             - array
             - "null"
         secrets:
-          description: The Secrets that the App's parts read and the keys they read, never their values; no two entries name the same one. An apply whose parts name an undeclared Secret is refused, and while a declared Secret or key is missing, funcd writes no part and reports SecretNotFound or SecretKeyMissing.
+          description: "The Secrets that the App's parts read and the keys they read, never their values; no two entries name the same one. An apply whose parts name an undeclared Secret is refused, and while a declared Secret or key is missing, funcd writes no part and reports SecretNotFound or SecretKeyMissing. A Secret that one of the App's Jobs owns may lack a key without that stop: each part that names it, other than that Job and the preApply hook Functions, is Lagging with SecretKeyMissing and is not written until the Job writes the key."
           items:
             additionalProperties: false
             properties:
@@ -2545,6 +2546,12 @@ components:
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        lagEndedAt:
+          description: When a part last stopped being Lagging while the latest revision was rolling out. The rollout's deadline counts from it too, so a part written once its wait ends has a full app.upgradeTimeout to turn Ready.
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         lastSelfHeal:
           $ref: "#/components/schemas/AppSelfHeal"

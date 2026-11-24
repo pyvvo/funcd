@@ -122,12 +122,13 @@ const (
 	ReasonSecretKeyMissing = "SecretKeyMissing"
 )
 
-// SecretGap is the first declared Secret that is not complete: the declaration's index and name, and the first declared
-// key it lacks, or no key when the Secret does not exist. It holds no Secret value.
+// SecretGap is a declared Secret that is not complete: the declaration's index and name, the first declared key it
+// lacks, or no key when the Secret does not exist, and the stored Secret's spec.owner. It holds no Secret value.
 type SecretGap struct {
 	Index int
 	Name  v1.ObjectName
 	Key   string
+	Owner v1.WorkloadRef // the stored Secret's spec.owner, zero when the Secret is missing (ADR-0357 Decision 2)
 }
 
 // Reason is SecretNotFound or SecretKeyMissing.
@@ -149,11 +150,31 @@ func (g SecretGap) Message() string {
 // CheckSecrets gets each Secret decls declares in ns, in declaration order, and returns the first gap, nil when every
 // one exists with every declared key (ADR-0213 Decision 8). It tests key membership only and only reads.
 func CheckSecrets(ctx context.Context, st store.Store, ns v1.NamespaceName, decls []v1.SecretDeclaration) (*SecretGap, error) {
-	const op = "ownedstore.CheckSecrets"
+	gaps, err := secretGaps(ctx, "ownedstore.CheckSecrets", st, ns, decls, true)
+	if err != nil || len(gaps) == 0 {
+		return nil, err
+	}
+	return &gaps[0], nil
+}
+
+// SecretGaps returns every gap of decls in ns, one per declared Secret that is not complete, in declaration order
+// (ADR-0357 Decision 2), as CheckSecrets reads them.
+func SecretGaps(ctx context.Context, st store.Store, ns v1.NamespaceName, decls []v1.SecretDeclaration) ([]SecretGap, error) {
+	return secretGaps(ctx, "ownedstore.SecretGaps", st, ns, decls, false)
+}
+
+// secretGaps gets each Secret decls declares in ns, in declaration order, and returns its gaps, ending at the first
+// when first is set; op names the caller in an error.
+func secretGaps(ctx context.Context, op string, st store.Store, ns v1.NamespaceName, decls []v1.SecretDeclaration, first bool) ([]SecretGap, error) {
+	var out []SecretGap
 	for i, d := range decls {
+		if first && len(out) > 0 {
+			break
+		}
 		obj, err := st.Get(ctx, v1.KindSecret.GVK(), ns, d.Name)
 		if fault.KindOf(err) == fault.NotFound {
-			return &SecretGap{Index: i, Name: d.Name}, nil
+			out = append(out, SecretGap{Index: i, Name: d.Name})
+			continue
 		}
 		if err != nil {
 			return nil, fault.Wrapf(err, fault.KindOf(err), op, "get secret %q", d.Name)
@@ -164,9 +185,10 @@ func CheckSecrets(ctx context.Context, st store.Store, ns v1.NamespaceName, decl
 		}
 		for _, key := range d.Keys {
 			if _, has := sec.Spec.Data[key]; !has {
-				return &SecretGap{Index: i, Name: d.Name, Key: key}, nil
+				out = append(out, SecretGap{Index: i, Name: d.Name, Key: key, Owner: sec.Spec.Owner})
+				break
 			}
 		}
 	}
-	return nil, nil
+	return out, nil
 }

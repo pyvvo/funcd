@@ -110,3 +110,36 @@ func TestMapOwner(t *testing.T) {
 	require.Equal(t, []controller.Request{{GVK: v1.KindApp.GVK(), Namespace: "default", Name: "todo"}},
 		ownedstore.MapOwner(nil, v1.KindApp)(context.Background(), ks))
 }
+
+// ADR-0357 Decision 2: SecretGaps returns a gap per declared Secret that is not complete, in declaration order, each with
+// the stored Secret's spec.owner and its first missing key; CheckSecrets keeps the first one.
+func TestSecretGaps(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(memory.New())
+	put := func(name v1.ObjectName, owner v1.WorkloadRef, data map[string][]byte) {
+		_, err := st.Create(ctx, &v1.Secret{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSecret.GVK().APIVersion(), Kind: v1.KindSecret},
+			ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1"},
+			Spec:       v1.SecretSpec{Type: v1.SecretTypeOpaque, Owner: owner, Data: data}})
+		require.NoError(t, err)
+	}
+	put("outputs", v1.JobOwner("stack"), map[string][]byte{"FRP_ADDR": []byte("a")})
+	put("stripe", v1.WorkloadRef{}, map[string][]byte{"KEY": []byte("k")})
+	decls := []v1.SecretDeclaration{
+		{Name: "stripe", Keys: []string{"KEY"}},
+		{Name: "outputs", Keys: []string{"FRP_ADDR", "FRP_TOKEN", "FRP_PORT"}},
+		{Name: "absent", Keys: []string{"X"}},
+	}
+	gaps, err := ownedstore.SecretGaps(ctx, st, "default", decls)
+	require.NoError(t, err)
+	require.Equal(t, []ownedstore.SecretGap{
+		{Index: 1, Name: "outputs", Key: "FRP_TOKEN", Owner: v1.JobOwner("stack")},
+		{Index: 2, Name: "absent"},
+	}, gaps)
+	first, err := ownedstore.CheckSecrets(ctx, st, "default", decls)
+	require.NoError(t, err)
+	require.Equal(t, &gaps[0], first)
+	none, err := ownedstore.SecretGaps(ctx, st, "default", decls[:1])
+	require.NoError(t, err)
+	require.Empty(t, none)
+}
