@@ -1381,8 +1381,9 @@ func (h *storeHandlers) ReplaceJobRun(ctx context.Context, ns v1.NamespaceName, 
 }
 
 // stampJobRunDecision records on an admitted update of a run what the API server sets (ADR-0348 Decisions 3 and 5):
-// on an approval that admission took, status.approvedAt and status.approvedBy, the caller's identity subject, empty
-// with none; on a rejection, status.rejectedBy. The pass acts only on an approval whose approvedAt this wrote.
+// on an approval that admission took (admission.JobRunApproves), status.approvedAt and status.approvedBy, the caller's
+// identity subject, empty with none; on a rejection, status.rejectedBy. The pass acts only on an approval whose
+// approvedAt this wrote.
 func stampJobRunDecision(ctx context.Context, admitted, stored v1.Object) {
 	run, ok := admitted.(*v1.JobRun)
 	if !ok {
@@ -1393,7 +1394,7 @@ func stampJobRunDecision(ctx context.Context, admitted, stored v1.Object) {
 		return
 	}
 	id, _ := middleware.IdentityFrom(ctx)
-	if run.Spec.Approve != old.Spec.Approve {
+	if admission.JobRunApproves(old, run) {
 		run.Status.ApprovedAt, run.Status.ApprovedBy = v1.NewTimestamp(time.Now()), id.Subject
 	}
 	if run.Spec.Reject && !old.Spec.Reject {

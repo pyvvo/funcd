@@ -4168,7 +4168,7 @@ components:
       additionalProperties: false
       properties:
         approve:
-          description: The digest of the preview that a person approves, status.preview.digest. A create that sets it is refused. An update may set or change it only while the run is AwaitingApproval and the digest is the run's preview's, else it is refused with 409, and only from a caller who may update the run's Job, else with 403. funcdctl job approve sets it.
+          description: The digest of the preview that a person approves, status.preview.digest. A create that sets it is refused. An update that sets or changes it, or that keeps one with no recorded approval of the run's current preview, is taken only while the run is AwaitingApproval and the digest is the run's preview's, else it is refused with 409, and only from a caller who may update the run's Job, else with 403; an update that cancels or rejects the run is taken whatever it holds. It is never cleared. funcdctl job approve sets it.
           pattern: ^sha256:[a-f0-9]{64}$
           type: string
         cancel:

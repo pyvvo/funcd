@@ -145,6 +145,18 @@ func (jobRunSpec) Admit(_ context.Context, req Request) (v1.Object, error) {
 
 // --- jobrun-approval (ADR-0348 Decisions 3 and 5): Create and Update on JobRun -----------------------------------
 
+// JobRunApproves reports whether an update of a run from old to run asks for a person's approval (ADR-0348 Decision
+// 3): it sets or changes spec.approve, or keeps one that admission recorded no approval of for the run's current
+// preview, as one that a preview made again with another document left, on a run that has not ended, in an update
+// that cancels and rejects nothing. jobrun-approval checks such an update, and the API server records its approver.
+func JobRunApproves(old, run *v1.JobRun) bool {
+	was, is := old.Spec, run.Spec
+	if is.Approve != was.Approve {
+		return is.Approve != ""
+	}
+	return is.Approve != "" && !old.Approved() && !old.Status.Phase.Ended() && is.Cancel == was.Cancel && is.Reject == was.Reject
+}
+
 type jobRunApproval struct{ authz auth.Authorizer }
 
 // NewJobRunApprovalAdmission returns the Validating admission of a person's approval and rejection of a run (ADR-0348
@@ -190,7 +202,7 @@ func (a jobRunApproval) Admit(ctx context.Context, req Request) (v1.Object, erro
 		return req.Object, nil
 	}
 	was, is := old.Spec, run.Spec
-	approving, rejecting := is.Approve != was.Approve, is.Reject && !was.Reject
+	approving, rejecting := JobRunApproves(old, run), is.Reject && !was.Reject
 	switch {
 	case was.Approve != "" && is.Approve == "":
 		return nil, fault.Invalidf(op, "JobRun %q: spec.approve is a record and is never cleared", run.Name)

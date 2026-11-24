@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/stretchr/testify/require"
@@ -248,4 +249,21 @@ func TestJobRunApprovalAdmission(t *testing.T) {
 		"a reason is set with the rejection only")
 	require.Equal(t, fault.Invalid, fault.KindOf(update(developer, awaiting, func(r *v1.JobRun) { r.Spec.RejectReason = "why" })))
 	require.NoError(t, update(viewer, approved, func(r *v1.JobRun) { r.Spec.Cancel = true }), "a cancel is no decision")
+
+	// A preview made again with another document leaves spec.approve d1 with no recorded approval: approving d1
+	// again is an approval of another preview (409, naming d2), while a cancel or a rejection of the run is taken.
+	stale := stored(v1.JobRunAwaitingApproval, d2, approve(d1))
+	err = update(developer, stale, approve(d1))
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, d2)
+	require.NoError(t, update(developer, stale, approve(d2)))
+	require.NoError(t, update(developer, stale, func(r *v1.JobRun) { r.Spec.Cancel = true }))
+	require.NoError(t, update(developer, stale, reject))
+	recorded := stored(v1.JobRunAwaitingApproval, d2, func(r *v1.JobRun) {
+		r.Spec.Approve, r.Status.ApprovedAt = d2, v1.NewTimestamp(time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC))
+	})
+	require.NoError(t, update(viewer, recorded, func(r *v1.JobRun) { r.Tags = v1.Tags{"a": "b"} }),
+		"an update that keeps a recorded approval approves nothing")
+	require.True(t, admission.JobRunApproves(stale, stale), "keeping an unrecorded approval approves anew")
+	require.False(t, admission.JobRunApproves(recorded, recorded))
 }
