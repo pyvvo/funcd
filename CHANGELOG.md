@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.48.0](https://github.com/pyvvo/funcd/compare/v0.47.0...v0.48.0) (2026-11-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** every owner and appliesTo item names its kind, and a Job reaches the platform as its own principal (ADR-0351)
+
+### Features
+
+* **addons:** a Function reconciles an engineless kind's objects, and a deletion waits for its destroy (ADR-0345) ([1ccda7f](https://github.com/pyvvo/funcd/commit/1ccda7f5c85d6b462ec1275b3d202dd6c43506da))
+* **addons:** an Addon ships runtimes, a Function or a Job names one, and its kind runs on one of them (ADR-0344) ([1ccda7f](https://github.com/pyvvo/funcd/commit/1ccda7f5c85d6b462ec1275b3d202dd6c43506da))
+* **api:** every owner and appliesTo item names its kind, and a Job reaches the platform as its own principal (ADR-0351) ([10ace43](https://github.com/pyvvo/funcd/commit/10ace435b7314499edb1955e74b26d63d1598906))
+* **apps:** an App declares Jobs as it declares Functions (ADR-0350) ([#1559](https://github.com/pyvvo/funcd/issues/1559)) ([15af128](https://github.com/pyvvo/funcd/commit/15af128987939b175d830cbe9de92d1c4aea19bd))
+* **apps:** an App never waits for its stacks, and a part that reads their outputs waits for them (ADR-0357) ([2974108](https://github.com/pyvvo/funcd/commit/2974108741e503171cf3d5217bf1735319441a57))
+* **edge:** the edge serves a workload on the bridge address only its own namespace's hosts (ADR-0353) ([6f06025](https://github.com/pyvvo/funcd/commit/6f060256d2dbbb39f49047f955b8dc7cc7dd110a))
+* **edge:** the edge takes the client address from a proxy it trusts, server.trustedProxies (ADR-0354) ([6f06025](https://github.com/pyvvo/funcd/commit/6f060256d2dbbb39f49047f955b8dc7cc7dd110a))
+* **egress:** an EgressPolicy names an add-on object whose engine it lets out (ADR-0352) ([6f06025](https://github.com/pyvvo/funcd/commit/6f060256d2dbbb39f49047f955b8dc7cc7dd110a))
+* **funcdctl:** dev runs a worker on an Addon's runtime on its container engine (ADR-0346) ([#1562](https://github.com/pyvvo/funcd/issues/1562)) ([d1cfcc5](https://github.com/pyvvo/funcd/commit/d1cfcc58ece7405ab50ae3883d40af3f6e083a3c))
+* **jobs:** a Function starts a Job's run through its binding and reads it back (ADR-0349) ([3385045](https://github.com/pyvvo/funcd/commit/338504562399c37be196b58295bad848e25e250a))
+* **jobs:** a Job runs its handler once per JobRun, in a worker of its own (ADR-0347) ([10ace43](https://github.com/pyvvo/funcd/commit/10ace435b7314499edb1955e74b26d63d1598906))
+* **jobs:** a run previews and waits for a person's approval unless its Job says bypass (ADR-0348) ([3385045](https://github.com/pyvvo/funcd/commit/338504562399c37be196b58295bad848e25e250a))
+
+
+### Bug Fixes
+
+* **addons:** an App's part takes its Addon's first revision when its App was stamped before it ([#1539](https://github.com/pyvvo/funcd/issues/1539)) ([aaaf73b](https://github.com/pyvvo/funcd/commit/aaaf73b72884755a17b256beb4e05d33cb853ae1))
+* **addons:** an engineless App part follows its App's applied revision when its spec is unchanged ([2974108](https://github.com/pyvvo/funcd/commit/2974108741e503171cf3d5217bf1735319441a57))
+* **artifact:** concurrent first uses of one artifact share one cache fill ([#1543](https://github.com/pyvvo/funcd/issues/1543)) ([ef62f45](https://github.com/pyvvo/funcd/commit/ef62f45cf9b3c6838c338c2f6f38e1ba18859138))
+
 ## [0.47.0](https://github.com/pyvvo/funcd/compare/v0.46.0...v0.47.0) (2026-11-23)
 
 
