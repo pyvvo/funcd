@@ -1,6 +1,6 @@
 # ADR-0352: An EgressPolicy names an add-on object, whose engine it lets out
 
-- **Status**: Reviewing (2026-11-24, implemented); Accepted (2026-11-24), on the decider's delegation ("accept after a clean judge"), after two independent judge rounds; round 2's Majors on ADR-0353 resolved as the judge recommended, by leaving the egress indexes' writer to a later ADR
+- **Status**: Implemented (2026-11-24), review passed in its second round with no finding open ([report](../reviews/adr-0352-implementation-claude-opus-5-5-2.md)); Reviewing (2026-11-24, implemented); Accepted (2026-11-24), on the decider's delegation ("accept after a clean judge"), after two independent judge rounds; round 2's Majors on ADR-0353 resolved as the judge recommended, by leaving the egress indexes' writer to a later ADR
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: egress, add-ons, network, security, cedar
