@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0314](0314-a-fresh-funcd-answers-on-loopback-until-it-has-a-real-credential.md) (2026-11-05) — Decision 4's shorthand path, Decision 7's "WithDevAuth does not change" and the built-in half of scenario legacy-token-is-developer: the built-in token works only on loopback, and warns in each form.
 - **Superseded in part by**: [ADR-0334](0334-funcdctl-dev-runs-add-on-images.md) (2026-11-19) — Decisions 3 and 7: each refusal of `funcd.DevToken` also covers `funcd.DevAdminToken`.
+- **Superseded in part by**: [ADR-0354](0354-the-edge-takes-the-client-address-from-a-proxy-it-trusts.md) (2026-11-24) — Decision 5's last sentence (what an `open` route forwards)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: auth, rbac, config, control-plane, edge, daemon
