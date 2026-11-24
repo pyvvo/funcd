@@ -29,13 +29,20 @@ import (
 // to listen and become ready.
 const runPoll = 50 * time.Millisecond
 
+// errNoWorkers ends each run of a platform built with no materializer, which loads no handler.
+var errNoWorkers = errors.New("this platform runs no workers: it has no materializer, so no run's handler can run")
+
 // execute is a run's executor (ADR-0347 Decisions 5 and 6). Once no worker of the run's name remains, it creates one
 // worker of the pinned revision, as a solo Function worker of that runtime is built, waits for it to listen and
 // become ready within runtime.bootTimeout, and calls it once through the invoke chain. The Job's timeout runs from the
 // worker's start. The worker is stopped and removed at every end, at once when ctx is cancelled; the answer of a
-// cancelled executor is never written.
+// cancelled executor is never written. A platform with no materializer runs no worker that could call a handler, only
+// a Function's stand-in (ADR-0020), so its runs end StartFailed at once.
 func (j *JobRunReconciler) execute(ctx context.Context, run *v1.JobRun, job *v1.Job, rev *v1.Revision) runAnswer {
 	r := j.r
+	if r.materializer == nil {
+		return startFailed(errNoWorkers)
+	}
 	w := runWorkload(job, rev)
 	id := runtime.NewInstanceID(run.Namespace, run.Name, rev.Name, 0)
 	if err := j.nameFree(ctx, run); err != nil {
