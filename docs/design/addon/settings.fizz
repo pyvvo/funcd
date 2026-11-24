@@ -8,6 +8,9 @@
 # funcd writes the object's status from the answer, at the generation it sent, unless the object changed since.
 # Someone may change the engine's settings at its own API (a drift). funcd may stop and start again: it keeps what it
 # knows of the calls in memory only, and its stop cuts the call in flight, which never answers.
+# The stored object may stop fitting the kind's schema, the contract of the revision its target pins, and an edit makes
+# it fit again (ADR-0358 Decision 5). While it does not fit, the pass sends nothing: a list without it would tell the
+# Function that it is gone, and the Function would put the engine's default back.
 # Environment: the controller runs one worker, so a pass is one step; the call runs beside it, on its own goroutine.
 # The engine keeps what was applied across funcd's stop, as rauthy keeps its policy in its storage. Left out: several
 # targets, kinds and objects, the resync's period, the backoff's length, a restarted engine's lost settings (its
@@ -27,6 +30,9 @@ options:
 # mutant no-retry: liveness
 # mutant no-resync: liveness
 # mutant state-survives-stop: liveness
+# mutant leave-out: UnfitKeepsItsSetting
+# mutant send-unfit: UnfitIsNeverSent
+# mutant stay-blocked: liveness
 
 # no-inflight-guard: a pass sends while a call is in flight.
 # ready-at-send: funcd reports the object Ready when it sends the list, before the Function answers.
@@ -36,6 +42,9 @@ options:
 # no-retry: a failed call is not sent again; only a change or the resync would send the list.
 # no-resync: the resync never fires, so nothing repairs a drift.
 # state-survives-stop: what funcd knows of its calls survives its stop, so the cut call stays in flight.
+# leave-out: the pass sends the list without an object that does not fit.
+# send-unfit: the pass sends an object that does not fit.
+# stay-blocked: once an object did not fit, the pass sends nothing more, even after an edit makes it fit.
 MUTANT = ""
 
 action Init:
@@ -56,11 +65,16 @@ action Init:
     resyncs = 0
     stops = 0
     fails = 0
+    fits = True
+    unfits = 0
+    rolled_back = False
+    sent_unfit = False
 
-# A create or an edit. An object is named by uid * 10 + generation in what funcd sends and applies.
+# A create or an edit, which the write's check makes fit. An object is named by uid * 10 + generation in what funcd sends and applies.
 atomic action Write:
     require writes < 3
     writes += 1
+    fits = True
     if gen == 0:
         uid = next_uid
         next_uid += 1
@@ -74,6 +88,16 @@ atomic action Delete:
     deletes += 1
     gen = 0
     uid = 0
+    ready = 0
+    fits = True
+
+# The target's pin moves to a revision whose contract the stored object does not fit; its pass shows ConfigInvalid.
+atomic action Unfit:
+    require gen > 0
+    require fits
+    require unfits < 1
+    unfits += 1
+    fits = False
     ready = 0
 
 # Someone changes the engine's settings at its own API.
@@ -101,12 +125,23 @@ atomic fair action Pass:
         require len(calls) == 0
     require len(calls) < 2
     want = uid * 10 + gen
+    if MUTANT == "stay-blocked":
+        require unfits == 0
+    if MUTANT == "leave-out":
+        if not fits:
+            want = 0
+    elif MUTANT != "send-unfit":
+        require fits
     changed = want != sent
     if MUTANT == "no-uid":
         changed = sent == -1 or gen != sent % 10
     retry = failed and MUTANT != "no-retry"
     require sent == -1 or changed or retry or resync
     calls.append({"gen": want, "state": "sent"})
+    if want == 0 and gen > 0:
+        rolled_back = True
+    if want != 0 and not fits:
+        sent_unfit = True
     resync = False
     call = "sent"
     if MUTANT == "ready-at-send":
@@ -141,7 +176,7 @@ atomic fair action Answer:
     if c["state"] == "applied" and MUTANT == "stale-answer":
         if gen > 0:
             ready = cur
-    elif gen > 0 and same:
+    elif gen > 0 and same and fits:
         if c["state"] == "applied":
             ready = cur
         else:
@@ -169,5 +204,13 @@ always assertion OneCallAtATime:
 always assertion ReadyMeansApplied:
     return ready == 0 or ready in applied
 
+always assertion UnfitKeepsItsSetting:
+    return not rolled_back
+
+always assertion UnfitIsNeverSent:
+    return not sent_unfit
+
 always eventually assertion Converges:
+    if not fits:
+        return len(calls) == 0
     return len(calls) == 0 and engine == uid * 10 + gen and ready == uid * 10 + gen
