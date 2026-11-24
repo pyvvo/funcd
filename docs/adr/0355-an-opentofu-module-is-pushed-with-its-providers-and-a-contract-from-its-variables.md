@@ -128,8 +128,9 @@ where the runtime installs providers from.
    `destroy` and `plan`; `variables` a closed record of the module's variables, typed by Contracts' table, the required
    ones those with no default. A sensitive variable is left out, so no run's input holds it: its value comes from a
    bound Secret's `TF_VAR_<name>` key, which the runtime gives OpenTofu already. The runtime's work copy of a module
-   leaves out the files that step 1 of Decision 2 refuses, so a run's variables come only from its input, its bound
-   Secrets and the module's defaults, a module pushed by hand included. Its output is a closed record of two
+   leaves out the files that step 1 of Decision 2 refuses, so a run's variables come only from its input, the
+   `TF_VAR_<name>` keys of its bound ConfigMaps and Secrets, and the module's defaults, a module pushed by hand
+   included. Its output is a closed record of two
    optional members: `outputs`, a closed record of the module's outputs that are not sensitive, each any value, none
    required; and `plan`, Decision 5's finding. A record that would have no member is the empty schema `{}`. The
    runtime answers in this shape: an apply `{"outputs": {…}}`, a destroy `{}`, a `plan` run `{"plan": {…}}`; so a
@@ -308,7 +309,7 @@ F141's work adds to funcd's `e2e/` (`addon-infrastack.venom.yml`), on a module t
   so a pushed module does not materialize there.
 - A typo in a stack's variables fails at its run's creation, naming the path, and nothing reaches the cloud.
 - A module's own `terraform.tfvars`, `*.auto.tfvars` and local state never reach a run: a stack sets each variable
-  through its config or a bound Secret.
+  through its config, or through a `TF_VAR_<name>` key of a ConfigMap or Secret that its Job binds.
 - A `plan` run of a Job without `bypass` asks a person to approve a run that changes nothing.
 
 ## Open questions
