@@ -41,7 +41,8 @@ the Secret `rauthy-keys`, unless a scenario says otherwise.
   `login-rauthypasswordpolicy` exists, controlled by `login`, runs the image's `handle` on the runtime its artifact
   declares, binds `login` and `rauthy-keys`, and has no address; and rauthy enforces `strict`.
 - `scenario: addon-function-on-demand` — *Given* no policy ever named `login`, *Then* it has no such Function, and a
-  policy set at rauthy's own API stays; *when* `strict` is created and deleted, *Then* rauthy's default is back.
+  policy set at rauthy's own API stays; *when* `strict` is created and deleted, *Then* rauthy's default is back, and the
+  Function goes.
 - `scenario: addon-function-follows-the-pin` — *When* the Addon names a newer image, *Then* `login`'s Function keeps its
   image until an edit of `login` moves its pin, and its next call has cause `change`.
 - `scenario: addon-function-repaired` — *When* that Function is deleted by hand while `strict` names `login`, *Then* it
@@ -112,14 +113,14 @@ kind that needs KV, a Bucket or SQL names a `ref`); publishing an add-on's image
    `spec.functions` wins over both, as today (ADR-0341 Decision 3, ADR-0345 Decision 2).
 2. **The Function of an image.** The add-on reconciler creates one for an object and a settings kind of it once an
    object of that kind names it, and one for an engineless object at its first pass. It is kept while such an object
-   exists: what differs is put back, and a deleted one is back, at the next pass. With the last object gone it stays and
-   gets the empty list; it goes with its owner, or once `spec.functions` or the pinned revision names another or none.
-   Its name is `<object>-<kind in lower case>`, shortened with a hash past 63 characters as an AddonRevision's. It is
-   written as a Workflow's step Function (ADR-0094): in the object's namespace and resource group, with the object's
-   marker and controller reference (`internal/ownedstore`, whose owners gain AddonObject, and the owner collector's new
-   pair `(AddonObject, Function)`), the runtime the artifact declares, the export `handle`, no minimum replica and the
-   step's idle timeout. It runs in a worker of its own, and its address is off (`ingress.enabled: false`), since its
-   caller is funcd. It binds:
+   exists: what differs is put back, and a deleted one is back, at the next pass. With the last object gone it gets the
+   empty list, and goes once the call that sent it ended well; it goes with its owner too, or once `spec.functions` or
+   the pinned revision names another or none. Its name is `<object>-<kind in lower case>`, shortened with a hash past 63
+   characters as an AddonRevision's. It is written as a Workflow's step Function (ADR-0094): in the object's namespace
+   and resource group, with the object's marker and controller reference (`internal/ownedstore`, whose owners gain
+   AddonObject, and the owner collector's new pair `(AddonObject, Function)`), the runtime the artifact declares, the
+   export `handle`, no minimum replica and the step's idle timeout. It runs in a worker of its own, and its address is
+   off (`ingress.enabled: false`), since its caller is funcd. It binds:
    - the object itself in `addon`, as `self`, when the object runs an engine; that alias goes in the call;
    - the object's `bindings.secret`;
    - an engineless object's `bindings.job` (new), as a Function's (ADR-0349 Decision 1). An InfraStack names its Job
@@ -168,14 +169,15 @@ kind that needs KV, a Bucket or SQL names a `ref`); publishing an add-on's image
   | Assertion | Kind | Protects | Oracle test |
   |---|---|---|---|
   | `NoObjectNoCall` (new) | always | `scenario: addon-function-on-demand` | `TestScenarioAddonFunctionOnDemand` |
-  | `Converges` | always eventually | the same, and ADR-0341's, once an object was sent | `TestScenarioSettingsDrift` |
+  | `NothingLeftBehind` (new) | always | the same: the Function goes after the default is back | the same |
+  | `Converges` | always eventually | the same, and ADR-0341's, while the Function is there | `TestScenarioSettingsDrift` |
 
 - **Bounds, faults**: ADR-0341's. A list that its contract refuses is a failed call, sent again until an edit.
 - **Environment**: a kind read from a frozen revision changes only when the pin moves, and a new image then changes the
   Function's revision, which the digest names. `engineless-delete.fizz` is unchanged: the Function is the stack's own.
 - **Mutants** added: `create-always` fails `NoObjectNoCall`; `gone-with-the-last` (the Function goes before its empty
-  list is applied) fails `Converges`.
-- **Result**: pass, 24,242 states, 9.3 s, FizzBee v0.5.4; the other mutants fail as ADR-0341 says.
+  list is sent) and `gone-after-any-answer` (after a failed call) fail `NothingLeftBehind`.
+- **Result**: pass, 25,944 states, 9.0 s, FizzBee v0.5.4; the other mutants fail as ADR-0341 says.
 - **Left to tests**: the Function's repair and removal, the in-use rule, targets on two revisions.
 
 ## Behavior rows
@@ -257,7 +259,7 @@ func KindSchema(contract v1.WorkflowContract, kind string) json.RawMessage
 - [ ] No write and no object's pass calls a registry; an engine's start waits for no read to succeed.
 - [ ] A list, its constraints and its call come from one revision, the target's.
 - [ ] A created Function has its object's marker and bindings and no address; another's is never written.
-- [ ] No Function exists, and nothing is called, for a target that no object of the kind ever named.
+- [ ] No Function and no call for a target that no object of the kind names, once its engine's default is back.
 - [ ] An App drops an add-on part whose kind has an image.
 
 ## Consequences

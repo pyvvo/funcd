@@ -9,8 +9,8 @@
 # Someone may change the engine's settings at its own API (a drift). funcd may stop and start again: it keeps what it
 # knows of the calls in memory only, and its stop cuts the call in flight, which never answers.
 # The kind's Function comes from an image (ADR-0358 Decision 2): the pass creates it once an object names the target, and
-# it stays when the last one goes, since the empty list it then gets puts the engine's default back. With no Function
-# nothing is called, so an engine that no object ever named keeps what its own API set.
+# deletes it once the last object is gone and a call that ended well sent the empty list, which puts the engine's default
+# back. With no Function nothing is called, so an engine that no object names keeps what its own API sets.
 # Environment: the controller runs one worker, so a pass is one step; the call runs beside it, on its own goroutine.
 # The engine keeps what was applied across funcd's stop, as rauthy keeps its policy in its storage. Left out: several
 # targets, kinds and objects, the resync's period, the backoff's length, a restarted engine's lost settings (its
@@ -31,7 +31,8 @@ options:
 # mutant no-resync: liveness
 # mutant state-survives-stop: liveness
 # mutant create-always: NoObjectNoCall
-# mutant gone-with-the-last: liveness
+# mutant gone-with-the-last: NothingLeftBehind
+# mutant gone-after-any-answer: NothingLeftBehind
 
 # no-inflight-guard: a pass sends while a call is in flight.
 # ready-at-send: funcd reports the object Ready when it sends the list, before the Function answers.
@@ -43,6 +44,7 @@ options:
 # state-survives-stop: what funcd knows of its calls survives its stop, so the cut call stays in flight.
 # create-always: the pass creates the Function with no object, so the engine gets an empty list.
 # gone-with-the-last: the pass deletes the Function with the last object, before its empty list is applied.
+# gone-after-any-answer: the pass deletes the Function once the empty list was answered, a failed call included.
 MUTANT = ""
 
 action Init:
@@ -64,8 +66,10 @@ action Init:
     stops = 0
     fails = 0
     fn = False
+    put = 0
     asked = False
     unasked = False
+    left_behind = False
 
 # A create or an edit. An object is named by uid * 10 + generation in what funcd sends and applies.
 atomic action Write:
@@ -113,9 +117,6 @@ atomic fair action Pass:
     want = uid * 10 + gen
     if gen > 0 or MUTANT == "create-always":
         fn = True
-    if MUTANT == "gone-with-the-last":
-        if gen == 0:
-            fn = False
     require fn
     changed = want != sent
     if MUTANT == "no-uid":
@@ -133,6 +134,22 @@ atomic fair action Pass:
         if gen > 0:
             ready = want
 
+# The pass after the last object's end: the last call that ended sent the empty list and ended well, so the Function goes.
+atomic fair action Retire:
+    require fn
+    require gen == 0
+    require len(calls) == 0
+    if MUTANT != "gone-with-the-last":
+        require sent == 0
+        if MUTANT != "gone-after-any-answer":
+            require not failed
+    if put != 0:
+        left_behind = True
+    fn = False
+    sent = -1
+    failed = False
+    resync = False
+
 # The Function applies the list it got, or fails.
 atomic fair action Apply:
     require len(calls) > 0
@@ -140,6 +157,7 @@ atomic fair action Apply:
     ok = oneof [True, False]
     if ok:
         engine = calls[0]["gen"]
+        put = calls[0]["gen"]
         applied.add(calls[0]["gen"])
         calls[0]["state"] = "applied"
         call = "applied"
@@ -192,7 +210,10 @@ always assertion ReadyMeansApplied:
 always assertion NoObjectNoCall:
     return not unasked
 
+always assertion NothingLeftBehind:
+    return not left_behind
+
 always eventually assertion Converges:
-    if not asked:
+    if not fn:
         return len(calls) == 0 and gen == 0
-    return len(calls) == 0 and engine == uid * 10 + gen and ready == uid * 10 + gen
+    return len(calls) == 0 and gen > 0 and engine == uid * 10 + gen and ready == uid * 10 + gen

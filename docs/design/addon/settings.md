@@ -16,7 +16,7 @@ stateDiagram-v2
     s0 --> s2 : Answer, Stop
     s1 --> s1 : Delete, Drift, Write
     s1 --> s2 : Answer, Stop
-    s2 --> s2 : Delete, Drift, Resync, Stop, Write
+    s2 --> s2 : Delete, Drift, Resync, Retire, Stop, Write
     s2 --> s3 : Pass
     s3 --> s0 : Apply
     s3 --> s1 : Apply
