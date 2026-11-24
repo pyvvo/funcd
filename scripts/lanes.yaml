@@ -1074,18 +1074,33 @@ job:
   venom: e2e/job.venom.yml
 
 addon-infrastack:
-  description: pyvvo/funcd-addons' InfraStack add-on on real containerd (ADR-0344, ADR-0345, ADR-0348, ADR-0349) — an admin registers the add-on's Addon, which ships the OpenTofu runtime and the Engineless kind InfraStack; the add-on's example stack previews, is approved, applies with its state in a Bucket prefix through the S3 gateway and turns Ready, and once deleted it is held until its approved destroy succeeded.
-  # The add-on's files come from the pinned funcd-addons module, and its Addon pulls the OpenTofu image from GHCR by
-  # the digest it pins; a lane that also stages opentofu.tar serves that image from e2e/laneregistry instead.
+  description: pyvvo/funcd-addons' InfraStack add-on on real containerd (ADR-0344, ADR-0345, ADR-0348, ADR-0349, ADR-0355, ADR-0356) — an admin registers the add-on's Addon, which ships the OpenTofu runtime and the Engineless kind InfraStack; the add-on's plugin pushes the example modules from the VM on Docker; a run whose variables break the module's contract is refused; the example stack previews, is approved, applies with its state in a Bucket prefix through the S3 gateway and turns Ready, a Function reads its outputs from the Secret its Job owns and sees a later apply's value, a sensitive output is in no status, log or plugin line, and once deleted the stack is held until its approved destroy succeeded; a second stack's module takes its sensitive variable from a Secret its Job binds.
+  # The add-on's files come from the pinned funcd-addons module. The build makes the OpenTofu runtime's image from the
+  # module's runtime/ with the add-on's own recipe and the shim its pins.json names, so the runs and the plugin use the
+  # runtime of the pinned version whatever image the Addon pins; e2e/laneregistry serves it in the VM. The build writes
+  # into the lane's dir, so the lane builds in a writable copy of the module, inside funcd's checkout: GOWORK=off keeps
+  # a go.work of funcd's from taking the copy's go commands.
   optional: true
   module: github.com/pyvvo/funcd-addons
   dir: infrastack/examples
+  copy: true
+  build:
+    - cd ../.. && GOWORK=off just opentofu-image "" funcd-lane/opentofu:lane && docker save funcd-lane/opentofu:lane | gzip -1n > infrastack/examples/opentofu.tar
   stage:
     - random-stack
     - random-stack.yaml
+    - random-stack-reader.mjs
+    - random-stack-reader.contract.yaml
+    - random-stack-reader.yaml
+    - token-stack
+    - token-stack.yaml
+    - opentofu.tar
     - from: infrastack/app/addon.yaml
       module: github.com/pyvvo/funcd-addons
       to: addon.yaml
+    - from: infrastack/plugin/funcdctl-infra
+      module: github.com/pyvvo/funcd-addons
+      to: funcdctl-infra
     - from: infrastack/reconciler/infrastack-reconciler.mjs
       module: github.com/pyvvo/funcd-addons
       to: infrastack-reconciler.mjs
@@ -1097,31 +1112,34 @@ addon-infrastack:
   tokens:
     admin: addon-infrastack-lane-admin
     developer: addon-infrastack-lane-developer
+  # The suite pushes the modules with the add-on's plugin.
   push:
-    - artifact: random-stack
-      ref: random-stack
-      entry: main.tf
     - artifact: infrastack-reconciler.mjs
       ref: infrastack-reconciler
+    - artifact: random-stack-reader.mjs
+      ref: random-stack-reader
   venom: e2e/addon-infrastack.venom.yml
 
 addon-frp-bunny:
-  description: funcd-functions' frp-bunny App on real containerd with egress on and no spend (ADR-0345, ADR-0352, ADR-0353) — the fake module in place of Bunny's, a local frps on the bridge over websocket, and pyvvo/funcd-addons' InfraStack and Tunnel Addons; the App's stack previews, is approved and applies, the Tunnel's frpc dials frps with the stack's FRP_TOKEN through the egress gateway, a call to frps with the public host reaches the hello Function through frpc and the edge, and the App's deletion waits for the stack's approved destroy.
-  # The App comes from the pinned funcd-functions module and the add-ons' files from the pinned funcd-addons module;
-  # the Addons pull their images from GHCR by the digests they pin, and a lane that also stages opentofu.tar and
-  # tunnel.tar serves those images from e2e/laneregistry instead. frps is fatedier/frps's binary, by digest.
+  description: funcd-functions' frp-bunny App on real containerd with egress on and no spend (ADR-0345, ADR-0352, ADR-0353, ADR-0356) — the fake module in place of Bunny's, a local frps on the bridge over websocket, and pyvvo/funcd-addons' InfraStack and Tunnel Addons; the App's stack previews, is approved and applies, the Tunnel's engine is replaced with the FRP_TOKEN that the apply writes into the outputs Secret, its frpc dials frps with it through the egress gateway, a call to frps with the public host reaches the hello Function through frpc and the edge, and the App's deletion waits for the stack's approved destroy.
+  # The App comes from the pinned funcd-functions module and the add-ons' files from the pinned funcd-addons module.
+  # The build makes the OpenTofu runtime's image with that module's recipe, as the addon-infrastack lane does, and
+  # e2e/laneregistry serves it in the VM; the Tunnel Addon pulls its image from GHCR by the digest it pins, unless the
+  # lane also stages tunnel.tar. frps is fatedier/frps's binary, by digest.
   optional: true
   module: github.com/pyvvo/funcd-functions
   dir: apps/frp-bunny
   copy: true
   build:
     - id=$(docker create --platform "linux/$(go env GOARCH)" fatedier/frps:v0.72.0@sha256:17abb20dd392557a44070d9726954630c0eb1f7a9bd6ead5ae9150d165179ea4) && docker cp "$id":/usr/bin/frps frps && docker rm "$id"
+    - here=$PWD && cd "$(cd "$FUNCD_ROOT" && scripts/moddir.sh github.com/pyvvo/funcd-addons)" && just opentofu-image "" funcd-lane/opentofu:lane && docker save funcd-lane/opentofu:lane | gzip -1n > "$here/opentofu.tar"
   stage:
     - app
     - infra/fake
     - hello
     - values/lane.yaml
     - frps
+    - opentofu.tar
     - from: infrastack/app/addon.yaml
       module: github.com/pyvvo/funcd-addons
       to: opentofu-addon.yaml
