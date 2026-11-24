@@ -64,6 +64,8 @@ in it. New words: Committed, Queued, Processing, Delayed, Idle, Gone.
 | `baseBackoff` | 5ms | `internal/controller/controller.go` |
 | `maxBackoff` | 1s | `internal/controller/controller.go` |
 | `DefaultInterval` | 5m | `internal/gc/gc.go` |
+| `nodeCollects` | 10s | `internal/gc/gc.go` |
+| `nodeCollectsPoll` | 100ms | `internal/gc/gc.go` |
 | `rewatchBackoff` | 1s | `internal/gc/gc.go` |
 | `baseTableSize` | 8MiB | `internal/store/badger/badger.go` |
 | `blockCacheSize` | 32MiB | `internal/store/badger/badger.go` |

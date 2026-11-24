@@ -24,6 +24,13 @@ const DefaultInterval = 5 * time.Minute
 // rewatchBackoff paces a re-watch that failed for a reason other than an expired resourceVersion.
 const rewatchBackoff = time.Second
 
+// nodeCollects bounds CollectNamespace's wait for the worker node that runs the namespace (FEAT-0002), looked at every
+// nodeCollectsPoll.
+const (
+	nodeCollects     = 10 * time.Second
+	nodeCollectsPoll = 100 * time.Millisecond
+)
+
 // Pair is an owner kind and a child kind a reconciler stamps with a controller OwnerReference.
 type Pair struct{ Owner, Child v1.Kind }
 
@@ -90,6 +97,8 @@ type Collector struct {
 	interval time.Duration
 	log      *slog.Logger
 	skip     func(v1.NamespaceName) bool
+	// nodeCollects is CollectNamespace's bound; tests shorten it.
+	nodeCollects time.Duration
 
 	mu      sync.Mutex
 	deleted map[ownerKey]struct{}
@@ -129,7 +138,8 @@ func New(d Deps) (*Collector, error) {
 	}
 	return &Collector{
 		store: d.Store, purger: d.Purger, interval: interval, log: log.With("component", "gc"), skip: d.Skip,
-		deleted: map[ownerKey]struct{}{}, wake: make(chan struct{}, 1),
+		nodeCollects: nodeCollects,
+		deleted:      map[ownerKey]struct{}{}, wake: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -176,9 +186,45 @@ func (c *Collector) Run(ctx context.Context) error {
 }
 
 // CollectNamespace runs one pass over every child kind in ns (empty ns is every namespace). List errors are
-// returned joined. Safe beside Run.
+// returned joined. Safe beside Run. A namespace that a worker node runs is collected there: it waits until the node did,
+// nodeCollects at most.
 func (c *Collector) CollectNamespace(ctx context.Context, ns v1.NamespaceName) error {
-	return c.collect(ctx, ns)
+	if ns == "" || c.skip == nil || !c.skip(ns) {
+		return c.collect(ctx, ns)
+	}
+	for end := time.Now().Add(c.nodeCollects); time.Now().Before(end); {
+		dead, err := c.holdsDead(ctx, ns)
+		if err != nil || !dead {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(nodeCollectsPoll):
+		}
+	}
+	return nil
+}
+
+// holdsDead reports whether ns holds a child whose owner is gone.
+func (c *Collector) holdsDead(ctx context.Context, ns v1.NamespaceName) (bool, error) {
+	p := newPass(c)
+	for _, kind := range childKinds() {
+		res, err := c.store.List(ctx, kind.GVK(), store.ListOptions{Namespace: ns})
+		if err != nil {
+			return false, err
+		}
+		for _, obj := range res.Items {
+			ref, ok := childRef(obj)
+			if !ok {
+				continue
+			}
+			if live, err := p.ownerLive(ctx, obj, ref, true); err != nil || !live {
+				return err == nil, err
+			}
+		}
+	}
+	return false, nil
 }
 
 // ownerKinds is the distinct owner kinds of Pairs, in order.
