@@ -1,1 +1,0 @@
-{"redirect_uris":["http://localhost/cb"],"grant_types":["authorization_code"],"token_endpoint_auth_method":"client_secret_post","client_name":"lane"}
