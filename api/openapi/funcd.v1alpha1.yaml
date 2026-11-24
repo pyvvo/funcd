@@ -1455,6 +1455,9 @@ components:
           items:
             additionalProperties: false
             properties:
+              approval:
+                $ref: "#/components/schemas/JobApproval"
+                description: Whether a run waits for a person's approval of its preview before it runs. Unset, every run previews and waits.
               bindings:
                 $ref: "#/components/schemas/FunctionBindings"
                 description: "What the code may use: KV tables, Bucket prefixes, SQL databases, Lakes and Functions, each under an alias, and ConfigMaps and Secrets. A binding is the grant: a call on an alias with no binding is refused with 403. Each store, Lake, ConfigMap and Secret it names must be declared at the root, in this spec's kv, buckets, sql, lakes, configMaps or secrets."
@@ -1496,7 +1499,7 @@ components:
                   - array
                   - "null"
               concurrency:
-                description: "How many of the Job's runs may hold a worker at once: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued."
+                description: "How many of the Job's runs may hold a worker at once, those Previewing included: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued."
                 format: int64
                 maximum: 15
                 minimum: 1
@@ -1785,7 +1788,7 @@ components:
                   - array
                   - "null"
               timeout:
-                description: "The bound on each call of a run's handler, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops."
+                description: "The bound on each call of a run's handler, its preview's and its apply's, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops."
                 pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
                 patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
                 type: string

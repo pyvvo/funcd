@@ -13,4 +13,6 @@ spec:
       handler: handle
       image: registry.example.com/report:1.0.0
       timeout: 10m
+      approval:
+        bypass: true
 # endregion app

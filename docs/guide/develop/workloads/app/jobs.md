@@ -38,6 +38,8 @@ that the push printed:
 
 ::include[../../../../../api/types/v1alpha1/examples/app/jobs.yaml#app]
 
+The entry sets [`approval.bypass`](spec.md#appspecjobsapproval), so each run runs at once, as the Job page's
+`report` does; without it, a run previews and waits for a person, as [Approve a run](../job/approval.md) shows.
 An entry holds the [fields of a Job's spec](spec.md#appspecjobs), but leaves `kv`, `buckets`, `sql`, `lakes`,
 `configMaps` and `secrets` empty, as a `functions` entry does: the App declares each store, Lake, ConfigMap and Secret
 in its own sections, and the entry binds it. An entry that sets one of them is refused with

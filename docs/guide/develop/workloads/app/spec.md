@@ -484,9 +484,10 @@ This page lists the spec and status fields of App and AppRevision, each with its
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
+| `approval` | object, [`App.spec.jobs[].approval`](#appspecjobsapproval) | Whether a run waits for a person's approval of its preview before it runs. Unset, every run previews and waits. |
 | `bindings` | object, [`App.spec.functions[].bindings`](#appspecfunctionsbindings) | What the code may use: KV tables, Bucket prefixes, SQL databases, Lakes and Functions, each under an alias, and ConfigMaps and Secrets. A binding is the grant: a call on an alias with no binding is refused with 403. Each store, Lake, ConfigMap and Secret it names must be declared at the root, in this spec's kv, buckets, sql, lakes, configMaps or secrets. |
 | `buckets` | array of [`App.spec.jobs[].buckets[]`](#appspecjobsbuckets) | The Buckets the Job declares: by name it creates and owns one, and a Bucket of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.blob binds only a declared Bucket. |
-| `concurrency` | integer, 1 to 15 | How many of the Job's runs may hold a worker at once: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued. |
+| `concurrency` | integer, 1 to 15 | How many of the Job's runs may hold a worker at once, those Previewing included: 1 to 15; unset means 1, and a local volume allows only 1. A run past it waits in Pending with Queued. |
 | `configMaps` | array of [`App.spec.jobs[].configMaps[]`](#appspecjobsconfigmaps) | The ConfigMaps the Job declares: by name it defines one from its data, which goes with the Job, by ref it uses an existing one. spec.bindings.config binds only a declared ConfigMap. |
 | `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` | The name of the export that the shim calls once for each run, such as handle. A Job without one, or whose code has no such export, is not Ready, with ShapeInvalid. |
 | `image` | string | The OCI reference of the code's artifact: a registry reference with a tag or a digest, or an oci-layout:// reference to a layout on the server's disk. A Job whose image is missing, or cannot be resolved or pulled, starts no run. |
@@ -499,8 +500,15 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | `runtime` | string, a DNS-1123 label | The runtime that runs the code, such as nodejs22 or python314. A Job without one is not Ready, with ShapeInvalid, and one whose runtime this node cannot run is not Ready, with RuntimeUnavailable. |
 | `secrets` | array of [`App.spec.jobs[].secrets[]`](#appspecjobssecrets) | The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Job waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key. |
 | `sql` | array of [`App.spec.jobs[].sql[]`](#appspecjobssql) | The SQLDatabases the Job declares: by name it creates and owns one, and a database of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.sql binds only a declared database. |
-| `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The bound on each call of a run's handler, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops. |
+| `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The bound on each call of a run's handler, its preview's and its apply's, from its worker's start: 0s to 168h; 0s or unset means none. A run past it ends Failed with RunTimedOut, and its worker stops. |
 | `volumes` | array of [`App.spec.functions[].volumes[]`](#appspecfunctionsvolumes) | The directories each run's worker mounts. Apply refuses a Job with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A local volume is the Job's own, never a same-named Function's, and allows a concurrency of at most 1. |
+
+### `App.spec.jobs[].approval`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `bypass` | boolean | When true, a run runs at once, with no preview and no approval. Unset or false, a run first calls the code's preview, then waits in AwaitingApproval until a person approves or rejects it. A Job for unattended work sets it. |
+| `expiry` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How long a preview stays valid for its approval: 1m to 168h; unset means 24h. A preview older than this when it is approved, or when its run's slot frees after the approval, is previewed again: the run runs when the new preview is the same document, and waits for a new approval when it differs. |
 
 ### `App.spec.jobs[].buckets[]`
 

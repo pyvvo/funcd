@@ -45,6 +45,7 @@ func (h *shimRig) shopApp(t *testing.T, src string) *v1.App {
 			Jobs: []v1.AppJob{{Name: "migrate", JobSpec: v1.JobSpec{
 				Runtime: "nodejs22", Handler: "handle", Image: ref, ImageDigest: digest,
 				Bindings: v1.FunctionBindings{Blob: []v1.FunctionBlob{{Alias: "state", Bucket: "state", Prefix: "tf"}}},
+				Approval: v1.JobApproval{Bypass: true},
 			}}},
 		},
 	}
