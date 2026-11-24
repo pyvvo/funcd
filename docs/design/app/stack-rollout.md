@@ -20,9 +20,10 @@ stateDiagram-v2
     s2 --> s1 : ReaderReady
     s2 --> s2 : Pass
     s3 --> s0 : Pass
-    s3 --> s3 : Apply, Approve
+    s3 --> s3 : Apply, Approve, OtherReady, Pass, Tick
     s3 --> s5 : Pass
     s4 --> s1 : Pass
+    s4 --> s4 : OtherReady, Pass, Tick
     s5 --> s4 : ReaderReady
-    s5 --> s5 : Pass
+    s5 --> s5 : OtherReady, Pass, Tick
 ```

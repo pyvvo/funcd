@@ -40,8 +40,8 @@ Secret, the way they read any Secret, with nothing copied by hand and no sensiti
   then the apply's call fails, naming the output and the Secret but no value.
 - `scenario: stack-outputs-never-shown`: Given a run that applies the sensitive `FRP_TOKEN`; then its value is in no
   run status, preview document, log line or `funcdctl infra outputs` line.
-- `scenario: stack-destroy-empties-outputs`: Given an applied stack; when its destroy run succeeds; then each output
-  key holds an empty value.
+- `scenario: stack-destroy-empties-outputs`: Given an applied stack, whose module has since gained the output
+  `pull-zone`; when its destroy run succeeds; then each output key holds an empty value.
 - `scenario: stack-outputs-feed-no-run`: Given an applied stack whose module has the variable `region`, default `DE`,
   and the output `TF_VAR_region`, `US`; when its next run plans without `region`; then the plan takes `DE`.
 - `scenario: infra-outputs-lists-them`: Given an applied stack; when `funcdctl infra outputs <stack>` runs; then it
@@ -100,11 +100,12 @@ the outputs; keeping them out of OpenTofu's environment; `funcdctl infra outputs
 3. **A refused write.** A write that funcd refuses, such as a 403 for a Secret the Job does not own, fails the run
    after its apply, naming the output and the Secret, never the value. The applied change stays in the state, and the
    stack's next apply, which its add-on starts at the stack's next generation, writes every output again.
-4. **Names and values.** An output's key is its name, and its value is a string as it is, any other value its JSON. A
-   module with an output whose name is not an env-var name (`^[A-Za-z_][A-Za-z0-9_]*$`, a Secret key's rule) or starts
-   with `FUNCD_`, which no reader loads (ADR-0327 Decision 7), or with `INFRASTACK_`, the prefix of the runtime's own
-   settings such as `INFRASTACK_STATE_PASSPHRASE`, fails its run's first call before it plans, naming the output: the
-   preview with `PreviewFailed`, a `bypass` run's one call with `HandlerFailed`.
+4. **Names and values.** An output's key is its name, and its value is a string as it is, any other value its JSON. An
+   apply or a `plan` run of a module with an output whose name is not an env-var name (`^[A-Za-z_][A-Za-z0-9_]*$`, a
+   Secret key's rule) or starts with `FUNCD_`, which no reader loads (ADR-0327 Decision 7), or with `INFRASTACK_`, the
+   prefix of the runtime's own settings such as `INFRASTACK_STATE_PASSPHRASE`, fails its first call before it plans,
+   naming the output: the preview with `PreviewFailed`, a `bypass` run's one call with `HandlerFailed`. A destroy
+   skips the check, since it empties only the keys of the outputs its last apply wrote.
 5. **A destroy.** A destroy run empties each output key it read before the destroy, keeps the key, and answers `{}`.
    It deletes no key: a deleted one would make an App's readers wait for it again, or stop the App's pass once the App
    no longer declares the owner Job (ADR-0357 Decision 2), and hold a Job outside an App that declares it `Pending`
@@ -120,7 +121,7 @@ the outputs; keeping them out of OpenTofu's environment; `funcdctl infra outputs
 8. **`funcdctl infra outputs <stack> [-n <namespace>] [-o json]`**, the plugin's (ADR-0355 Decision 1). Through
    `$FUNCDCTL`, it reads the stack; the Job its `config.job` names, the alias of the add-on Function's binding, which
    the add-on's README requires to be the Job's name; that Job's `status.contract`; the `INFRASTACK_OUTPUTS_SECRET` of
-   its bound ConfigMaps, merged as the runtime reads them, a later ConfigMap's key winning (ADR-0093 Decision 2); then
+   its bound ConfigMaps, merged as the runtime reads them, a later ConfigMap's key winning (`envresolve.Resolve`); then
    that Secret. It prints each key of the Secret, with the string it holds when the contract's `outputs` names the
    key, else `(sensitive)`, so it never prints a sensitive value, nor one that a contract written by hand does not
    name. A read funcd refuses ends it with funcdctl's error.

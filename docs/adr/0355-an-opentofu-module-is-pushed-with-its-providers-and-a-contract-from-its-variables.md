@@ -32,6 +32,9 @@ the path; and a run that only plans answers what would change, for F141's drift 
   and a `linux/arm64` manifest, and `funcdctl inspect <ref>` prints the contract made from its variables and outputs.
 - `scenario: infra-remote-module-refused`: Given a module that calls `hashicorp/consul/aws`, or `../shared`; when
   `funcdctl infra push` runs; then it pushes nothing and names the call.
+- `scenario: infra-local-files-refused`: Given a module folder that holds `terraform.tfvars` or `terraform.tfstate`;
+  when `funcdctl infra push` runs; then it pushes nothing and names the file; and a module pushed by hand with
+  `terraform.tfvars` runs as if the file were not there.
 - `scenario: infra-run-downloads-nothing`: Given a bundle that the plugin built; when the OpenTofu runtime plans and
   applies it on an internal Docker network (`docker network create --internal`) that reaches only the state's S3
   engine; then both succeed, with the providers the bundle carries.
@@ -102,25 +105,31 @@ where the runtime installs providers from.
    own, and the image gives it the add-on's OpenTofu.
 2. **`funcdctl infra push <module> <ref>`.** `<ref>` names a tag, `<registry>/<repo>:<tag>` or
    `oci-layout://<dir>:<tag>`. In order, stopping at the first failure with OpenTofu's or funcdctl's message:
-   1. `<module>` must be a folder that holds a `.tf` file, else the plugin names the path; `tofu show -json
-      -module=<module>` reads its variables, outputs and module calls, and refuses, naming it, a call whose `source` is
-      not a relative path that stays inside the folder; each local child is read and checked the same way;
+   1. `<module>` must be a folder that holds a `.tf` file and, outside `.terraform/`, no `terraform.tfstate`,
+      `terraform.tfstate.backup`, `terraform.tfvars`, `terraform.tfvars.json`, `*.auto.tfvars` or `*.auto.tfvars.json`,
+      which OpenTofu would load over a run's variables and which carry values in plain text, else the plugin names the
+      path or the file; `tofu show -json -module=<module>` reads its variables, outputs and module calls, and refuses,
+      naming it, a call whose `source` is not a relative path that stays inside the folder; each local child is read
+      and checked the same way;
    2. `tofu get` installs the local child modules, and `tofu providers lock -platform=linux_amd64
       -platform=linux_arm64` records both platforms' hashes in the module's `.terraform.lock.hcl`, created when absent
       and copied back into the module's folder, to commit;
    3. for each of `linux/amd64` and `linux/arm64`, `tofu providers mirror -platform=linux_<arch> .funcd-providers`
-      fills a fresh `.funcd-providers/` in the engine's copy of the module, and a build folder of the module's files,
-      without `.terraform/` and without the contract file the module holds (`<folder>.contract.yaml` or `.json`,
-      ADR-0247 Decision 1), takes it with Decision 3's contract as `<folder>.contract.yaml`. Then
-      `$FUNCDCTL push <build> <ref>-linux-<arch> --entry <first> --platform linux/<arch>` pushes it, `<first>` being
-      its first `.tf` file by name, since the runtime reads the folder, not the entry;
+      fills a fresh `.funcd-providers/` in the engine's copy of the module, and a build folder named as the module's
+      folder, holding its files without `.terraform/` and without the contract file the module holds
+      (`<folder>.contract.yaml` or `.json`, ADR-0247 Decision 1), takes it with Decision 3's contract as
+      `<folder>.contract.yaml`. Then `$FUNCDCTL push <build> <ref>-linux-<arch> --entry <first> --platform
+      linux/<arch>` pushes it, `<first>` being its first `.tf` file by name, since the runtime reads the folder, not the
+      entry;
    4. `$FUNCDCTL index <ref> <ref>-linux-amd64 <ref>-linux-arm64` writes the index, and the plugin prints its
       `<ref>@<digest>`.
    The build reaches the providers' registries; a run reaches none.
 3. **The contract.** Its runtime is `opentofu1`. Its input is the run's `{action, variables}`: `action` one of `apply`,
    `destroy` and `plan`; `variables` a closed record of the module's variables, typed by Contracts' table, the required
    ones those with no default. A sensitive variable is left out, so no run's input holds it: its value comes from a
-   bound Secret's `TF_VAR_<name>` key, which the runtime gives OpenTofu already. Its output is a closed record of two
+   bound Secret's `TF_VAR_<name>` key, which the runtime gives OpenTofu already. The runtime's work copy of a module
+   leaves out the files that step 1 of Decision 2 refuses, so a run's variables come only from its input, its bound
+   Secrets and the module's defaults, a module pushed by hand included. Its output is a closed record of two
    optional members: `outputs`, a closed record of the module's outputs that are not sensitive, each any value, none
    required; and `plan`, Decision 5's finding. A record that would have no member is the empty schema `{}`. The
    runtime answers in this shape: an apply `{"outputs": {…}}`, a destroy `{}`, a `plan` run `{"plan": {…}}`; so a
@@ -245,6 +254,8 @@ def push(module: Path, ref: str) -> str: ...  # Decision 2; returns "<ref>@<dige
 # infrastack/runtime/handler.py (delta)
 ACTIONS = ("apply", "destroy", "plan")        # plan is new (Decision 5)
 PROVIDERS = ".funcd-providers"                # new: the module's own provider folder (Decision 4)
+LOCAL_FILES = ("terraform.tfstate", "terraform.tfstate.backup", "terraform.tfvars", "terraform.tfvars.json")
+# new: with *.auto.tfvars and *.auto.tfvars.json, left out of the work copy (Decision 3)
 def plan_finding(shown: dict) -> dict: ...    # new: Decision 5's record, from `tofu show -json` of a plan
 ```
 
@@ -261,15 +272,17 @@ def plan_finding(shown: dict) -> dict: ...    # new: Decision 5's record, from `
 In pyvvo/funcd-addons, on the InfraStack add-on; funcd's code does not change:
 1. `infrastack/plugin/funcdctl-infra` and `plugin_test.py`, with a fake engine and a fake funcdctl that record their
    argv; the release workflow attaches the script to each release and pins its `IMAGE` with the Addon's digest.
-2. `infrastack/runtime/handler.py`: Decision 3's answers, so an apply answers `{"outputs": …}`, and Decisions 4 and 5,
-   with `handler_test.py`; `image_check.py` gains a module that carries `.funcd-providers`, made from the image's own
-   providers, run on an internal Docker network that reaches only versitygw, and a package off its lock file.
+2. `infrastack/runtime/handler.py`: Decision 3's answers, so an apply answers `{"outputs": …}`, and its work copy
+   without the local files; Decisions 4 and 5; with `handler_test.py`. `image_check.py` gains a module that carries
+   `.funcd-providers`, made from the image's own providers, run on an internal Docker network that reaches only
+   versitygw, and a package off its lock file.
 3. Decision 3's shape in the README's contract and run sections and in
    `infrastack/examples/random-stack/random-stack.contract.yaml`; in pyvvo/funcd-functions, in
    `apps/frp-bunny/infra/bunny/bunny.contract.yaml` and `apps/frp-bunny/infra/fake/fake.contract.yaml`.
 4. A test that the plugin's `IMAGE` is its Addon's `opentofu1` image.
 
-Tests, each written to pass: the type table, row by row, and `infra-remote-module-refused` in `plugin_test.py`;
+Tests, each written to pass: the type table, row by row, `infra-remote-module-refused` and the push's half of
+`infra-local-files-refused` in `plugin_test.py`, its run's half in `handler_test.py`;
 `infra-push-builds-index` with the fakes, and in the add-on's CI against an OCI layout with real OpenTofu;
 `infra-run-downloads-nothing`, `infra-provider-mismatch`, `infra-plan-run` and `infra-module-pushed-by-hand` in
 `image_check.py`; `infra-variables-refused` and `infra-sensitive-variable-refused` as cases of the InfraStack lane that
@@ -294,6 +307,8 @@ F141's work adds to funcd's `e2e/` (`addon-infrastack.venom.yml`), on a module t
 - Under `funcdctl dev` on a Mac, which pulls for its own platform (ADR-0145 Decision 6), the index has no darwin entry,
   so a pushed module does not materialize there.
 - A typo in a stack's variables fails at its run's creation, naming the path, and nothing reaches the cloud.
+- A module's own `terraform.tfvars`, `*.auto.tfvars` and local state never reach a run: a stack sets each variable
+  through its config or a bound Secret.
 - A `plan` run of a Job without `bypass` asks a person to approve a run that changes nothing.
 
 ## Open questions

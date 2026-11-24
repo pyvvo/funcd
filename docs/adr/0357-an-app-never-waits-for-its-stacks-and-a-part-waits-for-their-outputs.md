@@ -8,14 +8,15 @@
 - **Supersedes (in part)**, with back-links at acceptance:
   [ADR-0199](0199-app-resource.md) Decision 4 (a `Lagging` part is not written: Decision 2), Decision 5 (an engineless
   part and a part that waits for outputs are `Lagging`, which the App's Ready leaves out: Decisions 1 and 2) and
-  Decision 6 (prune waits while a part is `Lagging`: Decision 3);
+  Decision 6 (prune waits while a part is `Lagging`: Decision 4);
   [ADR-0200](0200-app-revisions.md) Decision 5 (`Applied` counts a `Lagging` part as written: Decision 2);
-  [ADR-0212](0212-app-self-heal-and-pause.md) Decision 1 (the write that ends a part's lag is no self-heal: Decision 2);
+  [ADR-0212](0212-app-self-heal-and-pause.md) Decision 1 (the write that ends a part's lag is no self-heal: Decision 2)
+  and Decision 6 (the deadline gains the end of a part's wait as a start term: Decision 3);
   [ADR-0213](0213-app-config-and-secret-declarations.md) Decision 8 (a declared Secret that a Job of the App owns and
   that lacks a key stops no pass: Decision 2);
   [ADR-0214](0214-app-hooks.md) Decision 4 (a pre-hook Function never waits for outputs, and a post-hook starts only in
-  a pass that wrote no part, while no part is `Lagging` or `Pending`: Decisions 2 and 3);
-  [ADR-0220](0220-dry-run-engine.md) Decision 5 (the plan shows no stop for that Secret: Decision 4);
+  a pass that wrote no part, while no part is `Lagging` or `Pending`: Decisions 2 and 4);
+  [ADR-0220](0220-dry-run-engine.md) Decision 5 (the plan shows no stop for that Secret: Decision 5);
   [ADR-0337](0337-an-app-template-carries-its-add-on.md) Decision 4 (an engineless part lags: Decision 1)
 - **Relates to**: [ADR-0345](0345-a-function-reconciles-an-engineless-kind-and-a-deletion-waits-for-its-destroy.md) ·
   [ADR-0350](0350-an-app-declares-jobs-as-it-declares-functions.md) ·
@@ -49,6 +50,10 @@ person approves, and the App's status names what lags and why.
   owned by its Job `stack` and holding no key yet, and an add-on part that binds it; when it is deployed; then the Job
   and the stack are written and the part is not, `Lagging` with `SecretKeyMissing: Secret/outputs FRP_TOKEN`; once
   the approved run writes `FRP_TOKEN`, the part is written, and `status.lastSelfHeal` stays empty.
+- `scenario: app-late-reader-gets-full-timeout`: Given a revision that a booting Function part still holds and a part
+  that waits for an output; when the approved run writes the output just before the deadline; then the waiting part is
+  written, the deadline moves to a full `app.upgradeTimeout` after that write, and the revision switches once both
+  parts are `Ready`.
 - `scenario: app-pre-hook-ignores-stack`: Given a pre-hook Function that binds `outputs`; when the App is deployed;
   then the pre-hook runs before the stack's first apply.
 - `scenario: app-post-hook-after-stack`: Given a post-hook and a part that reads the stack's outputs; when the revision
@@ -112,13 +117,18 @@ post-hooks, prune and dry run around them.
    `Lagging`, is no self-heal. A pre-hook Function is written as before (ADR-0214 Decision 4), so it never waits for a
    stack, and finds no output before the first apply. A missing Secret, or one that no Job of the App owns, stops the
    pass as before.
-3. **Post-hooks and prune wait.** Beside ADR-0214's and ADR-0199's own terms, a pass starts a post-hook only when it
+3. **The deadline.** A pass that writes a part whose stored child read `Lagging`, while the latest revision is
+   `Deploying`, sets that revision's `status.lagEndedAt` (new) to its clock's time, and the deadline takes it as one
+   more start term beside ADR-0212 Decision 6's. So a part written once its wait ends has a full `app.upgradeTimeout`,
+   more than `runtime.bootTimeout` (ADR-0200 Decision 10), to turn Ready, and a wait that ends near the deadline never
+   fails the revision for that part's boot.
+4. **Post-hooks and prune wait.** Beside ADR-0214's and ADR-0199's own terms, a pass starts a post-hook only when it
    wrote no part and no part is `Lagging` or `Pending`, and prunes only while no part is `Lagging`; until then a
    dropped object is a child `Pruning` with no reason, as while a post-hook is due. So post-hooks run once the stacks
    are applied and the parts that waited for them are Ready. Prune keeps a dropped part while a stack lags, since the
    part may run on what the stack's applied state provides and the pending change replaces, and while a reader lags,
    since the reader may be its successor.
-4. **The dry run.** The plan lists no stop for a Secret that Decision 2 lets through, and lists the parts that wait for
+5. **The dry run.** The plan lists no stop for a Secret that Decision 2 lets through, and lists the parts that wait for
    it as `create` or `update`, as any part, since a plan says what the rollout does, not when (ADR-0220 Decision 5).
 
 ## Design model
@@ -129,26 +139,25 @@ post-hooks, prune and dry run around them.
 
   | Assertion | Kind | Protects | Oracle test |
   |---|---|---|---|
-  | `NoFailWhileAStackWaits` | always | `scenario: app-stack-approval-never-fails` | `TestScenarioAppStackApprovalNeverFails` |
+  | `NoFailWhileAStackWaits` | always | `scenario: app-stack-approval-never-fails`, `scenario: app-late-reader-gets-full-timeout` | `TestScenarioAppStackApprovalNeverFails`, `TestScenarioAppLateReaderGetsFullTimeout` |
   | `ReaderWaitsForOutputs` | always | `scenario: app-part-waits-for-outputs` | `TestScenarioAppPartWaitsForOutputs` |
   | `PostHookAfterStacks` | always | `scenario: app-post-hook-after-stack` | `TestScenarioAppPostHookAfterStack` |
   | `OldPartServesUntilReplaced` | always | `scenario: app-prune-waits-for-lagging` | `TestScenarioAppPruneWaitsForLagging` |
   | `Switches` | eventually always | `scenario: app-stack-approval-never-fails` | `TestScenarioAppStackApprovalNeverFails` |
   | `ConvergesOnceApproved` | eventually always | `scenario: app-part-waits-for-outputs` | `TestScenarioAppPartWaitsForOutputs` |
 
-- **Bounds**: one stack, one part that reads its outputs and one dropped part, in an App with a post-hook and in one
-  without; 6 actions, the longest way to the end: the approval, the apply, the pass that writes the reader, its
-  readiness and two passes (5 cuts it).
+- **Bounds**: one stack, one part that reads its outputs, one other part that boots after the stamp and one dropped
+  part, in an App with a post-hook and in one without; a boot of 2 ticks at most and a deadline of 3, a boot shorter
+  than the deadline as ADR-0200 Decision 10 orders them; 10 actions, the longest way to the end (9 cuts it).
 - **Faults**: none beyond time: each pass is one step, since an App's passes never overlap (ADR-0214 Decision 4).
-- **Environment**: a pass follows the stamp, the outputs' write (the Secret's watch) and a part's write or readiness,
-  so time passes only once it ran; a written part turns ready before the deadline, since `app.upgradeTimeout` is more
-  than `runtime.bootTimeout` (ADR-0200 Decision 10); the clock is `Tick`, bounded by the deadline; a person may never
-  approve (not fair).
-- **Mutants**: `stack-pending` and `reader-pending` (a lagging part counts as Pending) fail `NoFailWhileAStackWaits`;
-  `reader-early` (written before its outputs) fails `ReaderWaitsForOutputs`; `hook-early` (a post-hook while a part
-  lags) and `hook-before-ready` (a post-hook in a pass that wrote a part, or while one is Pending) fail
-  `PostHookAfterStacks`; `prune-early` fails `OldPartServesUntilReplaced`; `no-reader-write` fails liveness.
-- **Result**: pass, 28 states, 2.0 s, FizzBee v0.5.4; wider (8 actions): pass, 28 states.
+- **Environment**: the Secret's and the parts' watches bring a pass after each write (fair); a written part turns
+  ready within `runtime.bootTimeout`; the clock is `Tick`; a person may never approve (not fair).
+- **Mutants**: `stack-pending` and `reader-pending` (a lagging part counts as Pending) and `no-lag-term` (the deadline
+  does not restart when a wait ends) fail `NoFailWhileAStackWaits`; `reader-early` (written before its outputs) fails
+  `ReaderWaitsForOutputs`; `hook-early` (a post-hook while a part lags) and `hook-before-ready` (a post-hook in a pass
+  that wrote a part, or while one is Pending) fail `PostHookAfterStacks`; `prune-early` fails
+  `OldPartServesUntilReplaced`; `no-reader-write` fails liveness.
+- **Result**: pass, 356 states, 0.4 s, FizzBee v0.5.4; wider (12 actions): pass, 356 states.
 - **Left to tests**: the parts funcd runs and their own readiness; an add-on part's pin
   (`docs/design/addon/revisions.fizz`); the self-heal record.
 
@@ -159,6 +168,7 @@ In `docs/behavior/apps.md`, with the new word `Lagging`; the machine's edges do 
   a key`.
 - **Changed**: `A part's name another object holds, or a declared Secret or key missing` (such a Secret stops no
   pass); `Post-hooks` (they wait while a part lags or is Pending) and `A dropped part` (it waits while a part lags);
+  ``A part Pending at the deadline, a missing `ref` target too`` (the deadline restarts when a wait ends);
   ``An App's `addons` part`` (an engineless one lags).
 
 ## Temporary workarounds
@@ -170,6 +180,9 @@ None.
 ```go
 // api/types/v1alpha1/app.go (delta): a child state (new), added to AppChildState's enum.
 const AppChildLagging AppChildState = "Lagging"
+
+// api/types/v1alpha1/apprevision.go (delta): AppRevisionStatus gains the start term of Decision 3 (new).
+LagEndedAt *Timestamp `json:"lagEndedAt,omitempty"`
 
 // internal/ownedstore (delta)
 type SecretGap struct {
@@ -185,7 +198,7 @@ func SecretGaps(ctx context.Context, st store.Store, ns v1.NamespaceName, decls 
 // internal/app (delta)
 // checkSecrets returns the stop of the first gap Decision 2 does not let through, and the Secrets it does, by name.
 func (r reader) checkSecrets(ctx context.Context, a *v1.App) (*stop, map[v1.ObjectName]ownedstore.SecretGap, error)
-func anyLagging(vs []verdict) bool // new: gates the post-hooks and prune (Decision 3)
+func anyLagging(vs []verdict) bool // new: gates the post-hooks and prune (Decision 4)
 ```
 
 | Dependency & I/O | Direction | Shape |
@@ -194,14 +207,16 @@ func anyLagging(vs []verdict) bool // new: gates the post-hooks and prune (Decis
 | a declared Secret's `spec.owner` | consumes | `WorkloadRef` of kind `Job` (ADR-0351 Decision 3) |
 | `status.children[].state` | exposes | `Lagging`, with the part's reason |
 | `status.children[].reason` of a waiting reader | exposes | `SecretKeyMissing: Secret/<name> <key>` (new) |
+| an AppRevision's `status.lagEndedAt` | exposes | a timestamp, a start term of the deadline (new) |
 
 ## Implementation plan
 
-1. `api/types/v1alpha1/app.go`: `AppChildLagging`, its enum and `AppChild.State`'s doc; `just generate` for the
-   OpenAPI and the kinds' reference.
+1. `api/types/v1alpha1/app.go`: `AppChildLagging`, its enum and `AppChild.State`'s doc; `apprevision.go`:
+   `LagEndedAt`; `just generate` for the OpenAPI and the kinds' reference.
 2. `internal/ownedstore`: `SecretGaps` and `SecretGap.Owner`.
 3. `internal/app`: `checkSecrets` and `apply` (Decision 2), `readiness` (Decisions 1 and 2), the post-hook start in
-   `hooks.go` and the prune gate in `reconcile.go` (Decision 3), `plan.go` (Decision 4).
+   `hooks.go` and the prune gate in `reconcile.go` (Decision 4), `deadline` in `revision.go` (Decision 3), `plan.go`
+   (Decision 5).
 4. Docs: the behavior rows; `docs/guide/platform/workloads/app.md` on stacks and `Lagging`.
 
 Tests, each written to pass: unit tests in `internal/app` for each Decision; one `TestScenario…` per scenario in
@@ -217,6 +232,7 @@ the Job's key, each assertion's test under `// oracle: docs/design/app/stack-rol
 - [ ] No part that names a Secret a Job of the App owns, lacking a declared key, is written, except that Job and the
   pre-hook Functions.
 - [ ] A post-hook starts only in a pass that wrote no part, while no part is `Lagging` or `Pending`.
+- [ ] `status.lagEndedAt` is set only while the latest revision is `Deploying`, and the deadline counts from it.
 - [ ] `just check-specs` passes.
 
 ## Consequences
@@ -234,6 +250,9 @@ the Job's key, each assertion's test under `// oracle: docs/design/app/stack-rol
   its wait ends.
 - A revision superseded while its post-hooks wait never calls them; the newer revision calls its own (ADR-0214
   Decisions 3 and 6).
+- The post-hook gate holds every App's post-hooks while a part is `Pending`, a crash-looping one included, where
+  ADR-0214 started them once the revision was current.
+- Each wait that ends while a revision deploys restarts its deadline, so the revision's other parts get that time too.
 - An App that requires this one (ADR-0219) goes on once this one is Ready, while its stacks may still lag.
 - A paused App writes no part (ADR-0212 Decision 4), so no change it holds starts a stack run; a run already started,
   and its approval, go on. The add-on has no scheduled run yet (F141).
