@@ -1,7 +1,7 @@
 # ADR-0346: Under funcdctl dev, a worker on an Addon's runtime runs on dev's container engine
 
-- **Status**: Accepted (2026-11-23), by the decider ("accept"), with the token transport of Decision 6 and option A,
-  after three rounds of an independent judge, every Blocker and Major folded
+- **Status**: Reviewing (2026-11-24, implemented); Accepted (2026-11-23), by the decider ("accept"), with the token
+  transport of Decision 6 and option A, after three rounds of an independent judge, every Blocker and Major folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: dev, runtime, addons, functions, jobs, local-api
