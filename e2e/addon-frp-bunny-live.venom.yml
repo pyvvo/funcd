@@ -63,7 +63,21 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
 
-  - name: the Bunny API key becomes the Secret bunny-api, and the outputs Secret and the EgressPolicies are applied
+  # An EgressPolicy names an add-on kind only once a stored Addon registers it (ADR-0352 Decision 1), so the Addons come
+  # first, then the policies, then the deploy, which refuses to start while any of them is missing.
+  - name: an admin registers both Addons
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} bash -c '
+            funcdctl apply -f /opt/lane/opentofu-addon.yaml && funcdctl apply -f /opt/lane/tunnel-addon.yaml'
+        info: "admin apply → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied Addon/infrastack"
+          - result.systemout ShouldContainSubstring "applied Addon/tunnel"
+
+  - name: the Bunny API key becomes the Secret bunny-api, and the outputs Secret and both EgressPolicies are applied
     steps:
       - type: exec
         script: |
@@ -79,24 +93,17 @@ testcases:
             funcdctl apply -f bunny-api.yaml
             shred -u bunny-api.yaml bunny.key
             funcdctl apply -f live-outputs.yaml
-            sed "s/<name>/{{.bunnyname}}/g" egress.yaml | funcdctl apply -f -'
+            sed "s/<name>/{{.bunnyname}}/g" egress.yaml > egress-live.yaml
+            funcdctl apply -f egress-live.yaml'
         info: "secrets and egress → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "applied Secret/bunny-api"
+          - result.systemout ShouldContainSubstring "applied EgressPolicy/frp-bunny-stack"
           - result.systemout ShouldContainSubstring "applied EgressPolicy/frp-bunny-tunnel"
 
-  - name: an admin registers both Addons, and the App's images and template are pushed, with the Bunny module
+  - name: the App's images and template are pushed, with the Bunny module
     steps:
-      - type: exec
-        script: |
-          limactl shell --workdir / {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} bash -c '
-            funcdctl apply -f /opt/lane/opentofu-addon.yaml && funcdctl apply -f /opt/lane/tunnel-addon.yaml'
-        info: "admin apply → {{.result.systemout}} {{.result.systemerr}}"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "applied Addon/infrastack"
-          - result.systemout ShouldContainSubstring "applied Addon/tunnel"
       - type: exec
         script: |
           limactl shell --workdir /opt/lane {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} bash -c '
@@ -120,6 +127,10 @@ testcases:
         script: |
           limactl shell --workdir /opt/lane {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} bash -c '
             [ -f LIVE_OK ] || { echo "the operator named no live run"; exit 1; }
+            for o in addon/infrastack addon/tunnel; do FUNCD_TOKEN={{.admintoken}} funcdctl get ${o%%/*} ${o#*/} >/dev/null || { echo "no ${o}: no deploy"; exit 1; }; done
+            for o in secret/bunny-api secret/frp-bunny-outputs egresspolicy/frp-bunny-stack egresspolicy/frp-bunny-tunnel; do
+              funcdctl get ${o%%/*} ${o#*/} -n default >/dev/null || { echo "no ${o}: no deploy"; exit 1; }
+            done
             funcdctl app deploy {{.registry}}/frp-bunny:0.1.0 -n default -f values/live.yaml --name frp-bunny --no-wait'
         retry: 15
         delay: 2
@@ -237,7 +248,7 @@ testcases:
         script: |
           limactl shell --workdir / {{.vm}} sudo bash -c '
             export FUNCD_SERVER=http://127.0.0.1:8080
-            rm -f /opt/lane/bunny.key /opt/lane/bunny-api.yaml
+            rm -f /opt/lane/bunny.key /opt/lane/bunny-api.yaml /opt/lane/egress-live.yaml
             for s in frp-bunny-outputs bunny-api; do FUNCD_TOKEN={{.devtoken}} funcdctl delete secret $s -n default || true; done
             for e in frp-bunny-stack frp-bunny-tunnel; do FUNCD_TOKEN={{.devtoken}} funcdctl delete egresspolicy $e -n default || true; done
             FUNCD_TOKEN={{.admintoken}} funcdctl delete addon tunnel || true

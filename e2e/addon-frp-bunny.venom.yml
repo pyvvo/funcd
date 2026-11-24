@@ -73,6 +73,8 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring PUSHED
 
+  # The Addons are registered above, since an EgressPolicy names an add-on kind only once a stored Addon registers it
+  # (ADR-0352 Decision 1); the deploy runs only once the Secrets and the policy are applied.
   - name: the App deploys, its stack's run is approved and applies, and the outputs Secret gets FRP_TOKEN
     steps:
       - type: exec
@@ -86,6 +88,7 @@ testcases:
         info: "deploy → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied EgressPolicy/frp-tunnel"
       # The InfraStack add-on's resync is a minute, and a run awaiting approval is no run's end (ADR-0345 Decision 4).
       - type: exec
         script: &stack |
