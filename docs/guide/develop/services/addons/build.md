@@ -141,6 +141,43 @@ engine's default back for an empty list, and answers `{"results": [...]}`, each 
 default, fails, and funcd calls again after a backoff. rauthy's is
 [`settings/rauthy-settings.mjs`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/settings/rauthy-settings.mjs).
 
+## Engineless kinds
+
+An add-on whose kind manages something outside funcd, such as a cloud stack that a Job applies, runs no engine: its
+Addon's kind entry serves `Engineless` alone, with no image, and names the Function that reconciles the kind's objects:
+
+::include[../../../../../api/types/v1alpha1/examples/addons/engineless.yaml#addon]
+
+- `kind` and `config` are an engine entry's: the kind that users declare and the schema of each object's `spec.config`.
+- `function.ref` names the Function, in each object's namespace, that reconciles the objects; an object may name its own
+  for its kind in `spec.functions`.
+- `resync`, from 1s to 24h, 10m when unset, is how often funcd sends each list again with no change.
+- An image, `settings` or an engine's attribute such as `port` is refused, and so is another workload beside
+  `Engineless`. An Addon's kind keeps its workload: a replace cannot move it between `Engine` and `Engineless`.
+
+### The engineless kind's Function
+
+funcd groups a namespace's objects of the kind by their Function and calls it with each group's full list, sorted by
+name, as a CloudEvent of type `funcd.addon.objects` whose source is `funcd://<namespace>/addon/<function>`, and whose
+data holds `kind`, `cause` and `objects`, each one's `name`, `uid`, `generation`, `deleting` and `config`:
+
+```json
+{"kind": "InfraStack", "cause": "change",
+ "objects": [{"name": "bunny-edge", "uid": "9c2e41aa", "generation": 3, "deleting": false,
+              "config": {"job": "bunny-edge", "variables": {"zone": "funcd-tunnel"}}}]}
+```
+
+The cause is `start`, `change`, `retry`, `resync` or `run`, the last once a JobRun of the namespace ends. The Function
+must accept a cause it does not know. It binds no object: it applies each list idempotently through what it binds
+itself, such as the Jobs it starts, reads which run ended from its own state, and answers as a settings kind's Function
+does, `{"results": [...]}` in at most 1 MiB, each result an object's `name`, `ok`, and a `reason` and a `message` when it
+is not ok. An object sent with `deleting: true` is one to destroy: only an ok to it lets the object go. An object that
+left the list was retained, and the Function forgets it, leaving what it manages in place. A call past
+`addons.settingsTimeout` fails, and funcd calls again after a backoff. The Function of funcd's own tests answers ok for
+every object:
+
+::include[../../../../../e2e/fixtures/infrastack-reconciler.mjs]
+
 ## Test it under funcdctl dev
 
 `funcdctl dev` runs an add-on's engine on the local Docker or containerd, and its admin token registers an Addon:

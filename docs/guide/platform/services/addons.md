@@ -58,6 +58,16 @@ at each change of the list, after a failed call's backoff, and at the kind's res
 through its binding of the target, and its answer writes each object's status. funcd keeps what it knows of the calls in
 memory, so a start sends each list again.
 
+## Engineless kinds
+
+An Addon's kind entry may serve `Engineless`: its objects run no engine and no image, and a Function of each object's
+namespace reconciles them, called with its group's full list as a settings kind's Function is, at each change, after a
+failed call's backoff, at the kind's resync, and once a JobRun of the namespace ends. An object's first pass stores
+`status.workload: Engineless` before any call carries it, and from then on an object with `deletion: delete` is held at
+its deletion: the API's DELETE, the owner collector and an App's prune set its `metadata.deletionTimestamp` instead of
+removing it, and only its Function's ok to a call that carried it as deleting removes it. An App's other parts outlive
+its engineless parts, so the Function and the Jobs that destroy a stack are still there to do it.
+
 ## Backups
 
 A BackupSchedule copies an add-on object when its scope names it: each Backup copies the newest consistent copy that

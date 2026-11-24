@@ -1,6 +1,6 @@
 ---
 title: Add-ons
-description: Register an add-on built outside funcd, such as rauthy, declare its objects, run Functions and Jobs on the runtimes it ships, call their engines from a Function, apply their settings, back them up and sign users in through them.
+description: Register an add-on built outside funcd, such as rauthy, declare its objects, run Functions and Jobs on the runtimes it ships, call their engines from a Function, apply their settings, reconcile an engineless kind's objects, back them up and sign users in through them.
 ---
 
 ## Usage
@@ -107,6 +107,39 @@ policy with rauthy's API key `settings`, which `funcdctl rauthy keys` has rauthy
 A target may name its own Function for a kind in `spec.functions`, in place of the kind's, so two copies of an App
 template in one namespace each apply their own.
 
+## Reconcile objects with a Function
+
+An Addon whose kind entry serves `Engineless` adds a kind whose objects run no engine, such as stacks that a Job
+applies outside funcd: a Function of each object's namespace reconciles them, the one the entry's `function.ref` names
+or the one an object names for its own kind in `spec.functions`
+([complete file](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/addons/engineless.yaml)):
+
+::include[../../../../../api/types/v1alpha1/examples/addons/engineless.yaml#addon]
+
+::include[../../../../../api/types/v1alpha1/examples/addons/engineless.yaml#stack]
+
+funcd sends the Function the list of the namespace's objects it reconciles, deleting ones included, at each change of
+the list, after a failed call's backoff, at the kind's `resync`, 10 minutes when unset, and once a JobRun of the
+namespace ends. An object is `Pending` with `Progressing` until the Function answers for its generation, then `Ready`
+on an ok, or with the Function's reason, such as `AwaitingApproval`. [Build an add-on](build.md#engineless-kinds) shows
+the call and its answer.
+
+An object with `deletion: delete` stays at its deletion until its Function has destroyed what it holds. The DELETE
+answers 202 with the object, which keeps `metadata.deletionTimestamp`, the reason `Deleting` until the Function's first
+answer, and its later writes. Only the Function's ok to a call that carried it as deleting removes it. With `retain`,
+the default, the object goes at once and the Function forgets it, leaving what it manages in place; setting `retain`
+on a deleting object lets it go at its next pass. A deleting object whose Addon or Function is gone waits until they
+are back or `retain` is set:
+
+```sh
+funcdctl delete InfraStack bunny-edge -n default
+funcdctl get infrastacks bunny-edge -n default -o json
+```
+
+`funcdctl delete` prints `deleting InfraStack/bunny-edge` for an object it holds. An App's deletion and a revision that
+drops such an object wait the same way: the App's other parts, its Function and its Jobs among them, stay until its
+engineless parts are gone.
+
 ## Ship it with an App
 
 An App template can carry the add-on with the Functions, values and hooks that run beside it: its `addon.yaml` holds the
@@ -174,13 +207,15 @@ with 403. An alias the Function does not bind, and a proxy request with no token
 
 ## Limits and quotas
 
-- A namespace holds at most `addons.maxObjectsPerNamespace` objects that run an engine, 20 by default, all add-ons
-  together, and at most `addons.maxSettingsPerNamespace` settings objects, 200 by default.
+- A namespace holds at most `addons.maxObjectsPerNamespace` objects of add-on kinds, settings kinds apart, 20 by
+  default, all add-ons together, an engineless kind's objects too, and at most `addons.maxSettingsPerNamespace`
+  settings objects, 200 by default.
 - A call of an engine waits `addons.callTimeout` for the answer, 10 seconds by default, then fails with 503. Its request
   body and its answer body hold at most `addons.callPayloadLimit` bytes each, 1 MiB by default, or the call fails with
   413.
-- A call of a settings kind's Function waits `addons.settingsTimeout`, 30 seconds by default, then fails, and funcd
-  calls again after 1 second, then twice as long after each failure, at most 5 minutes or the kind's resync.
+- A call of a settings or an engineless kind's Function waits `addons.settingsTimeout`, 30 seconds by default, then
+  fails, and funcd calls again after 1 second, then twice as long after each failure, at most 5 minutes or the kind's
+  resync.
 
 ## Status
 
@@ -204,6 +239,10 @@ funcdctl logs identityprovider/login -n default
 | | `ReconcileFailed`, `NoResult` | The call failed, or its answer left the object out; the Function's own reason when it gives one |
 | | `TargetNotFound`, `TargetNotReady` | Its target is missing or not Ready |
 | | `FunctionNotFound`, `FunctionNotBound` | Its Function is missing, or does not bind its target |
+| An engineless object | `Progressing` | No answer of its Function for its generation yet |
+| | `ReconcileFailed`, `NoResult` | The call failed, or its answer left the object out; the Function's own reason when it gives one |
+| | `AddonNotFound`, `AddonRevisionNotFound`, `FunctionNotFound` | Its Addon, its pinned revision or its Function is missing, and no call carries it |
+| | `Deleting` | Held at its deletion: its Function has not answered a call that carried it as deleting yet |
 | A Function or a Job on its runtime | `RuntimeUnavailable` | The entry does not serve the workload, no worker driver of the server runs an image, or the Addon that shipped the Revision's image is gone |
 | A Function that binds an object | `AddonObjectNotFound` | The object does not exist |
 | | `DependencyNotReady` | A worker is not ready: the object's engine is not Ready |
