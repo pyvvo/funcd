@@ -545,7 +545,7 @@ func AddonCapability() Capability {
 		Actions:               []auth.Action{auth.ActionAddonCall},
 		EmitsEntityType:       entityTypeAddonObject,
 		SupportingEntityTypes: []cedartypes.EntityType{entityTypeJob},
-		Resource:              addonResource,
+		Resource:              namespacedResource(v1.KindAddonObject, addonObjectUID),
 		PrincipalBinding: PrincipalBinding{
 			Attr: "addonBindings",
 			Bind: bindFunction(func(b *v1.FunctionBindings) []v1.FunctionAddon { return b.Addon },
@@ -557,16 +557,19 @@ func AddonCapability() Capability {
 	}
 }
 
-// addonResource materializes the add-on object as a bare entity with its namespace attr, as lakeResource does; a
-// missing object still yields an evaluable entity (default-deny).
-func addonResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
-	if resource.Type != v1.KindAddonObject {
-		return nil, false, nil
+// namespacedResource is a Capability.Resource that materializes a resource of kind as a bare entity with its namespace
+// attr, as lakeResource does: an add-on object for addon::call, a Job for job::start and job::read. A missing object
+// still yields an evaluable entity (default-deny), and another resource gives ok==false.
+func namespacedResource(kind v1.Kind, uidOf func(v1.NamespaceName, v1.ObjectName) cedartypes.EntityUID) func(context.Context, MetaReader, auth.EntityRef) (cedartypes.EntityMap, bool, error) {
+	return func(_ context.Context, _ MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
+		if resource.Type != kind {
+			return nil, false, nil
+		}
+		uid := uidOf(resource.Namespace, resource.Name)
+		return cedartypes.EntityMap{
+			uid: {UID: uid, Attributes: cedartypes.NewRecord(cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)})},
+		}, true, nil
 	}
-	uid := addonObjectUID(resource.Namespace, resource.Name)
-	return cedartypes.EntityMap{
-		uid: {UID: uid, Attributes: cedartypes.NewRecord(cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)})},
-	}, true, nil
 }
 
 // JobCapability is the job::start and job::read capability (ADR-0349 Decision 1): spec.bindings.job → the
@@ -578,7 +581,7 @@ func JobCapability() Capability {
 		Name:            "job",
 		Actions:         []auth.Action{auth.ActionJobStart, auth.ActionJobRead},
 		EmitsEntityType: entityTypeJob,
-		Resource:        jobResource,
+		Resource:        namespacedResource(v1.KindJob, jobUID),
 		PrincipalBinding: PrincipalBinding{
 			Attr: "jobBindings",
 			Bind: bindFunction(func(b *v1.FunctionBindings) []v1.FunctionJob { return b.Job },
@@ -586,18 +589,6 @@ func JobCapability() Capability {
 		},
 		Builtin: builtinJobPolicies,
 	}
-}
-
-// jobResource materializes the Job a job::start or job::read targets as a bare entity with its namespace attr, as
-// addonResource does. ok==false for another resource.
-func jobResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
-	if resource.Type != v1.KindJob {
-		return nil, false, nil
-	}
-	uid := jobUID(resource.Namespace, resource.Name)
-	return cedartypes.EntityMap{
-		uid: {UID: uid, Attributes: cedartypes.NewRecord(cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)})},
-	}, true, nil
 }
 
 // bindFunction is a PrincipalBinding.Bind over a Function's or a Job's bindings, one entity per binding; any other
