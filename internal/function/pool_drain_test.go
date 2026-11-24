@@ -51,6 +51,12 @@ func (s *recordingSockets) PoolSocketFor(_ v1.NamespaceName, pool v1.ObjectName,
 
 func (s *recordingSockets) Remove(local.Ref) {}
 
+func (*recordingSockets) ListenerFor(local.Ref, runtime.InstanceID) (string, string, error) {
+	return "", "", nil
+}
+
+func (*recordingSockets) ReleaseListener(runtime.InstanceID) {}
+
 func (s *recordingSockets) of(pool v1.ObjectName) []v1.ObjectName {
 	s.mu.Lock()
 	defer s.mu.Unlock()

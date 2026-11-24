@@ -426,6 +426,12 @@ func (b *brokenSockets) PoolSocketFor(ns v1.NamespaceName, pool v1.ObjectName, _
 
 func (*brokenSockets) Remove(local.Ref) {}
 
+func (*brokenSockets) ListenerFor(local.Ref, runtime.InstanceID) (string, string, error) {
+	return "", "", fault.Unavailablef("test.ListenerFor", "no listener")
+}
+
+func (*brokenSockets) ReleaseListener(runtime.InstanceID) {}
+
 // Issue #358: a local API socket that cannot be provisioned keeps the Function from going Ready, with a reason naming
 // the error, and starts no worker without it; the pass retries, and the Function is Ready once the socket is provisioned.
 func TestIssue358_SocketFailureBlocksReady(t *testing.T) {

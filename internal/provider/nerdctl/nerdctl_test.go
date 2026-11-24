@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,8 +24,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/provider/docker"
+	containerrt "github.com/pyvvo/funcd/internal/runtime"
 )
 
 // fakeDirEnv names the directory of the fake nerdctl's state (internal/testkit/fakenerdctl).
@@ -265,4 +268,57 @@ func TestLastWords(t *testing.T) {
 	require.Equal(t, "the last line", lastWords("a pull\nthe last line\n"))
 	require.Equal(t, "level=error no msg", lastWords("level=error no msg\n"), "a line with no msg= is kept whole")
 	require.Empty(t, lastWords(""))
+}
+
+// ADR-0346 Decisions 4, 5 and 7 through nerdctl: a worker's bundle volume of the role worker, filled through the
+// helper's tar and mounted read-only as the volume's own directory; its run with the key, FUNCD_PORT published on
+// 127.0.0.1, funcd.host at the host gateway, its limits and FUNCD_LOG_STDOUT; it listens once its readiness path
+// answers; Remove takes its container and volume.
+func TestWorkersThroughNerdctl(t *testing.T) {
+	t.Parallel()
+	bin, dir := fake(t)
+	ready := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(ready.Close)
+	_, port, err := net.SplitHostPort(ready.Listener.Addr().String())
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "port"), []byte(port), 0o600))
+	ctx := context.Background()
+	w, err := docker.NewWorkers(ctx, cli{bin: bin}, key, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+
+	bundle := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bundle, "handler.mjs"), []byte("export function handle() {}\n"), 0o600))
+	spec := containerrt.WorkerSpec{Namespace: "default", Name: "greeter", OwnerKind: v1.KindFunction, Revision: "greeter-1",
+		Image: "example.test/deno@sha256:" + strings.Repeat("a", 64), Env: map[string]string{"FUNCD_PORT": "8080"},
+		Mounts: []containerrt.Mount{{Source: bundle, Target: "/var/funcd/artifact", ReadOnly: true}},
+		Limits: containerrt.Limits{CPUs: 0.5, MemoryBytes: 64 << 20}}
+	inst, err := w.Create(ctx, spec)
+	require.NoError(t, err)
+	require.NoError(t, w.Start(ctx, inst.ID))
+
+	cs := calls(t, dir)
+	vol := find(t, cs, []string{"volume", "create"}, "funcd/role=worker", "funcd/dev-key="+key)
+	name := vol.Args[len(vol.Args)-1]
+	require.Regexp(t, "^funcd-dev-worker-"+key+"-[0-9a-f]{16}$", name)
+	fill := find(t, cs, []string{"run", "--rm"}, "-i", "-v", name+":/d", docker.HelperImage)
+	require.Contains(t, fill.Stdin, "handler.mjs", "the helper extracts the bundle's tar")
+	run := find(t, cs, []string{"run", "-d"}, "--name", name, "-p", "127.0.0.1::8080", "--add-host", "funcd.host:host-gateway",
+		"--cpus", "0.5", "--memory", "67108864", "funcd/role=worker", "--mount",
+		"type=bind,source=/var/lib/nerdctl/volumes/"+name+"/_data,target=/var/funcd/artifact,readonly", spec.Image)
+	require.Contains(t, run.Stdin, "FUNCD_LOG_STDOUT=1\n")
+	require.NotContains(t, run.Args, "--network", "an engine in a VM: the worker's own network")
+
+	got, err := w.Status(ctx, inst.ID)
+	require.NoError(t, err)
+	require.True(t, got.Listened, "a 503 is an answer")
+	require.Equal(t, "127.0.0.1", got.IP)
+	require.Equal(t, port, strconv.Itoa(got.Port))
+	require.NoError(t, w.Stop(ctx, inst.ID))
+	require.NoError(t, w.Remove(ctx, inst.ID))
+	cs = calls(t, dir)
+	find(t, cs, []string{"rm", "-f", name})
+	find(t, cs, []string{"volume", "rm", name})
 }

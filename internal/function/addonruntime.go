@@ -3,7 +3,9 @@ package function
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -68,14 +70,18 @@ func (r *Reconciler) shippedRuntime(ctx context.Context, rt v1.RuntimeName) (shi
 // instead. The legacy mode with no Materializer is never gated.
 func (r *Reconciler) runtimeGate(w workload, sh shipped, recorded string) (gateFailure, bool) {
 	rt := w.spec.Runtime
+	runs, why := r.runsImages()
 	var cause string
 	switch {
 	case r.materializer == nil:
 		return gateFailure{}, false
 	case sh.found() && !sh.entry.Serves(v1.WorkloadOf(w.kind())):
 		cause = fmt.Sprintf("Addon %q ships it for %s, not for %ss", sh.addon, workloadNames(sh.entry.Workloads), w.kind())
-	case sh.found() && !r.runsImages():
+	case sh.found() && !runs:
 		cause = "it is an Addon's image, which no worker driver of this server runs"
+		if why != "" {
+			cause += ": " + why // the engine search's, or the rootless engine's, under funcdctl dev (ADR-0346 Decision 1)
+		}
 	case sh.found():
 		return gateFailure{}, false
 	case recorded != "":
@@ -94,8 +100,88 @@ func (r *Reconciler) runtimeGate(w workload, sh shipped, recorded string) (gateF
 	return gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed}, true
 }
 
-// runsImages reports whether this server's worker driver runs a worker from an image: the containerd driver does.
-func (r *Reconciler) runsImages() bool { return r.endpointMode == EndpointNetnsFixedPort }
+// runsImages reports whether this server's worker runtime runs a worker from an image now, and when not, why: one
+// that is a runtime.ImageRunner says so itself, as funcdctl dev's Pair does (ADR-0346 Decision 1); else the containerd
+// driver does, and the process driver does not.
+func (r *Reconciler) runsImages() (bool, string) {
+	if ir, ok := r.runtime.(runtime.ImageRunner); ok {
+		return ir.RunsImages()
+	}
+	return r.endpointMode == EndpointNetnsFixedPort, ""
+}
+
+// endpointHost is the host a container worker of a process-mode server reaches funcd's listeners by (ADR-0346
+// Decision 5): its image runtime's, else funcd's loopback address.
+func (r *Reconciler) endpointHost() string {
+	if ir, ok := r.runtime.(runtime.ImageRunner); ok {
+		return ir.EndpointHost()
+	}
+	return runtime.LoopbackHost
+}
+
+// addonImage is the image a process-mode server runs w's worker of revision rev from, when it runs one (ADR-0346
+// Decision 2): the image of the Addon runtime that rev records (ADR-0344 Decision 8), on a worker runtime that runs
+// images. ok is false for any other worker, which the process driver runs.
+func (r *Reconciler) addonImage(ctx context.Context, w workload, rev v1.ObjectName) (string, bool, error) {
+	if ownRuntime(w.spec.Runtime) {
+		return "", false, nil
+	}
+	if ok, _ := r.runsImages(); !ok {
+		return "", false, nil
+	}
+	snap, err := r.getRevision(ctx, w.meta().Namespace, rev)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		return "", false, nil
+	case err != nil:
+		return "", false, fault.Wrapf(err, fault.KindOf(err), "function.addonImage", "get revision %q", rev)
+	}
+	return snap.Spec.RuntimeImage, snap.Spec.RuntimeImage != "", nil
+}
+
+// imageWorkerSpec is spec in the container shape for a worker that a process-mode server runs from img, an Addon
+// runtime's under funcdctl dev (ADR-0346 Decisions 2, 5 and 6): no Command; the artifact's folder delivered read-only at
+// containerArtifactDir, which the image driver copies into the worker's bundle volume; the local API on the worker's
+// own listener with its token; funcd's endpoints by the host the worker reaches them by; and on an engine in a VM the
+// fixed port that the engine publishes. No socket is bound in, no volume, and no host path.
+func (r *Reconciler) imageWorkerSpec(spec runtime.WorkerSpec, w workload, rev v1.ObjectName, wo workerOf, artifactPath string, we workerEnv,
+	img string) (runtime.WorkerSpec, error) {
+	spec.Image = img
+	spec.Mounts = []runtime.Mount{{Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true}}
+	spec.Env = r.shimWorkerEnv(w, wo, filepath.Join(containerArtifactDir, filepath.Base(artifactPath)), containerArtifactDir, "", we, nil)
+	// A container worker takes no host path, and dev's extension folder is one: no containerd worker gets it either
+	// (the decider, 2026-11-24). A bound config key of that name is the developer's and stays (ADR-0306 Decision 3).
+	if r.lakeExtensionDir != "" && spec.Env[lakeExtensionDirEnv] == r.lakeExtensionDir {
+		delete(spec.Env, lakeExtensionDirEnv)
+	}
+	host := r.endpointHost()
+	if r.invokeSockets != nil {
+		id := runtime.NewInstanceID(w.meta().Namespace, wo.name, rev, wo.replica)
+		url, token, err := r.invokeSockets.ListenerFor(callerRef(w, wo), id)
+		if err != nil {
+			return runtime.WorkerSpec{}, fault.Wrapf(err, fault.KindOf(err), "function.workerSpec", "serve the local API of worker %s", id)
+		}
+		spec.Env["FUNCD_INVOKE_URL"], spec.Env["FUNCD_INVOKE_TOKEN"] = viaHost(url, host), token
+	}
+	for _, k := range we.endpoints {
+		if v, ok := spec.Env[k]; ok {
+			spec.Env[k] = viaHost(v, host)
+		}
+	}
+	if host != runtime.LoopbackHost {
+		spec.Env["FUNCD_PORT"] = strconv.Itoa(containerShimPort)
+	}
+	return spec, nil
+}
+
+// viaHost is v with funcd's loopback address written as host, the one a container worker reaches it by (ADR-0346
+// Decision 5).
+func viaHost(v, host string) string {
+	if host == runtime.LoopbackHost {
+		return v
+	}
+	return strings.ReplaceAll(v, runtime.LoopbackHost, host)
+}
 
 // workloadNames joins an entry's workloads for a RuntimeUnavailable message: "Job", "Function and Job".
 func workloadNames(ws []v1.Workload) string {

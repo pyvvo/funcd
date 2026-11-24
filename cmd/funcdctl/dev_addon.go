@@ -20,6 +20,7 @@ import (
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/provider/docker"
 	"github.com/pyvvo/funcd/internal/provider/nerdctl"
+	fnruntime "github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -54,11 +55,13 @@ type devAddonDrivers struct {
 // session's key (Decision 6), from any registry (Decision 5). Dev builds the runtime once process.Open holds the
 // session's registry, so a second session is refused first, and its start reaps what a killed session left (Decision 7);
 // the platform's stop is followed by its StopAll. Each engine's output goes to its log file beside the dev.watch logs,
-// which writef prints once, and never to the terminal (ADR-0342 Decision 5).
-func devAddonOptions(ctx context.Context, stateDir string, cfg devConfig, inst *devInstance, writef func(string, ...any) error) ([]funcd.Option, error) {
+// which writef prints once, and never to the terminal (ADR-0342 Decision 5). It also returns the image side of dev's
+// worker runtime (ADR-0346 Decision 3), which the cleanups close before the engines stop.
+func devAddonOptions(ctx context.Context, stateDir string, cfg devConfig, inst *devInstance,
+	writef func(string, ...any) error) ([]funcd.Option, fnruntime.Runtime, error) {
 	key, err := devSessionKey(stateDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rt := chooseAddonRuntime(ctx, cfg, key, inst.logger)
 	if lr, ok := rt.(interface {
@@ -68,8 +71,33 @@ func devAddonOptions(ctx context.Context, stateDir string, cfg devConfig, inst *
 	}
 	inst.addons = rt
 	inst.cleanup = append(inst.cleanup, rt.StopAll)
+	images := devWorkers(ctx, rt, key, inst.logger)
+	inst.cleanup = append(inst.cleanup, func() { _ = images.Close() })
 	return []funcd.Option{funcd.WithAddonRuntime(rt), funcd.WithAnyAddonRegistry(),
-		funcd.WithAddonsFollowingCurrent()}, nil
+		funcd.WithAddonsFollowingCurrent()}, images, nil
+}
+
+// devWorkers runs the session's workers on an Addon's runtime on the engine that runs its add-on engines (ADR-0346
+// Decision 4); when dev found none, or the engine's workers cannot start, it runs no image and says why, the engine
+// search's reason (Decision 1).
+func devWorkers(ctx context.Context, addons devAddonRuntime, key string, logger *slog.Logger) fnruntime.Runtime {
+	var eng docker.Engine
+	switch a := addons.(type) {
+	case *docker.Runtime:
+		eng = a.Engine()
+	case *nerdctl.Runtime:
+		eng = a.Engine()
+	case devAddonsUnavailable:
+		return fnruntime.NoImages(a.why)
+	default:
+		return fnruntime.NoImages("funcdctl dev runs no worker on this add-on runtime")
+	}
+	w, err := docker.NewWorkers(ctx, eng, key, logger)
+	if err != nil {
+		logger.Warn("workers on an Addon's runtime cannot run on the container engine", "err", err)
+		return fnruntime.NoImages(says(err))
+	}
+	return w
 }
 
 // devSessionKey is the session's key (ADR-0334 Decision 6): the first 16 hex digits of the sha256 of the state dir's

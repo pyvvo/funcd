@@ -111,6 +111,9 @@ func (r *Reconciler) MapLake(ctx context.Context, obj v1.Object) []controller.Re
 	return out
 }
 
+// lakeExtensionDirEnv names dev's DuckDB extension folder in a lake consumer's env.
+const lakeExtensionDirEnv = "DUCKDB_EXTENSION_DIRECTORY"
+
 // addLakeExtensionDir injects DUCKDB_EXTENSION_DIRECTORY for a lake-consumer function (one
 // declaring spec.bindings.lake) when a dir is configured — the dev analogue of the prod bundle's
 // duckdb-ext (ADR-0089), letting the handler's `LOAD quack`/`ducklake` resolve the curated DuckDB
@@ -120,5 +123,5 @@ func (r *Reconciler) addLakeExtensionDir(env map[string]string, fn *v1.Function)
 	if r.lakeExtensionDir == "" || len(fn.Spec.Bindings.Lake) == 0 {
 		return
 	}
-	env["DUCKDB_EXTENSION_DIRECTORY"] = r.lakeExtensionDir
+	env[lakeExtensionDirEnv] = r.lakeExtensionDir
 }

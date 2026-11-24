@@ -440,6 +440,19 @@ func (s *socketLog) Remove(ref local.Ref) {
 	s.events = append(s.events, "remove "+ref.String())
 }
 
+func (s *socketLog) ListenerFor(ref local.Ref, id runtime.InstanceID) (string, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, "listen "+ref.String()+" "+string(id))
+	return "http://127.0.0.1:40001", "token-of-" + string(id), nil
+}
+
+func (s *socketLog) ReleaseListener(id runtime.InstanceID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, "release "+string(id))
+}
+
 func (s *socketLog) log() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

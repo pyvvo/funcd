@@ -87,8 +87,14 @@ type InvokeSocketProvider interface {
 	// members is the set it serves, replaced on every call.
 	PoolSocketFor(ns v1.NamespaceName, pool v1.ObjectName, members []v1.ObjectName) (string, error)
 	// Remove stops + deletes ref's local API listener (called from teardown on delete, and as a run's worker is
-	// removed, so the socket lifecycle tracks its resource — controller-driven, not leaked).
+	// removed, so the socket lifecycle tracks its resource — controller-driven, not leaked), with the listeners of its
+	// dev container workers.
 	Remove(ref local.Ref)
+	// ListenerFor serves ref's local API for the dev container worker id on a listener of its own on the host's
+	// 127.0.0.1, and returns its URL and the token each request carries (ADR-0346 Decision 6). Idempotent per id.
+	ListenerFor(ref local.Ref, id runtime.InstanceID) (url, token string, err error)
+	// ReleaseListener stops worker id's listener, if any.
+	ReleaseListener(id runtime.InstanceID)
 }
 
 // Deps configures the Function lifecycle reconciler (internal component, ADR-0002 §1).
@@ -1990,9 +1996,11 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		spec.Revision = rev
 		inst, cerr := r.runtime.Create(ctx, spec)
 		if cerr != nil {
-			if rerr := r.releaseEmptyDirs(ctx, runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i)); rerr != nil {
+			id := runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i)
+			if rerr := r.releaseEmptyDirs(ctx, id); rerr != nil {
 				r.logger.Warn("could not release a failed worker's emptyDirs", "function", tmpl.Name, "replica", i, "err", rerr)
 			}
+			r.releaseListener(id) // its listener goes when its Create fails (ADR-0346 Decision 6)
 		}
 		if errors.Is(cerr, runtime.ErrImageUnavailable) {
 			return revisionPass{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "%s", unavailablePrefix(tmpl.Spec.Runtime))
@@ -2154,6 +2162,7 @@ func (r *Reconciler) retire(ctx context.Context, in runtime.Instance) error {
 	if err := r.runtime.Remove(ctx, in.ID); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "remove worker")
 	}
+	r.releaseListener(in.ID)
 	return nil
 }
 
@@ -3213,6 +3222,13 @@ func (r *Reconciler) removeSocket(ref local.Ref) {
 	}
 }
 
+// releaseListener stops the listener of dev container worker id, if the local API is on (ADR-0346 Decision 6).
+func (r *Reconciler) releaseListener(id runtime.InstanceID) {
+	if r.invokeSockets != nil {
+		r.invokeSockets.ReleaseListener(id)
+	}
+}
+
 // callerRef is the local API caller worker wo of w acts as: its Function, or its Job with the run it serves (ADR-0351
 // Decision 2).
 func callerRef(w workload, wo workerOf) local.Ref {
@@ -3356,7 +3372,8 @@ func (r *Reconciler) addRecordBound(env map[string]string) {
 // worker gets a local API socket of its own, on which it acts as its Job (ADR-0351 Decision 2).
 func (r *Reconciler) workerSpec(ctx context.Context, w workload, rev v1.ObjectName, wo workerOf, artifactPath string, we workerEnv) (runtime.WorkerSpec, error) {
 	m := w.meta()
-	spec := runtime.WorkerSpec{Namespace: m.Namespace, Name: wo.name, OwnerKind: wo.kind, Replica: wo.replica, Image: string(w.spec.Runtime)}
+	// Only the container shape sets Image (ADR-0346 Decision 2): runtime.Pair runs a spec with one on its image side.
+	spec := runtime.WorkerSpec{Namespace: m.Namespace, Name: wo.name, OwnerKind: wo.kind, Replica: wo.replica}
 	if r.materializer == nil {
 		// Legacy placeholder: a long-lived process stands in for the worker; real execution is the shim path (ADR-0030).
 		spec.Command = []string{"sleep", "86400"}
@@ -3366,11 +3383,19 @@ func (r *Reconciler) workerSpec(ctx context.Context, w workload, rev v1.ObjectNa
 	if err != nil {
 		return runtime.WorkerSpec{}, err
 	}
+	spec.Limits = r.limitsOf(ctx, w.fn())
+	if r.endpointMode != EndpointNetnsFixedPort {
+		if img, ok, err := r.addonImage(ctx, w, rev); err != nil || ok {
+			if err != nil {
+				return runtime.WorkerSpec{}, err
+			}
+			return r.imageWorkerSpec(spec, w, rev, wo, artifactPath, we, img)
+		}
+	}
 	sock, err := r.invokeSocket(callerRef(w, wo))
 	if err != nil {
 		return runtime.WorkerSpec{}, err
 	}
-	spec.Limits = r.limitsOf(ctx, w.fn())
 	if r.endpointMode != EndpointNetnsFixedPort {
 		// Process mode (ADR-0030): ShimCommand launches the shim, which binds loopback and writes its port file; the
 		// worker sees the host paths, and its volumes are host directories with no mount (ADR-0262).

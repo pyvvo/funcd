@@ -49,8 +49,8 @@ require (
 	github.com/parquet-go/parquet-go v0.32.1
 	github.com/pyvvo/funcd-addons v0.4.1
 	github.com/pyvvo/funcd-functions v0.28.1
-	github.com/pyvvo/funcd-python v0.30.0
-	github.com/pyvvo/funcd-typescript v0.35.0
+	github.com/pyvvo/funcd-python v0.31.0
+	github.com/pyvvo/funcd-typescript v0.36.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/spf13/cobra v1.10.2

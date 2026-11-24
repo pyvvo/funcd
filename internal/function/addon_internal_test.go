@@ -26,10 +26,11 @@ func TestAddonBindingGivesTheProxyEnv(t *testing.T) {
 	_, err := r.store.Create(context.Background(), o)
 	require.NoError(t, err)
 
-	shared, gate, err := addonHook{r}.check(context.Background(), functionWorkload(fn))
+	shared, endpoints, gate, err := addonHook{r}.check(context.Background(), functionWorkload(fn))
 	require.NoError(t, err)
 	require.Nil(t, gate)
 	require.Equal(t, map[string]string{"FUNCD_ADDON_IDP_URL": "http://10.63.0.1:40123/addon/idp"}, shared)
+	require.Equal(t, []string{"FUNCD_ADDON_IDP_URL"}, endpoints, "the hook marks its endpoint key (ADR-0346 Decision 5)")
 	own, issue, g := addonHook{r}.own(functionWorkload(fn))
 	require.Nil(t, g)
 	require.Nil(t, issue, "the token is stable across workers")
