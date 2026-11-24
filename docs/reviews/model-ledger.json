@@ -15448,5 +15448,20 @@
     "dod_total": 14,
     "report": "docs/reviews/adr-0355-amendment-implementation-claude-opus-5-5.md",
     "notes": "amendment of 2026-11-24 (#1021), funcd 6e94910d and funcd-addons #22 583963a: pass on what it can meet; routed (adr, the decider): the closed variables record with no member is outside ADR-0058's profile, so funcdctl push refuses it and funcdctl infra push fails for every module with no plain variable, one with no variable included, which pushes on main (real funcdctl from fe2c6c2f); both merges wait for the ruling; Minor (model): the scenario's test never pushes its Given, and push_check.py pushes only a module with prefix; revert check fails 2 tests, 5 mutants caught"
+  },
+  {
+    "date": "2026-11-24",
+    "adr": "0355",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 14,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0355-amendment-implementation-claude-opus-5-5-2.md",
+    "notes": "amendment round 3 (#1021), funcd ef4b1e7d and funcd-addons #22 767dbc1: void variables ({\"type\":\"null\"}, ADR-0090), required only with a required plain variable; round 2 (changes requested in chat) fixed: Major (model) the reconciler dropped malformed variables, now passed on and refused at creation; Minors (model) push_check.py pushes a sensitive-only module (PASS locally, fails on rounds 0 and 1), drift start tested (mutant caught), Decision 3 rewrapped; real funcdctl pushes all four module kinds; lane inputs as on main; 18 mutants caught; routed: /variables path for a stack with none (the decider)"
   }
 ]
