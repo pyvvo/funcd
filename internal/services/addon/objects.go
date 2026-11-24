@@ -79,7 +79,8 @@ func enginelessFunction(at v1.AddonAttributes, o *v1.AddonObject) v1.ObjectName 
 
 // enginelessObject is the pass of an object of an engineless kind, which runs no engine (Decisions 1 and 5 to 7). A
 // deleting object set to retain goes with no call. Otherwise the object pins its revision as an engine's object does,
-// and its first pass stores status.workload before any call carries it. It waits while its revision or its Function is
+// a pin the pass moves stored even when nothing else of its status changes (ADR-0339 Decision 3), and its first pass
+// stores status.workload before any call carries it. It waits while its revision or its Function is
 // missing, a deleting one too; a new or edited object is Progressing until the answer for its generation, and a
 // deleting one Deleting until the first answer to a call that carried it so. Its group's call is due as a settings
 // call is, and runs on a goroutine of its own.
@@ -91,6 +92,7 @@ func (r *Reconciler) enginelessObject(ctx context.Context, current *v1.Addon, o 
 	if current == nil {
 		return r.objectStatus(ctx, o, reasonAddonNotFound, fmt.Sprintf("no Addon registers the kind %q", o.Spec.Kind), false)
 	}
+	appRev, addonRev := o.Status.AppRevision, o.Status.AddonRevision
 	a, ph, err := r.pinned(ctx, current, o)
 	if err != nil {
 		return controller.Result{}, err
@@ -105,6 +107,11 @@ func (r *Reconciler) enginelessObject(ctx context.Context, current *v1.Addon, o 
 			res.Requeue = true // the next pass may call: the mark is stored
 		}
 		return res, err
+	}
+	if o.Status.AppRevision != appRev || o.Status.AddonRevision != addonRev {
+		if err := r.storeStatus(ctx, o); err != nil { // a call's answer keeps the stored pin
+			return controller.Result{}, err
+		}
 	}
 	at := a.Spec.KindAttributes()
 	fnName := enginelessFunction(at, o)
@@ -153,14 +160,20 @@ func (r *Reconciler) objectStatus(ctx context.Context, o *v1.AddonObject, reason
 	o.Status.Phase, o.Status.ObservedGeneration = v1.PhasePending, o.Generation
 	o.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: message,
 		ObservedGeneration: o.Generation})
+	return controller.Result{}, r.storeStatus(ctx, o)
+}
+
+// storeStatus writes o's status as it stands and takes the stored object back into o; a Conflict is left to the pass
+// that the conflicting write brings.
+func (r *Reconciler) storeStatus(ctx context.Context, o *v1.AddonObject) error {
 	updated, err := r.store.Update(ctx, o)
 	if err != nil {
-		return controller.Result{}, retryOnConflict(err, "services.addon.enginelessObject")
+		return retryOnConflict(err, "services.addon.enginelessObject")
 	}
 	if u, ok := updated.(*v1.AddonObject); ok {
 		*o = *u
 	}
-	return controller.Result{}, nil
+	return nil
 }
 
 // syncGroup starts the call of o's group when one is due and none runs (Decision 2), and returns how soon the next is

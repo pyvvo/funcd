@@ -1,0 +1,135 @@
+---
+# An App's rollout with a stack (ADR-0357 Decisions 1 to 4). The App's latest revision holds an engineless part, the
+# stack, whose change waits for a person's approval; a part that reads the stack's outputs from the Secret the stack's
+# Job owns; another part, which boots after the stamp; an older part that the revision drops; and, in one of the two
+# Apps explored, a post-hook. A pass writes the reader once the outputs exist, which restarts the deadline, and the
+# reader is then Pending until it is ready; a pass switches the revision when it wrote no part and no part is Pending,
+# and fails it once the deadline passed while one is. In a later pass that writes nothing, while no part is Lagging or
+# Pending, it starts the post-hook and prunes. A person may approve the stack's run, which applies the change and
+# writes the outputs. Environment: the controller runs one pass of an App at a time, so a pass is one step; the
+# Secret's and the parts' watches bring a pass after each write (fair); a written part turns ready within BOOT ticks,
+# runtime.bootTimeout, less than the deadline's DEADLINE, app.upgradeTimeout (ADR-0200 Decision 10); the clock is Tick.
+# A stop or a Conflict between a pass's writes is not modeled: the next pass reads the end of a wait from the stored App
+# status (ADR-0357 Decision 3). Left out: the parts funcd runs, judged by ADR-0199 as before; tests hold them.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 10
+  crash_on_yield: false
+---
+# diagram: revision, reader
+# mutant stack-pending: NoFailWhileAStackWaits
+# mutant reader-pending: NoFailWhileAStackWaits
+# mutant no-lag-term: NoFailWhileAStackWaits
+# mutant reader-early: ReaderWaitsForOutputs
+# mutant hook-early: PostHookAfterStacks
+# mutant hook-before-ready: PostHookAfterStacks
+# mutant prune-early: OldPartServesUntilReplaced
+# mutant no-reader-write: liveness
+
+# stack-pending: a stack whose change is not applied counts as Pending, as before this ADR.
+# reader-pending: a part that waits for the outputs counts as Pending.
+# no-lag-term: the deadline does not restart when a part's wait ends.
+# reader-early: a pass writes the reader before the outputs exist.
+# hook-early: a pass starts the post-hook while a part is Lagging.
+# hook-before-ready: a pass starts the post-hook in a pass that wrote a part, or while one is Pending.
+# prune-early: a pass prunes while a part is Lagging.
+# no-reader-write: a pass never writes a part that waited for the outputs.
+MUTANT = ""
+
+DEADLINE = 3
+BOOT = 2
+
+action Init:
+    h = oneof [True, False]
+    has_hook = h
+    revision = "deploying"
+    approved = False
+    applied = False
+    reader = "absent"
+    reader_age = 0
+    other = "booting"
+    other_age = 0
+    old = "serving"
+    hook = "due"
+    since = 0
+
+# A person approves the stack's run; nothing makes them.
+atomic action Approve:
+    require not approved
+    approved = True
+
+# The approved run applies the change, and the runtime writes the outputs into the Job's Secret.
+atomic fair action Apply:
+    require approved and not applied
+    applied = True
+
+atomic fair action OtherReady:
+    require other == "booting"
+    other = "ready"
+
+atomic fair action ReaderReady:
+    require reader == "written"
+    reader = "ready"
+
+# One pass of the App reconciler.
+atomic fair action Pass:
+    was_current = revision == "current"
+    wrote = False
+    if reader == "absent" and (applied or MUTANT == "reader-early") and MUTANT != "no-reader-write":
+        reader = "written"
+        wrote = True
+        if revision == "deploying" and MUTANT != "no-lag-term":
+            since = 0
+    lagging = not applied or reader == "absent"
+    pending = reader == "written" or other == "booting"
+    if MUTANT == "stack-pending" and not applied:
+        pending = True
+    if MUTANT == "reader-pending" and reader == "absent":
+        pending = True
+    if revision == "deploying":
+        if not wrote and not pending:
+            revision = "current"
+        elif since >= DEADLINE:
+            revision = "failed"
+    hook_gate = was_current
+    if MUTANT != "hook-before-ready":
+        hook_gate = hook_gate and not wrote and not pending
+    if MUTANT != "hook-early":
+        hook_gate = hook_gate and not lagging
+    if has_hook and hook_gate:
+        hook = "done"
+    prune_gate = was_current and not wrote and not pending and (not has_hook or hook == "done")
+    if MUTANT != "prune-early":
+        prune_gate = prune_gate and not lagging
+    if prune_gate:
+        old = "pruned"
+
+# Time passes while the revision deploys, up to its deadline; a booting part turns ready within BOOT ticks.
+atomic fair action Tick:
+    require revision == "deploying" and since < DEADLINE
+    require other != "booting" or other_age < BOOT
+    require reader != "written" or reader_age < BOOT
+    since += 1
+    if other == "booting":
+        other_age += 1
+    if reader == "written":
+        reader_age += 1
+
+always assertion NoFailWhileAStackWaits:
+    return revision != "failed"
+
+always assertion ReaderWaitsForOutputs:
+    return reader == "absent" or applied
+
+always assertion PostHookAfterStacks:
+    return hook != "done" or (applied and reader == "ready")
+
+always assertion OldPartServesUntilReplaced:
+    return old == "serving" or reader == "ready"
+
+eventually always assertion Switches:
+    return revision == "current"
+
+eventually always assertion ConvergesOnceApproved:
+    return not approved or (reader == "ready" and old == "pruned" and (not has_hook or hook == "done"))

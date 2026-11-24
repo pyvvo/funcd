@@ -384,10 +384,15 @@ func TestAppEntrySchemas(t *testing.T) {
 	}
 }
 
+// ADR-0357 Decisions 1 and 2 add Lagging to the states.
 func TestAppChildStateSchema(t *testing.T) {
-	got := AppChildState("").Schema(nil).Enum
-	if len(got) != 4 || got[0] != "Ready" || got[1] != "NotStarted" || got[2] != "Pending" || got[3] != "Pruning" {
-		t.Fatalf("AppChildState enum = %v", got)
+	var got []string
+	for _, v := range AppChildState("").Schema(nil).Enum {
+		s, _ := v.(string)
+		got = append(got, s)
+	}
+	if want := []string{"Ready", "NotStarted", "Pending", "Lagging", "Pruning"}; !slices.Equal(got, want) {
+		t.Fatalf("AppChildState enum = %v, want %v", got, want)
 	}
 }
 

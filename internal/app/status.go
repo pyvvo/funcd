@@ -52,10 +52,12 @@ type verdict struct {
 func partName(k v1.ObjectRef) string { return fmt.Sprintf("%s/%s", k.Kind, k.Name) }
 
 // readiness judges every declared entry in section order (Decision 5); the part a stopped pass names is Pending
-// with the stop's reason. steps holds the step Functions of the Workflow parts, by name, nil when absent. An add-on
-// part counts only once it pins the record of latest, the App's latest revision (ADR-0339 Decision 4).
+// with the stop's reason, and a part waiting lists is Lagging with its reason (ADR-0357 Decision 2). steps holds the
+// step Functions of the Workflow parts, by name, nil when absent. An engineless add-on object not Ready at its
+// generation is Lagging with the reason its judgment gives (ADR-0357 Decision 1); once Ready, an add-on part counts
+// only once it pins the record of latest, the App's latest revision (ADR-0339 Decision 4).
 func readiness(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, steps map[v1.ObjectName]*v1.Function, halt *stop,
-	latest v1.ObjectName) []verdict {
+	latest v1.ObjectName, waiting map[v1.ObjectRef]string) []verdict {
 	out := make([]verdict, 0, len(ents))
 	for _, e := range ents {
 		k := e.key(a.Namespace)
@@ -63,13 +65,20 @@ func readiness(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, steps m
 		switch obj := objs[k]; {
 		case halt != nil && halt.part == k:
 			v = pending(halt.reason, halt.reason, "")
+		case waiting[k] != "":
+			v = lagging(waiting[k])
 		case obj == nil && e.ref:
 			v = pending(reasonRefNotFound, reasonRefNotFound, "no such object in the namespace")
 		case obj == nil:
 			v = pending(reasonProgressing, reasonProgressing, "not written yet")
 		default:
 			v = judge(obj, steps)
-			if o, ok := obj.(*v1.AddonObject); ok && !e.ref && v.child.State == v1.AppChildReady && o.Status.AppRevision != latest {
+			o, ok := obj.(*v1.AddonObject)
+			switch {
+			case !ok:
+			case v.child.State == v1.AppChildPending && o.Status.Workload == v1.WorkloadEngineless:
+				v = lagging(v.child.Reason)
+			case !e.ref && v.child.State == v1.AppChildReady && o.Status.AppRevision != latest:
 				v = pending(reasonProgressing, reasonProgressing, "runs the record of "+cmp.Or(string(o.Status.AppRevision), "no revision")+
 					", not of "+string(latest))
 			}
@@ -82,6 +91,12 @@ func readiness(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, steps m
 
 func pending(cause, reason, message string) verdict {
 	return verdict{child: v1.AppChild{State: v1.AppChildPending, Reason: reason}, cause: cause, message: message}
+}
+
+// lagging is the verdict of a part that waits for what funcd does not run (ADR-0357 Decisions 1 and 2): settled, as a
+// Pruning object, so the App's Ready, its phase, the switch and the deadline leave it out.
+func lagging(reason string) verdict {
+	return verdict{child: v1.AppChild{State: v1.AppChildLagging, Reason: reason}}
 }
 
 // judge applies Decision 5 to an existing part: a Function by its own rule, a kind without status is Ready once it
@@ -169,13 +184,28 @@ func judgeFunction(fn *v1.Function) verdict {
 	return pending(cause, cmp.Or(reason, string(phase), reasonChildNotReady), msg)
 }
 
-func anyPending(vs []verdict) bool {
-	for _, v := range vs {
-		if v.child.State == v1.AppChildPending {
-			return true
-		}
-	}
-	return false
+func anyPending(vs []verdict) bool { return anyIn(vs, v1.AppChildPending) }
+
+// anyLagging gates the post-hooks and prune (ADR-0357 Decision 4).
+func anyLagging(vs []verdict) bool { return anyIn(vs, v1.AppChildLagging) }
+
+func anyIn(vs []verdict, state v1.AppChildState) bool {
+	return slices.ContainsFunc(vs, func(v verdict) bool { return v.child.State == state })
+}
+
+// lagEnded reports whether a part that stored, the App's children before the pass, lists Lagging is judged otherwise
+// in vs (ADR-0357 Decision 3).
+func lagEnded(stored []v1.AppChild, vs []verdict) bool {
+	return slices.ContainsFunc(vs, func(v verdict) bool {
+		return v.child.State != v1.AppChildLagging && slices.ContainsFunc(stored, func(c v1.AppChild) bool {
+			return c.State == v1.AppChildLagging && sameLine(c, v.child.Kind, v.child.Name)
+		})
+	})
+}
+
+// sameLine reports whether c is the line of the part kind/name, an add-on kind compared as the store compares it.
+func sameLine(c v1.AppChild, kind v1.Kind, name v1.ObjectName) bool {
+	return c.Name == name && v1.SameAddonKind(string(c.Kind), string(kind))
 }
 
 // readyCondition is the App's Ready (Decision 5): False with the stop's reason; else False naming the first Pending

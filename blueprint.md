@@ -419,10 +419,14 @@ FEAT-0010): typed sections (`kv`, `buckets`, `functions`, `workflows`, `eventSou
 writes. Admission refuses an inconsistent App before anything is stored, with quotas counted over all its parts. The
 App controller writes the parts with platform rights, as a Workflow writes its steps, writes back a part edited by
 hand, reports one status in which an idle Function counts as ready, and prunes a dropped part once no part is pending
-and nothing else uses it. Deleting the App removes its tree through the garbage collector; a KV store or a Bucket goes
+or lagging and nothing else uses it. Deleting the App removes its tree through the garbage collector; a KV store or a Bucket goes
 only when its entry says `deletion: delete`. Every spec change is stamped as a read-only `AppRevision`
-([ADR-0200](docs/adr/0200-app-revisions.md)), which becomes current, and lets dropped parts go, only once every part
-is Ready within `app.upgradeTimeout`; a timed-out upgrade is `Failed` and the previous revision stays current, with no
+([ADR-0200](docs/adr/0200-app-revisions.md)), which becomes current only once every part is Ready within
+`app.upgradeTimeout`, a `Lagging` part aside: an engineless part such as a stack, which may wait for a person, or a
+part that waits for a stack's outputs, which the App writes only once they exist
+([ADR-0357](docs/adr/0357-an-app-never-waits-for-its-stacks-and-a-part-waits-for-their-outputs.md)). Dropped parts go,
+and the post-hooks run, once it is current and no part is pending or lagging, and the end of a wait restarts the
+deadline; a timed-out upgrade is `Failed` and the previous revision stays current, with no
 automatic rollback, while the parts keep the new spec; `funcdctl app history` lists the revisions and `funcdctl app rollback` re-applies one as a new
 revision. An App can be paused for manual work and records each self-heal ([ADR-0212](docs/adr/0212-app-self-heal-and-pause.md));
 it defines its ConfigMaps under content-hashed names and declares, never holds, the Secrets it needs
@@ -951,7 +955,11 @@ The control-plane REST API is the single front door for *all* clients — `funcd
 unit. It is an add-on with no engine, which ships its OpenTofu runtime: an add-on can ship runtimes for Functions, Jobs
 and its own kind. Each change runs as a `JobRun` of a generic run-to-completion `Job`, which is built as a Function is:
 its runtime is a shim with its tool, funcd's own or an add-on's. A run waits for a person's approval of its preview
-unless its Job says `bypass`. A stack's secret outputs reach Functions through a Secret that its Job owns. The [design report](docs/reports/infrastack-design.md) holds the study.
+unless its Job says `bypass`. A stack's outputs, plain and sensitive, reach Functions and add-on engines through a
+Secret that its Job owns, which its runs write ([ADR-0356](docs/adr/0356-a-stacks-outputs-reach-its-readers-through-the-secret-its-job-owns.md)).
+The add-on's `funcdctl infra` plugin pushes a module as an image index of one bundle per architecture, its providers
+pinned by its lock file and its contract made from its variables and outputs
+([ADR-0355](docs/adr/0355-an-opentofu-module-is-pushed-with-its-providers-and-a-contract-from-its-variables.md)). The [design report](docs/reports/infrastack-design.md) holds the study.
 ADR-0344 to ADR-0346 decide runtimes from add-ons and engineless kinds, and ADR-0347 to ADR-0351 the Job and its runs,
 their approval, a Function's start, an App's Jobs and the Job's own identity; the InfraStack add-on itself takes no
 ADR.

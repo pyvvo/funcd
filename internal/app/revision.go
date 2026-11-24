@@ -307,11 +307,12 @@ func (r *Reconciler) setCurrent(rev, latest *v1.AppRevision, current v1.ObjectNa
 	r.setCondition(&rev.Status.Conditions, c)
 }
 
-// deadline is the latest of the revision's startedAt, resumedAt(a), the hold's ReleasedAt and its last preApply
-// call's endTime, plus UpgradeTimeout (ADR-0212 Decision 6, ADR-0214 Decision 4): paused and held time and the time
-// before a pre-hook's last call do not count. rev must have startedAt, so every term is read from the store and the
-// gate on every pass, a restart included; the other terms are zero when absent and never start a deadline alone
-// (ADR-0219 Decision 4).
+// deadline is the latest of the revision's startedAt, resumedAt(a), the hold's ReleasedAt, its last preApply call's
+// endTime and the App's status.lagEndedAt, plus UpgradeTimeout (ADR-0212 Decision 6, ADR-0214 Decision 4, ADR-0357
+// Decision 3): paused and held time, the time before a pre-hook's last call and the time before a part's wait ended do
+// not count. rev must have startedAt, so every term is read from the store and the gate on every pass, a restart
+// included; the other terms are zero when absent and never start a deadline alone (ADR-0219 Decision 4), and one older
+// than startedAt, such as a wait that ended under an older revision, moves nothing.
 func (r *Reconciler) deadline(a *v1.App, rev *v1.AppRevision) time.Time {
 	start := time.Time(*rev.Status.StartedAt)
 	var released time.Time
@@ -321,7 +322,11 @@ func (r *Reconciler) deadline(a *v1.App, rev *v1.AppRevision) time.Time {
 	case r.hold != nil:
 		released = r.hold.ReleasedAt()
 	}
-	for _, t := range []time.Time{resumedAt(a), released, lastPreApply(rev)} {
+	var lagEnd time.Time
+	if a.Status.LagEndedAt != nil {
+		lagEnd = time.Time(*a.Status.LagEndedAt)
+	}
+	for _, t := range []time.Time{resumedAt(a), released, lastPreApply(rev), lagEnd} {
 		if t.After(start) {
 			start = t
 		}

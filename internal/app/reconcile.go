@@ -7,8 +7,10 @@
 // (ADR-0213, F116). It calls the App's hook Functions before its parts change and after a new revision is current,
 // records each call on the AppRevision and resumes a failed one on Retry (ADR-0214, F117). It holds a revision until
 // every App it requires is Ready at a matching version, and app-requires refuses the upgrade, rollback, delete or
-// cycle that would break a started dependent (ADR-0219, F122). The owner GC removes the tree on App delete
-// (internal/gc).
+// cycle that would break a started dependent (ADR-0219, F122). It never waits for its stacks: an engineless part not
+// Ready, and a part that names a Secret one of its Jobs owns while that Secret lacks a key, are Lagging, which its
+// Ready, switch and deadline leave out and its post-hooks and prune wait for (ADR-0357, F145). The owner GC removes
+// the tree on App delete (internal/gc).
 package app
 
 import (
@@ -18,8 +20,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -270,12 +274,12 @@ func (s *stop) msg() string {
 }
 
 // Reconcile stamps an AppRevision when the spec changed, checks that the App owns every part that exists, writes the
-// parts that are absent or differ, recording each self-heal, reads each part's readiness, calls the latest revision's
-// due hook, derives the rollout record, prunes the dropped objects it controls once the latest revision is current and
-// its post-hooks are done, writes the App's status, then each changed AppRevision status, and trims the history. While
-// the latest revision's pre-hooks are not done, it writes only what they need (ADR-0214 Decision 4). A revision waits,
-// writing no part, until every App it requires is met (ADR-0219). A held pass writes nothing (ADR-0206 Decision 6); a
-// paused App gets only its Paused condition (ADR-0212).
+// parts that are absent or differ, recording each self-heal, reads each part's readiness, notes the end of a part's
+// wait, calls the latest revision's due hook, derives the rollout record, prunes the dropped objects it controls once
+// the latest revision is current, its post-hooks are done and no part lags, writes the App's status, then each changed
+// AppRevision status, and trims the history. While the latest revision's pre-hooks are not done, it writes only what
+// they need (ADR-0214 Decision 4). A revision waits, writing no part, until every App it requires is met (ADR-0219). A
+// held pass writes nothing (ADR-0206 Decision 6); a paused App gets only its Paused condition (ADR-0212).
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	if r.held(req.Namespace) {
 		return controller.Result{RequeueAfter: r.supervisionPeriod}, nil
@@ -325,7 +329,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		writes = preHookParts(a, ents)
 	}
 	objs := make(map[v1.ObjectRef]v1.Object, len(ents))
-	halt, wrote, healed, err := r.apply(ctx, a, ents, writes, objs, halt, healing(revs, stored))
+	waiting := make(map[v1.ObjectRef]string)
+	halt, wrote, healed, err := r.apply(ctx, a, ents, writes, objs, waiting, halt, healing(revs, stored))
 	if errors.Is(err, errAppGone) {
 		return controller.Result{}, nil // the owner GC collects the tree (Decision 7)
 	}
@@ -351,8 +356,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if latest != nil {
 		latestName = latest.Name
 	}
-	children := readiness(a, ents, objs, steps, halt, latestName)
-	hp, err := r.hooks(ctx, a, latest, current, objs, halt, wrote, busy)
+	children := readiness(a, ents, objs, steps, halt, latestName, waiting)
+	if latest != nil && latest.Status.Phase == v1.PhaseDeploying && lagEnded(a.Status.Children, children) {
+		ended := v1.NewTimestamp(r.clock.Now())
+		a.Status.LagEndedAt = &ended // stored with the children that drop the Lagging line (ADR-0357 Decision 3)
+	}
+	hp, err := r.hooks(ctx, a, latest, current, objs, children, halt, wrote, busy)
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -363,7 +372,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 	current = latest != nil && latest.Name == a.Status.CurrentRevision
 	var pruning []v1.AppChild
-	if current && halt == nil && wrote == nil && !anyPending(children) && firstPending(latest, pointPostApply) == nil {
+	if current && halt == nil && wrote == nil && !anyPending(children) && !anyLagging(children) && firstPending(latest, pointPostApply) == nil {
 		pruning, err = r.prune(ctx, a, dropped)
 		if err != nil {
 			return controller.Result{}, err
@@ -423,10 +432,12 @@ func healing(revs []*v1.AppRevision, stored map[v1.ObjectName]v1.AppRevisionStat
 // spec, owner references or resource group differ: every entry in section order, or what the pre-hooks need (ADR-0214
 // Decision 4). A write the store refuses stops the pass with ChildInvalid. A pass the stamp stopped (halt) reads the
 // parts and writes none. objs gains each part's stored object, nil when absent; wrote is the first part written, nil
-// when none was. When heal is set, each write of a part that was absent or whose spec differed is a self-heal (ADR-0212
-// Decision 1): it is logged right after the write and returned, in write order.
-func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry, objs map[v1.ObjectRef]v1.Object, halt *stop,
-	heal bool) (*stop, *v1.ObjectRef, []v1.ObjectRef, error) {
+// when none was. waiting gains, once the Secret check ran, each part that waits for a Secret it lets through, with its
+// Lagging reason, and no write creates or updates such a part (ADR-0357 Decision 2). When heal is set, each write of a
+// part that was absent or whose spec differed is a self-heal (ADR-0212 Decision 1), unless it ends that part's wait
+// (ADR-0357 Decision 2); a self-heal is logged right after the write and returned, in write order.
+func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry, objs map[v1.ObjectRef]v1.Object,
+	waiting map[v1.ObjectRef]string, halt *stop, heal bool) (*stop, *v1.ObjectRef, []v1.ObjectRef, error) {
 	if err := r.readParts(ctx, a, ents, objs); err != nil {
 		return nil, nil, nil, err
 	}
@@ -436,8 +447,13 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry,
 	if s := notOwned(a, ents, objs); s != nil {
 		return s, nil, nil, nil
 	}
-	if s, err := r.checkSecrets(ctx, a); s != nil || err != nil {
-		return s, nil, nil, err
+	s, through, err := r.checkSecrets(ctx, a)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	maps.Copy(waiting, waitingParts(a, through))
+	if s != nil {
+		return s, nil, nil, nil
 	}
 	parts := partsOf(a)
 	var wrote *v1.ObjectRef
@@ -447,6 +463,10 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry,
 			continue
 		}
 		k := e.key(a.Namespace)
+		if _, wait := waiting[k]; wait {
+			continue
+		}
+		ends := endsWait(a, e.shownKind(objs[k]), e.name)
 		written, changed, drift, err := r.write(ctx, desired(a, parts, e), objs[k])
 		switch fault.KindOf(err) {
 		case "":
@@ -460,7 +480,7 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry,
 				shown := v1.ObjectRef{Kind: e.shownKind(written), Namespace: k.Namespace, Name: k.Name}
 				wrote = &shown
 			}
-			if changed && drift && heal {
+			if changed && drift && heal && !ends {
 				healed = append(healed, k)
 				r.log.InfoContext(ctx, "self-healed", "kind", k.Kind, "namespace", k.Namespace, "name", k.Name, "app", a.Name)
 			}
@@ -544,20 +564,73 @@ func desired(a *v1.App, parts map[v1.ObjectRef]v1.Object, e entry) v1.Object {
 	return d
 }
 
-// checkSecrets returns the stop of the first declared Secret of the App's namespace that is missing (SecretNotFound) or
-// lacks a declared key in spec.data (SecretKeyMissing, naming the first missing key), nil when every one is complete
-// (ADR-0213 Decision 8), through the check every declarer shares (ownedstore.CheckSecrets). It tests key membership
-// only, so no value enters a stop, a status or a log line. It only reads.
-func (r reader) checkSecrets(ctx context.Context, a *v1.App) (*stop, error) {
-	gap, err := ownedstore.CheckSecrets(ctx, r.store, a.Namespace, a.Spec.Secrets)
-	if err != nil || gap == nil {
-		return nil, err
+// checkSecrets returns the stop of the first gap Decision 2 does not let through (ADR-0357), and the Secrets it does,
+// by name: the stop of the first declared Secret of the App's namespace that is missing (SecretNotFound) or lacks a
+// declared key in spec.data (SecretKeyMissing, naming the first missing key), nil when every one is complete
+// (ADR-0213 Decision 8), but one that exists, lacks a key and whose spec.owner is a Job the App's jobs name, by name
+// or by ref, stops no pass. It reads through the check every declarer shares (ownedstore.SecretGaps) and tests key
+// membership only, so no value enters a stop, a status or a log line. It only reads.
+func (r reader) checkSecrets(ctx context.Context, a *v1.App) (*stop, map[v1.ObjectName]ownedstore.SecretGap, error) {
+	gaps, err := ownedstore.SecretGaps(ctx, r.store, a.Namespace, a.Spec.Secrets)
+	if err != nil {
+		return nil, nil, err
 	}
-	k := v1.ObjectRef{Kind: v1.KindSecret, Namespace: a.Namespace, Name: gap.Name}
-	if gap.Key == "" {
-		return &stop{reason: gap.Reason(), part: k, detail: "no such Secret in the namespace"}, nil
+	var halt *stop
+	through := make(map[v1.ObjectName]ownedstore.SecretGap)
+	for _, gap := range gaps {
+		if gap.Key != "" && gap.Owner.Kind == v1.KindJob && slices.ContainsFunc(a.Spec.Jobs, func(j v1.AppJob) bool {
+			return cmp.Or(j.Name, j.Ref) == gap.Owner.Name
+		}) {
+			through[gap.Name] = gap
+			continue
+		}
+		if halt != nil {
+			continue
+		}
+		halt = &stop{reason: gap.Reason(), part: v1.ObjectRef{Kind: v1.KindSecret, Namespace: a.Namespace, Name: gap.Name}}
+		if gap.Key == "" {
+			halt.detail = "no such Secret in the namespace"
+		} else {
+			halt.detail = "lacks the declared key " + gap.Key
+		}
 	}
-	return &stop{reason: gap.Reason(), part: k, detail: "lacks the declared key " + gap.Key}, nil
+	return halt, through, nil
+}
+
+// waitingParts are the parts that wait for a Secret the Secret check lets through (through), each with its Lagging
+// reason, SecretKeyMissing: Secret/<name> <key>, for the first such Secret it names (ADR-0357 Decision 2): every
+// defined part namedSecrets walks that names one, but the Job that owns that Secret and the pre-hook Functions, which
+// are written as before (ADR-0214 Decision 4).
+func waitingParts(a *v1.App, through map[v1.ObjectName]ownedstore.SecretGap) map[v1.ObjectRef]string {
+	out := make(map[v1.ObjectRef]string)
+	if len(through) == 0 {
+		return out
+	}
+	pre := make(map[v1.ObjectName]bool)
+	for _, h := range hooksOf(a.Spec, pointPreApply) {
+		pre[h.Function] = true
+	}
+	_ = namedSecrets(a, func(_ string, _ v1.Kind, k v1.ObjectRef, secrets []v1.ObjectName) error {
+		if _, seen := out[k]; seen || k.Name == "" || k.Kind == v1.KindFunction && pre[k.Name] {
+			return nil
+		}
+		for _, n := range secrets {
+			if gap, ok := through[n]; ok && (k.Kind != v1.KindJob || k.Name != gap.Owner.Name) {
+				out[k] = fmt.Sprintf("%s: Secret/%s %s", ownedstore.ReasonSecretKeyMissing, gap.Name, gap.Key)
+				return nil
+			}
+		}
+		return nil
+	})
+	return out
+}
+
+// endsWait reports whether the App's stored status lists the part kind/name Lagging for a Secret's key (ADR-0357
+// Decision 2): the write that ends that wait, the first after it, is no self-heal.
+func endsWait(a *v1.App, kind v1.Kind, name v1.ObjectName) bool {
+	return slices.ContainsFunc(a.Status.Children, func(c v1.AppChild) bool {
+		return c.State == v1.AppChildLagging && sameLine(c, kind, name) && strings.HasPrefix(c.Reason, ownedstore.ReasonSecretKeyMissing+": ")
+	})
 }
 
 // write creates desired, or updates cur with desired's spec, owner references and resource group when one of them

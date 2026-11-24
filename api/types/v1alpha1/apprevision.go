@@ -41,8 +41,9 @@ type AppAddonRevision struct {
 type AppRevisionStatus struct {
 	Status `json:",inline"`
 	// StartedAt is when the requirements were met, the stamp time when none waited; nil while the revision waits; the
-	// rollout deadline (ADR-0212 Decision 6) needs it (ADR-0219 Decision 3).
-	StartedAt *Timestamp `json:"startedAt,omitempty" doc:"When the rollout started: when the revision was created, or, when it waited for required Apps, once they were all met; unset while it waits. The rollout fails if it is not complete app.upgradeTimeout after the latest of this time, a resume of the App, the release of a hold and the end of the last pre-hook call, unless a pre-hook call is running."`
+	// rollout deadline (ADR-0212 Decision 6) needs it (ADR-0219 Decision 3), and counts from the end of a part's wait
+	// too (ADR-0357 Decision 3).
+	StartedAt *Timestamp `json:"startedAt,omitempty" doc:"When the rollout started: when the revision was created, or, when it waited for required Apps, once they were all met; unset while it waits. The rollout fails if it is not complete app.upgradeTimeout after the latest of this time, a resume of the App, the release of a hold, the end of the last pre-hook call and the end of a part's wait, the App's status.lagEndedAt, unless a pre-hook call is running."`
 	// Hooks records every hook call of the revision, retries included, in call order (ADR-0214 Decision 6).
 	Hooks []AppHookCall `json:"hooks,omitempty" doc:"The hook calls of this revision in call order, a retried call included. A call that ends during a stop of funcd, a hold or a pause of the App is not recorded and is made again."`
 }

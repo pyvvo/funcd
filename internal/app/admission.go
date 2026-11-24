@@ -117,22 +117,31 @@ func undeclaredSecret(app *v1.App) error {
 	for _, s := range app.Spec.Secrets {
 		declared[s.Name] = true
 	}
-	check := func(path string, kind v1.Kind, name v1.ObjectName, secrets []v1.ObjectName) error {
+	return namedSecrets(app, func(path string, shown v1.Kind, k v1.ObjectRef, secrets []v1.ObjectName) error {
 		for j, n := range secrets {
 			if !declared[n] {
-				return fault.Invalidf(admitOp, "%s.bindings.secret[%d]: %s/%s names Secret %q, which spec.secrets does not declare", path, j, kind, name, n)
+				return fault.Invalidf(admitOp, "%s.bindings.secret[%d]: %s/%s names Secret %q, which spec.secrets does not declare", path, j, shown, k.Name, n)
 			}
 		}
 		return nil
+	})
+}
+
+// namedSecrets calls visit, until it fails, with each entry that names Secrets as ADR-0213 Decision 7's check walks
+// them: every functions, jobs, lakes and addons entry, and each workflows entry once per image step: its field path, the
+// kind its lines name, its key and the Secrets it names in spec.bindings.secret (a step's function.bindings.secret).
+func namedSecrets(app *v1.App, visit func(path string, shown v1.Kind, k v1.ObjectRef, secrets []v1.ObjectName) error) error {
+	key := func(kind v1.Kind, name v1.ObjectName) v1.ObjectRef {
+		return v1.ObjectRef{Kind: kind, Namespace: app.Namespace, Name: name}
 	}
 	s := &app.Spec
 	for i, f := range s.Functions {
-		if err := check(fmt.Sprintf("spec.functions[%d]", i), v1.KindFunction, f.Name, f.Bindings.Secret); err != nil {
+		if err := visit(fmt.Sprintf("spec.functions[%d]", i), v1.KindFunction, key(v1.KindFunction, f.Name), f.Bindings.Secret); err != nil {
 			return err
 		}
 	}
 	for i, j := range s.Jobs {
-		if err := check(fmt.Sprintf("spec.jobs[%d]", i), v1.KindJob, j.Name, j.Bindings.Secret); err != nil {
+		if err := visit(fmt.Sprintf("spec.jobs[%d]", i), v1.KindJob, key(v1.KindJob, j.Name), j.Bindings.Secret); err != nil {
 			return err
 		}
 	}
@@ -141,18 +150,19 @@ func undeclaredSecret(app *v1.App) error {
 			if st.Function == nil || st.Function.Image == "" {
 				continue
 			}
-			if err := check(fmt.Sprintf("spec.workflows[%d].steps[%d].function", i, j), v1.KindWorkflow, w.Name, st.Function.Bindings.Secret); err != nil {
+			path := fmt.Sprintf("spec.workflows[%d].steps[%d].function", i, j)
+			if err := visit(path, v1.KindWorkflow, key(v1.KindWorkflow, w.Name), st.Function.Bindings.Secret); err != nil {
 				return err
 			}
 		}
 	}
 	for i, c := range s.Lakes {
-		if err := check(fmt.Sprintf("spec.lakes[%d]", i), v1.KindLake, c.Name, c.Bindings.Secret); err != nil {
+		if err := visit(fmt.Sprintf("spec.lakes[%d]", i), v1.KindLake, key(v1.KindLake, c.Name), c.Bindings.Secret); err != nil {
 			return err
 		}
 	}
 	for i, e := range s.Addons {
-		if err := check(fmt.Sprintf("spec.addons[%d]", i), v1.Kind(e.Kind), e.Name, e.Bindings.Secret); err != nil {
+		if err := visit(fmt.Sprintf("spec.addons[%d]", i), v1.Kind(e.Kind), key(v1.KindAddonObject, e.Name), e.Bindings.Secret); err != nil {
 			return err
 		}
 	}
