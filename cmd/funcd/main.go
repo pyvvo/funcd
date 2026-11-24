@@ -1104,7 +1104,6 @@ func parseDuration(key, s string, def time.Duration, lo, hi v1.Duration) (time.D
 	return time.Duration(d), nil
 }
 
-// limitsConfig maps server.limits to the data-plane limiter's Config (ADR-0112, ADR-0164).
 // trustedProxies is server.trustedProxies, which config.Validate checked, over the worker subnet that a cidrs entry never
 // trusts: runtime.containerd.subnetCIDR under containerd, none on the process runtime (ADR-0354 Decision 3).
 func trustedProxies(cfg config.Config) edge.Proxies {
@@ -1124,6 +1123,7 @@ func trustedProxies(cfg config.Config) edge.Proxies {
 	return p
 }
 
+// limitsConfig maps server.limits to the data-plane limiter's Config (ADR-0112, ADR-0164).
 func limitsConfig(cfg config.Config) limit.Config {
 	l := cfg.Server.Limits
 	return limit.Config{
