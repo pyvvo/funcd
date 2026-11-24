@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -44,12 +45,12 @@ func TestDevAddonWorkerSpec(t *testing.T) {
 		t.Run(host, func(t *testing.T) {
 			t.Parallel()
 			socks := &socketLog{}
-			h := newShimHarness(t, http.StatusOK, false, onDevImages(true, "", host, socks), func(d *function.Deps) {
-				d.S3Gateway = function.S3GatewayInjection{Enabled: true, ListenAddr: "127.0.0.1:9000",
-					Derive: func(_ v1.Kind, _, name string) (string, string) { return "AK-" + name, "SK-" + name }}
+			h := newShimHarness(t, http.StatusOK, false, onDevImages(true, "", host, socks), withS3Gateway, func(d *function.Deps) {
+				d.LakeMaster = []byte("dev-worker-spec-master-secret")
 			})
 			h.putAddon(t, denoImageA, v1.WorkloadFunction)
-			h.createObj(t, v1.KindBucket, "k", func(o v1.Object) { o.(*v1.Bucket).Spec.Prefixes = []v1.BucketPrefix{{Name: "raw"}} })
+			storeBucket(t, h)
+			storeReadyLake(t, h.st)
 			obj, _ := v1.NewObject(v1.KindConfigMap)
 			cm := obj.(*v1.ConfigMap)
 			cm.Name, cm.Namespace, cm.ResourceGroup = "app", "default", "rg1"
@@ -57,7 +58,8 @@ func TestDevAddonWorkerSpec(t *testing.T) {
 			_, err := h.st.Create(context.Background(), cm)
 			require.NoError(t, err)
 			bind := func(fn *v1.Function) {
-				fn.Spec.Bindings.Blob = []v1.FunctionBlob{{Alias: "raw", Bucket: "k", Prefix: "raw"}}
+				bindBucket(fn)
+				bindLake(fn)
 				fn.Spec.Bindings.Config = []v1.ObjectName{"app"}
 			}
 			h.create(t, "greeter", func(fn *v1.Function) { onDeno2(fn); bind(fn) })
@@ -78,6 +80,7 @@ func TestDevAddonWorkerSpec(t *testing.T) {
 			require.Equal(t, "http://"+host+":40001", spec.Env["FUNCD_INVOKE_URL"])
 			require.Equal(t, "token-of-"+string(id), spec.Env["FUNCD_INVOKE_TOKEN"])
 			require.Equal(t, "http://"+host+":9000", spec.Env["AWS_ENDPOINT_URL_S3"], "a marked endpoint key")
+			require.Equal(t, host+":1", spec.Env["FUNCD_LAKE_LAKE_URL"], "the Lake hook's endpoint key, marked too")
 			require.Equal(t, "http://127.0.0.1:7777", spec.Env["UPSTREAM"], "a config key is the developer's, never rewritten")
 			if host == runtime.LoopbackHost {
 				require.NotContains(t, spec.Env, "FUNCD_PORT", "on the host's network the shim binds the loopback")
@@ -92,6 +95,7 @@ func TestDevAddonWorkerSpec(t *testing.T) {
 			require.Contains(t, plain.Env, "FUNCD_INVOKE_SOCKET")
 			require.NotContains(t, plain.Env, "FUNCD_INVOKE_URL")
 			require.Equal(t, "http://127.0.0.1:9000", plain.Env["AWS_ENDPOINT_URL_S3"])
+			require.Equal(t, "127.0.0.1:1", plain.Env["FUNCD_LAKE_LAKE_URL"])
 		})
 	}
 }
@@ -114,7 +118,8 @@ func TestDevAddonWorkerGateNamesWhy(t *testing.T) {
 	require.Empty(t, h.rt.specOf(runtime.NewInstanceID("default", "greeter", "greeter-1", 0)).Name, "no worker is created")
 }
 
-// ADR-0346 Decision 6: a worker's listener goes when its Create fails, and with its Function's own Remove.
+// ADR-0346 Decision 6: a worker's listener goes when its Create fails, when the worker of a revision that no longer
+// serves is retired, and with its Function's own Remove.
 func TestDevAddonWorkerListenerGoes(t *testing.T) {
 	t.Parallel()
 	socks := &socketLog{}
@@ -129,9 +134,18 @@ func TestDevAddonWorkerListenerGoes(t *testing.T) {
 	h.rt.failImage(denoImageA, nil)
 	h.reconcile(t, "greeter")
 	h.requireReady(t, "greeter")
+	served := len(socks.log())
+	h.apply(t, "greeter", func(fn *v1.Function) { fn.Spec.Handler = "handle2" })
+	require.Eventually(t, func() bool {
+		h.reconcile(t, "greeter")
+		fn := h.getFn(t, "greeter")
+		return fn.Status.ServingRevision == "greeter-2" && fn.Status.DrainingRevision == ""
+	}, 5*time.Second, 10*time.Millisecond, "greeter-1 drains")
+	require.Contains(t, socks.log()[served:], "release "+id, "the retired worker's listener goes with it")
+
 	require.NoError(t, h.st.Delete(context.Background(), v1.KindFunction.GVK(), "default", "greeter", ""))
 	h.reconcile(t, "greeter")
-	require.Contains(t, socks.log()[2:], "remove default/greeter", "the Function's Remove takes its workers' listeners")
+	require.Contains(t, socks.log()[served:], "remove default/greeter", "the Function's Remove takes its workers' listeners")
 }
 
 // ADR-0346 Decision 8: a Job's run on an Addon's runtime runs as such a worker, on a listener of the run's own, which
