@@ -18,7 +18,9 @@ import (
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 )
 
-// The modules funcd pins in go.mod: the two language repos, the example repo and the add-ons repo (ADR-0332).
+// The modules funcd pins in go.mod: the two language repos, the example repo and the add-ons repo (ADR-0332). No lane
+// of funcd runs an add-on: the add-ons repo runs its own lanes with funcd's harness, and funcd pins it for its guide's
+// includes and for the folders those lanes run, which the guide's Examples links may name.
 const (
 	TypeScript = "github.com/pyvvo/funcd-typescript"
 	Python     = "github.com/pyvvo/funcd-python"

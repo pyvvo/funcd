@@ -255,6 +255,6 @@ funcdctl logs identityprovider/login -n default
 ## Examples
 
 - [rauthy](https://github.com/pyvvo/funcd-addons/tree/main/rauthy): the add-on, its template and its settings Function,
-  which the `addon-rauthy` lanes register, deploy and apply.
+  which pyvvo/funcd-addons' `addon-rauthy` lanes register, deploy and apply.
 - [addon-caller](https://github.com/pyvvo/funcd-functions/tree/main/apps/addon-caller): a Function that calls an add-on
-  object's engine, which the `addon-rauthy-signin` lane runs.
+  object's engine, which pyvvo/funcd-addons' `addon-rauthy-signin` lane runs.

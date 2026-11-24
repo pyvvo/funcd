@@ -71,8 +71,8 @@ func TestTemplateRefusesABrokenPage(t *testing.T) {
 		`line 24: code from funcd-typescript sits under a "### TypeScript" heading`,
 		`line 28: a hand-written "Method" table`,
 		`"Access" appears twice`,
-		"an Examples link points at examples/no-such-example, which no lane in scripts/lanes.yaml runs",
-		"an Examples link points at shim, which no lane in scripts/lanes.yaml runs",
+		"an Examples link points at examples/no-such-example, which no lane in scripts/lanes.yaml or in the add-ons repo's e2e/lanes.yaml runs",
+		"an Examples link points at shim, which no lane in scripts/lanes.yaml or in the add-ons repo's e2e/lanes.yaml runs",
 		"a cedar block that quotes no built-in policy",
 	} {
 		require.Contains(t, problems, want)
@@ -263,7 +263,7 @@ func templateProblems(t *testing.T, tpl pageTemplate, file string) []string {
 			if shown == "" {
 				shown = m[2]
 			}
-			problems = append(problems, fmt.Sprintf("an Examples link points at %s, which no lane in scripts/lanes.yaml runs", shown))
+			problems = append(problems, fmt.Sprintf("an Examples link points at %s, which no lane in scripts/lanes.yaml or in the add-ons repo's e2e/lanes.yaml runs", shown))
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(langmod.Dir(t, module), filepath.FromSlash(folder))); err != nil {
@@ -306,14 +306,44 @@ func statements(lines []string) string {
 // a fixture that funcd stages is no example.
 func laneFolders(t *testing.T) map[string]bool {
 	t.Helper()
+	run := map[string]bool{}
+	addLaneFolders(run, readLanes(t), "github.com/pyvvo/funcd")
+	// The add-ons run their lanes in their own repository, with funcd's harness: what the pinned add-ons repo's lanes
+	// run, an Examples link may name too.
+	data, err := os.ReadFile(filepath.Join(langmod.Dir(t, langmod.Addons), "e2e", "lanes.yaml"))
+	if err != nil {
+		for _, folder := range movedLaneFolders() {
+			run[folder] = true
+		}
+		return run
+	}
+	require.Empty(t, movedLaneFolders(), "the pinned funcd-addons runs its own lanes: empty movedLaneFolders")
+	var lanes map[string]laneSpec
+	require.NoError(t, yaml.Unmarshal(data, &lanes))
+	addLaneFolders(run, lanes, langmod.Addons)
+	return run
+}
+
+// movedLaneFolders are run by pyvvo/funcd-addons' own lanes, which moved there after the funcd-addons release that
+// go.mod pins (v0.6.0), so that release holds no e2e/lanes.yaml to read them from. A temporary list: laneFolders fails
+// once the pinned release holds one, and the entries go then.
+func movedLaneFolders() []string {
+	return []string{
+		"github.com/pyvvo/funcd-addons rauthy",
+		"github.com/pyvvo/funcd-functions apps/addon-caller",
+	}
+}
+
+// addLaneFolders records each folder the lanes run: a lane's dir, a staged file's folder in the module it names, and,
+// for another repository's lanes, the top folder of each file staged from that repository, home.
+func addLaneFolders(run map[string]bool, lanes map[string]laneSpec, home string) {
 	module := func(m string) string {
 		if m == "" {
-			return "github.com/pyvvo/funcd"
+			return home
 		}
 		return m
 	}
-	run := map[string]bool{}
-	for _, lane := range readLanes(t) {
+	for _, lane := range lanes {
 		if lane.Dir != "" {
 			run[module(lane.Module)+" "+lane.Dir] = true
 		}
@@ -321,10 +351,12 @@ func laneFolders(t *testing.T) map[string]bool {
 			if parts := strings.SplitN(st.From, "/", 3); st.Module != "" && len(parts) >= 2 {
 				run[st.Module+" "+parts[0]+"/"+parts[1]] = true
 			}
+			if top, _, ok := strings.Cut(st.From, "/"); st.Module == "" && ok && home != "github.com/pyvvo/funcd" {
+				run[home+" "+top] = true
+			}
 			if parts := strings.SplitN(lane.Dir+"/"+st.Path, "/", 3); st.Path != "" && lane.Module != "" && len(parts) == 3 {
 				run[lane.Module+" "+parts[0]+"/"+parts[1]] = true
 			}
 		}
 	}
-	return run
 }

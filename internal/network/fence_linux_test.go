@@ -48,7 +48,7 @@ func TestScenarioFenceRefusesOtherDestinations(t *testing.T) {
 
 // The input chain accepts loopback, then established or related traffic, then IPv4 from each admit address, funcd's
 // bridge address, and nothing else: its drop policy refuses a connection from any other worker (ADR-0332 Decision 3).
-// The packet-level effect is the addon-rauthy lane's.
+// The packet-level effect is pyvvo/funcd-addons' addon-rauthy lane's.
 func TestFenceAdmitsOnlyLoopbackAndTheBridgeAddress(t *testing.T) {
 	bridge := netip.MustParseAddr("10.63.0.1")
 	rules := admitRules([]netip.Addr{bridge})
