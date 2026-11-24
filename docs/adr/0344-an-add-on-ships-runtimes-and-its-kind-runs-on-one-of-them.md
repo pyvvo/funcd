@@ -1,7 +1,7 @@
 # ADR-0344: An add-on ships runtimes, and its kind runs on one of them
 
-- **Status**: Accepted (2026-11-23), by the decider ("accept"), after three rounds of an independent judge, every
-  Blocker and Major folded
+- **Status**: Reviewing (2026-11-24, implemented); Accepted (2026-11-23), by the decider ("accept"), after three rounds
+  of an independent judge, every Blocker and Major folded
 - **Amended in place**: 2026-11-23, by the decider on [#1526](https://github.com/pyvvo/funcd/pull/1526): the Jobs ADRs
   (F137) are implemented first, so this ADR gates Jobs as Functions (Decision 11), and under `funcdctl dev` a worker on
   an Addon's runtime runs on dev's container engine (Decision 13), as ADR-0346 decides
