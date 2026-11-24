@@ -141,8 +141,8 @@ Egress control works on Linux with the containerd runtime. Turn it on with these
 [`funcdconfig.yaml`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/egress-probe/funcdconfig.yaml) does:
 `server.network.egress: true`, `server.network.egressGatewayPort`, `server.network.dnsForwarderPort` and
 `server.network.dnsResolver`. With it on, a Function or an add-on engine reaches nothing outside funcd unless an
-EgressPolicy or a Policy allows it. Without it, and under `funcdctl dev`, workers connect anywhere, and an add-on
-engine nowhere.
+EgressPolicy or a Policy allows it. Without it on containerd, a Function's workers connect anywhere and an add-on
+engine nowhere. Under `funcdctl dev`, workers and engines both connect anywhere.
 
 An EgressPolicy's [`rules`](spec.md#egresspolicyspec) allow TCP connections to their [`to`](spec.md#egresspolicyspecrules)
 on their `ports`, or on every port:
