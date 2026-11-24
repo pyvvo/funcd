@@ -2,6 +2,7 @@
 
 - **Status**: Reviewing (2026-11-24, implemented); Accepted (2026-11-23), by the decider ("accept"), with the token
   transport of Decision 6 and option A, after three rounds of an independent judge, every Blocker and Major folded
+- **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md) (2026-11-23) — the Contracts' ListenerFor takes the caller's ref
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: dev, runtime, addons, functions, jobs, local-api
