@@ -1,0 +1,42 @@
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: sso-session
+  namespace: default
+  resourceGroup: rg1
+spec:
+  data:
+    SESSION_KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+---
+# region oidcprovider
+apiVersion: funcd.io/v1alpha1
+kind: OIDCProvider
+metadata:
+  name: sso
+  namespace: default
+  resourceGroup: rg1
+spec:
+  issuer: http://login.localhost:8080/auth/v1/
+  addon: login
+  client:
+    registration: {}
+  sessionSecret: sso-session
+# endregion oidcprovider
+---
+# region route
+apiVersion: funcd.io/v1alpha1
+kind: Route
+metadata:
+  name: devices
+  namespace: default
+  resourceGroup: rg1
+spec:
+  host: localhost
+  auth:
+    mode: oidc
+    provider: sso
+  rules:
+    - path: /
+      backend:
+        function: devices-api
+# endregion route

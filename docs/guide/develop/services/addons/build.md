@@ -26,7 +26,7 @@ An add-on cannot serve one of funcd's own kinds, as a CSI driver serves a Kubern
 still to make.
 
 A funcd feature that speaks a standard protocol can still use an add-on's engine as its server. The edge's sign-in
-([Sign users in](../../security-and-networking/security/index.md#sign-users-in)) speaks OpenID Connect to any
+([OIDC sign-in](../../security-and-networking/sign-in/index.md)) speaks OpenID Connect to any
 provider, so rauthy is to it what Dex is to the Kubernetes API server's OIDC authentication: a trusted provider, not a
 driver. An `OIDCProvider` names the object with `spec.addon`, and funcd reaches the engine at its own address. Two of
 rauthy's settings serve the sign-in rather than its own kind: `ENABLE_DYN_CLIENT_REG` lets funcd register the edge's
