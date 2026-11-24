@@ -5,6 +5,9 @@
   folded
 - **Superseded in part by**: [ADR-0345](0345-a-function-reconciles-an-engineless-kind-and-a-deletion-waits-for-its-destroy.md) (2026-11-23) — Decisions 3 and 8 (an engineless object's `spec.functions` may name its own kind; `addons.settingsTimeout` bounds the engineless call too).
 - **Superseded in part by**: [ADR-0358](0358-an-add-on-kinds-function-comes-from-an-image-and-its-contract-is-the-kinds-schema.md) (2026-11-24) — Decisions 1 (a kind is read from a pin), 3 (an image's Function) and 4 (two more reasons).
+- **Amended in place**: 2026-11-25, on the decider's go to merge ADR-0358
+  ([#1576](https://github.com/pyvvo/funcd/issues/1576)): the digest names the revision of the Function that answers, not
+  the current one, whose workers may still boot beside those that answer (Decision 1)
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, reconcile, functions
@@ -111,8 +114,9 @@ state.
    digest differs from that of the last call that ended (`change`); or that call failed and its backoff ended
    (`retry`); or the kind's `resync` elapsed since it ended (`resync`). The first that holds names the call. The digest
    holds each object's name, uid and generation, the target's address and how many times it turned Ready, and the
-   Function's current revision and the alias that binds the target. The pass requeues the target at the next
-   due time when that comes before its supervision period (ADR-0142).
+   revision of the Function that answers, the one whose workers take the calls (ADR-0143) or, while it sleeps, the latest,
+   and the alias that binds the target (amended 2026-11-25). The pass requeues the target at the next due time when that
+   comes before its supervision period (ADR-0142).
 2. **The call** runs on a goroutine of its own, and its end requeues the target, as an App hook's call does (ADR-0214
    Decision 6); it records no Invocation, and `addons.settingsTimeout` bounds it, not the Function's `spec.timeout`: the
    bound frees the target's step, so the platform sets it, as `sql.callTimeout` bounds a SQL call. Its Function is
