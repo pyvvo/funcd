@@ -247,3 +247,64 @@ func TestEnginelessDeleteAnswersHeld(t *testing.T) {
 	require.NotNil(t, stored.DeletionTime, "a write keeps it deleting")
 	require.JSONEq(t, `{"job":"other"}`, string(stored.Spec.Config))
 }
+
+// ADR-0345 Decisions 3 and 6: an engineless object runs no engine, so an engine field is refused 400, as on a settings
+// object, while spec.deletion and spec.functions stay its own.
+func TestEnginelessObjectRefusesEngineFields(t *testing.T) {
+	t.Parallel()
+	e := startAddons(t)
+	e.apply(t, e.admin, infraStackAddon())
+	stacks := "/apis/funcd.io/v1alpha1/namespaces/default/infrastacks"
+	stack := func(change func(*v1.AddonObject)) *v1.AddonObject {
+		o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: "InfraStack"}}
+		o.Name, o.Namespace, o.ResourceGroup, o.Spec.Deletion = "site", "default", "rg1", v1.DeletionDelete
+		change(o)
+		return o
+	}
+	require.Eventually(t, func() bool {
+		status, _ := e.send(t, http.MethodPost, stacks, addonDevToken, stack(func(o *v1.AddonObject) { o.Name = "probe" }))
+		return status == http.StatusOK
+	}, 5*time.Second, 20*time.Millisecond, "the kind is served")
+	for name, change := range map[string]func(*v1.AddonObject){
+		"secret":    func(o *v1.AddonObject) { o.Spec.Bindings.Secret = []v1.ObjectName{"keys"} },
+		"resources": func(o *v1.AddonObject) { o.Spec.Resources.Memory = "64Mi" },
+		"ingress":   func(o *v1.AddonObject) { o.Spec.Ingress = &v1.Ingress{Host: "site.example.com"} },
+	} {
+		status, detail := e.send(t, http.MethodPost, stacks, addonDevToken, stack(change))
+		require.Equal(t, http.StatusBadRequest, status, "%s: %s", name, detail)
+		require.Contains(t, detail, "runs no engine", name)
+	}
+	status, detail := e.send(t, http.MethodPost, stacks, addonDevToken, stack(func(o *v1.AddonObject) {
+		o.Spec.Functions = []v1.AddonObjectFunction{{Kind: "InfraStack", Ref: "site-reconciler"}}
+	}))
+	require.Equal(t, http.StatusOK, status, detail)
+}
+
+// ADR-0345 Decision 1 across an Addon's deletion: an Addon created again for a kind whose marked object ran no engine
+// is refused 409 as an Engine kind, as a replace that moves the kind is refused 400, and stored as an Engineless one.
+func TestEnginelessKindKeepsItsWorkloadAcrossDeletion(t *testing.T) {
+	t.Parallel()
+	e := startAddons(t)
+	e.apply(t, e.admin, infraStackAddon())
+	stacks := "/apis/funcd.io/v1alpha1/namespaces/default/infrastacks"
+	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: "InfraStack"}}
+	o.Name, o.Namespace, o.ResourceGroup, o.Spec.Deletion = "bunny-edge", "default", "rg1", v1.DeletionRetain
+	require.Eventually(t, func() bool {
+		status, _ := e.send(t, http.MethodPost, stacks, addonDevToken, o)
+		return status == http.StatusOK
+	}, 5*time.Second, 20*time.Millisecond, "the kind is served")
+	require.Eventually(t, func() bool {
+		stored, ok := e.object(t, "default", "bunny-edge")
+		return ok && stored.Status.Workload == v1.WorkloadEngineless
+	}, 5*time.Second, 10*time.Millisecond, "its first pass stores the mark")
+	status, detail := e.send(t, http.MethodDelete, addonsPath+"/infrastack", addonAdminToken, nil)
+	require.Equal(t, http.StatusNoContent, status, detail)
+
+	engine := rauthyAddon("infrastack")
+	engine.Spec.Runtimes[0].Attributes.Kind = "InfraStack"
+	status, detail = e.send(t, http.MethodPost, addonsPath, addonAdminToken, engine)
+	require.Equal(t, http.StatusConflict, status, detail)
+	require.Contains(t, detail, `default/bunny-edge ran no engine`)
+	status, detail = e.send(t, http.MethodPost, addonsPath, addonAdminToken, infraStackAddon())
+	require.Equal(t, http.StatusOK, status, detail)
+}

@@ -216,7 +216,7 @@ components:
       properties:
         bindings:
           $ref: "#/components/schemas/AddonObjectBindings"
-          description: What the object's engine uses.
+          description: What the object's engine uses. An object of a settings or an engineless kind, which runs no engine, takes none.
         config:
           description: The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object.
         deletion:
@@ -234,13 +234,13 @@ components:
             - "null"
         ingress:
           $ref: "#/components/schemas/Ingress"
-          description: Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused.
+          description: Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused. An object of a settings or an engineless kind takes none.
         kind:
           description: The add-on's kind, which funcd sets from the path the object is written at.
           type: string
         resources:
           $ref: "#/components/schemas/ResourceSpec"
-          description: The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine.
+          description: The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine. An object of a settings or an engineless kind takes none.
       type: object
     AddonObjectStatus:
       additionalProperties: false
@@ -903,7 +903,7 @@ components:
             properties:
               bindings:
                 $ref: "#/components/schemas/AddonObjectBindings"
-                description: What the object's engine uses.
+                description: What the object's engine uses. An object of a settings or an engineless kind, which runs no engine, takes none.
               config:
                 description: The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object.
               deletion:
@@ -921,7 +921,7 @@ components:
                   - "null"
               ingress:
                 $ref: "#/components/schemas/Ingress"
-                description: Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused.
+                description: Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused. An object of a settings or an engineless kind takes none.
               kind:
                 description: "The add-on's kind: one that an Addon registers, as the Addon writes it. A ref entry leaves it unset."
                 type: string
@@ -939,7 +939,7 @@ components:
                 type: string
               resources:
                 $ref: "#/components/schemas/ResourceSpec"
-                description: The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine.
+                description: The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine. An object of a settings or an engineless kind takes none.
             type: object
           type:
             - array
@@ -25601,7 +25601,7 @@ paths:
             - `urn:funcd:problem:invalid`: The body's metadata.namespace is not the namespace of the path. Send the object to the path of its own namespace.
             - `about:blank`: The body is missing or is not JSON. Send a JSON body.
             - `urn:funcd:problem:invalid`: The body's kind is not the kind whose plural the path names. Send the object to its own kind's plural.
-            - `urn:funcd:problem:invalid`: The namespace already holds the most add-on objects that run an engine that addons.maxObjectsPerNamespace allows, or the most settings objects that addons.maxSettingsPerNamespace allows. Delete an object that the namespace no longer needs, or ask the operator to raise the cap.
+            - `urn:funcd:problem:invalid`: The namespace already holds the most add-on objects of engine and engineless kinds that addons.maxObjectsPerNamespace allows, or the most settings objects that addons.maxSettingsPerNamespace allows. Delete an object that the namespace no longer needs, or ask the operator to raise the cap.
           x-funcd-cases:
             - type: urn:funcd:problem:invalid
               when: A field breaks a rule that the schema cannot hold, which the detail names.
@@ -25616,7 +25616,7 @@ paths:
               when: The body's kind is not the kind whose plural the path names.
               fix: Send the object to its own kind's plural.
             - type: urn:funcd:problem:invalid
-              when: The namespace already holds the most add-on objects that run an engine that addons.maxObjectsPerNamespace allows, or the most settings objects that addons.maxSettingsPerNamespace allows.
+              when: The namespace already holds the most add-on objects of engine and engineless kinds that addons.maxObjectsPerNamespace allows, or the most settings objects that addons.maxSettingsPerNamespace allows.
               fix: Delete an object that the namespace no longer needs, or ask the operator to raise the cap.
         "401":
           content:

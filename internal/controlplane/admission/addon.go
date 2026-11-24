@@ -17,9 +17,10 @@ type addonObjectQuota struct {
 }
 
 // NewAddonObjectQuotaAdmission returns the Validating admission that rejects creating an add-on object when its
-// namespace already holds the most of its class: maxEngines objects that run an engine, all add-ons together, as the
-// SQLDatabase quota does, or maxSettings objects of settings kinds, every kind together (ADR-0340 Decision 6). A
-// maximum ≤ 0 disables its class's cap.
+// namespace already holds the most of its class: maxEngines objects of engine and engineless kinds, all add-ons
+// together, as the SQLDatabase quota does, or maxSettings objects of settings kinds, every kind together (ADR-0340
+// Decision 6). An engineless object drives its Function's calls and the runs they start, so it counts with the engine
+// objects (ADR-0345 names no cap of its own). A maximum ≤ 0 disables its class's cap.
 func NewAddonObjectQuotaAdmission(r StoreReader, maxEngines, maxSettings int) Admission {
 	return addonObjectQuota{r: r, maxEngines: maxEngines, maxSettings: maxSettings}
 }
@@ -45,7 +46,7 @@ func (a addonObjectQuota) Admit(ctx context.Context, req Request) (v1.Object, er
 		return nil, fault.Wrapf(err, fault.Internal, op, "list Addons")
 	}
 	isSettings := settings[v1.AddonPlural(o.AddonKind())]
-	limit, what, key := a.maxEngines, "add-on objects that run an engine", "addons.maxObjectsPerNamespace"
+	limit, what, key := a.maxEngines, "add-on objects of engine and engineless kinds", "addons.maxObjectsPerNamespace"
 	if isSettings {
 		limit, what, key = a.maxSettings, "settings objects", "addons.maxSettingsPerNamespace"
 	}

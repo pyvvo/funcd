@@ -565,3 +565,22 @@ func TestEnginelessFunctionChangeRequeuesItsObjects(t *testing.T) {
 	require.Equal(t, []controller.Request{{GVK: v1.KindAddonObject.GVK(), Namespace: "default", Name: "bunny-edge"}},
 		g.r.MapEnginelessFunction(g.ctx, fn))
 }
+
+// ADR-0345 Decision 1: an object's Function is its pinned revision's, so a Function's change requeues an object that
+// pins an older revision naming it, after the Addon's current function.ref moved to another Function.
+func TestEnginelessFunctionChangeRequeuesByPinnedRevision(t *testing.T) {
+	t.Parallel()
+	g := newEnginelessRig(t)
+	g.stack("site", v1.DeletionRetain, "")
+	g.marked("site")
+	require.Equal(t, v1.AddonRevisionName("infrastack", 1), g.object("site").Status.AddonRevision)
+	cur, err := g.st.Get(g.ctx, v1.KindAddon.GVK(), "", "infrastack")
+	require.NoError(t, err)
+	a := cur.(*v1.Addon)
+	a.Spec.Runtimes[0].Attributes.Function = &v1.AddonSettingsFunction{Ref: "next-reconciler"}
+	_, err = g.st.Update(g.ctx, a)
+	require.NoError(t, err)
+	fn := &v1.Function{ObjectMeta: v1.ObjectMeta{Name: "infrastack-reconciler", Namespace: "default"}}
+	require.Equal(t, []controller.Request{{GVK: v1.KindAddonObject.GVK(), Namespace: "default", Name: "site"}},
+		g.r.MapEnginelessFunction(g.ctx, fn), "site pins revision 1, whose Function this is")
+}

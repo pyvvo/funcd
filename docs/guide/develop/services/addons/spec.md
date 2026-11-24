@@ -137,13 +137,13 @@ This page lists the spec and status fields of Addon, AddonObject and AddonRevisi
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`AddonObject.spec.bindings`](#addonobjectspecbindings) | What the object's engine uses. |
+| `bindings` | object, [`AddonObject.spec.bindings`](#addonobjectspecbindings) | What the object's engine uses. An object of a settings or an engineless kind, which runs no engine, takes none. |
 | `config` | any JSON value | The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object. |
 | `deletion` | string, one of `retain`, `delete` | What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it. |
 | `functions` | array of [`AddonObject.spec.functions[]`](#addonobjectspecfunctions) | The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none. |
-| `ingress` | object, [`AddonObject.spec.ingress`](#addonobjectspecingress) | Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused. |
+| `ingress` | object, [`AddonObject.spec.ingress`](#addonobjectspecingress) | Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused. An object of a settings or an engineless kind takes none. |
 | `kind` | string | The add-on's kind, which funcd sets from the path the object is written at. |
-| `resources` | object, [`AddonObject.spec.resources`](#addonobjectspecresources) | The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine. |
+| `resources` | object, [`AddonObject.spec.resources`](#addonobjectspecresources) | The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine. An object of a settings or an engineless kind takes none. |
 
 ### `AddonObject.spec.bindings`
 

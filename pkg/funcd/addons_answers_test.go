@@ -174,7 +174,7 @@ func TestAddonObjectAnswersMatrix(t *testing.T) {
 		row("createAddonObject", "addons.maxObjectsPerNamespace", capped, ask{what: "an object past the cap",
 			method: http.MethodPost, path: identityPath, body: as("second", func(*v1.AddonObject) {}),
 			detail: "already holds the maximum 1 add-on objects"}),
-		row("createAddonObject", "spec.config breaks the schema", e, ask{what: "a config that breaks the Addon's schema",
+		row("createAddonObject", "spec.config breaks the config schema", e, ask{what: "a config that breaks the Addon's schema",
 			method: http.MethodPost, path: identityPath, body: as("typed", typed), detail: "body.spec.config.issuer"}),
 
 		row("replaceAddonObject", "No Addon registers the kind whose plural", e, ask{what: "a plural no Addon registers",
@@ -183,7 +183,7 @@ func TestAddonObjectAnswersMatrix(t *testing.T) {
 		row("replaceAddonObject", "The body's kind is not", e, ask{what: "another add-on's kind", method: http.MethodPut,
 			path: identityPath + "/login", body: as("login", echo),
 			detail: `body kind "EchoService" is not "IdentityProvider"`}),
-		row("replaceAddonObject", "spec.config breaks the schema", e, ask{what: "a config that breaks the Addon's schema",
+		row("replaceAddonObject", "spec.config breaks the config schema", e, ask{what: "a config that breaks the Addon's schema",
 			method: http.MethodPut, path: identityPath + "/login", body: as("login", typed),
 			detail: "body.spec.config.issuer"}),
 		held,

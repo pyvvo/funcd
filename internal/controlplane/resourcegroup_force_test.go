@@ -245,3 +245,28 @@ func TestResourceGroupForceRacesLinkWrites(t *testing.T) {
 		}
 	}
 }
+
+// ADR-0345 Decision 6 under ADR-0170's force: an engineless add-on object member with deletion: delete is held at its
+// deletion, as its own DELETE holds it, and stops the force with a 409 naming it; the object and the group remain.
+func TestResourceGroupForceHoldsAnEnginelessMember(t *testing.T) {
+	srv, st := newGroupServer(t, true)
+	mustDo(t, srv, call{http.MethodPost, kindPath(groupNS, "resourcegroups"), groupBody(t, groupNS, "team")})
+	mustDo(t, srv, call{http.MethodPost, kindPath(groupNS, "configmaps"), memberBody(t, v1.KindConfigMap, groupNS, "c", "team")})
+	obj, _ := v1.NewObject(v1.KindAddonObject)
+	stack := obj.(*v1.AddonObject)
+	stack.Name, stack.Namespace, stack.ResourceGroup = "stack", groupNS, "team"
+	stack.Spec.Kind, stack.Spec.Deletion = "InfraStack", v1.DeletionDelete
+	stack.Status.Workload = v1.WorkloadEngineless
+	_, err := st.Create(context.Background(), stack)
+	require.NoError(t, err)
+
+	rec := do(t, srv, http.MethodDelete, groupPath(groupNS, "team", true), devToken, nil)
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	_, detail := problemOf(t, rec)
+	require.Contains(t, detail, `"stack"`)
+	got, err := st.Get(context.Background(), v1.KindAddonObject.GVK(), groupNS, "stack")
+	require.NoError(t, err, "the held member stays")
+	require.NotNil(t, got.(*v1.AddonObject).DeletionTime, "the force holds it as its own DELETE does")
+	require.True(t, present(t, st, v1.KindResourceGroup, groupNS, "team"))
+	require.False(t, present(t, st, v1.KindConfigMap, groupNS, "c"), "an unprotected member is deleted; no rollback")
+}

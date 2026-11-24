@@ -133,6 +133,11 @@ func (a addonUnique) Admit(ctx context.Context, req admission.Request) (v1.Objec
 			return nil, fault.Invalidf(op, "the plural %q of the kind %q is a path that funcd serves", plural, kind)
 		}
 	}
+	if req.Operation == admission.Create {
+		if err := a.objectsKeepTheirWorkload(ctx, ad); err != nil {
+			return nil, err
+		}
+	}
 	others, err := a.Store.List(ctx, v1.KindAddon.GVK(), "")
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "list Addons")
@@ -535,7 +540,7 @@ func addonObjectOperations() restOperations {
 		[]ErrorCase{problem(fault.NotFound, "No Addon registers the kind, and the namespace holds no object of it.",
 			"Check the plural, or register the add-on.")})...)
 	ops.create = Describe(ops.create, "Create an object of an add-on's kind", v.create(append(writes,
-		problem(fault.Invalid, "The namespace already holds the most add-on objects that run an engine that "+
+		problem(fault.Invalid, "The namespace already holds the most add-on objects of engine and engineless kinds that "+
 			"addons.maxObjectsPerNamespace allows, or the most settings objects that addons.maxSettingsPerNamespace allows.",
 			"Delete an object that the namespace no longer needs, or ask the operator to raise the cap.")))...)
 	ops.get = Describe(ops.get, "Read an object of an add-on's kind", v.get()...)
@@ -696,16 +701,78 @@ func stored(k servedKind, o v1.AddonObject) (*v1.AddonObject, error) {
 }
 
 // engineFields refuses an engine field, and a target's spec.functions, on an object of a settings kind (ADR-0340
-// Decision 3, ADR-0341 Decision 3).
+// Decision 3, ADR-0341 Decision 3), and an engine field on an object of an engineless kind, which runs no engine
+// either and keeps spec.deletion and spec.functions (ADR-0345 Decisions 3 and 6).
 func engineFields(k servedKind, s v1.AddonObjectSpec) error {
-	if k.settings == nil {
-		return nil
-	}
-	if len(s.Bindings.Secret) > 0 || s.Ingress != nil || s.Resources != (v1.ResourceSpec{}) || s.Deletion != "" || len(s.Functions) > 0 {
+	engine := len(s.Bindings.Secret) > 0 || s.Ingress != nil || s.Resources != (v1.ResourceSpec{})
+	switch {
+	case k.settings != nil && (engine || s.Deletion != "" || len(s.Functions) > 0):
 		return fault.Invalidf("controlplane.addonObject", "a %s object runs no engine: spec.bindings, spec.ingress, "+
 			"spec.resources, spec.deletion and spec.functions are not allowed", k.name())
+	case k.settings == nil && k.addon.Spec.Engineless() && engine:
+		return fault.Invalidf("controlplane.addonObject", "a %s object runs no engine: spec.bindings, spec.ingress and "+
+			"spec.resources are not allowed", k.name())
 	}
 	return nil
+}
+
+// objectsKeepTheirWorkload refuses, 409, the create of an Addon whose kind has a stored object that ran the other way,
+// Engine or Engineless, by its mark or by the revision it pins (ADR-0345 Decision 1): an Addon deleted and created
+// again keeps the workload of its kind's objects, as a replace does (addonRules). An object that never ran is no bar.
+func (a addonUnique) objectsKeepTheirWorkload(ctx context.Context, ad *v1.Addon) error {
+	const op = "admission.addon-unique"
+	kind := ad.Spec.Kind()
+	if kind == "" {
+		return nil
+	}
+	objs, err := a.Store.List(ctx, v1.KindAddonObject.GVK(), "")
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "list add-on objects")
+	}
+	var revs map[v1.ObjectName]*v1.AddonRevision
+	for _, obj := range objs {
+		o, ok := obj.(*v1.AddonObject)
+		if !ok || !v1.SameAddonKind(o.Spec.Kind, kind) || (o.Status.Workload == "" && o.Status.AddonRevision == "") {
+			continue
+		}
+		engineless := o.Status.Workload == v1.WorkloadEngineless
+		if !engineless {
+			if revs == nil {
+				if revs, err = addonRevisions(ctx, a.Store); err != nil {
+					return fault.Wrapf(err, fault.Internal, op, "list AddonRevisions")
+				}
+			}
+			rev, found := revs[o.Status.AddonRevision]
+			if !found {
+				continue
+			}
+			engineless = rev.Spec.Spec.Engineless()
+		}
+		if engineless != ad.Spec.Engineless() {
+			ran := "an engine"
+			if engineless {
+				ran = "no engine"
+			}
+			return fault.Conflictf(op, "the %s object %s/%s ran %s, and an Addon that registers %q again keeps how its "+
+				"objects run: remove them first (a held one goes once its spec.deletion is retain)", o.Spec.Kind, o.Namespace, o.Name, ran, kind)
+		}
+	}
+	return nil
+}
+
+// addonRevisions are the stored AddonRevisions by name.
+func addonRevisions(ctx context.Context, r admission.StoreReader) (map[v1.ObjectName]*v1.AddonRevision, error) {
+	list, err := r.List(ctx, v1.KindAddonRevision.GVK(), "")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[v1.ObjectName]*v1.AddonRevision, len(list))
+	for _, obj := range list {
+		if rev, ok := obj.(*v1.AddonRevision); ok {
+			out[rev.Name] = rev
+		}
+	}
+	return out, nil
 }
 
 // settingsFunctions checks an object's own Functions (ADR-0341 Decision 3, ADR-0345 Decision 3): each entry names a

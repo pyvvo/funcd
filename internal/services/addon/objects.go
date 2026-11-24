@@ -467,7 +467,8 @@ func (r *Reconciler) MapJobRun(ctx context.Context, obj v1.Object) []controller.
 
 // MapEnginelessFunction maps a Function's change to the engineless objects of its namespace that it reconciles: its
 // creation or deletion ends or starts a wait, and a new revision changes the next call's digest (Decision 2). An
-// object's Function is its own in spec.functions, else its kind's function.ref as its Addon is now.
+// object's Function is its own in spec.functions, else the function.ref of the revision it pins (Decision 1), or of its
+// kind as its Addon is now, which its next pass may pin: either maps it.
 func (r *Reconciler) MapEnginelessFunction(ctx context.Context, obj v1.Object) []controller.Request {
 	m := obj.GetObjectMeta()
 	addons, err := r.store.List(ctx, v1.KindAddon.GVK(), store.ListOptions{})
@@ -484,8 +485,22 @@ func (r *Reconciler) MapEnginelessFunction(ctx context.Context, obj v1.Object) [
 	if len(kinds) == 0 {
 		return nil
 	}
+	revs := map[v1.ObjectName]*v1.AddonRevision{}
 	return r.objects(ctx, m.Namespace, func(o *v1.AddonObject) bool {
 		at, ok := kinds[v1.AddonPlural(o.Spec.Kind)]
-		return ok && enginelessFunction(at, o) == m.Name
+		if ok && enginelessFunction(at, o) == m.Name {
+			return true
+		}
+		if o.Status.Workload != v1.WorkloadEngineless || o.Status.AddonRevision == "" {
+			return false
+		}
+		rev, seen := revs[o.Status.AddonRevision]
+		if !seen {
+			if got, err := r.store.Get(ctx, v1.KindAddonRevision.GVK(), "", o.Status.AddonRevision); err == nil {
+				rev, _ = got.(*v1.AddonRevision)
+			}
+			revs[o.Status.AddonRevision] = rev
+		}
+		return rev != nil && enginelessFunction(rev.Spec.Spec.KindAttributes(), o) == m.Name
 	})
 }

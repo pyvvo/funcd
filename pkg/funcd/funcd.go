@@ -127,8 +127,8 @@ const (
 	defaultBucketsPerNamespace = 100
 	// defaultSQLDatabasesPerNamespace is the per-namespace SQLDatabase count cap when unset (ADR-0232).
 	defaultSQLDatabasesPerNamespace = 20
-	// defaultAddonObjectsPerNamespace is the per-namespace cap on the add-on objects that run an engine when unset
-	// (ADR-0332 Decision 2); defaultAddonSettingsPerNamespace the cap on settings objects (ADR-0340 Decision 6).
+	// defaultAddonObjectsPerNamespace is the per-namespace cap on the add-on objects of engine and engineless kinds when
+	// unset (ADR-0332 Decision 2); defaultAddonSettingsPerNamespace the cap on settings objects (ADR-0340 Decision 6).
 	defaultAddonObjectsPerNamespace  = 20
 	defaultAddonSettingsPerNamespace = 200
 	// The workflow engine tunables when WithWorkflow is not given: the daemon config's workflow.* defaults
