@@ -3,7 +3,7 @@ title: Services
 description: The services that funcd runs for its workloads, how each is reached, and where funcd keeps them on disk.
 ---
 
-![How each store is reached (the local API, the S3 gateway, the Lake gateway, the worker's mounts) and the engine under it (memory or Badger, files or S3, rqlite, DuckDB, the local disk)](../../assets/services.drawio.svg)
+![How each service is reached, and what serves it. A KVStore through ctx.kv, on memory or Badger. A Bucket through ctx.blob or the S3 gateway, on files or S3. A SQLDatabase through ctx.sql, on rqlite. A Lake through its gateway, on DuckDB. An add-on object through ctx.addon, the add-on proxy or the edge, on its engine. A worker's volumes through its mounts, on the local disk](../../assets/services.drawio.svg)
 
 funcd serves the stores a Function binds: a KVStore, a Bucket, a SQLDatabase and a Lake, and the Function's own volumes.
 A Function reaches KV, its Buckets and its SQL databases through its local API. When the operator turns on funcd's S3

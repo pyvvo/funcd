@@ -3,7 +3,7 @@ title: Workloads
 description: The Functions, Apps, Sites, Workflows and Jobs that run on funcd, and what they need to run.
 ---
 
-![An App, a Function, a Workflow and a Site take their code and files from bundles in an OCI registry, pinned by digest, and rely on their configuration: ConfigMaps and Secrets, or only ConfigMaps for a Site](../../assets/workloads.drawio.svg)
+![An App, a Function, a Workflow, a Site and a Job take their code and files from bundles in an OCI registry, pinned by digest, and rely on their configuration: ConfigMaps and Secrets, or only ConfigMaps for a Site](../../assets/workloads.drawio.svg)
 
 funcd runs five kinds of workload. A Function is code, an App is a whole app in one resource, a Site is a static web
 app, a Workflow runs Functions as steps, and a Job runs code once for each of its runs. Their code and files come from
@@ -22,10 +22,10 @@ shares with other Functions.
 
 ## App
 
-An [App](app.md) declares a whole app in one resource: its Functions, Workflows, Sites, Routes, stores,
-EventSources, Sensors and ConfigMaps. funcd rolls the App out as one unit, through an AppRevision for each changed
-spec. It calls the App's hooks around the rollout, deletes the parts that the App no longer declares, and rolls the
-App back through its revisions.
+An [App](app.md) declares a whole app in one resource: its Functions, Jobs, Workflows, Sites, Routes, stores, add-on
+objects, EventSources, Sensors and ConfigMaps. funcd rolls the App out as one unit, through an AppRevision for each
+changed spec. It calls the App's hooks around the rollout, deletes the parts that the App no longer declares, and rolls
+the App back through its revisions.
 
 ## Site
 
@@ -47,18 +47,20 @@ run's result, and never runs a run again on its own.
 
 ## Artifacts
 
-A Function's code reaches funcd as an OCI [artifact](artifacts.md), together with its contract and its runtime. The
-Revision pins the artifact's digest, so the code that was validated is the code that runs, and funcd pulls it by that
-digest.
+The code of a Function or a Job reaches funcd as an OCI [artifact](artifacts.md), together with its contract and its
+runtime. The Revision pins the artifact's digest, so the code that was validated is the code that runs, and funcd pulls
+it by that digest.
 
 ## Runtime
 
-A Function's code runs in a worker, where a shim in TypeScript or in Python loads it and gives it its context. The
-[runtime](runtime.md) driver runs each worker as a host process by default, or, on Linux, in a container of its own.
+The code of a Function or a Job runs in a worker, where a shim in TypeScript or in Python loads it and gives it its
+context. The [runtime](runtime.md) driver runs each worker as a host process by default, or, on Linux, in a container of
+its own.
 
 ## Configuration
 
-Workloads take their settings from ConfigMaps and their secrets from Secrets. A Function and a Workflow's steps
-receive ConfigMap keys as environment variables and read Secret values through their local API. A Lake's engine
-receives both in its environment. A Site writes a ConfigMap's keys into a public file, and an App declares both for
-its parts. The [Configuration](configuration.md) page describes each of them.
+Workloads take their settings from ConfigMaps and their secrets from Secrets. A Function, a Job's run and a Workflow's
+steps receive ConfigMap keys as environment variables and read Secret values through their local API. A Lake's engine
+receives both in its environment, and an add-on's engine the Secret keys that its Addon lists. A Site writes a
+ConfigMap's keys into a public file, and an App declares both for its parts. The [Configuration](configuration.md) page
+describes each of them.

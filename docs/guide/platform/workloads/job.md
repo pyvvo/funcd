@@ -8,7 +8,7 @@ declares its code, its runtime and its handler as a Function does, and the store
 uses. A JobRun is one run of a Job, with its input. A developer starts a run with `funcdctl job run`, a Function starts
 one through its binding, and an App declares the Jobs its parts need.
 
-![A developer, a Function through its binding, or an App's Job leads to a JobRun with its input. The run pins its Job's Revision, previews and waits for a person's approval unless its Job says bypass, then gets a worker of its own, which calls the handler once. The handler's answer ends the run, and the worker reaches stores, Secrets and egress as the Job](../../assets/jobs.drawio.svg)
+![An App declares Jobs, and each change of a Job is a Revision. A developer or a Function starts a JobRun with its input. The run pins its Job's Revision, previews and waits for a person's approval unless its Job says bypass, then gets a worker of its own, which calls the handler once. The handler's answer ends the run, and the worker reaches stores, Secrets and egress as the Job](../../assets/jobs.drawio.svg)
 
 ## Revisions
 

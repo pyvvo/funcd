@@ -3,13 +3,15 @@ title: Security
 description: The enforcement points, and the two authorizers they ask who may do what.
 ---
 
-![The API and the edge's authenticated routes ask RBAC. The local API's calls, Secret reads and writes included, and the S3, Lake and egress gateways ask Cedar, which compiles Policies, RolesAssignments and EgressPolicies](../../assets/security.drawio.svg)
+![The API and the edge's authenticated routes ask RBAC. The local API's calls, Secret reads and writes included, the add-on proxy, and the S3, Lake and egress gateways ask Cedar, which compiles Policies, RolesAssignments and EgressPolicies](../../assets/security.drawio.svg)
 
 funcd checks a request where it enters, and each check asks one of two authorizers. The API and the edge's
-authenticated Routes ask RBAC, which has the built-in admin, developer and viewer roles.
+authenticated Routes ask RBAC, which has the built-in admin, developer and viewer roles. A Route that
+[signs its callers in](sign-in.md) with an OpenID Connect provider asks no authorizer about them.
 
-The other checks ask Cedar. The local API asks Cedar before a Function reads or writes KV, a Bucket, a SQL database or
-a Secret, or calls another Function. A Lake also asks Cedar before its engine reads a Secret. The S3 gateway asks it
-before each Bucket request, the Lake gateway when a session opens, and the egress gateway before each outbound
-connection. Cedar compiles Policies, which are Cedar text, RolesAssignments,
-which grant Roles at a scope, and EgressPolicies. Both authorizers deny a request that no rule allows.
+The other checks ask Cedar. The local API asks Cedar before a Function or a Job reads or writes KV, a Bucket, a SQL
+database or a Secret, or calls another Function or an add-on's engine, and before a Function starts a Job's run. The
+add-on proxy asks it before each call of an engine. A Lake also asks Cedar before its engine reads a Secret. The S3
+gateway asks it before each Bucket request, the Lake gateway when a session opens, and the egress gateway before each
+outbound connection. Cedar compiles Policies, which are Cedar text, RolesAssignments, which grant Roles at a scope, and
+EgressPolicies. Both authorizers deny a request that no rule allows.
