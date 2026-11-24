@@ -1,6 +1,6 @@
 # ADR-0347: A Job runs its handler once per JobRun, in a worker of its own
 
-- **Status**: Reviewing (2026-11-23, implemented); Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
+- **Status**: Implemented (2026-11-24), review passed in its second round with one Minor ([report](../reviews/adr-0347-implementation-claude-opus-5-5-2.md)); Reviewing (2026-11-23, implemented); Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
 - **Amended in place**: 2026-11-23, by the decider on [#1015](https://github.com/pyvvo/funcd/issues/1015#issuecomment-7113370643): an image with no contract holds the Job with ContractMissing (Decision 2)
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
