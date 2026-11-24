@@ -1,0 +1,76 @@
+---
+# When the egress indexes hold an address (ADR-0353 Decision 5). The containerd runtime leases a worker its address in
+# Create and writes the worker's entry before Create returns, so before the worker starts; its stop removes the entry
+# once the worker's task is gone, and only then releases the address. Two workers, of two namespaces, take turns at
+# one address. Environment: the IPAM leases the address to one worker at a time, from its Create to the release in its
+# stop; a worker sends nothing before its start or once its task is gone. Left out: the second index (an engine's,
+# written by the same two steps), the readers (the gateway, the forwarder and the edge's pin), which read the entry at
+# each connection or request, and a crash of funcd, which loses the indexes with their readers.
+deadlock_detection: false
+options:
+  # One worker's stop runs its steps while the other worker's Create, atomic, runs between them.
+  max_concurrent_actions: 2
+  # The smallest reuse: a Create, its stop, and the other worker's Create while that stop runs.
+  max_actions: 3
+  crash_on_yield: false
+---
+# diagram: lease, entry
+# mutant write-after-start: HolderIsNamed
+# mutant remove-after-release: HolderIsNamed
+
+# write-after-start: the entry is written once the worker runs, as the 2 s sync adds a running worker.
+# remove-after-release: the stop releases the address and then removes the entry by address, as a Job run's executor
+# does once its worker's stop returns.
+MUTANT = ""
+
+NONE = -1
+
+role Worker:
+    action Init:
+        self.phase = "none"
+
+    # The runtime leases the free address to the worker and writes its entry before Create returns.
+    atomic action Create:
+        require self.phase == "none"
+        require lease == NONE
+        lease = self.id
+        if MUTANT != "write-after-start":
+            entry = self.id
+        self.phase = "created"
+
+    atomic action Start:
+        require self.phase == "created"
+        self.phase = "running"
+
+    # The mutant's late write: the entry follows a running worker.
+    atomic action IndexRunning:
+        require MUTANT == "write-after-start"
+        require self.phase == "running"
+        require entry != self.id
+        entry = self.id
+
+    # The stop: the worker's task goes, then its entry, then its address, each a step another action can follow.
+    action Stop:
+        require self.phase in ["created", "running"]
+        self.phase = "gone"
+        if MUTANT == "remove-after-release":
+            lease = NONE
+            entry = NONE
+        else:
+            entry = NONE
+            lease = NONE
+
+action Init:
+    lease = NONE
+    entry = NONE
+    workers = []
+    for i in range(2):
+        workers.append(Worker(id=i))
+
+# A worker that holds the address is the one its entry names, from its Create until its task is gone: its calls are
+# never refused for want of the entry, and never taken for the address's former holder.
+always assertion HolderIsNamed:
+    for w in workers:
+        if w.phase in ["created", "running"] and lease == w.id and entry != w.id:
+            return False
+    return True
