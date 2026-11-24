@@ -133,11 +133,15 @@ func bindTable(fn *v1.Function) {
 	fn.Spec.Bindings.KV = []v1.FunctionKV{{Alias: "t", Store: "s", Table: "t"}}
 }
 
+// ownedKVStore is store s with table t, owned by Function owner, or by no one when owner is "".
 func ownedKVStore(owner v1.ObjectName) *v1.KVStore {
 	obj, _ := v1.NewObject(v1.KindKVStore)
 	s := obj.(*v1.KVStore)
 	s.Name = "s"
-	s.Spec.Tables = []v1.KVTable{{Name: "t", Owner: v1.FunctionOwner(owner)}}
+	s.Spec.Tables = []v1.KVTable{{Name: "t"}}
+	if owner != "" {
+		s.Spec.Tables[0].Owner = v1.FunctionOwner(owner)
+	}
 	return s
 }
 
