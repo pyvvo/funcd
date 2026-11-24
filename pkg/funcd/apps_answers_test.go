@@ -244,7 +244,8 @@ func siteObject(name v1.ObjectName) *v1.Site {
 // The answers of the Site feature's operations, one row per case of each.
 func TestSiteAnswersMatrix(t *testing.T) {
 	t.Parallel()
-	e := newAnswerEnv(t)
+	e := newAnswerEnv(t, asCluster(t))
+	placeOnOfflineNode(t, e)
 	for _, s := range []*v1.Site{siteObject("plain"), siteObject("fixed")} {
 		create(t, e.c, e.api, s)
 	}
@@ -257,6 +258,11 @@ func TestSiteAnswersMatrix(t *testing.T) {
 		[]answerRow{{op: "replaceSite", when: "spec.bindings.blob[0].prefix", on: e, ask: ask{what: "another prefix",
 			method: http.MethodPut, path: "/apis/funcd.io/v1alpha1/namespaces/default/sites/fixed", token: answersDev,
 			body: jsonOf(t, moved), detail: "spec.bindings.blob[0].prefix is immutable"}}},
+		hostRows(t, e, "Site", "sites", "plain", func(name v1.ObjectName, host string) string {
+			s := siteObject(name)
+			s.Spec.Ingress.Host = host
+			return jsonOf(t, s)
+		}),
 	)
 	runMatrix(t, rows)
 }

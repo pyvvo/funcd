@@ -51,8 +51,8 @@ func registerTokenRoute(api huma.API, r tokenRoute, authz auth.Authorizer) {
 		Path:        r.path,
 		Tags:        []string{string(r.kind)},
 		Description: r.description,
-	}, r.summary, unauthorized(), forbidden("update "+r.kinds), vc.notFound(), badPath(vc.path()),
-		problem(fault.Invalid, r.ttlWhen, r.ttlFix),
+	}, r.summary, append([]ErrorCase{unauthorized(), vc.forbidden("update " + an(string(r.kind))), vc.notFound(),
+		badPath(vc.path()), badQuery(), problem(fault.Invalid, r.ttlWhen, r.ttlFix)}, bodyCases()...)...,
 	), func(ctx context.Context, in *tokenInput) (*tokenOutput, error) {
 		op := "controlplane." + r.op
 		id, ok := middleware.IdentityFrom(ctx)

@@ -116,40 +116,8 @@ func TestAWorkerNodeRunsTheNamespacePlacedOnIt(t *testing.T) {
 		"a WorkerNode a namespace names cannot be deleted")
 }
 
-// TestMintingAJoinTokenAnswersEachCase provokes each answer the join-token route lists (ADR-0329 Decision 4).
-func TestMintingAJoinTokenAnswersEachCase(t *testing.T) {
-	const dev = "cluster-dev-token"
-	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))),
-		funcd.WithCredentials(funcd.Credential{Token: clusterAdmin, Role: "admin"},
-			funcd.Credential{Token: dev, Role: "developer", Namespaces: []string{"default"}}),
-		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true}))
-	base := "http://" + cp.Addr()
-	c := answersClient()
-	ask{what: "declare the node", method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/workernodes", token: clusterAdmin,
-		body: `{"apiVersion":"funcd.io/v1alpha1","kind":"WorkerNode","metadata":{"name":"vm1"}}`, status: http.StatusOK}.run(t, c, base)
-	const path = "/apis/funcd.io/v1alpha1/workernodes/vm1/token"
-	for _, a := range []ask{
-		{what: "a token for a declared node", method: http.MethodPost, path: path, token: clusterAdmin, body: `{"ttl":"10m"}`, status: http.StatusOK},
-		{what: "no credential", method: http.MethodPost, path: path, body: `{}`, status: http.StatusUnauthorized},
-		{what: "a developer", method: http.MethodPost, path: path, token: dev, body: `{}`, status: http.StatusForbidden},
-		{what: "an undeclared node", method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/workernodes/vm2/token",
-			token: clusterAdmin, body: `{}`, status: http.StatusNotFound},
-		{what: "a name that is no DNS label", method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/workernodes/VM_1/token",
-			token: clusterAdmin, body: `{}`, status: http.StatusUnprocessableEntity},
-		{what: "a body that is no JSON", method: http.MethodPost, path: path, token: clusterAdmin, body: `{`,
-			status: http.StatusBadRequest},
-		{what: "a ttl that is no duration", method: http.MethodPost, path: path, token: clusterAdmin, body: `{"ttl":"forever"}`,
-			status: http.StatusBadRequest},
-	} {
-		a.run(t, c, base)
-	}
-}
-
 func TestAnAPITokenKeptAsAHashWorksUntilItIsMintedAgainOrDeleted(t *testing.T) {
-	const dev = "cluster-dev-token"
-	cp := runPlatform(t, funcd.WithStore(store.New(memory.New())),
-		funcd.WithCredentials(funcd.Credential{Token: clusterAdmin, Role: "admin"},
-			funcd.Credential{Token: dev, Role: "developer", Namespaces: []string{"default"}}))
+	cp := runPlatform(t, funcd.WithStore(store.New(memory.New())))
 	base := "http://" + cp.Addr()
 	c := answersClient()
 	ask{what: "declare the token", method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/apitokens", token: clusterAdmin,
@@ -174,21 +142,8 @@ func TestAnAPITokenKeptAsAHashWorksUntilItIsMintedAgainOrDeleted(t *testing.T) {
 	second := mint()
 	ask{what: "a token minted again ends the one before", method: http.MethodGet, path: mine, token: first, status: http.StatusUnauthorized}.run(t, c, base)
 	ask{what: "the new one works", method: http.MethodGet, path: mine, token: second, status: http.StatusOK}.run(t, c, base)
-	for _, a := range []ask{
-		{what: "no credential", method: http.MethodPost, path: path, body: `{}`, status: http.StatusUnauthorized},
-		{what: "a developer", method: http.MethodPost, path: path, token: dev, body: `{}`, status: http.StatusForbidden},
-		{what: "an undeclared token", method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/apitokens/nope/token",
-			token: clusterAdmin, body: `{}`, status: http.StatusNotFound},
-		{what: "a name that is no DNS label", method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/apitokens/CI_1/token",
-			token: clusterAdmin, body: `{}`, status: http.StatusUnprocessableEntity},
-		{what: "a body that is no JSON", method: http.MethodPost, path: path, token: clusterAdmin, body: `{`, status: http.StatusBadRequest},
-		{what: "a ttl that is no duration", method: http.MethodPost, path: path, token: clusterAdmin, body: `{"ttl":"forever"}`,
-			status: http.StatusBadRequest},
-		{what: "a ttl past a year", method: http.MethodPost, path: path, token: clusterAdmin, body: `{"ttl":"9000h"}`,
-			status: http.StatusBadRequest},
-	} {
-		a.run(t, c, base)
-	}
+	ask{what: "a ttl past a year", method: http.MethodPost, path: path, token: clusterAdmin, body: `{"ttl":"9000h"}`,
+		status: http.StatusBadRequest}.run(t, c, base)
 	resp, err := ask{method: http.MethodGet, path: "/apis/funcd.io/v1alpha1/apitokens/ci", token: clusterAdmin}.do(c, base)
 	require.NoError(t, err)
 	stored, err := io.ReadAll(resp.Body)
@@ -433,6 +388,23 @@ func offlineRow(op string, e *answerEnv, setup func(*testing.T, *answerEnv), a a
 func awayRow(op string, e *answerEnv, method, path string) answerRow {
 	return offlineRow(op, e, nil, ask{what: "a namespace whose worker node is offline", method: method,
 		path: "/apis/funcd.io/v1alpha1/namespaces/e1/" + path})
+}
+
+// hostRows are the create and the replace rows of a kind's claim on a host that a Route of e1 claims, whose worker node is
+// not the control plane's own, on a platform that placeOnOfflineNode set up. body is the kind's object name with that host.
+func hostRows(t *testing.T, e *answerEnv, kind, path string, name v1.ObjectName, body func(name v1.ObjectName, host string) string) []answerRow {
+	t.Helper()
+	const host = "taken.example.com"
+	theirs := route("taken", "/")
+	theirs.Namespace, theirs.Spec.Host = "e1", host
+	create(t, e.c, e.api, theirs)
+	coll := "/apis/funcd.io/v1alpha1/namespaces/default/" + path
+	row := func(op, method, path string, name v1.ObjectName) answerRow {
+		return answerRow{op: op + kind, when: "a namespace on another worker node claims", on: e, ask: ask{
+			what: "a host of another node", method: method, path: path, token: answersAdmin, body: body(name, host),
+			detail: "host " + host + " belongs to worker node vm1"}}
+	}
+	return []answerRow{row("create", http.MethodPost, coll, name+"-host"), row("replace", http.MethodPut, coll+"/"+string(name), name)}
 }
 
 // withVolume is fn with a volume, which its node books.

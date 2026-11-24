@@ -1238,6 +1238,11 @@ func TestFunctionAnswersMatrix(t *testing.T) {
 		},
 	)
 	const awayFns = "/apis/funcd.io/v1alpha1/namespaces/e1/functions"
+	rows = append(rows, hostRows(t, sh, "Function", "functions", "plain", func(name v1.ObjectName, host string) string {
+		fn := function(name)
+		fn.Spec.Ingress = &v1.Ingress{Host: host}
+		return jsonOf(t, fn)
+	})...)
 	rows = append(rows,
 		awayRow("getFunctionLogs", sh, http.MethodGet, "functions/echo/logs"),
 		awayRow("deleteVolume", sh, http.MethodDelete, "volumes/echo/state"),

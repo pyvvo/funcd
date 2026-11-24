@@ -1,0 +1,11 @@
+{
+  "title": "APIToken",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete",
+    "mint"
+  ]
+}

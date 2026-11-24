@@ -54,6 +54,12 @@ func nodeQueryCases() []ErrorCase {
 // nodeBack is the fix of an answer that an offline worker node gives.
 const nodeBack = "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
 
+// hostElsewhere is the 409 of a claim, in field, on a host that a namespace on another worker node claims (FEAT-0002 F247).
+func hostElsewhere(field string) ErrorCase {
+	return problem(fault.Conflict, "The host in "+field+" is one that a namespace on another worker node claims: a host "+
+		"belongs to one node.", "Use another host. To share one across nodes, put a gateway in front of them.")
+}
+
 // nodeAway is the 503 of a read or an action that the worker node of the namespace answers, while it is offline (F250).
 func nodeAway() ErrorCase {
 	return problem(fault.Unavailable, "The namespace runs on a worker node that is offline.", nodeBack)

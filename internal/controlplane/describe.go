@@ -116,6 +116,7 @@ func blank(status int, when, fix string) ErrorCase {
 type kindCases struct {
 	create, replace, remove []ErrorCase
 	words                   map[sharedCase]wording
+	noSpec                  bool // a kind with no spec: its replace breaks no rule but its path's and the schema's
 }
 
 // sharedCase names a shared case that a kind may word for itself, in kindCases.words.
@@ -150,7 +151,7 @@ func restOperationsOf(kind, kinds, base, item string, namespaced bool, cases *ki
 	if cases == nil {
 		return ops
 	}
-	v := verbCases{kind: kind, kinds: kinds, namespaced: namespaced, words: cases.words}
+	v := verbCases{kind: kind, kinds: kinds, namespaced: namespaced, words: cases.words, noSpec: cases.noSpec}
 	list := "List the " + kinds
 	if namespaced {
 		list += " of a namespace"
@@ -220,6 +221,7 @@ func badIfMatch() ErrorCase {
 type verbCases struct {
 	kind, kinds string
 	namespaced  bool
+	noSpec      bool
 	words       map[sharedCase]wording // the kind's own words for some of these cases
 }
 
@@ -311,8 +313,12 @@ func (v verbCases) replace(own []ErrorCase) []ErrorCase {
 			"metadata.name is not the path's"
 		fix = "Leave metadata.namespace empty, and send the object to its own path"
 	}
+	var rule []ErrorCase
+	if !v.noSpec {
+		rule = []ErrorCase{ruleBroken()}
+	}
 	return slices.Concat([]ErrorCase{unauthorized(), v.forbidden("replace " + an(v.kind)), v.notFound(),
-		badPath(v.path()), badQuery(), badDryRun(), badIfMatch(), ruleBroken(), v.stale(),
+		badPath(v.path()), badQuery(), badDryRun(), badIfMatch()}, rule, []ErrorCase{v.stale(),
 		problem(fault.Invalid, when+", or If-Match and metadata.resourceVersion name two versions.",
 			fix+", with at most one version.")},
 		bodyCases(), own)

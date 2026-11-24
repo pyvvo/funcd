@@ -295,7 +295,8 @@ func TestSQLAnswersMatrix(t *testing.T) {
 // The answers of the Lake feature's operations, one row per case of each.
 func TestLakeAnswersMatrix(t *testing.T) {
 	t.Parallel()
-	e := newAnswerEnv(t)
+	e := newAnswerEnv(t, asCluster(t))
+	placeOnOfflineNode(t, e)
 	create(t, e.c, e.api, lakeFixture("lake"))
 
 	const lakes = "/apis/funcd.io/v1alpha1/namespaces/default/lakes"
@@ -316,6 +317,11 @@ func TestLakeAnswersMatrix(t *testing.T) {
 			{op: "replaceLake", when: "missing from spec.buckets", on: e, ask: ask{what: "a binding to an undeclared Bucket",
 				method: http.MethodPut, path: lakes + "/lake", token: answersDev, body: undeclared("lake"), detail: notDeclared}},
 		},
+		hostRows(t, e, "Lake", "lakes", "lake", func(name v1.ObjectName, host string) string {
+			l := lakeFixture(name)
+			l.Spec.Ingress = &v1.Ingress{Host: host}
+			return jsonOf(t, l)
+		}),
 	)
 	runMatrix(t, rows)
 }

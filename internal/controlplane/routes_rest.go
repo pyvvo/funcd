@@ -17,7 +17,10 @@ func registerNamespace(api huma.API, h Handlers) {
 	registerClusterCRUD(api, clusterRoutes[v1.Namespace]{
 		kind: "Namespace", kinds: "Namespaces", path: "namespaces",
 		list: h.ListNamespaces, create: h.CreateNamespace, get: h.GetNamespace,
-		replace: h.ReplaceNamespace, remove: h.DeleteNamespace, cases: &kindCases{},
+		replace: h.ReplaceNamespace, remove: h.DeleteNamespace,
+		cases: &kindCases{replace: []ErrorCase{problem(fault.Conflict, "The body changes spec.node, and the namespace "+
+			"holds objects: their data stays on the node that runs them.", "Keep spec.node. To move a namespace, back its "+
+			"stores up, delete its objects, change spec.node, apply the objects again and restore the stores.")}},
 	})
 }
 
@@ -68,8 +71,9 @@ func registerFunction(api huma.API, h Handlers) {
 // functionWrites are the cases a Function's create and replace add to their verb's: the admissions of its links
 // (ADR-0064), its bindings (ADR-0248) and its local volumes (ADR-0262).
 func functionWrites() []ErrorCase {
-	return slices.Insert(workloadWrites(), 1, problem(fault.Invalid, "The links would close a cycle among the "+
-		"namespace's Functions, such as a Function that links to itself.", "Remove a link of the cycle."))
+	return append(slices.Insert(workloadWrites(), 1, problem(fault.Invalid, "The links would close a cycle among the "+
+		"namespace's Functions, such as a Function that links to itself.", "Remove a link of the cycle.")),
+		hostElsewhere("spec.ingress.host"))
 }
 
 // workloadWrites are the cases that a Function's and a Job's create and replace share (ADR-0347 Decision 1): no link
@@ -289,13 +293,14 @@ func registerBucket(api huma.API, h Handlers) {
 // ===== Lake (namespaced) — ADR-0086 =====
 
 func registerLake(api huma.API, h Handlers) {
-	undeclared := []ErrorCase{problem(fault.Invalid, "A binding names a Bucket, a ConfigMap or a Secret that the spec "+
-		"does not declare, such as a Bucket missing from spec.buckets.", "Declare it in the spec, or bind one that it declares.")}
+	writes := []ErrorCase{problem(fault.Invalid, "A binding names a Bucket, a ConfigMap or a Secret that the spec "+
+		"does not declare, such as a Bucket missing from spec.buckets.", "Declare it in the spec, or bind one that it declares."),
+		hostElsewhere("spec.ingress.host")}
 	registerNamespacedCRUD(api, crudRoutes[v1.Lake]{
 		kind: "Lake", kinds: "Lakes", path: "lakes",
 		list: h.ListLakes, create: h.CreateLake, get: h.GetLake,
 		replace: h.ReplaceLake, remove: h.DeleteLake,
-		cases: &kindCases{create: undeclared, replace: undeclared},
+		cases: &kindCases{create: writes, replace: writes},
 	})
 }
 
@@ -361,7 +366,7 @@ func registerRoute(api huma.API, h Handlers) {
 	registerNamespacedCRUD(api, crudRoutes[v1.Route]{
 		kind: "Route", kinds: "Routes", path: "routes",
 		list: h.ListRoutes, create: h.CreateRoute, get: h.GetRoute, replace: h.ReplaceRoute, remove: h.DeleteRoute,
-		cases: &kindCases{},
+		cases: &kindCases{create: []ErrorCase{hostElsewhere("spec.host")}, replace: []ErrorCase{hostElsewhere("spec.host")}},
 	})
 }
 
@@ -395,23 +400,25 @@ func registerRuntimeClass(api huma.API, h Handlers) {
 	})
 }
 
-// ===== WorkerNode (cluster-scoped) =====
-
 // ===== APIToken (cluster-scoped, FEAT-0002 F248) =====
 
 func registerAPIToken(api huma.API, h Handlers) {
 	registerClusterCRUD(api, clusterRoutes[v1.APIToken]{
 		kind: "APIToken", kinds: "APITokens", path: "apitokens",
 		list: h.ListAPITokens, create: h.CreateAPIToken, get: h.GetAPIToken,
-		replace: h.ReplaceAPIToken, remove: h.DeleteAPIToken,
+		replace: h.ReplaceAPIToken, remove: h.DeleteAPIToken, cases: &kindCases{},
 	})
 }
+
+// ===== WorkerNode (cluster-scoped) =====
 
 func registerWorker(api huma.API, h Handlers) {
 	registerClusterCRUD(api, clusterRoutes[v1.WorkerNode]{
 		kind: "WorkerNode", kinds: "WorkerNodes", path: "workernodes",
 		list: h.ListWorkerNodes, create: h.CreateWorkerNode, get: h.GetWorkerNode,
 		replace: h.ReplaceWorkerNode, remove: h.DeleteWorkerNode,
+		cases: &kindCases{noSpec: true, remove: []ErrorCase{problem(fault.Conflict, "A Namespace's spec.node names the "+
+			"WorkerNode.", "Move the namespaces that the detail names to another node, or delete them, first.")}},
 	})
 }
 
@@ -512,9 +519,10 @@ func registerSite(api huma.API, h Handlers) {
 	registerNamespacedCRUD(api, crudRoutes[v1.Site]{
 		kind: "Site", kinds: "Sites", path: "sites",
 		list: h.ListSites, create: h.CreateSite, get: h.GetSite, replace: h.ReplaceSite, remove: h.DeleteSite,
-		cases: &kindCases{replace: []ErrorCase{problem(fault.Invalid, "The spec changes spec.bindings.blob[0].prefix, "+
-			"which holds the Site's bundles and is never removed from the Bucket.",
-			"Keep the prefix. A new prefix needs a new Site, under another name.")}},
+		cases: &kindCases{create: []ErrorCase{hostElsewhere("spec.ingress.host")}, replace: []ErrorCase{
+			problem(fault.Invalid, "The spec changes spec.bindings.blob[0].prefix, which holds the Site's bundles and is "+
+				"never removed from the Bucket.", "Keep the prefix. A new prefix needs a new Site, under another name."),
+			hostElsewhere("spec.ingress.host")}},
 	})
 }
 
