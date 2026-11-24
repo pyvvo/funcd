@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -316,6 +317,10 @@ func TestScenarioAppStackChangeKeepsAppliedState(t *testing.T) {
 	stack := e.object(t, "InfraStack", "bunny").(*v1.AddonObject)
 	require.Equal(t, int64(2), stack.Generation)
 	require.JSONEq(t, `{"region":"fi"}`, string(stack.Spec.Config), "the new variables are written")
+	seenRV(t, apps, "edge-2 switches", func(ev store.Event) bool {
+		a, ok := ev.Object.(*v1.App)
+		return ok && a.Name == "edge" && a.Status.CurrentRevision == "edge-2"
+	})
 	for _, ev := range apps.events(t) {
 		if a, ok := ev.Object.(*v1.App); ok && a.Name == "edge" {
 			require.True(t, isReady(a), "the App stays Ready through the upgrade: %+v", readyCondition(a))
@@ -436,8 +441,8 @@ export async function handle(ctx, event) {
 	found, err := os.ReadFile(filepath.Join(f.calls, ents[0].Name()))
 	require.NoError(t, err)
 	require.Equal(t, "absent", string(found), "the pre-hook finds no output before the first apply")
-	recorded := firstRV(t, revs.events(t), "edge-1 records migrate's call", hookRecorded("edge-1", v1.PhaseReady))
-	written := firstRV(t, stacks.events(t), "bunny is written", func(ev store.Event) bool {
+	recorded := seenRV(t, revs, "edge-1 records migrate's call", hookRecorded("edge-1", v1.PhaseReady))
+	written := seenRV(t, stacks, "bunny is written", func(ev store.Event) bool {
 		return ev.Type == store.Added && ev.Object.GetObjectMeta().Name == "bunny"
 	})
 	require.Less(t, recorded, written, "the pre-hook runs before the stack is written")
@@ -470,7 +475,8 @@ func TestScenarioAppPostHookAfterStack(t *testing.T) {
 		stacks, revs := watchKind(t, e.st, v1.KindAddonObject), watchKind(t, e.st, v1.KindAppRevision)
 		e.approveStack(t, "bunny", 1)
 		e.warmCalled(t, f)
-		require.Less(t, readyRV(t, stacks.events(t), "bunny"), warmRV(t, revs.events(t)), "warm runs after bunny is Ready")
+		require.Less(t, seenRV(t, stacks, "bunny is Ready", readyWrite("bunny")), seenRV(t, revs, "edge-1 records warm's call",
+			hookRecorded("edge-1", v1.PhaseReady)), "warm runs after bunny is Ready")
 	})
 	t.Run("the approved run writes the key", func(t *testing.T) {
 		t.Parallel()
@@ -497,7 +503,8 @@ export async function handle(event) { return event; }`, booted))
 
 		require.NoError(t, os.WriteFile(booted, nil, 0o600))
 		e.warmCalled(t, f)
-		require.Less(t, readyRV(t, fns.events(t), "relay"), warmRV(t, revs.events(t)), "warm runs after relay is Ready")
+		require.Less(t, seenRV(t, fns, "relay is Ready", readyWrite("relay")), seenRV(t, revs, "edge-1 records warm's call",
+			hookRecorded("edge-1", v1.PhaseReady)), "warm runs after relay is Ready")
 	})
 }
 
@@ -529,11 +536,10 @@ func (e *stackEnv) warmCalled(t *testing.T, f hookFiles) {
 	require.Equal(t, "postApply", e.appRevision(t, "edge-1").Status.Hooks[0].Point)
 }
 
-// readyRV is the resourceVersion at which the part name first turned Ready in evs: an add-on object's Ready condition
-// True, or a Function's phase Ready.
-func readyRV(t *testing.T, evs []store.Event, name v1.ObjectName) uint64 {
-	t.Helper()
-	return firstRV(t, evs, string(name)+" is Ready", func(ev store.Event) bool {
+// readyWrite matches a write in which the part name is Ready: an add-on object's Ready condition True, or a Function's
+// phase Ready.
+func readyWrite(name v1.ObjectName) func(store.Event) bool {
+	return func(ev store.Event) bool {
 		switch o := ev.Object.(type) {
 		case *v1.AddonObject:
 			c, _ := o.Status.Conditions.Get("Ready")
@@ -542,13 +548,16 @@ func readyRV(t *testing.T, evs []store.Event, name v1.ObjectName) uint64 {
 			return o.Name == name && o.Status.Phase == v1.PhaseReady
 		}
 		return false
-	})
+	}
 }
 
-// warmRV is the resourceVersion at which edge-1 recorded warm's call in evs.
-func warmRV(t *testing.T, evs []store.Event) uint64 {
+// seenRV waits until w has recorded a write that match accepts, since a read can show a write before the watch delivers
+// it, and returns the resourceVersion of the first such write.
+func seenRV(t *testing.T, w *kindWatch, what string, match func(store.Event) bool) uint64 {
 	t.Helper()
-	return firstRV(t, evs, "edge-1 records warm's call", hookRecorded("edge-1", v1.PhaseReady))
+	require.Eventually(t, func() bool { return slices.ContainsFunc(w.seen(), match) }, stackWithin, stackTick,
+		"the watch records a write where %s", what)
+	return firstRV(t, w.seen(), what, match)
 }
 
 // scenario: app-prune-waits-for-lagging — an upgrade drops the Function old and adds new, which binds outputs before
@@ -581,14 +590,10 @@ func TestScenarioAppPruneWaitsForLagging(t *testing.T) {
 	fns := watchKind(t, e.st, v1.KindFunction)
 	e.writeOutputs(t, frpToken())
 	e.waitGone(t, v1.KindFunction, "old")
-	evs := fns.events(t)
-	replaced := firstRV(t, evs, "new is Ready", func(ev store.Event) bool {
-		fn, ok := ev.Object.(*v1.Function)
-		return ok && fn.Name == "new" && fn.Status.Phase == v1.PhaseReady
-	})
-	pruned := firstRV(t, evs, "old is deleted", func(ev store.Event) bool {
+	pruned := seenRV(t, fns, "old is deleted", func(ev store.Event) bool {
 		return ev.Type == store.Deleted && ev.Object.GetObjectMeta().Name == "old"
 	})
+	replaced := seenRV(t, fns, "new is Ready", readyWrite("new"))
 	require.Less(t, replaced, pruned, "old goes only once new is Ready")
 	e.waitEdge(t, "edge-2 is Ready with no Pruning line", func(a *v1.App) bool {
 		return isReady(a) && lineOf(a, v1.KindFunction, "old") == v1.AppChild{}
