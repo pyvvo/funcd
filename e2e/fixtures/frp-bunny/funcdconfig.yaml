@@ -1,0 +1,47 @@
+# The addon-frp-bunny lane's daemon config: as addon-infrastack's, with egress on, so the Tunnel's engine leaves its
+# fence through the egress gateway under the EgressPolicy that names it (ADR-0352) and reaches the edge on the bridge
+# address (ADR-0353); the stack's Job reaches the S3 gateway on the bridge address, which internalAllow lists; the edge
+# takes a request's client from the X-Real-IP that a Tunnel's engine passes on, which Bunny sets to the visitor
+# (ADR-0354), and logs it; and the registries of both add-on images are listed.
+apiVersion: funcd.io/v1alpha1
+kind: FuncdConfig
+server:
+  listenAddr: 127.0.0.1:8080
+  dataPlaneAddr: 0.0.0.0:8081
+  network:
+    egress: true
+    egressGatewayPort: 15080
+    dnsForwarderPort: 15053
+    dnsResolver: 1.1.1.1:53
+    internalAllow:
+      - 10.63.0.1:9000
+  observability:
+    accessLog: true
+  trustedProxies:
+    - addonKinds:
+        - Tunnel
+      header: X-Real-IP
+storage:
+  mode: file
+  dataDir: /var/lib/funcd/data
+auth:
+  credentials:
+    - tokenFile: /etc/funcd/tokens/admin
+      role: admin
+    - tokenFile: /etc/funcd/tokens/developer
+      role: developer
+      namespaces:
+        - default
+runtime:
+  mode: containerd
+s3gateway:
+  enabled: true
+  listenAddr: 0.0.0.0:9000
+addons:
+  registries:
+    - ghcr.io
+    - 127.0.0.1:5443
+    - 127.0.0.1:5444
+log:
+  format: text
+  level: info

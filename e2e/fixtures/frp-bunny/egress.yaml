@@ -1,0 +1,18 @@
+# The Tunnel's engine dials frps on the bridge address: a node address, which takes a cidrs rule (ADR-0317). The edge on
+# the bridge address needs none, since workers reach it directly (ADR-0353 Decision 1).
+apiVersion: funcd.io/v1alpha1
+kind: EgressPolicy
+metadata:
+  name: frp-tunnel
+  namespace: default
+  resourceGroup: default
+spec:
+  appliesTo:
+    - kind: Tunnel
+      name: frp-tunnel
+  rules:
+    - to:
+        cidrs:
+          - 10.63.0.1/32
+      ports:
+        - 7000

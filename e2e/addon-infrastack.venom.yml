@@ -1,0 +1,177 @@
+# Venom e2e suite for the addon-infrastack containerd lane: pyvvo/funcd-addons' InfraStack add-on on a real funcd. An
+# admin registers the add-on's Addon, which ships opentofu1, the OpenTofu runtime, and the Engineless kind InfraStack
+# (ADR-0344, ADR-0345). A developer applies the add-on's example random-stack, whose Job's image is the random-stack
+# module, and whose reconciler Function binds that Job (ADR-0349): the stack's run previews its plan (ADR-0348), waits
+# for an approval, applies it with the state in a Bucket prefix through the S3 gateway, and the stack turns Ready;
+# deleted, it is held until its destroy run, approved too, succeeded (ADR-0345 Decision 6).
+#
+# The Addon pulls its image from GHCR by the digest it pins. A lane that stages opentofu.tar, an image built from the
+# add-on's runtime/, serves it from e2e/laneregistry in the VM instead, and the Addon names it there.
+name: addon-infrastack — an InfraStack applied and destroyed through approved OpenTofu runs (containerd lane)
+
+vars:
+  devtoken: addon-infrastack-lane-developer
+  admintoken: addon-infrastack-lane-admin
+
+testcases:
+  - name: the OpenTofu runtime's image comes from GHCR, or from the lane's registry when the lane stages it
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo bash -c '
+            set -e
+            if [ ! -f /opt/lane/opentofu.tar ]; then echo FROM_GHCR; exit 0; fi
+            systemctl stop lane-registry 2>/dev/null || true
+            systemctl reset-failed lane-registry 2>/dev/null || true
+            rm -f /opt/lane/opentofu.digest
+            systemd-run --unit lane-registry /mnt/funcd-deps/laneregistry /opt/lane/opentofu.tar funcd/opentofu \
+              127.0.0.1:5443 /opt/lane/registry.crt /opt/lane/opentofu.digest
+            for i in $(seq 120); do [ -s /opt/lane/opentofu.digest ] && break; sleep 1; done
+            install -m 0644 /opt/lane/registry.crt /usr/local/share/ca-certificates/funcd-lane-registry.crt
+            update-ca-certificates >/dev/null
+            curl -sf -o /dev/null https://127.0.0.1:5443/v2/
+            sed -i -E "s#ghcr.io/pyvvo/funcd-opentofu@sha256:[A-Za-z0-9-]+#127.0.0.1:5443/funcd/opentofu@$(cat /opt/lane/opentofu.digest)#" /opt/lane/addon.yaml
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            echo FROM_LANE_REGISTRY'
+        info: "image → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: an admin registers the InfraStack Addon, and a developer applies the example stack, its Job and the reconciler
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
+            funcdctl apply -f /opt/lane/addon.yaml
+        info: "admin apply → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied Addon/infrastack"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} bash -c '
+            sed -e "s#registry.example.com/random-stack:0.1.0#oci-layout:///mnt/funcd-deps/registry:random-stack#" \
+              -e "s#registry.example.com/infrastack-reconciler:0.1.0#oci-layout:///mnt/funcd-deps/registry:infrastack-reconciler#" \
+              /opt/lane/random-stack.yaml | funcdctl apply -f -'
+        retry: 15
+        delay: 2
+        info: "developer apply → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied InfraStack/random-stack"
+
+  - name: the stack's run previews its plan and waits for an approval, which applies it, and the stack turns Ready
+    steps:
+      # The add-on's resync is a minute, and a run awaiting approval is no run's end (ADR-0345 Decision 4).
+      - type: exec
+        script: &stack |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            st=$(funcdctl get InfraStack random-stack -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin).get(\"status\",{});r=([c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"Ready\"] or [{}])[0];print(\"PHASE=\"+s.get(\"phase\",\"\")+\",REASON=\"+str(r.get(\"reason\",\"\"))+\",MESSAGE=\"+r.get(\"message\",\"\"))")
+            echo "$st"
+            case "$st" in *Failed*) run=$(echo "$st" | grep -o "random-stack-[a-z0-9-]*" | head -1); funcdctl job logs "$run" -n default 2>&1 | tail -25;; esac'
+        retry: 120
+        delay: 2
+        info: "stack → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring REASON=AwaitingApproval
+      - type: exec
+        script: &approve |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            set -e
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            run=$(funcdctl job runs random-stack -n default -o json | python3 -c "import sys,json;print([r[\"metadata\"][\"name\"] for r in json.load(sys.stdin) if r.get(\"status\",{}).get(\"phase\")==\"AwaitingApproval\"][0])")
+            funcdctl get jobrun "$run" -n default -o json > /tmp/run.json
+            python3 -c "import json;d=json.load(open(\"/tmp/run.json\"))[\"status\"][\"preview\"][\"document\"];print(\"RUN=$run,ACTION=%s,ADD=%d,DESTROY=%d\" % (d[\"action\"],d[\"add\"],d[\"destroy\"]))"
+            funcdctl job approve "$run" -n default --digest "$(python3 -c "import json;print(json.load(open(\"/tmp/run.json\"))[\"status\"][\"preview\"][\"digest\"])")" >/dev/null
+            echo APPROVED'
+        info: "approval → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ACTION=apply,ADD=3,DESTROY=0
+          - result.systemout ShouldContainSubstring APPROVED
+      - type: exec
+        script: *stack
+        retry: 120
+        delay: 2
+        info: "stack → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith PHASE=Ready,
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl job runs random-stack -n default -o json | python3 -c "import sys,json;r=[r for r in json.load(sys.stdin) if r.get(\"status\",{}).get(\"phase\")==\"Succeeded\"][0][\"status\"].get(\"result\") or {};print(\"KEYS=\"+\",\".join(sorted(r))+\" NAME=\"+str(r.get(\"name\")))"'
+        info: "the run's result → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "KEYS=name NAME=example-"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} bash -c '
+            funcdctl get secret random-stack-outputs -n default -o json | python3 -c "import sys,json,base64;print(\"TOKEN_LEN=%d\" % len(base64.b64decode(json.load(sys.stdin)[\"spec\"][\"data\"][\"token\"])))"'
+        info: "the outputs Secret → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring TOKEN_LEN=24
+
+  - name: the deleted stack is held, its destroy run waits for an approval, and the stack goes once it succeeded
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            funcdctl delete InfraStack random-stack -n default
+        info: "delete → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "deleting InfraStack/random-stack"
+      - type: exec
+        script: *stack
+        retry: 120
+        delay: 2
+        info: "stack → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "which destroys random-stack, awaits approval"
+      - type: exec
+        script: *approve
+        info: "approval → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ACTION=destroy,ADD=0,DESTROY=3
+          - result.systemout ShouldContainSubstring APPROVED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get InfraStack random-stack -n default >/dev/null 2>&1 || echo GONE'
+        retry: 90
+        delay: 2
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring GONE
+
+  - name: the stack's other objects and the Addon go
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo bash -c '
+            export FUNCD_SERVER=http://127.0.0.1:8080
+            for o in function/infrastack-reconciler job/random-stack secret/random-stack-outputs configmap/random-stack-infrastack; do
+              FUNCD_TOKEN={{.devtoken}} funcdctl delete ${o%%/*} ${o#*/} -n default || true
+            done
+            FUNCD_TOKEN={{.admintoken}} funcdctl delete addon infrastack
+            systemctl stop lane-registry 2>/dev/null || true
+            if [ -f /usr/local/share/ca-certificates/funcd-lane-registry.crt ]; then
+              rm -f /usr/local/share/ca-certificates/funcd-lane-registry.crt
+              update-ca-certificates --fresh >/dev/null
+            fi
+            echo CLEANED'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring CLEANED

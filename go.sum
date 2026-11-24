@@ -731,10 +731,10 @@ github.com/prometheus/common v0.70.1 h1:1HvjP4D5oL3t8RsPlwxA9onvvStjtIHYE5XuuwOi
 github.com/prometheus/common v0.70.1/go.mod h1:VdFUQDMZK3VLkurFUVhia6uys/0suUp86TJz5qbJRhc=
 github.com/prometheus/procfs v0.21.1 h1:GljZCt+zSTS+NZq88cyQ1LjZ+RCHp3uVuabBWA5+OJI=
 github.com/prometheus/procfs v0.21.1/go.mod h1:aB55Cww9pdSJVHk0hUf0inxWyyjPogFIjmHKYgMKmtY=
-github.com/pyvvo/funcd-addons v0.3.0 h1:4bW3qYlHkJLpL8r7BqMHrff+BmphcXAEVU2Bbnd+de0=
-github.com/pyvvo/funcd-addons v0.3.0/go.mod h1:KFlK+z4bZ9KNRr8/OsrwrSABRbBwm9D2MFaUu30xX5I=
-github.com/pyvvo/funcd-functions v0.27.0 h1:Oxmw7L898BaiMvvvfMZfpaTEzQRqjNf3iMQSejLAqBo=
-github.com/pyvvo/funcd-functions v0.27.0/go.mod h1:L91uY7v74Ik9u+ui8J8p6Zqu/6RAK9uJWJFAKl6TxSY=
+github.com/pyvvo/funcd-addons v0.4.1 h1:XQxjm1IIrTclglGVQZS0nDxP9sUMUsqQ4KSnqwJQmeE=
+github.com/pyvvo/funcd-addons v0.4.1/go.mod h1:KFlK+z4bZ9KNRr8/OsrwrSABRbBwm9D2MFaUu30xX5I=
+github.com/pyvvo/funcd-functions v0.28.1 h1:OY2P8wsNhHiI8Pjlvzbps3zXGLI3OhGh1DtRh7ah9Cs=
+github.com/pyvvo/funcd-functions v0.28.1/go.mod h1:L91uY7v74Ik9u+ui8J8p6Zqu/6RAK9uJWJFAKl6TxSY=
 github.com/pyvvo/funcd-python v0.30.0 h1:37LM2lny0nPLAg2cyyQKU0uYUlWA7hWBm1rskzc/ysY=
 github.com/pyvvo/funcd-python v0.30.0/go.mod h1:xgR0Do0470V/uB78dA8QEsKrzyiHr4EeO1c37b92E2c=
 github.com/pyvvo/funcd-typescript v0.35.0 h1:0MitjT30urf5aURNn3xh17BGjRSly0KM4JxRvRFxUOY=

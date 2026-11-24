@@ -2,6 +2,7 @@ package funcd_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -44,9 +45,8 @@ func (e *stageEntry) UnmarshalJSON(data []byte) error {
 }
 
 // scenario: examples-build-with-the-tools (ADR-0144, ADR-0247) — the pinned language modules' examples carry no build
-// script, no schema file and no funcdctl.yaml (the contract lives in the contract file), and every lane push of a file
-// finds its contract file staged beside it, where `funcdctl push` reads it; a bundle directory is built by
-// funcd-bundle, which puts the contract file at its root.
+// script, no schema file and no funcdctl.yaml (the contract lives in the contract file), and every lane push finds its
+// contract file where `funcdctl push` reads it (pushContract).
 func TestScenarioExamplesBuildWithTheTools(t *testing.T) {
 	for _, mod := range []string{langmod.TypeScript, langmod.Python} {
 		root := filepath.Join(langmod.Dir(t, mod), "examples")
@@ -78,21 +78,88 @@ func TestScenarioExamplesBuildWithTheTools(t *testing.T) {
 			if push.Site {
 				continue
 			}
-			dir, file := path.Split(push.Artifact)
-			ext := path.Ext(file)
-			if ext == "" {
-				// a built bundle directory: the lane's build writes it, funcd-bundle puts its contract file inside
-				require.Contains(t, strings.Join(lane.Build, " "), "funcd-bundle", "lane %s builds %s", name, push.Artifact)
-				continue
-			}
-			stem := strings.TrimSuffix(file, ext)
-			yamlSrc, jsonSrc := staged[dir+stem+".contract.yaml"], staged[dir+stem+".contract.json"]
-			require.True(t, (yamlSrc != "") != (jsonSrc != ""),
-				"lane %s stages no single contract file beside %s (%s.contract.yaml or .json)", name, push.Artifact, stem)
-			src := yamlSrc + jsonSrc
-			_, serr := os.Stat(src)
-			require.NoError(t, serr, "lane %s stages the contract file of %s from %s", name, push.Artifact, src)
+			require.NoError(t, pushContract(lane, staged, push.Artifact), "lane %s", name)
 		}
+	}
+}
+
+// pushContract reports whether `funcdctl push` finds the contract file of a lane's pushed artifact (ADR-0247
+// Decision 2): `<dir>/<stem>.contract.*` for a file `<dir>/<stem>.<ext>`, and `<dir>/<base>.contract.*` for a directory
+// `<dir>` named `<base>`. A directory is a bundle the lane's build makes with funcd-bundle, which writes the contract
+// file at its root, or a folder the lane stages with that file at its root, as an OpenTofu module.
+func pushContract(lane laneSpec, staged map[string]string, artifact string) error {
+	dir, file := path.Split(artifact)
+	ext := path.Ext(file)
+	if ext == "" {
+		if strings.Contains(strings.Join(lane.Build, " "), "funcd-bundle") {
+			return nil
+		}
+		src, ok := staged[artifact]
+		if !ok {
+			return fmt.Errorf("%s is neither built by funcd-bundle nor staged", artifact)
+		}
+		var found []string
+		for _, name := range []string{file + ".contract.yaml", file + ".contract.json"} {
+			if _, err := os.Stat(filepath.Join(src, name)); err == nil {
+				found = append(found, name)
+			}
+		}
+		if len(found) != 1 {
+			return fmt.Errorf("the staged folder %s holds %d of %s.contract.yaml and .json at its root, not one: %v",
+				src, len(found), file, found)
+		}
+		return nil
+	}
+	stem := strings.TrimSuffix(file, ext)
+	yamlSrc, jsonSrc := staged[dir+stem+".contract.yaml"], staged[dir+stem+".contract.json"]
+	if (yamlSrc != "") == (jsonSrc != "") {
+		return fmt.Errorf("no single contract file is staged beside %s (%s.contract.yaml or .json)", artifact, stem)
+	}
+	if _, err := os.Stat(yamlSrc + jsonSrc); err != nil {
+		return fmt.Errorf("the contract file of %s: %w", artifact, err)
+	}
+	return nil
+}
+
+// A staged folder is pushed only with exactly one contract file named after it at its root, and a directory that
+// nothing builds or stages is no push (ADR-0247 Decision 2).
+func TestScenarioExamplesBuildWithTheToolsPushContract(t *testing.T) {
+	root := t.TempDir()
+	folder := func(name string, files ...string) string {
+		dir := filepath.Join(root, name)
+		require.NoError(t, os.MkdirAll(dir, 0o750))
+		for _, f := range files {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, f), nil, 0o600))
+		}
+		return dir
+	}
+	contract := filepath.Join(folder("file"), "hello.contract.yaml")
+	require.NoError(t, os.WriteFile(contract, nil, 0o600))
+	for _, tc := range []struct {
+		name     string
+		lane     laneSpec
+		staged   map[string]string
+		artifact string
+		wantErr  string
+	}{
+		{"a bundle that funcd-bundle builds", laneSpec{Build: []string{"funcd-bundle --out bundle"}}, nil, "bundle", ""},
+		{"a staged folder holding its yaml contract", laneSpec{}, map[string]string{"stack": folder("yaml", "main.tf", "stack.contract.yaml")}, "stack", ""},
+		{"a staged folder holding its json contract", laneSpec{}, map[string]string{"stack": folder("json", "main.tf", "stack.contract.json")}, "stack", ""},
+		{"a staged folder without its contract", laneSpec{}, map[string]string{"stack": folder("none", "main.tf")}, "stack", "holds 0 of stack.contract.yaml"},
+		{"a staged folder whose contract has another name", laneSpec{}, map[string]string{"stack": folder("other", "main.tf", "main.contract.yaml")}, "stack", "holds 0 of stack.contract.yaml"},
+		{"a staged folder holding both contracts", laneSpec{}, map[string]string{"stack": folder("both", "stack.contract.yaml", "stack.contract.json")}, "stack", "holds 2 of stack.contract.yaml"},
+		{"a folder that nothing builds or stages", laneSpec{}, nil, "stack", "neither built by funcd-bundle nor staged"},
+		{"a file with its contract staged beside it", laneSpec{}, map[string]string{"hello.mjs": "hello.mjs", "hello.contract.yaml": contract}, "hello.mjs", ""},
+		{"a file without its contract", laneSpec{}, map[string]string{"hello.mjs": "hello.mjs"}, "hello.mjs", "no single contract file is staged beside hello.mjs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := pushContract(tc.lane, tc.staged, tc.artifact)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+		})
 	}
 }
 
