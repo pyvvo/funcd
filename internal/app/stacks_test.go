@@ -323,7 +323,10 @@ func TestLagEndSurvivesACutPass(t *testing.T) {
 	require.Equal(t, v1.AppChildPending, h.child(v1.KindFunction, "todo-tunnel").State)
 }
 
-// Decision 4: a post-hook starts only in a pass that wrote no part, while no part is Lagging or Pending.
+// Decision 4: a post-hook starts only in a pass that wrote no part, while no part is Lagging or Pending. The calls are
+// counted right after each pass, so each term holds the call alone once: the stack and the reader lag, then the reader
+// alone; the pass that writes the reader; the reader Pending while nothing lags; a pass that writes back a ConfigMap
+// deleted by hand while nothing is Pending or Lagging. The next pass calls the post-hook.
 func TestPostHookWaitsForEveryLaggingPart(t *testing.T) {
 	h := newHooked(t, nil)
 	h.stacks()
@@ -331,33 +334,62 @@ func TestPostHookWaitsForEveryLaggingPart(t *testing.T) {
 	h.create(todoApp(func(a *v1.App) {
 		withStack(a)
 		withOutputs(a)
+		a.Spec.ConfigMaps = []v1.ConfigMapEntry{{Name: "todo-settings", ConfigMapSpec: paris()}}
 		a.Spec.Functions = append(a.Spec.Functions, v1.AppFunction{Name: "todo-warm", FunctionSpec: apiSpec()})
 		a.Spec.Hooks = &v1.AppHooks{PostApply: []v1.AppHook{{Function: "todo-warm"}}}
 	}))
 	h.reconcile()
 	h.markReadyBut("todo-stack")
 	h.stackAnswers("AwaitingApproval")
-	h.step()
-	require.True(t, h.current())
-	h.step()
-	h.noCall()
+	h.reconcile()
+	require.True(t, h.current(), "the revision switches while the stack and the reader lag")
+	pass := func(why string) {
+		t.Helper()
+		h.step()
+		require.Zero(t, len(h.inv.received()), why)
+	}
+	pass("no call while the stack and the reader lag")
+	h.stackAnswers("")
+	pass("no call while the reader lags")
 
 	h.putOutputs(v1.JobOwner("todo-tf"), frpToken())
-	h.step()
-	h.noCall()
-	require.NotNil(t, h.get(v1.KindFunction, "todo-tunnel"), "the pass wrote the reader")
-	h.step()
-	h.noCall()
-	require.Equal(t, v1.AppChildPending, h.child(v1.KindFunction, "todo-tunnel").State, "no call while a part is Pending")
-	h.markReadyBut("todo-stack")
-	h.step()
-	h.noCall()
-	require.Equal(t, v1.AppChildLagging, h.child("InfraStack", "todo-stack").State, "no call while the stack lags")
+	pass("no call in the pass that writes the reader")
+	require.NotNil(t, h.get(v1.KindFunction, "todo-tunnel"))
+	pass("no call while the reader is Pending, though nothing lags")
+	require.Equal(t, v1.AppChildPending, h.child(v1.KindFunction, "todo-tunnel").State)
 
-	h.stackAnswers("")
+	h.markReady(v1.KindFunction, "todo-tunnel")
+	settings := storedSettings(paris())
+	require.NoError(t, h.st.Delete(h.ctx, v1.KindConfigMap.GVK(), ns, settings, ""))
+	pass("no call in a pass that writes a part, though nothing is Pending or Lagging")
+	require.NotNil(t, h.get(v1.KindConfigMap, settings), "the pass wrote the ConfigMap back")
+
 	h.step()
-	require.Len(t, h.inv.received(), 1, "the post-hook starts once the stack is applied and its readers are Ready")
+	require.Len(t, h.inv.received(), 1, "the next pass calls the post-hook")
 	require.Equal(t, v1.ObjectName("todo-warm"), h.inv.received()[0].fn)
+}
+
+// Decision 2 keeps ADR-0212 Decision 1 for every other write: a stack edited by hand while it lags is written back as a
+// self-heal, since only the write that ends a wait for a Secret's key is none.
+func TestHandEditOfALaggingStackIsASelfHeal(t *testing.T) {
+	h := newHarness(t, nil)
+	h.stacks()
+	h.create(todoApp(withStack))
+	h.reconcile()
+	h.markReadyBut("todo-stack")
+	h.stackAnswers("AwaitingApproval")
+	h.reconcile()
+	require.True(t, h.current())
+	require.Equal(t, v1.AppChildLagging, h.child("InfraStack", "todo-stack").State)
+
+	o := h.get(v1.KindAddonObject, "todo-stack").(*v1.AddonObject)
+	o.Spec.Config = json.RawMessage(`{"region":"elsewhere"}`)
+	h.update(o)
+	h.reconcile()
+	require.Empty(t, h.get(v1.KindAddonObject, "todo-stack").(*v1.AddonObject).Spec.Config, "the App writes its entry back")
+	heal := h.app().Status.LastSelfHeal
+	require.NotNil(t, heal, "the write-back of a lagging stack is a self-heal")
+	require.Equal(t, v1.ObjectName("todo-stack"), heal.Name)
 }
 
 // Decision 4: prune keeps a dropped part, a Pruning child with no reason, while a part lags: the stack or a reader.
