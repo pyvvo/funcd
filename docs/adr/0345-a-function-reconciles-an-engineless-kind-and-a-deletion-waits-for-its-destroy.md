@@ -1,7 +1,7 @@
 # ADR-0345: A Function reconciles an engineless kind's objects, and a deletion waits for its destroy
 
-- **Status**: Accepted (2026-11-23), by the decider, after five rounds of an independent judge, every Blocker and
-  Major folded
+- **Status**: Reviewing (2026-11-24, implemented); Accepted (2026-11-23), by the decider, after five rounds of an
+  independent judge, every Blocker and Major folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, reconcile, functions, deletion, apps
