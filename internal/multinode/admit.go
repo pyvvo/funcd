@@ -12,21 +12,26 @@ import (
 )
 
 // nodeStateAdmissions are the checks before a write that read the state of the node a namespace runs on (FEAT-0002
-// F250): the deletion protection of a KVStore, a Bucket and a SQLDatabase, the booking of a Function's volumes, and the
-// in-place restore guard.
+// F250): the deletion protection of a KVStore, a Bucket and a SQLDatabase, the booking of a Function's or a Job's volumes,
+// and the in-place restore guard.
 func nodeStateAdmissions() []string {
 	return []string{"kvstore-deletion-protection", "bucket-deletion-protection", "sqldatabase-deletion-protection",
 		"function-volumes", "restore-in-place"}
 }
 
-// needsNode reports whether the check named name reads the node's state for req: the volume booking only for a Function
+// needsNode reports whether the check named name reads the node's state for req: the volume booking only for a workload
 // that declares volumes, and the restore guard only for an in-place Restore, so a write that needs nothing of the node
 // goes through while the node is away.
 func needsNode(name string, req admission.Request) bool {
 	switch name {
 	case "function-volumes":
-		fn, ok := req.Object.(*v1.Function)
-		return ok && len(fn.Spec.Volumes) > 0
+		switch w := req.Object.(type) {
+		case *v1.Function:
+			return len(w.Spec.Volumes) > 0
+		case *v1.Job:
+			return len(w.Spec.Volumes) > 0
+		}
+		return false
 	case "restore-in-place":
 		obj := req.Object
 		if req.Operation == admission.Delete {

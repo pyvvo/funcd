@@ -66,11 +66,12 @@ type Feed struct {
 	Changes []store.Change `json:"changes,omitempty"`
 }
 
-// StatusWrite is a node's status write-back of one object it runs (FEAT-0002 decision 4).
+// StatusWrite is a node's status write-back of one object it runs (FEAT-0002 decision 4), the one of that uid.
 type StatusWrite struct {
 	Kind      v1.Kind          `json:"kind"`
 	Namespace v1.NamespaceName `json:"namespace"`
 	Name      v1.ObjectName    `json:"name"`
+	UID       v1.UID           `json:"uid"`
 	Status    json.RawMessage  `json:"status"`
 }
 

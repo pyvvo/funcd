@@ -59,6 +59,8 @@ type Agent struct {
 	pushed   map[string]string
 	// backupSent is the backup status the control plane holds, as last sent
 	backupSent string
+	// unsent are the deletes the control plane did not take yet
+	unsent map[string]url.Values
 }
 
 // New loads the node's identity from cfg.Dir.
@@ -78,7 +80,7 @@ func New(cfg Config) (*Agent, error) {
 		cfg.Logger = slog.Default()
 	}
 	a := &Agent{cfg: cfg, id: id, log: cfg.Logger.With("component", "node-agent", "node", id.name),
-		mine: map[v1.NamespaceName]bool{}, keys: keys, pushed: map[string]string{}}
+		mine: map[v1.NamespaceName]bool{}, keys: keys, pushed: map[string]string{}, unsent: map[string]url.Values{}}
 	if b, err := os.ReadFile(filepath.Join(cfg.Dir, cursorFile)); err == nil { //nolint:gosec // the node's own directory
 		if f := strings.Fields(string(b)); len(f) == 2 {
 			a.timeline = f[0]
@@ -305,7 +307,7 @@ func (a *Agent) syncAll(ctx context.Context) error {
 	for ns := range placed {
 		a.prune(ctx, ns, seen)
 	}
-	a.pruneTokens(ctx, seen)
+	a.pruneClusterKinds(ctx, seen)
 	a.saveCursor(snap.Timeline, snap.Rev)
 	a.log.InfoContext(ctx, "node agent: synced from a snapshot", "rev", snap.Rev, "objects", len(snap.Objects), "namespaces", len(placed))
 	return nil
@@ -341,10 +343,7 @@ func (a *Agent) apply(ctx context.Context, c store.Change) {
 	}
 	var err error
 	if c.Type == store.Deleted {
-		err = a.cfg.Store.Delete(ctx, c.Kind.GVK(), c.Namespace, c.Name, "")
-		if fault.KindOf(err) == fault.NotFound {
-			err = nil
-		}
+		err = a.delete(ctx, c)
 	} else {
 		err = a.upsert(ctx, c)
 	}
@@ -394,122 +393,4 @@ func (a *Agent) removeNamespace(ctx context.Context, ns v1.NamespaceName) {
 	}
 	a.dropKey(ctx, ns)
 	a.log.InfoContext(ctx, "node agent: namespace left this node", "namespace", ns)
-}
-
-// pruneTokens deletes the API tokens the control plane no longer holds (F248), so a token revoked while the node was
-// behind stops working on it too.
-func (a *Agent) pruneTokens(ctx context.Context, keep map[string]bool) {
-	res, err := a.cfg.Store.List(ctx, v1.KindAPIToken.GVK(), store.ListOptions{})
-	if err != nil {
-		a.log.WarnContext(ctx, "node agent: list the API tokens", "error", err)
-		return
-	}
-	for _, obj := range res.Items {
-		name := obj.GetObjectMeta().Name
-		if keep[key(v1.KindAPIToken, "", name)] {
-			continue
-		}
-		if err := a.cfg.Store.Delete(ctx, v1.KindAPIToken.GVK(), "", name, ""); err != nil && fault.KindOf(err) != fault.NotFound {
-			a.log.WarnContext(ctx, "node agent: remove an API token", "name", name, "error", err)
-		}
-	}
-}
-
-// prune deletes the local objects of ns the control plane does not hold (not in keep). The node's own children stay:
-// its reconcilers own them.
-func (a *Agent) prune(ctx context.Context, ns v1.NamespaceName, keep map[string]bool) {
-	for _, k := range v1.AllKinds() {
-		if !k.Namespaced() {
-			continue
-		}
-		res, err := a.cfg.Store.List(ctx, k.GVK(), store.ListOptions{Namespace: ns})
-		if err != nil {
-			continue
-		}
-		for _, obj := range res.Items {
-			m := obj.GetObjectMeta()
-			if len(m.OwnerReferences) > 0 || keep[key(k, ns, m.Name)] {
-				continue
-			}
-			if err := a.cfg.Store.Delete(ctx, k.GVK(), ns, m.Name, ""); err != nil && fault.KindOf(err) != fault.NotFound {
-				a.log.WarnContext(ctx, "node agent: prune", "kind", k, "namespace", ns, "name", m.Name, "error", err)
-			}
-		}
-	}
-}
-
-func key(k v1.Kind, ns v1.NamespaceName, name v1.ObjectName) string {
-	return string(k) + "/" + string(ns) + "/" + string(name)
-}
-
-// upsert writes a control-plane object into the local store, without the fields the local store mints, and keeps the
-// status the node's reconcilers wrote.
-func (a *Agent) upsert(ctx context.Context, c store.Change) error {
-	obj, ok := v1.NewObject(c.Kind)
-	if !ok {
-		return fault.Invalidf("agent.upsert", "unknown kind %q", c.Kind)
-	}
-	if err := json.Unmarshal(c.Object, obj); err != nil {
-		return fault.Wrapf(err, fault.Invalid, "agent.upsert", "decode the %s", c.Kind)
-	}
-	m := obj.GetObjectMeta()
-	m.UID, m.ResourceVersion, m.Generation = "", "", 0
-	m.CreationTime, m.DeletionTime = v1.Timestamp{}, nil
-	for range 5 {
-		cur, err := a.cfg.Store.Get(ctx, obj.GroupVersionKind(), m.Namespace, m.Name)
-		if fault.KindOf(err) == fault.NotFound {
-			if _, err = a.cfg.Store.Create(ctx, obj); fault.KindOf(err) == fault.Conflict {
-				continue
-			}
-			return err
-		}
-		if err != nil {
-			return err
-		}
-		next := obj
-		if c.Kind != v1.KindAPIToken { // an API token's status is the control plane's: its hash and expiry
-			if next, err = keepStatus(obj, cur); err != nil {
-				return err
-			}
-		}
-		next.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion
-		if _, err = a.cfg.Store.Update(ctx, next); fault.KindOf(err) != fault.Conflict {
-			return err
-		}
-	}
-	return fault.Conflictf("agent.upsert", "%s %s kept changing", c.Kind, c.Name)
-}
-
-// keepStatus is obj with cur's status.
-func keepStatus(obj, cur v1.Object) (v1.Object, error) {
-	const op = "agent.keepStatus"
-	curRaw, err := json.Marshal(cur)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "marshal")
-	}
-	var curMap map[string]json.RawMessage
-	if err := json.Unmarshal(curRaw, &curMap); err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "unmarshal")
-	}
-	raw, err := json.Marshal(obj)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "marshal")
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "unmarshal")
-	}
-	if st, ok := curMap["status"]; ok {
-		m["status"] = st
-	} else {
-		delete(m, "status")
-	}
-	if raw, err = json.Marshal(m); err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "marshal")
-	}
-	next, _ := v1.NewObject(obj.GroupVersionKind().Kind)
-	if err := json.Unmarshal(raw, next); err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "unmarshal")
-	}
-	return next, nil
 }

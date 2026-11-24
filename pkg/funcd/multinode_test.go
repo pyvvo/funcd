@@ -252,9 +252,116 @@ func TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
 	require.Equal(t, "from vm1", string(body), "the node's data plane answers the call from the node's worker")
 
+	rt := &v1.Route{TypeMeta: tmeta(v1.KindRoute)}
+	rt.Name, rt.Namespace, rt.ResourceGroup, rt.Spec.Host = "echo", "e1", "rg1", "echo.example.com"
+	rt.Spec.Rules = []v1.RouteRule{{Path: "/", Backend: v1.RouteBackend{Function: "echo"}}}
+	_, err = admin.Apply(ctx, rt)
+	require.NoError(t, err)
+	edge := func(p *funcd.Platform) int {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.DataPlaneAddr()+"/", nil)
+		require.NoError(t, err)
+		req.Host = "echo.example.com"
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	require.Eventually(t, func() bool { return edge(node) == http.StatusOK }, 10*time.Second, 50*time.Millisecond, "the node's edge serves the Route")
+	ready := func(ns v1.NamespaceName, want v1.Phase) func() bool {
+		return func() bool {
+			obj, err := admin.Get(ctx, v1.KindRoute, ns, "echo")
+			return err == nil && obj.(*v1.Route).Status.Phase == want
+		}
+	}
+	require.Eventually(t, ready("e1", v1.PhaseReady), 10*time.Second, 50*time.Millisecond, "the Route reads Ready, as the node reports it")
+	rt = &v1.Route{TypeMeta: tmeta(v1.KindRoute), ObjectMeta: v1.ObjectMeta{Name: "echo", Namespace: "default", ResourceGroup: "rg1"}, Spec: rt.Spec}
+	rt.Spec.Host = "here.example.com"
+	_, err = admin.Apply(ctx, rt)
+	require.NoError(t, err)
+	require.Eventually(t, ready("default", v1.PhasePending), 10*time.Second, 50*time.Millisecond, "the control plane passes over its own Routes")
+	require.Equal(t, http.StatusNotFound, edge(cp), "its edge serves none of the node's")
+	require.True(t, ready("e1", v1.PhaseReady)(), "nor does it write their status")
+
 	cpWorkers.mu.Lock()
 	defer cpWorkers.mu.Unlock()
 	require.Empty(t, cpWorkers.insts, "the control plane starts no worker for a namespace placed on a node")
+}
+
+// TestAJobRunsOnTheWorkerNodeItsNamespaceIsPlacedOn applies a Job and starts a run of it on the control plane before and
+// after its node joins: the node runs it, and the control plane reads its result, who started it and the Job's generation
+// as the node reports them (FEAT-0002 F244, ADR-0347).
+func TestAJobRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
+	ctx := context.Background()
+	nodeWorkers := newFakeWorkers()
+	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))), funcd.WithRuntimeShim("node", "shim.mjs"),
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true}))
+	admin, err := sdk.New("http://"+cp.Addr(), sdk.WithToken(clusterAdmin))
+	require.NoError(t, err)
+	wn := &v1.WorkerNode{TypeMeta: tmeta(v1.KindWorkerNode)}
+	wn.Name = "vm1"
+	_, err = admin.Apply(ctx, wn)
+	require.NoError(t, err)
+	ns := &v1.Namespace{TypeMeta: tmeta(v1.KindNamespace)}
+	ns.Name, ns.Spec.Node = "e1", "vm1"
+	_, err = admin.Apply(ctx, ns)
+	require.NoError(t, err)
+	report := job("report")
+	report.Namespace, report.Spec.Approval.Bypass = "e1", true
+	report.Spec.Image = "file://" + filepath.Join(artifact(t, ""), "handler.mjs")
+	_, err = admin.Apply(ctx, report)
+	require.NoError(t, err)
+	report.Spec.Concurrency = 2
+	applied, err := admin.Apply(ctx, report)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), applied.GetObjectMeta().Generation)
+	start := func(name v1.ObjectName) {
+		run := jobRun(name, "report", "")
+		run.Namespace = "e1"
+		_, err := admin.Create(ctx, run)
+		require.NoError(t, err)
+	}
+	start("before")
+
+	tok, err := admin.MintJoinToken(ctx, "vm1", "")
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
+	require.NoError(t, err)
+	for _, name := range []v1.ObjectName{"before", "after"} {
+		nodeWorkers.serve(t, name, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"from":"vm1"}`))
+		})
+	}
+	runPlatform(t, funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: dir, Version: "test"}), funcd.WithRuntime(nodeWorkers),
+		funcd.WithRuntimeShim("node", "shim.mjs"))
+	require.Eventually(t, func() bool {
+		obj, err := admin.Get(ctx, v1.KindJob, "e1", "report")
+		if err != nil {
+			return false
+		}
+		j := obj.(*v1.Job)
+		c, ok := j.Status.Conditions.Get("Ready")
+		return ok && c.Status == v1.ConditionTrue && c.ObservedGeneration == j.Generation
+	}, 20*time.Second, 50*time.Millisecond, "the Job reads Ready at its generation")
+	start("after")
+	for _, name := range []v1.ObjectName{"before", "after"} {
+		var run *v1.JobRun
+		require.Eventually(t, func() bool {
+			obj, err := admin.Get(ctx, v1.KindJobRun, "e1", name)
+			if err != nil {
+				return false
+			}
+			run = obj.(*v1.JobRun)
+			return run.Status.Phase.Ended()
+		}, 20*time.Second, 50*time.Millisecond, "the run %s ends", name)
+		c, _ := run.Status.Conditions.Get("Ready")
+		require.Equal(t, v1.JobRunSucceeded, run.Status.Phase, "%s: %s %s", name, c.Reason, c.Message)
+		require.JSONEq(t, `{"from":"vm1"}`, string(run.Status.Result))
+		require.Equal(t, applied.GetObjectMeta().UID, run.Status.JobUID)
+	}
 }
 
 // TestAWriteThatNeedsAnOfflineNodeIsRefusedAtOnce writes into a namespace whose worker node never joined: each write

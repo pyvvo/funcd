@@ -186,6 +186,11 @@ func TestAHostBelongsToOneNode(t *testing.T) {
 	require.Equal(t, fault.Conflict, fault.KindOf(admit(route("d", "r", "shop.example.com"))), "nor the control plane's own node")
 	require.NoError(t, admit(route("c", "r", "other.example.com")))
 	require.NoError(t, admit(route("c", "r", "")), "the namespace host is the node's own")
+	login := &v1.AddonObject{TypeMeta: tm(v1.KindAddonObject)}
+	login.Name, login.Namespace, login.Spec.Ingress = "login", "c", &v1.Ingress{Host: "shop.example.com"}
+	require.True(t, a.Handles(v1.KindAddonObject.GVK(), admission.Create))
+	_, err = a.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindAddonObject.GVK(), Object: login})
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "an add-on object's ingress claims its host too")
 }
 
 func TestASpecFieldANodeIsTooOldForIsRefused(t *testing.T) {

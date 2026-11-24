@@ -60,6 +60,7 @@ func WithChangeLog(retain int) Option {
 type (
 	noChangeKey struct{}
 	originKey   struct{}
+	copyKey     struct{}
 )
 
 // WithoutChangeLog marks a write the change log skips: a node's status write-back, which no node needs back.
@@ -70,6 +71,16 @@ func WithoutChangeLog(ctx context.Context) context.Context {
 // WithOrigin marks the writes made for worker node node, so the feed does not send them back to it.
 func WithOrigin(ctx context.Context, node v1.ObjectName) context.Context {
 	return context.WithValue(ctx, originKey{}, node)
+}
+
+// AsCopy marks the writes of an object that another store holds (FEAT-0002): a node's copy of the control plane's, or
+// the control plane's copy of a node's. The copy keeps the object's uid, generation and creation time, so it is the same
+// object on both sides, and its name is never generated anew. An object with no uid gets its own, as any write's does.
+func AsCopy(ctx context.Context) context.Context { return context.WithValue(ctx, copyKey{}, true) }
+
+// copied reports whether ctx's write keeps the identity meta carries.
+func copied(ctx context.Context, meta *v1.ObjectMeta) bool {
+	return ctx.Value(copyKey{}) != nil && meta.UID != ""
 }
 
 // putChange writes obj's record at rev in tx and reports whether it wrote one.

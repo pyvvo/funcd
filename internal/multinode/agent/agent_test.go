@@ -497,7 +497,7 @@ type volCheck struct{ refuse bool }
 func (volCheck) Name() string           { return "function-volumes" }
 func (volCheck) Phase() admission.Phase { return admission.Validating }
 func (volCheck) Handles(gvk v1.GroupVersionKind, op admission.Operation) bool {
-	return gvk.Kind == v1.KindFunction && op == admission.Create
+	return (gvk.Kind == v1.KindFunction || gvk.Kind == v1.KindJob) && op == admission.Create
 }
 
 func (c volCheck) Admit(_ context.Context, req admission.Request) (v1.Object, error) {
@@ -549,6 +549,12 @@ func TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState(t *testing.T) {
 	}
 	require.NoError(t, create(), "a Function with no volume needs nothing of the node")
 	require.Equal(t, fault.Conflict, fault.KindOf(create(v1.VolumeEntry{Name: "data"})), "one with a volume is booked on the node")
+	j := job("report")
+	_, err = book.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindJob.GVK(), Object: j})
+	require.NoError(t, err, "nor does a Job with none")
+	j.Spec.Volumes = []v1.VolumeEntry{{Name: "data"}}
+	_, err = book.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindJob.GVK(), Object: j})
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "a Job's volume is booked on the node too")
 }
 
 func TestANodeReportsItsBackupInItsWorkerNode(t *testing.T) {
@@ -612,6 +618,23 @@ func TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers(t *testing.T) {
 	})
 
 	// The node API itself refuses a Policy, even one that names an owner.
+	pol := &v1.Policy{TypeMeta: meta(v1.KindPolicy)}
+	pol.Name, pol.Namespace, pol.ResourceGroup = "grant-all", "e1", "rg1"
+	pol.Spec.Cedar = "permit(principal, action, resource);"
+	pol.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Name: "api"}, UID: "x"}}
+	raw, err := json.Marshal(pol)
+	require.NoError(t, err)
+	call := nodeCaller(t, r, dir)
+	require.Equal(t, http.StatusForbidden, call(http.MethodPut, multinode.PathObjects, multinode.ObjectWrite{Kind: v1.KindPolicy, Object: raw}))
+	_, err = r.cp.Get(ctx, v1.KindPolicy.GVK(), "e1", "grant-all")
+	require.Equal(t, fault.NotFound, fault.KindOf(err))
+}
+
+// nodeCaller calls r's node API with the certificate of the node that joined under dir, and returns the status it answers.
+//
+//nolint:forbidigo // body is one of the node API's typed requests, sent as JSON
+func nodeCaller(t *testing.T, r rig, dir string) func(method, path string, body any) int {
+	t.Helper()
 	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "node.crt"), filepath.Join(dir, "node.key"))
 	require.NoError(t, err)
 	caPEM, err := os.ReadFile(filepath.Join(dir, "ca.crt"))
@@ -620,24 +643,19 @@ func TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers(t *testing.T) {
 	require.True(t, roots.AppendCertsFromPEM(caPEM))
 	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert},
 		RootCAs: roots, MinVersion: tls.VersionTLS13}}}
-	pol := &v1.Policy{TypeMeta: meta(v1.KindPolicy)}
-	pol.Name, pol.Namespace, pol.ResourceGroup = "grant-all", "e1", "rg1"
-	pol.Spec.Cedar = "permit(principal, action, resource);"
-	pol.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Name: "api"}, UID: "x"}}
-	raw, err := json.Marshal(pol)
-	require.NoError(t, err)
-	body, err := json.Marshal(multinode.ObjectWrite{Kind: v1.KindPolicy, Object: raw})
-	require.NoError(t, err)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, r.server()+multinode.PathObjects, bytes.NewReader(body))
-	require.NoError(t, err)
-	req.Header.Set(multinode.HeaderAPIVersion, strconv.Itoa(multinode.APIVersion))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := hc.Do(req)
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	require.Equal(t, http.StatusForbidden, resp.StatusCode)
-	_, err = r.cp.Get(ctx, v1.KindPolicy.GVK(), "e1", "grant-all")
-	require.Equal(t, fault.NotFound, fault.KindOf(err))
+	return func(method, path string, body any) int {
+		t.Helper()
+		raw, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(context.Background(), method, r.server()+path, bytes.NewReader(raw))
+		require.NoError(t, err)
+		req.Header.Set(multinode.HeaderAPIVersion, strconv.Itoa(multinode.APIVersion))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := hc.Do(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
 }
 
 // fakeHold records the hold releases and quarantine returns it ran.

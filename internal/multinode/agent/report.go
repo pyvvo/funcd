@@ -36,6 +36,7 @@ func (a *Agent) report(ctx context.Context) {
 		case ev := <-events:
 			a.push(ctx, ev.Type, ev.Object)
 		case <-t.C:
+			a.resendDeletes(ctx)
 			a.resyncReports(ctx)
 			a.reportBackup(ctx)
 		}
@@ -96,11 +97,9 @@ func (a *Agent) push(ctx context.Context, typ store.EventType, obj v1.Object) {
 	whole := multinode.WrittenBack(kind, len(m.OwnerReferences) > 0)
 	if typ == store.Deleted {
 		a.forget(k)
-		if whole {
-			q := url.Values{"kind": {string(kind)}, "namespace": {string(m.Namespace)}, "name": {string(m.Name)}}
-			if _, err := a.do(ctx, http.MethodDelete, multinode.PathObjects+"?"+q.Encode(), nil, nil); err != nil {
-				a.log.WarnContext(ctx, "node agent: delete a child", "kind", kind, "name", m.Name, "error", err)
-			}
+		if whole || m.DeletionTime != nil { // the node ended the deletion the control plane holds
+			a.sendDelete(ctx, k, url.Values{"kind": {string(kind)}, "namespace": {string(m.Namespace)}, "name": {string(m.Name)},
+				"uid": {string(m.UID)}})
 		}
 		return
 	}
@@ -128,7 +127,7 @@ func (a *Agent) push(ctx context.Context, typ store.EventType, obj v1.Object) {
 	if len(status) == 0 || string(status) == "{}" || a.wasPushed(k, string(status)) {
 		return
 	}
-	w := multinode.StatusWrite{Kind: kind, Namespace: m.Namespace, Name: m.Name, Status: status}
+	w := multinode.StatusWrite{Kind: kind, Namespace: m.Namespace, Name: m.Name, UID: m.UID, Status: status}
 	if _, err := a.do(ctx, http.MethodPut, multinode.PathStatus, w, nil); err != nil {
 		a.log.WarnContext(ctx, "node agent: write a status back", "kind", kind, "name", m.Name, "error", err)
 		return
@@ -136,13 +135,28 @@ func (a *Agent) push(ctx context.Context, typ store.EventType, obj v1.Object) {
 	a.remember(k, string(status))
 }
 
-// fingerprint is a child's content without the fields each store mints.
+// sendDelete deletes on the control plane the object q names, which the node deleted; one it did not take is sent again
+// at the next pass.
+func (a *Agent) sendDelete(ctx context.Context, k string, q url.Values) {
+	if _, err := a.do(ctx, http.MethodDelete, multinode.PathObjects+"?"+q.Encode(), nil, nil); err != nil {
+		a.unsent[k+"/"+q.Get("uid")] = q
+		a.log.WarnContext(ctx, "node agent: delete a child", "kind", q.Get("kind"), "name", q.Get("name"), "error", err)
+	}
+}
+
+func (a *Agent) resendDeletes(ctx context.Context) {
+	for k, q := range a.unsent {
+		if _, err := a.do(ctx, http.MethodDelete, multinode.PathObjects+"?"+q.Encode(), nil, nil); err == nil {
+			delete(a.unsent, k)
+		}
+	}
+}
+
+// fingerprint is a child's content without the version its own store mints.
 func fingerprint(fields map[string]json.RawMessage) string {
 	var meta map[string]json.RawMessage
 	if json.Unmarshal(fields["metadata"], &meta) == nil {
 		delete(meta, "resourceVersion")
-		delete(meta, "uid")
-		delete(meta, "generation")
 		if b, err := json.Marshal(meta); err == nil {
 			fields["metadata"] = b
 		}

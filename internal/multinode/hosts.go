@@ -12,10 +12,10 @@ import (
 )
 
 // hostKinds are the kinds that claim a host at the edge.
-var hostKinds = []v1.Kind{v1.KindRoute, v1.KindFunction, v1.KindSite, v1.KindLake} //nolint:gochecknoglobals // a constant list
+var hostKinds = []v1.Kind{v1.KindRoute, v1.KindFunction, v1.KindSite, v1.KindLake, v1.KindAddonObject} //nolint:gochecknoglobals // a constant list
 
-// hostClaim is the host an object claims at the edge: a Route's spec.host, or the spec.ingress.host of a Function, a Site
-// or a Lake, in the spelling the edge matches (lower case, no port, no trailing dot). Empty claims the namespace's own
+// hostClaim is the host an object claims at the edge: a Route's spec.host, or the spec.ingress.host of a Function, a Site,
+// a Lake or an add-on object, in the spelling the edge matches (lower case, no port, no trailing dot). Empty claims the namespace's own
 // host, which only its node answers.
 func hostClaim(obj v1.Object) string {
 	var h string
@@ -29,6 +29,10 @@ func hostClaim(obj v1.Object) string {
 	case *v1.Site:
 		h = o.Spec.Ingress.Host
 	case *v1.Lake:
+		if o.Spec.Ingress != nil {
+			h = o.Spec.Ingress.Host
+		}
+	case *v1.AddonObject:
 		if o.Spec.Ingress != nil {
 			h = o.Spec.Ingress.Host
 		}

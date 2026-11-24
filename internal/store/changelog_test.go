@@ -141,3 +141,44 @@ func TestNoChangeLogWithoutTheOption(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, out)
 }
+
+func TestACopyKeepsItsOriginalsIdentity(t *testing.T) {
+	ctx := context.Background()
+	from, to := store.New(memory.New()), store.New(memory.New())
+	put(t, from, "a", "1")
+	put(t, from, "a", "2")
+	obj, err := from.Get(ctx, v1.KindConfigMap.GVK(), "default", "a")
+	require.NoError(t, err)
+	orig := *obj.GetObjectMeta()
+	require.Equal(t, int64(2), orig.Generation)
+
+	copied := obj.(*v1.ConfigMap)
+	copied.GenerateName = "a-"
+	got, err := to.Create(store.AsCopy(ctx), copied)
+	require.NoError(t, err)
+	m := got.GetObjectMeta()
+	require.Equal(t, orig.Name, m.Name)
+	require.Equal(t, orig.UID, m.UID)
+	require.Equal(t, orig.Generation, m.Generation)
+	require.Equal(t, orig.CreationTime, m.CreationTime)
+	require.NotEqual(t, orig.ResourceVersion, m.ResourceVersion, "a version is its own store's")
+	_, err = to.Create(store.AsCopy(ctx), copied)
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "a copy never takes another name")
+
+	put(t, from, "a", "3")
+	obj, err = from.Get(ctx, v1.KindConfigMap.GVK(), "default", "a")
+	require.NoError(t, err)
+	next := obj.(*v1.ConfigMap)
+	next.ResourceVersion = m.ResourceVersion
+	got, err = to.Update(store.AsCopy(ctx), next)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), got.GetObjectMeta().Generation)
+
+	own := got.(*v1.ConfigMap)
+	own.Spec.Data = map[string]string{"n": "4"}
+	own.UID, own.Generation = "forged", 99
+	got, err = to.Update(ctx, own)
+	require.NoError(t, err)
+	require.Equal(t, orig.UID, got.GetObjectMeta().UID, "any other write keeps the stored identity")
+	require.Equal(t, int64(4), got.GetObjectMeta().Generation)
+}

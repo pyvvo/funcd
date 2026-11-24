@@ -349,7 +349,7 @@ func (s *store) Create(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	if s.initErr != nil {
 		return nil, s.initErr
 	}
-	if obj.GetObjectMeta().GenerateName == "" {
+	if obj.GetObjectMeta().GenerateName == "" || copied(ctx, obj.GetObjectMeta()) {
 		return s.createOnce(ctx, obj) // normal path: Name required, single attempt
 	}
 	// generateName path: work on a clone (the caller's input stays read-only) and regenerate the name on
@@ -416,10 +416,10 @@ func (s *store) createOnce(ctx context.Context, obj v1.Object) (v1.Object, error
 			return nerr
 		}
 		rev = r
-		meta.UID = uid
-		meta.Generation = 1
+		if !copied(ctx, meta) {
+			meta.UID, meta.Generation, meta.CreationTime = uid, 1, v1.NewTimestamp(time.Now())
+		}
 		meta.ResourceVersion = s.version(rev)
-		meta.CreationTime = v1.NewTimestamp(time.Now())
 		val, eerr := s.encode(ctx, gvk.Kind, obj)
 		if eerr != nil {
 			return eerr
@@ -502,9 +502,9 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if changed {
 			gen++
 		}
-		meta.UID = curMeta.UID
-		meta.Generation = gen
-		meta.CreationTime = curMeta.CreationTime
+		if !copied(ctx, meta) {
+			meta.UID, meta.Generation, meta.CreationTime = curMeta.UID, gen, curMeta.CreationTime
+		}
 		// No-op coalescing (ADR-0047): align the incoming RV to the stored one, then compare.
 		// A byte-identical Update changes nothing — skip the revision bump, the Put, and the
 		// watch event, so a reconcile that observed no change does not self-trigger another

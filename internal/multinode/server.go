@@ -259,9 +259,6 @@ func (s *Server) placedOn(ctx context.Context, ns v1.NamespaceName, node v1.Obje
 	return err == nil && at == node && node != ""
 }
 
-// nodeKinds are the cluster-scoped kinds every node follows, besides the Namespaces.
-func nodeKinds(k v1.Kind) bool { return k == v1.KindRuntimeClass || k == v1.KindAPIToken }
-
 // snapshot answers GET …/snapshot[?namespace=]: every object of the node's namespaces (or the one asked), at the
 // revision it follows the feed after. The node's own children are left out.
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
@@ -293,10 +290,7 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 			Namespace: m.Namespace, Name: m.Name, Object: raw})
 		return nil
 	}
-	for _, k := range v1.AllKinds() {
-		if !nodeKinds(k) {
-			continue
-		}
+	for _, k := range NodeKinds() {
 		res, err := s.cfg.Store.List(ctx, k.GVK(), store.ListOptions{})
 		if err != nil {
 			writeFault(w, err)
@@ -369,7 +363,7 @@ func (s *Server) feed(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case c.Origin == node:
 			return false
-		case c.Kind == v1.KindNamespace || nodeKinds(c.Kind):
+		case c.Kind == v1.KindNamespace || nodeKind(c.Kind):
 			return true
 		case c.Namespace == "":
 			return false
@@ -425,8 +419,9 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// status answers PUT …/status (decision 4): the object's status becomes the node's; nothing else of it changes. The
-// object must sit in a namespace placed on the node, and pass validation (decision 5).
+// status answers PUT …/status (decision 4): the object's status becomes the node's, but the decisions the control plane
+// records there; nothing else of it changes. The object must sit in a namespace placed on the node, be the one the node
+// runs, by its uid, and pass validation (decision 5).
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	const op = "multinode.status"
 	ctx, node := r.Context(), nodeOf(r.Context())
@@ -445,11 +440,16 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			writeFault(w, err)
 			return
 		}
+		if cur.GetObjectMeta().UID != in.UID {
+			writeFault(w, fault.Conflictf(op, "%s %s was created again since the node took it", in.Kind, in.Name))
+			return
+		}
 		obj, err := withStatus(cur, in.Status)
 		if err != nil {
 			writeFault(w, err)
 			return
 		}
+		KeepDecisions(obj, cur)
 		if err := obj.Validate(); err != nil {
 			writeFault(w, err)
 			return
@@ -491,8 +491,10 @@ func withStatus(cur v1.Object, status json.RawMessage) (v1.Object, error) {
 	return obj, nil
 }
 
-// putObject answers PUT …/objects: a child the node owns (one with ownerReferences) is created or replaced, in a
-// namespace placed on the node. A node never writes an object a person wrote.
+// putObject answers PUT …/objects, in a namespace placed on the node: a child the node owns (one with ownerReferences)
+// is created or replaced, and an object the node makes with no owner is created, after which only its status changes. The
+// copy is the node's object, under its uid. A node never writes an object a person wrote, and one it makes under a name
+// another object holds is refused: the node takes that object instead.
 func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 	const op = "multinode.putObject"
 	ctx, node := r.Context(), nodeOf(r.Context())
@@ -523,32 +525,59 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 		writeFault(w, err)
 		return
 	}
-	ctx = store.WithOrigin(ctx, node)
+	ctx = store.AsCopy(store.WithOrigin(ctx, node))
 	for range 5 {
-		cur, err := s.cfg.Store.Get(ctx, obj.GroupVersionKind(), m.Namespace, m.Name)
-		if fault.KindOf(err) == fault.NotFound {
-			m.UID, m.ResourceVersion, m.Generation = "", "", 0
-			if _, err = s.cfg.Store.Create(ctx, obj); fault.KindOf(err) == fault.Conflict {
-				continue
-			}
-			writeDone(w, err)
-			return
-		}
-		if err != nil {
-			writeFault(w, err)
-			return
-		}
-		if !WrittenBack(in.Kind, len(cur.GetObjectMeta().OwnerReferences) > 0) {
-			writeFault(w, fault.Forbiddenf(op, "%s %s was written by a person, not by worker node %s", in.Kind, m.Name, node))
-			return
-		}
-		m.ResourceVersion = cur.GetObjectMeta().ResourceVersion
-		if _, err = s.cfg.Store.Update(ctx, obj); fault.KindOf(err) != fault.Conflict {
+		err := s.putCopy(ctx, obj, in.Object)
+		if fault.KindOf(err) != fault.Conflict || errors.Is(err, errNameHeld) {
 			writeDone(w, err)
 			return
 		}
 	}
 	writeFault(w, fault.Conflictf(op, "%s %s kept changing", in.Kind, m.Name))
+}
+
+// errNameHeld is an object a node made under a name another object holds on the control plane.
+var errNameHeld = fault.Conflictf("multinode.putObject", "another object holds the name")
+
+// putCopy writes obj, which a node sent as raw, once: a Conflict is a write to try again, but errNameHeld.
+func (s *Server) putCopy(ctx context.Context, obj v1.Object, raw json.RawMessage) error {
+	const op = "multinode.putObject"
+	m, gvk := obj.GetObjectMeta(), obj.GroupVersionKind()
+	cur, err := s.cfg.Store.Get(ctx, gvk, m.Namespace, m.Name)
+	if fault.KindOf(err) == fault.NotFound {
+		m.ResourceVersion = ""
+		_, err = s.cfg.Store.Create(ctx, obj)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	cm, next := cur.GetObjectMeta(), obj
+	switch {
+	case !WrittenBack(gvk.Kind, len(cm.OwnerReferences) > 0):
+		return fault.Forbiddenf(op, "%s %s was written by a person, not by worker node %s", gvk.Kind, m.Name, nodeOf(ctx))
+	case len(m.OwnerReferences) > 0:
+	case cm.UID != m.UID:
+		return fault.Wrapf(errNameHeld, fault.Conflict, op, "%s %s", gvk.Kind, m.Name)
+	default:
+		if next, err = withStatus(cur, statusOf(raw)); err != nil {
+			return err
+		}
+		KeepDecisions(next, cur)
+		ctx = store.WithoutChangeLog(ctx)
+	}
+	next.GetObjectMeta().ResourceVersion = cm.ResourceVersion
+	_, err = s.cfg.Store.Update(ctx, next)
+	return err
+}
+
+// statusOf is the status of an object in JSON.
+func statusOf(raw json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil || len(m["status"]) == 0 {
+		return json.RawMessage("{}")
+	}
+	return m["status"]
 }
 
 func writeDone(w http.ResponseWriter, err error) {
@@ -559,18 +588,24 @@ func writeDone(w http.ResponseWriter, err error) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// deleteObject answers DELETE …/objects?kind=&namespace=&name=: a child the node owns goes.
+// deleteObject answers DELETE …/objects?kind=&namespace=&name=&uid=: an object the node holds goes, when it is one a node
+// writes back whole, or one whose deletion the control plane held until the node ended it (ADR-0345 Decision 6). An
+// object of another uid took the name since, so it stays.
 func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
 	const op = "multinode.deleteObject"
 	ctx, node := r.Context(), nodeOf(r.Context())
 	q := r.URL.Query()
-	kind, ns, name := v1.Kind(q.Get("kind")), v1.NamespaceName(q.Get("namespace")), v1.ObjectName(q.Get("name"))
-	if !s.placedOn(ctx, ns, node) {
+	kind, ns, name, uid := v1.Kind(q.Get("kind")), v1.NamespaceName(q.Get("namespace")), v1.ObjectName(q.Get("name")), v1.UID(q.Get("uid"))
+	switch {
+	case !s.placedOn(ctx, ns, node):
 		writeFault(w, fault.Forbiddenf(op, "namespace %s is not placed on worker node %s", ns, node))
+		return
+	case uid == "":
+		writeFault(w, fault.Invalidf(op, "the uid of the deleted %s %s is required", kind, name))
 		return
 	}
 	cur, err := s.cfg.Store.Get(ctx, kind.GVK(), ns, name)
-	if fault.KindOf(err) == fault.NotFound {
+	if fault.KindOf(err) == fault.NotFound || err == nil && cur.GetObjectMeta().UID != uid {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -578,7 +613,7 @@ func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
 		writeFault(w, err)
 		return
 	}
-	if !WrittenBack(kind, len(cur.GetObjectMeta().OwnerReferences) > 0) {
+	if m := cur.GetObjectMeta(); !WrittenBack(kind, len(m.OwnerReferences) > 0) && m.DeletionTime == nil {
 		writeFault(w, fault.Forbiddenf(op, "%s %s was written by a person, not by worker node %s", kind, name, node))
 		return
 	}
