@@ -955,6 +955,32 @@ addon-rauthy-restore:
   # Only an admin registers an Addon and restores in place, so the suite applies every manifest itself.
   venom: e2e/addon-rauthy-restore.venom.yml
 
+addon-runtime:
+  description: A Function on an Addon's runtime on real containerd (ADR-0344) — an admin's Addon ships jscopy22, a copy of funcd's nodejs22 image that a registry in the VM serves over TLS, for Functions; a developer's Function on jscopy22 pulls the image by digest from that registry, which addons.registries lists, turns Ready, records the image in its Revision and answers through the data plane.
+  # The copy is the nodejs22 image that `just build-runtime-images` embeds, served by e2e/laneregistry, which the lane
+  # recipes build into the VM's deps beside funcd; its certificate is made at its start, and the suite trusts it.
+  stage:
+    - from: internal/runtime/embedimg/nodejs22.tar
+      to: nodejs22.tar
+    - from: e2e/fixtures/addon-runtime-funcdconfig.yaml
+      to: funcdconfig.yaml
+    - from: e2e/fixtures/addon-runtime-addon.yaml
+      to: addon.yaml
+    - from: e2e/fixtures/addon-runtime-function.yaml
+      to: function.yaml
+    - from: e2e/fixtures/addon-runtime-echo.mjs
+      to: addon-runtime-echo.mjs
+    - from: e2e/fixtures/addon-runtime-echo.contract.json
+      to: addon-runtime-echo.contract.json
+  tokens:
+    admin: addon-runtime-lane-admin
+    developer: addon-runtime-lane-developer
+  push:
+    - artifact: addon-runtime-echo.mjs
+      ref: addon-runtime-echo
+  # Only an admin registers an Addon, and the Addon's digest is the registry's, so the suite applies both manifests.
+  venom: e2e/addon-runtime.venom.yml
+
 job:
   description: A Job's runs on real containerd (ADR-0347) — the job-report examples of funcd-typescript and funcd-python each report on a month, a run that ends Succeeded with no container left, a cancel that stops the run's container within the grace, and a funcd crash during a run that leaves it Interrupted with no container.
   module: github.com/pyvvo/funcd-typescript

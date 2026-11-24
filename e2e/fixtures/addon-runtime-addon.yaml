@@ -1,0 +1,12 @@
+# ADR-0344: an Addon that ships jscopy22, a copy of funcd's nodejs22 image that the lane's registry serves, for
+# Functions. The suite puts the image's digest, which the registry writes out, in place of DIGEST.
+apiVersion: funcd.io/v1alpha1
+kind: Addon
+metadata:
+  name: jscopy
+spec:
+  runtimes:
+    - name: jscopy22
+      image: 127.0.0.1:5443/funcd/jscopy@DIGEST
+      workloads:
+        - Function
