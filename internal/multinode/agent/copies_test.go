@@ -341,7 +341,11 @@ func TestARunThatANodeStartsReachesTheControlPlane(t *testing.T) {
 func TestANodesLateWriteChangesNothingOfAnotherObject(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)
-	call := nodeCaller(t, n.rig, n.dir)
+	send := nodeCaller(t, n.rig, n.dir)
+	call := func(method, path string, body any) int { //nolint:forbidigo // a typed request of the node API
+		status, _ := send(method, path, body)
+		return status
+	}
 	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	run := jobRun("deploy-1", "deploy")
 	run.Spec.Approve, run.Status.Phase = digest, v1.JobRunAwaitingApproval
@@ -387,6 +391,62 @@ func TestANodesLateWriteChangesNothingOfAnotherObject(t *testing.T) {
 	require.NoError(t, err)
 	path = multinode.PathObjects + "?kind=AddonObject&namespace=e1&name=net&uid=" + string(obj.GetObjectMeta().UID)
 	require.Equal(t, http.StatusForbidden, call(http.MethodDelete, path, nil), "an object a person wrote and did not delete")
+}
+
+func TestANodeGetsTheAPITokensAndTheNamespacesThatConcernIt(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t)
+	token := func(name v1.ObjectName, role string, spans ...v1.NamespaceName) {
+		at := &v1.APIToken{TypeMeta: meta(v1.KindAPIToken)}
+		at.Name, at.Spec.Role, at.Spec.Namespaces = name, role, spans
+		at.Status.TokenHash = "hash-of-" + string(name)
+		_, err := n.cp.Create(ctx, at)
+		require.NoError(t, err)
+	}
+	namespace := func(name, node v1.ObjectName) {
+		ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+		ns.Name, ns.Spec.Node = name, node
+		_, err := n.cp.Create(ctx, ns)
+		require.NoError(t, err)
+	}
+	token("mine", "developer", "e1", "far")
+	token("theirs", "viewer", "far")
+	token("root", "admin")
+	namespace("far", "")
+	defer n.start(t)()
+	anyToken := func(*v1.APIToken) bool { return true }
+	lacks := func(name v1.ObjectName) {
+		_, err := n.node.Get(ctx, v1.KindAPIToken.GVK(), "", name)
+		require.Equal(t, fault.NotFound, fault.KindOf(err), "%s", name)
+	}
+	onNode(t, n, v1.KindAPIToken, "mine", "a token that spans e1 is on the node", anyToken)
+	onNode(t, n, v1.KindAPIToken, "root", "and an admin's, which spans every namespace", anyToken)
+	lacks("theirs")
+
+	// The feed sends the node nothing of the rest but a name.
+	status, body := nodeCaller(t, n.rig, n.dir)(http.MethodGet, multinode.PathFeed+"?since=0&timeline="+n.cp.(store.ChangeLog).Timeline()+"&wait=1ms", nil)
+	require.Equal(t, http.StatusOK, status)
+	require.Contains(t, string(body), "hash-of-mine")
+	require.Contains(t, string(body), `"theirs"`)
+	require.NotContains(t, string(body), "hash-of-theirs")
+	var feed multinode.Feed
+	require.NoError(t, json.Unmarshal(body, &feed))
+	for _, c := range feed.Changes {
+		if c.Name == "far" || c.Name == "theirs" {
+			require.Equal(t, store.Deleted, c.Type, "%s", c.Name)
+			require.Empty(t, c.Object, "%s", c.Name)
+		}
+	}
+
+	update(t, n.cp, v1.KindAPIToken, "mine", func(a *v1.APIToken) { a.Spec.Namespaces = []v1.NamespaceName{"far"} })
+	gone(t, n.node, v1.KindAPIToken, "mine", "a token that spans none of the node's namespaces any more leaves it")
+	token("later", "developer", "e2")
+	namespace("e2", "vm1")
+	onNode(t, n, v1.KindAPIToken, "later", "a token comes with the namespace it spans", anyToken)
+	require.NoError(t, n.cp.Delete(ctx, v1.KindNamespace.GVK(), "", "e2", ""))
+	gone(t, n.node, v1.KindAPIToken, "later", "and leaves with it")
+	onNode(t, n, v1.KindAPIToken, "root", "the admin's stays", anyToken)
+	lacks("theirs")
 }
 
 func stack(name v1.ObjectName) *v1.AddonObject {

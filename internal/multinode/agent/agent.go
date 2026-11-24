@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -396,5 +397,24 @@ func (a *Agent) removeNamespace(ctx context.Context, ns v1.NamespaceName) {
 		a.log.WarnContext(ctx, "node agent: remove a Namespace", "namespace", ns, "error", err)
 	}
 	a.dropKey(ctx, ns)
+	a.dropTokens(ctx)
 	a.log.InfoContext(ctx, "node agent: namespace left this node", "namespace", ns)
+}
+
+// dropTokens removes the API tokens that span none of the node's namespaces any more (decision 7).
+func (a *Agent) dropTokens(ctx context.Context) {
+	res, err := a.cfg.Store.List(ctx, v1.KindAPIToken.GVK(), store.ListOptions{})
+	if err != nil {
+		a.log.WarnContext(ctx, "node agent: list the API tokens", "error", err)
+		return
+	}
+	for _, obj := range res.Items {
+		t, ok := obj.(*v1.APIToken)
+		if !ok || len(t.Spec.Namespaces) == 0 || slices.ContainsFunc(t.Spec.Namespaces, a.isMine) {
+			continue
+		}
+		if err := a.remove(ctx, t); err != nil {
+			a.log.WarnContext(ctx, "node agent: remove an API token", "name", t.Name, "error", err)
+		}
+	}
 }

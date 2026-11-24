@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -449,6 +450,10 @@ func TestANodeChecksTheAPITokensOfTheControlPlaneItself(t *testing.T) {
 		return func() { stop(); <-done }
 	}
 	stop := run()
+	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+	ns.Name, ns.Spec.Node = "e1", "vm1"
+	_, err = r.cp.Create(ctx, ns)
+	require.NoError(t, err)
 	at := &v1.APIToken{TypeMeta: meta(v1.KindAPIToken)}
 	at.Name, at.Spec.Role, at.Spec.Namespaces = "ci", "developer", []v1.NamespaceName{"e1"}
 	_, err = r.cp.Create(ctx, at)
@@ -624,16 +629,17 @@ func TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers(t *testing.T) {
 	pol.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Name: "api"}, UID: "x"}}
 	raw, err := json.Marshal(pol)
 	require.NoError(t, err)
-	call := nodeCaller(t, r, dir)
-	require.Equal(t, http.StatusForbidden, call(http.MethodPut, multinode.PathObjects, multinode.ObjectWrite{Kind: v1.KindPolicy, Object: raw}))
+	status, _ := nodeCaller(t, r, dir)(http.MethodPut, multinode.PathObjects, multinode.ObjectWrite{Kind: v1.KindPolicy, Object: raw})
+	require.Equal(t, http.StatusForbidden, status)
 	_, err = r.cp.Get(ctx, v1.KindPolicy.GVK(), "e1", "grant-all")
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 }
 
-// nodeCaller calls r's node API with the certificate of the node that joined under dir, and returns the status it answers.
+// nodeCaller calls r's node API with the certificate of the node that joined under dir, and returns the status and the
+// body it answers.
 //
 //nolint:forbidigo // body is one of the node API's typed requests, sent as JSON
-func nodeCaller(t *testing.T, r rig, dir string) func(method, path string, body any) int {
+func nodeCaller(t *testing.T, r rig, dir string) func(method, path string, body any) (int, []byte) {
 	t.Helper()
 	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "node.crt"), filepath.Join(dir, "node.key"))
 	require.NoError(t, err)
@@ -643,7 +649,7 @@ func nodeCaller(t *testing.T, r rig, dir string) func(method, path string, body 
 	require.True(t, roots.AppendCertsFromPEM(caPEM))
 	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert},
 		RootCAs: roots, MinVersion: tls.VersionTLS13}}}
-	return func(method, path string, body any) int {
+	return func(method, path string, body any) (int, []byte) {
 		t.Helper()
 		raw, err := json.Marshal(body)
 		require.NoError(t, err)
@@ -653,8 +659,10 @@ func nodeCaller(t *testing.T, r rig, dir string) func(method, path string, body 
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := hc.Do(req)
 		require.NoError(t, err)
-		_ = resp.Body.Close()
-		return resp.StatusCode
+		defer func() { _ = resp.Body.Close() }()
+		answer, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		return resp.StatusCode, answer
 	}
 }
 

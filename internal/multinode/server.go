@@ -261,8 +261,41 @@ func (s *Server) placedOn(ctx context.Context, ns v1.NamespaceName, node v1.Obje
 	return err == nil && at == node && node != ""
 }
 
-// snapshot answers GET …/snapshot[?namespace=]: every object of the node's namespaces (or the one asked), at the
-// revision it follows the feed after. The node's own children are left out.
+// concerns reports whether node takes the cluster-scoped obj whole: its own Namespaces, the API tokens that span one of
+// them (decision 7), and every object of the other kinds it follows.
+func (s *Server) concerns(ctx context.Context, node v1.ObjectName, obj v1.Object) bool {
+	switch o := obj.(type) {
+	case *v1.Namespace:
+		return o.Spec.Node == node
+	case *v1.APIToken:
+		return len(o.Spec.Namespaces) == 0 || slices.ContainsFunc(o.Spec.Namespaces, func(ns v1.NamespaceName) bool {
+			return s.placedOn(ctx, ns, node)
+		})
+	}
+	return true
+}
+
+// forNode is record c as node gets it. One of a Namespace or of an API token that does not concern the node is a delete of
+// its name and carries nothing else, so a node that held it drops it, and no node reads what is not its own.
+func (s *Server) forNode(ctx context.Context, node v1.ObjectName, c store.Change) (store.Change, error) {
+	if c.Kind != v1.KindNamespace && c.Kind != v1.KindAPIToken {
+		return c, nil
+	}
+	obj, ok := v1.NewObject(c.Kind)
+	if !ok {
+		return c, nil
+	}
+	if err := json.Unmarshal(c.Object, obj); err != nil {
+		return store.Change{}, fault.Wrapf(err, fault.Internal, "multinode.feed", "decode %s %s", c.Kind, c.Name)
+	}
+	if s.concerns(ctx, node, obj) {
+		return c, nil
+	}
+	return store.Change{Rev: c.Rev, Type: store.Deleted, Kind: c.Kind, Name: c.Name}, nil
+}
+
+// snapshot answers GET …/snapshot[?namespace=]: every object of the node's namespaces (or the one asked), and the
+// cluster-scoped ones that concern it, at the revision it follows the feed after. The node's own children are left out.
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	ctx, node := r.Context(), nodeOf(r.Context())
 	head, err := s.cl.Head(ctx)
@@ -299,6 +332,9 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, obj := range res.Items {
+			if !s.concerns(ctx, node, obj) {
+				continue
+			}
 			if err := add(obj); err != nil {
 				writeFault(w, err)
 				return
@@ -347,8 +383,8 @@ func waitOf(r *http.Request) time.Duration {
 }
 
 // feed answers GET …/feed?since=&wait= (decision 3): the node's records after since, or none once wait passes. A node
-// gets every Namespace record, so it sees placements come and go, and the records of the namespaces placed on it, but
-// not the ones it wrote itself. A since older than the change log, or of another timeline of the metastore (one restored
+// gets the records of the namespaces placed on it and of the cluster-scoped kinds it follows, as they concern it, so it
+// sees placements come and go, but not the ones it wrote itself. A since older than the change log, or of another timeline of the metastore (one restored
 // from a backup since), is 410: the node starts again from a snapshot.
 func (s *Server) feed(w http.ResponseWriter, r *http.Request) {
 	ctx, node := r.Context(), nodeOf(r.Context())
@@ -384,6 +420,12 @@ func (s *Server) feed(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeFault(w, err)
 			return
+		}
+		for i := range out {
+			if out[i], err = s.forNode(ctx, node, out[i]); err != nil {
+				writeFault(w, err)
+				return
+			}
 		}
 		if len(out) > 0 || !time.Now().Before(deadline) {
 			writeJSON(w, Feed{Rev: cursor, Changes: out})
