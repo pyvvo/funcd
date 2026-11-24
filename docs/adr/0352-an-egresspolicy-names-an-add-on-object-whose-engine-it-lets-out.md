@@ -16,8 +16,8 @@
   whose objects run an engine)
 - **Relates to**: [ADR-0117](0117-egress-policy-enforcement.md) (the gateway) · [ADR-0315](0315-what-a-domain-rule-allows.md)
   (the forwarder) · [ADR-0269](0269-a-provider-engine-reaches-only-its-one-internal-endpoint.md) (the engines' fence)
-  · [ADR-0115](0115-worker-network-isolation.md) (the redirect) · ADR-0353 (the edge on the bridge address; its
-  Decision 5 says when an index entry is written) · [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md)
+  · [ADR-0115](0115-worker-network-isolation.md) (the redirect) · ADR-0353 (the edge on the bridge address) ·
+  [ADR-0163](0163-retry-times-in-config.md) (the worker sync that reconciles the indexes) · [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md)
   (a runtime entry that runs engines)
 
 ## Context & Need
@@ -50,7 +50,7 @@ name"), and the engine's connections pass the egress gateway as a Function's do.
 In: an `appliesTo` item that names an add-on object; the engine's outbound path through the egress gateway and the DNS
 forwarder; how they name its source. Out: an Addon field that lists egress (the decider: reuse EgressPolicy); the
 process runtime and `funcdctl dev`, which control no egress (ADR-0334); an add-on kind with no engine; when an index
-entry is written and removed (ADR-0353 Decision 5); the path to funcd's own edge, which ADR-0353 decides: a listener
+entry is written and removed, which stays as today (ADR-0163, ADR-0332 Decision 3); the path to funcd's own edge, which ADR-0353 decides: a listener
 on the bridge address that a workload or an engine reaches directly, which the gateway never dials.
 
 ## Constraints & Decision drivers
@@ -104,10 +104,9 @@ on the bridge address that a workload or an engine reaches directly, which the g
 ## Design model
 
 None. Decision 3 adds no writer and no timer: the engine index keeps its one writer, and the gateway's and the
-forwarder's reads of two indexes refuse a conflict, so no interleaving of writes is new. When an entry is written and
-removed is ADR-0353 Decision 5's, with which this ADR lands, modeled in
-[`docs/design/egress/address-index.fizz`](../design/egress/address-index.fizz); the gateway's decision is ADR-0117's,
-unchanged.
+forwarder's reads of two indexes refuse a conflict, so no interleaving of writes is new. The indexes are written as
+today: an engine's entry from its runtime's `BeforeStart`, and both reconciled at each worker sync (ADR-0163), the
+window the decider accepted for these indexes (2026-11-23); the gateway's decision is ADR-0117's, unchanged.
 
 ## Behavior rows
 
@@ -157,7 +156,7 @@ func EgressDomains(ep *v1.EgressPolicy, principal auth.EntityRef, kind string) [
 |---|---|---|
 | `EgressPolicy.spec.appliesTo[]` | exposes | add-on kinds whose objects run an engine |
 | `server.network.egress` | consumes | unchanged; off keeps the fence |
-| the worker and engine indexes | consume | read through `Sources`; written as ADR-0353 Decision 5 says |
+| the worker and engine indexes | consume | read through `Sources`; written as today (ADR-0163, ADR-0332 Decision 3) |
 
 ## Implementation plan
 
@@ -169,7 +168,7 @@ func EgressDomains(ep *v1.EgressPolicy, principal auth.EntityRef, kind string) [
    `internal/runtime/containerd` `writeNetns` and `internal/network` `FenceNetns`: the input chain alone.
 5. `internal/network/egress`: `Sources`; `pkg/funcd` `buildEgress` gives it to the gateway and the forwarder, and
    `storeDomainRules` reads an engine's kind.
-6. Lands with ADR-0353 Decision 5.
+6. Lands with ADR-0353.
 7. Tests, each written to pass: the type's and the admission's tables, a case-only kind included; the Cedar
    compilation; `Sources`, a conflict refused; one `TestScenario…` per scenario in `pkg/funcd`, built like
    `TestScenarioEngineEgressIsLake`; a case in the egress lane on containerd for `engine-egress-named`, a lookup and a

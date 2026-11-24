@@ -75,7 +75,7 @@ today); a list of Bunny's edge ranges, which change; several proxies in a row be
    address. A peer that matches no entry is the client.
 3. **Matching.** A `cidrs` entry matches an address in its ranges, but never one in `runtime.containerd.subnetCIDR`:
    that is a workload's address, which only an `addonKinds` entry can trust. An `addonKinds` entry matches a peer that
-   `egress.Sources` (ADR-0352 Decision 3; exact from a worker's creation to its release, ADR-0353 Decision 5) names as
+   `egress.Sources` (ADR-0352 Decision 3) names as
    an add-on object whose stored object's kind is one of the entry's, spelled the same. Where no engine index exists
    (the process runtime, or containerd without the egress gateway), an `addonKinds` entry matches nothing, and funcd
    warns at start.
@@ -92,8 +92,8 @@ today); a list of Bunny's edge ranges, which change; several proxies in a row be
 ## Design model
 
 None. The client address is a function of the request, the config and what `egress.Sources` names for the peer, read
-at each request; the decision adds no writer, lifecycle or timer. When an index names a peer is ADR-0353 Decision 5's,
-modeled in [`docs/design/egress/address-index.fizz`](../design/egress/address-index.fizz).
+at each request; the decision adds no writer, lifecycle or timer. The indexes that name a peer follow the workers within one
+worker sync (ADR-0163).
 
 ## Behavior rows
 
