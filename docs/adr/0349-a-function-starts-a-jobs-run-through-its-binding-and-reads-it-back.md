@@ -1,6 +1,6 @@
 # ADR-0349: A Function starts a Job's run through its binding and reads it back
 
-- **Status**: Reviewing (2026-11-24, implemented); Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
+- **Status**: Implemented (2026-11-24), review passed in round 2 with two Minors; Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
 - **Amended in place**: 2026-11-24, by the decider on [#1492](https://github.com/pyvvo/funcd/issues/1492#issuecomment-7119567941): an input off the Job's contract answers 422 as a Function's call does, not as a declared cause (Decision 4)
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
