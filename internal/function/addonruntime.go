@@ -143,12 +143,15 @@ func (r *Reconciler) addonImage(ctx context.Context, w workload, rev v1.ObjectNa
 // runtime's under funcdctl dev (ADR-0346 Decisions 2, 5 and 6): no Command; the artifact's folder delivered read-only at
 // containerArtifactDir, which the image driver copies into the worker's bundle volume; the local API on the worker's
 // own listener with its token; funcd's endpoints by the host the worker reaches them by; and on an engine in a VM the
-// fixed port that the engine publishes. No socket is bound in, and no volume.
+// fixed port that the engine publishes. No socket is bound in, no volume, and no host path.
 func (r *Reconciler) imageWorkerSpec(spec runtime.WorkerSpec, w workload, rev v1.ObjectName, wo workerOf, artifactPath string, we workerEnv,
 	img string) (runtime.WorkerSpec, error) {
 	spec.Image = img
 	spec.Mounts = []runtime.Mount{{Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true}}
 	spec.Env = r.shimWorkerEnv(w, wo, filepath.Join(containerArtifactDir, filepath.Base(artifactPath)), containerArtifactDir, "", we, nil)
+	// A container worker takes no host path, and dev's extension folder is one: no containerd worker gets it either
+	// (the decider, 2026-11-24).
+	delete(spec.Env, lakeExtensionDirEnv)
 	host := r.endpointHost()
 	if r.invokeSockets != nil {
 		id := runtime.NewInstanceID(w.meta().Namespace, wo.name, rev, wo.replica)

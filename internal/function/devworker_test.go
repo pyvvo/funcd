@@ -38,15 +38,17 @@ func onDevImages(runs bool, why, host string, socks *socketLog) func(*function.D
 
 // ADR-0346 Decisions 2, 5 and 6: on an image runtime, a worker on an Addon's runtime runs its Revision's image in the
 // container shape, with the local API on a listener of its own and funcd's endpoints by the host it reaches them by,
-// only in the keys the hooks mark; a Function on funcd's runtimes beside it keeps the process shape and sets no Image.
+// only in the keys the hooks mark, and no host path, as the decider ruled on 2026-11-24 for dev's DuckDB extension
+// folder; a Function on funcd's runtimes beside it keeps the process shape and sets no Image.
 func TestDevAddonWorkerSpec(t *testing.T) {
 	t.Parallel()
+	const extDir = "/opt/duckdb-ext"
 	for _, host := range []string{"funcd.host", runtime.LoopbackHost} {
 		t.Run(host, func(t *testing.T) {
 			t.Parallel()
 			socks := &socketLog{}
 			h := newShimHarness(t, http.StatusOK, false, onDevImages(true, "", host, socks), withS3Gateway, func(d *function.Deps) {
-				d.LakeMaster = []byte("dev-worker-spec-master-secret")
+				d.LakeMaster, d.LakeExtensionDir = []byte("dev-worker-spec-master-secret"), extDir
 			})
 			h.putAddon(t, denoImageA, v1.WorkloadFunction)
 			storeBucket(t, h)
@@ -81,6 +83,7 @@ func TestDevAddonWorkerSpec(t *testing.T) {
 			require.Equal(t, "token-of-"+string(id), spec.Env["FUNCD_INVOKE_TOKEN"])
 			require.Equal(t, "http://"+host+":9000", spec.Env["AWS_ENDPOINT_URL_S3"], "a marked endpoint key")
 			require.Equal(t, host+":1", spec.Env["FUNCD_LAKE_LAKE_URL"], "the Lake hook's endpoint key, marked too")
+			require.NotContains(t, spec.Env, "DUCKDB_EXTENSION_DIRECTORY", "a container worker takes no host path")
 			require.Equal(t, "http://127.0.0.1:7777", spec.Env["UPSTREAM"], "a config key is the developer's, never rewritten")
 			if host == runtime.LoopbackHost {
 				require.NotContains(t, spec.Env, "FUNCD_PORT", "on the host's network the shim binds the loopback")
@@ -96,6 +99,7 @@ func TestDevAddonWorkerSpec(t *testing.T) {
 			require.NotContains(t, plain.Env, "FUNCD_INVOKE_URL")
 			require.Equal(t, "http://127.0.0.1:9000", plain.Env["AWS_ENDPOINT_URL_S3"])
 			require.Equal(t, "127.0.0.1:1", plain.Env["FUNCD_LAKE_LAKE_URL"])
+			require.Equal(t, extDir, plain.Env["DUCKDB_EXTENSION_DIRECTORY"], "a process worker reads dev's folder")
 		})
 	}
 }
