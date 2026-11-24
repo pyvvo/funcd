@@ -554,6 +554,7 @@ type Platform struct {
 
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
 	dataPlaneListener net.Listener
+	bridgeListen      netip.AddrPort // the edge's own listener on the bridge address (ADR-0353 Decision 1); invalid ⇒ none
 	dataPlaneAddr     string
 
 	workflowRuns      runstate.Store          // durable workflow run state (ADR-0094); closed on shutdown
@@ -1306,10 +1307,14 @@ func (p *Platform) buildControlPlane() error {
 	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). The write stall
 	// bound is outermost, so every byte of every listener response passes it. Runtime order:
 	// WriteStall → Recover → RequestID → observ → limit → shape → dataplane.Handler.
-	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, c.baseDomain, edgeEnforcer, targetLimiter, staticHandler,
-		c.invokeDefaultTimeout, p.logger, dataplane.WithCallGate(c.callGate()), dataplane.WithChain(callChain),
+	dpOpts := []dataplane.Option{dataplane.WithCallGate(c.callGate()), dataplane.WithChain(callChain),
 		dataplane.WithOIDC(oidc.New(oidc.Deps{Store: c.store, CallbackURL: p.callbacks().URL, HTTPS: p.callbacks().HTTPS(),
-			BackChannel: c.oidcBackChannel, Addons: storedAddons{c.store}, Logger: p.logger})))
+			BackChannel: c.oidcBackChannel, Addons: storedAddons{c.store}, Logger: p.logger}))}
+	if bridge, ok := p.bridgeEdge(); ok { // ADR-0353: a caller on the bridge address gets only its namespace
+		dpOpts = append(dpOpts, dataplane.WithBridgeCallers(bridge, p.exec.egressSources))
+	}
+	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, c.baseDomain, edgeEnforcer, targetLimiter, staticHandler,
+		c.invokeDefaultTimeout, p.logger, dpOpts...)
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
 	dpHandler := gateway.Chain(dpCore, gateway.WriteStall(gateway.WriteStallTimeout), gateway.Recover(p.logger),
 		gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
@@ -1329,6 +1334,9 @@ func (p *Platform) buildControlPlane() error {
 	}
 	p.dataPlaneListener = dln
 	p.dataPlaneAddr = dln.Addr().String()
+	if tcp, ok := dln.Addr().(*net.TCPAddr); ok {
+		p.edgeOnTheBridge(tcp.AddrPort())
+	}
 
 	return nil
 }
@@ -1519,6 +1527,9 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.logger.ErrorContext(ctx, "data-plane server stopped", "error", err)
 		}
 	}()
+	if p.bridgeListen.IsValid() {
+		go p.serveBridge(ctx, serve)
+	}
 
 	<-ctx.Done()
 

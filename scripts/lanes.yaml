@@ -516,7 +516,7 @@ funclog:
   venom: e2e/funclog.venom.yml
 
 egress:
-  description: The egress-probe JS function proves ADR-0117 (F81) egress enforcement on real containerd — default-deny with no EgressPolicy, allow via a wildcard-domain / CIDR EgressPolicy, and the audit trail — and an add-on engine, traefik/whoami as the Tunnel public, is let out by an EgressPolicy that names its object (ADR-0352).
+  description: The egress-probe JS function proves ADR-0117 (F81) egress enforcement on real containerd — default-deny with no EgressPolicy, allow via a wildcard-domain / CIDR EgressPolicy, and the audit trail — and an add-on engine, traefik/whoami as the Tunnel public, is let out by an EgressPolicy that names its object (ADR-0352) and reaches the edge on the bridge address for its own namespace only (ADR-0353).
   module: github.com/pyvvo/funcd-typescript
   dir: examples/egress-probe
   stage:

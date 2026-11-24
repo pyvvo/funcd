@@ -1,9 +1,14 @@
 # The egress lane's probe, run in an add-on engine's network namespace (nsenter -n) with the VM's python3:
 #   lookup <name> [address]  asks funcd's forwarder for <name>'s A record as a worker's resolver does, then opens TLS to
-#                            the first address it answered, else to <address>, and prints what each step got.
+#                            the first address it answered, else to <address>, and prints what each step got;
+#   edge <url> <host> [ns]   calls funcd's edge at <url> as the engine, with Host <host> and, when given,
+#                            X-Funcd-Namespace <ns>, and prints the status and the problem's detail.
+import json
 import socket
 import ssl
 import sys
+import urllib.error
+import urllib.request
 
 
 def lookup(name):
@@ -45,7 +50,21 @@ def connect(name, address):
         print("connect", name, "failed", e)
 
 
-if sys.argv[1] == "lookup":
+def edge(url, host, namespace):
+    body = json.dumps({"data": {"url": "http://127.0.0.1:9/"}}).encode()
+    req = urllib.request.Request(url, data=body, headers={"Host": host, "Content-Type": "application/json"})
+    if namespace:
+        req.add_header("X-Funcd-Namespace", namespace)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as res:
+            print("edge", host, namespace or "-", res.status)
+    except urllib.error.HTTPError as e:
+        print("edge", host, namespace or "-", e.code, json.loads(e.read() or b"{}").get("detail", ""))
+
+
+if sys.argv[1] == "edge":
+    edge(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else "")
+elif sys.argv[1] == "lookup":
     found = lookup(sys.argv[2])
     target = found or (sys.argv[3] if len(sys.argv) > 3 else None)
     if target:

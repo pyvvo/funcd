@@ -14,6 +14,13 @@ is ready. An idle Function scales back to zero.
 A worker reaches other Functions and its stores through its local API. When egress control is on, its outbound
 connections go through the egress gateway, which applies the namespace's EgressPolicy.
 
+With egress control on and the gateway running, the edge also listens on funcd's bridge address at the data plane's
+port, where a worker or an add-on engine, such as a tunnel's connector, reaches it directly. funcd names such a caller
+by its source address, as the gateway does, and serves it only what resolves to the caller's own namespace: another
+namespace's host, Function by name or sign-in callback, or an `X-Funcd-Namespace` header that names another namespace,
+gets 403. The gateway never connects a worker to an address the data plane listens on, so this is the one way from the
+container network to the edge. A request from outside the container network is served as before.
+
 ## Local API
 
 ![A Function's ctx calls go through the shim to the worker's local API. The kv, blob, sql and secret facets and the invoke and fetch calls ask Cedar, which either serves the call or refuses it with 403 Forbidden. The health call checks the worker's bindings](../../assets/networking-local-api.drawio.svg)

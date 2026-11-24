@@ -183,6 +183,12 @@ port 443 at `1.1.1.1`, which a URL can name without a lookup; `https://1.0.0.1` 
   `egress::connect`:
   funcd makes one from each EgressPolicy rule, and a [Policy](../security/spec.md#policy) can hold one, but a lookup
   still needs a domain rule. A Policy's `forbid` stops a connection, not the lookup.
+- **A workload's calls to the edge.** With egress control on, a worker or an add-on engine reaches funcd's edge
+  directly at funcd's bridge address, `10.63.0.1` by default, on the data plane's port; a configured address needs a
+  fixed port in `server.dataPlaneAddr`. There it gets only its own namespace's hosts, Functions by name and sign-in
+  callback: another namespace's, or an `X-Funcd-Namespace` header that names one, gets 403
+  `outside the caller's namespace`. Any other way to it, such as a node address at that port, is refused whatever an
+  EgressPolicy allows.
 - **Callers of an authenticated rule.** With `server.auth.edge: true`, the token's credential decides, from
   [`auth.credentials`](../../running-funcd/spec.md#funcdconfigyaml): `viewer` is the smallest role that passes in its
   namespaces, and another namespace gets 403, such as

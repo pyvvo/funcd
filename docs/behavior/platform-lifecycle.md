@@ -132,6 +132,7 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `feedWaitPoll` | 50ms | `pkg/funcd/binding_providers.go` |
 | `sensorDeliveryTimeout` | 30s | `pkg/funcd/binding_providers.go` |
 | `sqlFeedBootWait` | 30s | `pkg/funcd/binding_providers.go` |
+| `bridgeBindRetry` | 1s | `pkg/funcd/bridge_edge.go` |
 | `engineOutputBuf` | 64KiB | `pkg/funcd/engineoutput.go` |
 | `closeMargin` | 2s | `pkg/funcd/funcd.go` |
 | `defaultAddonObjectsPerNamespace` | 20 | `pkg/funcd/funcd.go` |

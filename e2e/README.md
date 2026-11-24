@@ -23,7 +23,7 @@ and its suite. Every lane runs in one shared VM (ADR-0230).
 | `workflow.venom.yml` | `workflow` | The workflow engine: runs, chaining, fan-out, when and join, pause, resume and cancel (ADR-0094, ADR-0096) |
 | `job.venom.yml` | `job` | A Job's runs (ADR-0347): a run of each language's job-report example that reports on a month, a run's container gone after its answer, a cancel that stops it within the grace, and a funcd crash that leaves the run `Interrupted` with no container |
 | `funclog.venom.yml` | `funclog` | Function log capture, reads and traces (ADR-0081, ADR-0084, ADR-0101) |
-| `egress.venom.yml` | `egress` | Egress enforcement (ADR-0117), what a worker's network holds (ADR-0318), and an add-on engine's egress (ADR-0352) |
+| `egress.venom.yml` | `egress` | Egress enforcement (ADR-0117), what a worker's network holds (ADR-0318), an add-on engine's egress (ADR-0352), and the edge's pin on the bridge address (ADR-0353) |
 | `sql.venom.yml` | `sql` | SQL databases (ADR-0232 to ADR-0236), and a database at its quota (ADR-0292) |
 | `sql-examples.venom.yml` | `sql-examples` | The SQL examples (FEAT-0011) |
 | `volumes.venom.yml` | `volumes` | Function volumes, local and emptyDir (ADR-0262, ADR-0266, ADR-0268) |

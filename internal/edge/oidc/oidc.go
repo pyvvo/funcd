@@ -198,6 +198,15 @@ func (g *Gate) Auth(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// callerKey carries the namespace that a pinned caller's requests are served in (ADR-0353 Decision 4).
+type callerKey struct{}
+
+// WithCallerNamespace marks ctx as a caller's that the edge serves only within ns: its sign-in callback is refused when
+// the state names a provider of another namespace, before any code exchange (ADR-0353 Decision 4).
+func WithCallerNamespace(ctx context.Context, ns v1.NamespaceName) context.Context {
+	return context.WithValue(ctx, callerKey{}, ns)
+}
+
 // errProviderMissing is a stance whose provider is not in its namespace.
 var errProviderMissing = errors.New("the OIDCProvider does not exist")
 
@@ -594,6 +603,10 @@ func (g *Gate) signInCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := r.URL.Query()
 	v, name, st, err := g.stateOf(r, q.Get("state"))
+	if pinned, ok := ctx.Value(callerKey{}).(v1.NamespaceName); ok && v != nil && v.ns != pinned {
+		fault.WriteProblem(w, fault.Forbiddenf(op, "outside the caller's namespace"))
+		return
+	}
 	switch {
 	case err != nil:
 		g.unavailable(ctx, w, v.providerKey, err)
