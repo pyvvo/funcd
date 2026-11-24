@@ -188,9 +188,9 @@ func TestJobRunExpiryIsCheckedWhenTheSlotFrees(t *testing.T) {
 	require.Equal(t, []function.RunCall{function.CallPreview, function.CallPreview}, h.exec.kindsOf("tofu-a"))
 }
 
-// A Job edit that sets approval.bypass while its runs wait, which no ADR clause decides (the Jobs chapter's uncovered
-// row): the bypass is read from the Job when a slot frees, so an approved run that waits for one runs at once, its old
-// preview unchecked, while a run AwaitingApproval keeps waiting for a person.
+// A Job edit that sets approval.bypass while its runs wait. ADR-0347 Decision 5 reads a Job's shared fields from the Job
+// and ADR-0348 Decisions 1 and 2 apply bypass when a run takes its slot, so an approved run that waits for one runs at
+// once, its old preview unchecked; no clause says otherwise of a run AwaitingApproval, which keeps waiting for a person.
 func TestJobRunBypassSetWhileRunsWait(t *testing.T) {
 	t.Parallel()
 	h := newRunHarness(t, 1)
