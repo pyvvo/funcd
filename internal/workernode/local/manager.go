@@ -17,6 +17,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/runtime"
 )
 
 // Manager provisions one per-function worker-node local API listener (ADR-0064), lazily and
@@ -41,6 +42,8 @@ type Manager struct {
 	mu     sync.Mutex
 	closed bool
 	active map[string]*serving // "ns/name" (a Function or a pool worker) → its listener
+	// listeners are the dev container workers' own listeners, by worker (ADR-0346 Decision 6).
+	listeners map[runtime.InstanceID]*listening
 }
 
 // serving is one function's or one pool worker's running local API listener.
@@ -67,7 +70,7 @@ func NewManager(dir string, store FunctionStore, invoker Invoker, authz auth.Aut
 	}
 	return &Manager{
 		dir: dir, store: store, invoker: invoker, authz: authz, deps: deps, opts: opts, logger: logger.With("component", "workernode.local"),
-		ctx: ctx, cancel: cancel, active: map[string]*serving{},
+		ctx: ctx, cancel: cancel, active: map[string]*serving{}, listeners: map[runtime.InstanceID]*listening{},
 	}
 }
 
@@ -136,7 +139,7 @@ func (m *Manager) bind(op, key string, h http.Handler, members *poolMembers) (*s
 	}
 	path := filepath.Join(m.dir, sockName(key))
 	sctx, scancel := context.WithCancel(m.ctx) // child of m.ctx: cancelled by Remove OR Close
-	ln, srv, err := listen(sctx, op, path, h, m.logger)
+	ln, srv, err := listen(sctx, op, "unix", path, h, m.logger)
 	if err != nil {
 		scancel()
 		return nil, err
@@ -209,13 +212,18 @@ func (m *Manager) serve(key string, s *serving, run func() error) {
 
 // Remove stops + deletes the local API listener for ref, a Function's, a pool worker's or a run's, if any —
 // called when the Function or the pool is deleted, so the socket lifecycle tracks the resource
-// (controller-driven, not leaked). It returns once the listener is closed: closing a Unix listener unlinks
-// its path, which a Function re-created under the same name binds again (issue #491). It holds mu until
-// then, so a concurrent SocketFor binds after it.
+// (controller-driven, not leaked) — and the listeners of ref's dev container workers (ADR-0346 Decision 6). It
+// returns once the listener is closed: closing a Unix listener unlinks its path, which a Function re-created under
+// the same name binds again (issue #491). It holds mu until then, so a concurrent SocketFor binds after it.
 func (m *Manager) Remove(ref Ref) {
 	key := ref.key()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for id, l := range m.listeners {
+		if l.ref == key {
+			m.releaseLocked(id)
+		}
+	}
 	s, ok := m.active[key]
 	if !ok {
 		return

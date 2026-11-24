@@ -459,14 +459,17 @@ func newServer(h http.Handler, logger *slog.Logger) *http.Server {
 		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn)}
 }
 
-// listen binds the local API's Unix socket at path, after clearing a stale socket file from a prior
-// sandbox, and builds h's server logging through logger, closed once ctx is done; the caller runs
-// srv.Serve(ln). Serve and Manager.SocketFor both bind through it, so the two cannot drift (issue #357).
-func listen(ctx context.Context, op, path string, h http.Handler, logger *slog.Logger) (net.Listener, *http.Server, error) {
-	_ = os.Remove(path)
-	ln, err := net.Listen("unix", path)
+// listen binds the local API on network at addr, a Unix socket's path after clearing a stale socket file from a
+// prior sandbox, or a dev container worker's "127.0.0.1:0" (ADR-0346 Decision 6), and builds h's server logging
+// through logger, closed once ctx is done; the caller runs srv.Serve(ln). Serve, Manager.SocketFor and
+// Manager.ListenerFor all bind through it, so they cannot drift (issue #357).
+func listen(ctx context.Context, op, network, addr string, h http.Handler, logger *slog.Logger) (net.Listener, *http.Server, error) {
+	if network == "unix" {
+		_ = os.Remove(addr)
+	}
+	ln, err := net.Listen(network, addr)
 	if err != nil {
-		return nil, nil, fault.Wrapf(err, fault.Unavailable, op, "listen on unix socket %q", path)
+		return nil, nil, fault.Wrapf(err, fault.Unavailable, op, "listen on %s socket %q", network, addr)
 	}
 	srv := newServer(h, logger)
 	context.AfterFunc(ctx, func() { _ = srv.Close() })
@@ -478,7 +481,7 @@ func listen(ctx context.Context, op, path string, h http.Handler, logger *slog.L
 // slog.Default()).
 func Serve(ctx context.Context, path string, h http.Handler, logger *slog.Logger) error {
 	const op = "workernode.local.Serve"
-	ln, srv, err := listen(ctx, op, path, h, cmp.Or(logger, slog.Default()))
+	ln, srv, err := listen(ctx, op, "unix", path, h, cmp.Or(logger, slog.Default()))
 	if err != nil {
 		return err
 	}
