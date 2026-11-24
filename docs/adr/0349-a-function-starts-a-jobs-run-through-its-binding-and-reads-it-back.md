@@ -1,6 +1,6 @@
 # ADR-0349: A Function starts a Job's run through its binding and reads it back
 
-- **Status**: Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
+- **Status**: Reviewing (2026-11-24, implemented); Accepted (2026-11-23) on the decider's go, after two judge rounds with every Blocker and Major folded
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: jobs, functions, bindings, local-api, sdk
