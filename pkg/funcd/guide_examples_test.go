@@ -65,10 +65,11 @@ func TestScenarioGuideIncludesResolve(t *testing.T) {
 	t.Parallel()
 	require.Empty(t, includeProblems(t, filepath.Join("docs", "guide")))
 	problems := includeProblems(t, filepath.Join("pkg", "funcd", "testdata", "guide-broken"))
-	require.Len(t, problems, 3, "%v", problems)
+	require.Len(t, problems, 4, "%v", problems)
 	require.Contains(t, problems[0], "no-such-file.yaml")
 	require.Contains(t, problems[1], "kvstore.yaml#no-such-region")
 	require.Contains(t, problems[2], "attributes")
+	require.Contains(t, problems[3], "the docs site does not copy")
 	for _, problem := range problems {
 		require.Contains(t, problem, filepath.Join("guide-broken", "page.md"), "a problem names its page")
 	}
@@ -122,7 +123,7 @@ func includeProblems(t *testing.T, pages string) []string {
 		if inc.region != "" {
 			name += "#" + inc.region
 		}
-		file, _ := inc.target(t)
+		file, pinned := inc.target(t)
 		data, err := os.ReadFile(file)
 		switch {
 		case inc.attributes != "":
@@ -131,9 +132,20 @@ func includeProblems(t *testing.T, pages string) []string {
 			problems = append(problems, inc.page+": "+name+": "+err.Error())
 		case inc.region != "" && !marksRegion(string(data), inc.region):
 			problems = append(problems, inc.page+": "+name+": the file marks no such region")
+		case !pinned && !inExamples(t, file):
+			problems = append(problems, inc.page+": "+name+": the docs site does not copy this file; include an example manifest or a file of a pinned repo")
 		}
 	}
 	return problems
+}
+
+// inExamples reports whether file is under api/types/v1alpha1/examples, the only files of funcd that the docs site
+// copies for its pages to include (ADR-0325 Decisions 1 and 5).
+func inExamples(t *testing.T, file string) bool {
+	t.Helper()
+	rel, err := filepath.Rel(filepath.Join("..", "..", "api", "types", "v1alpha1", "examples"), file)
+	require.NoError(t, err)
+	return !strings.HasPrefix(rel, "..")
 }
 
 // marksRegion reports whether content opens and closes region with the markers that fumadocs reads in // and #

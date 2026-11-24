@@ -175,10 +175,8 @@ itself, such as the Jobs it starts, reads which run ended from its own state, an
 does, `{"results": [...]}` in at most 1 MiB, each result an object's `name`, `ok`, and a `reason` and a `message` when it
 is not ok. An object sent with `deleting: true` is one to destroy: only an ok to it lets the object go. An object that
 left the list was retained, and the Function forgets it, leaving what it manages in place. A call past
-`addons.settingsTimeout` fails, and funcd calls again after a backoff. The Function of funcd's own tests answers ok for
-every object:
-
-::include[../../../../../e2e/fixtures/infrastack-reconciler.mjs]
+`addons.settingsTimeout` fails, and funcd calls again after a backoff. InfraStack's is
+[`reconciler/infrastack-reconciler.mjs`](https://github.com/pyvvo/funcd-addons/blob/main/infrastack/reconciler/infrastack-reconciler.mjs).
 
 ## Test it under funcdctl dev
 
