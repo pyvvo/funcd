@@ -35,7 +35,7 @@ const (
 	PathObjects  = "/node/v1/objects"
 	PathCalls    = "/node/v1/calls"
 	PathKeys     = "/node/v1/keys"
-	PathBackup   = "/node/v1/backup"
+	PathReport   = "/node/v1/report"
 	PathSecrets  = "/node/v1/secrets"
 	PathChildren = "/node/v1/children"
 )
@@ -81,6 +81,13 @@ type StatusWrite struct {
 type ObjectWrite struct {
 	Kind   v1.Kind         `json:"kind"`
 	Object json.RawMessage `json:"object"`
+}
+
+// NodeReport is what a node reports of itself into its WorkerNode's status: the address of its blob store, and its
+// platform backup (F251), absent while it runs none.
+type NodeReport struct {
+	BlobStore string         `json:"blobStore,omitempty"`
+	Backup    *v1.NodeBackup `json:"backup,omitempty"`
 }
 
 // SecretWrite is a workload's write of one key of a Secret it binds (ADR-0327), in a namespace placed on the node; a nil

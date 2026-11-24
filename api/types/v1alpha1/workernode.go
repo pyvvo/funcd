@@ -28,6 +28,9 @@ type WorkerNodeStatus struct {
 	Certificate *NodeCertificate `json:"certificate,omitempty" doc:"The node certificate that the control plane issued when the node joined."`
 	// PendingJoin is the one-time join token waiting to be used, as a hash.
 	PendingJoin *PendingJoin `json:"pendingJoin,omitempty" doc:"The one-time join token minted for the node and not used yet, kept as a hash."`
+	// BlobStore is the address of the node's blob store, as the node reported it (decision 9): a BackupSchedule of one of
+	// its namespaces writes outside it.
+	BlobStore string `json:"blobStore,omitempty" doc:"The address of the node's blob store, as the node last reported it: its blob.target, or the file:// URL of its blob.dir. A BackupSchedule of a namespace on the node writes outside it."`
 	// Backup is the platform backup of the node's own stores, as the node reported it (F251).
 	Backup *NodeBackup `json:"backup,omitempty" doc:"The backup of the node's own stores, as the node last reported it; absent while the node runs no backup."`
 }

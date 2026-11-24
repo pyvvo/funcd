@@ -112,7 +112,7 @@ func (s *Server) routes() http.Handler {
 		r.Get(PathCalls, s.poll)
 		r.Post(PathCalls+"/{id}", s.answer)
 		r.Get(PathKeys, s.keys)
-		r.Put(PathBackup, s.backup)
+		r.Put(PathReport, s.report)
 		r.Post(PathSecrets, s.secret)
 		r.Get(PathChildren, s.children)
 	})
@@ -485,15 +485,15 @@ func (s *Server) feed(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// backup answers PUT …/backup (F251): the node's report of its own platform backup goes into its WorkerNode's status.
-func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
+// report answers PUT …/report: what the node reports of itself goes into its WorkerNode's status.
+func (s *Server) report(w http.ResponseWriter, r *http.Request) {
 	ctx, node := r.Context(), nodeOf(r.Context())
-	var in v1.NodeBackup
+	var in NodeReport
 	if !decode(w, r, maxStatusBody, &in) {
 		return
 	}
 	if err := writeNodeStatus(ctx, s.cfg.Store, node, func(n *v1.WorkerNode) bool {
-		n.Status.Backup = &in
+		n.Status.BlobStore, n.Status.Backup = in.BlobStore, in.Backup
 		return true
 	}); err != nil {
 		writeFault(w, err)

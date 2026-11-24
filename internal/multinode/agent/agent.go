@@ -61,8 +61,8 @@ type Agent struct {
 	mine     map[v1.NamespaceName]bool
 	keys     map[v1.NamespaceName]multinode.NamespaceKey
 	pushed   map[string]string
-	// backupSent is the backup status the control plane holds, as last sent
-	backupSent string
+	// reported is what the control plane holds of the node's report of itself, as last sent
+	reported string
 	// unsent are the deletes the control plane did not take yet
 	unsent map[string]url.Values
 	// resynced asks the report for every status and child again, after a snapshot

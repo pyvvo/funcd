@@ -27,7 +27,7 @@ func (a *Agent) report(ctx context.Context) {
 			go a.watch(ctx, k, events)
 		}
 	}
-	a.reportBackup(ctx)
+	a.reportSelf(ctx)
 	dropped := a.dropChildren(ctx)
 	t := time.NewTicker(resyncEvery)
 	defer t.Stop()
@@ -43,7 +43,7 @@ func (a *Agent) report(ctx context.Context) {
 		case <-t.C:
 			a.resendDeletes(ctx)
 			a.resyncReports(ctx)
-			a.reportBackup(ctx)
+			a.reportSelf(ctx)
 			dropped = dropped || a.dropChildren(ctx)
 		}
 	}
@@ -336,26 +336,28 @@ func (a *Agent) admit(ctx context.Context, c multinode.Call) (v1.Object, error) 
 	return nil, fault.Unavailablef("agent.admit", "this node runs no %s check", c.Name)
 }
 
-// reportBackup sends the node's platform backup status when it changed (F251), so the control plane's WorkerNode shows it.
-func (a *Agent) reportBackup(ctx context.Context) {
-	if a.cfg.Commands.Backup == nil {
-		return
+// reportSelf sends what the node reports of itself when it changed, so the control plane's WorkerNode shows it: the address
+// of its blob store and its platform backup's status (F251).
+func (a *Agent) reportSelf(ctx context.Context) {
+	report := multinode.NodeReport{BlobStore: a.cfg.Commands.BlobStore}
+	if b := a.cfg.Commands.Backup; b != nil {
+		st, err := b.Status(ctx)
+		if err != nil {
+			a.log.WarnContext(ctx, "node agent: read the backup status", "error", err)
+			return
+		}
+		nb := multinode.NodeBackup(st)
+		report.Backup = &nb
 	}
-	st, err := a.cfg.Commands.Backup.Status(ctx)
-	if err != nil {
-		a.log.WarnContext(ctx, "node agent: read the backup status", "error", err)
-		return
-	}
-	report := multinode.NodeBackup(st)
 	b, err := json.Marshal(report)
-	if err != nil || string(b) == a.backupSent {
+	if err != nil || string(b) == a.reported {
 		return
 	}
-	if _, err := a.do(ctx, http.MethodPut, multinode.PathBackup, report, nil); err != nil {
-		a.log.WarnContext(ctx, "node agent: report the backup status", "error", err)
+	if _, err := a.do(ctx, http.MethodPut, multinode.PathReport, report, nil); err != nil {
+		a.log.WarnContext(ctx, "node agent: report the node", "error", err)
 		return
 	}
-	a.backupSent = string(b)
+	a.reported = string(b)
 }
 
 // releaseNamespaces releases the holds of nss, which must all run on this node.

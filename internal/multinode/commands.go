@@ -39,6 +39,7 @@ type Commands struct {
 	Apps        AppRetrier
 	Volumes     VolumeDeleter
 	Admissions  []admission.Admission // the node-state checks before a write (NodeState)
+	BlobStore   string                // the address of the node's blob store
 	// Backup reads the node's platform backup (F251); nil ⇒ the node runs none.
 	Backup Backups
 	// Hold reads and releases the node's holds and returns its quarantined data.

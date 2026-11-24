@@ -53,7 +53,7 @@ func (p *Platform) routeNodeParts(own nodeParts, holdSvc *controlplane.HoldServi
 	if p.agent != nil {
 		p.agent.SetLogs(own.logs, own.runLogs)
 		cmds := multinode.Commands{DeadLetters: own.deadLetters, Apps: own.apps, Volumes: own.volumes, Admissions: checks,
-			Hold: holdSvc}
+			Hold: holdSvc, BlobStore: p.cfg.blobStoreURL}
 		if p.eventing.sensorReconciler != nil {
 			cmds.Replayer = p.eventing.sensorReconciler
 		}

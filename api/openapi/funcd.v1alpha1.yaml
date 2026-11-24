@@ -7671,6 +7671,9 @@ components:
         backup:
           $ref: "#/components/schemas/NodeBackup"
           description: The backup of the node's own stores, as the node last reported it; absent while the node runs no backup.
+        blobStore:
+          description: "The address of the node's blob store, as the node last reported it: its blob.target, or the file:// URL of its blob.dir. A BackupSchedule of a namespace on the node writes outside it."
+          type: string
         certificate:
           $ref: "#/components/schemas/NodeCertificate"
           description: The node certificate that the control plane issued when the node joined.

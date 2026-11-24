@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -104,6 +105,43 @@ func TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects(t *testing.T)
 	require.NoError(t, err)
 	_, err = a.Admit(ctx, req(admission.Update, namespace("e1", "vm1"), namespace("e1", "")))
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "a namespace that holds objects keeps its node")
+}
+
+// A BackupSchedule's target stays outside the blob store of the node that runs its namespace, not the control plane's
+// (decision 9, ADR-0222 Decision 6).
+func TestABackupSchedulesTargetStaysOutsideItsNodesBlobStore(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(memory.New(), store.WithChangeLog(0))
+	c, err := New(Config{Store: st, Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalNode: "local", LocalRuns: true})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	reported := workerNode("vm1")
+	reported.Status.BlobStore = "s3://node-blobs?region=eu-west-3"
+	for _, obj := range []v1.Object{reported, workerNode("vm2"), namespace("e1", "vm1"), namespace("e2", "vm2"), namespace("here", "")} {
+		_, err := st.Create(ctx, obj)
+		require.NoError(t, err)
+	}
+	var recipients []string
+	for range 2 {
+		id, err := age.GenerateX25519Identity()
+		require.NoError(t, err)
+		recipients = append(recipients, id.Recipient().String())
+	}
+	check := c.Forward([]admission.Admission{admission.NewBackupScheduleAdmission("s3://cp-blobs?region=eu-west-3")})[0]
+	admit := func(ns v1.NamespaceName, bucket string) error {
+		s := &v1.BackupSchedule{TypeMeta: tm(v1.KindBackupSchedule)}
+		s.Name, s.Namespace = "nightly", ns
+		s.Spec.Target.URL = "s3://" + bucket + "?region=eu-west-3"
+		s.Spec.Encryption.Recipients = recipients
+		_, err := check.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindBackupSchedule.GVK(), Object: s})
+		return err
+	}
+	require.True(t, check.Handles(v1.KindBackupSchedule.GVK(), admission.Create))
+	require.ErrorContains(t, admit("here", "cp-blobs"), "inside the blob store")
+	require.NoError(t, admit("here", "node-blobs"))
+	require.ErrorContains(t, admit("e1", "node-blobs"), "inside the blob store")
+	require.NoError(t, admit("e1", "cp-blobs"), "the control plane's store is another one")
+	require.NoError(t, admit("e2", "node-blobs"), "nothing is known of a node that has not joined")
 }
 
 func TestAWorkerNodeANamespaceNamesCannotBeDeleted(t *testing.T) {

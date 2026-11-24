@@ -573,7 +573,7 @@ func TestANodeReportsItsBackupInItsWorkerNode(t *testing.T) {
 	require.NoError(t, err)
 	last := v1.NewTimestamp(time.Date(2026, 11, 17, 3, 0, 0, 0, time.UTC))
 	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
-		Commands: multinode.Commands{Backup: fakeBackup{LastSuccessTime: &last, RPORisk: true}}})
+		Commands: multinode.Commands{BlobStore: "s3://node-blobs", Backup: fakeBackup{LastSuccessTime: &last, RPORisk: true}}})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -587,6 +587,9 @@ func TestANodeReportsItsBackupInItsWorkerNode(t *testing.T) {
 		b := obj.(*v1.WorkerNode).Status.Backup
 		return b != nil && b.RPORisk && b.LastSuccessTime != nil && time.Time(*b.LastSuccessTime).Equal(time.Time(last))
 	})
+	obj, err := r.cp.Get(ctx, v1.KindWorkerNode.GVK(), "", "vm1")
+	require.NoError(t, err)
+	require.Equal(t, "s3://node-blobs", obj.(*v1.WorkerNode).Status.BlobStore)
 }
 
 func TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers(t *testing.T) {

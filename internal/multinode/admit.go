@@ -9,6 +9,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // nodeStateAdmissions are the checks before a write that read the state of the node a namespace runs on (FEAT-0002
@@ -89,17 +90,54 @@ func (r AdmitRequest) Request() (admission.Request, error) {
 	return out, err
 }
 
+// scheduleCheck is the check of a BackupSchedule's target against the blob store (ADR-0222 Decision 6).
+const scheduleCheck = "backup-schedule"
+
 // Forward wraps the node-state checks among as: for a namespace another node runs, that node runs its own (F250). An
-// offline node refuses the write, so no protection is skipped.
+// offline node refuses the write, so no protection is skipped. A BackupSchedule's check needs no call: it reads the
+// address of the node's blob store in the WorkerNode's status.
 func (c *Cluster) Forward(as []admission.Admission) []admission.Admission {
 	out := make([]admission.Admission, len(as))
 	for i, a := range as {
 		out[i] = a
-		if slices.Contains(nodeStateAdmissions(), a.Name()) {
+		switch {
+		case slices.Contains(nodeStateAdmissions(), a.Name()):
 			out[i] = forwarded{router: c.router(), inner: a}
+		case a.Name() == scheduleCheck:
+			out[i] = outsideNodeStore{Admission: a, st: c.cfg.Store, placement: c.placement}
 		}
 	}
 	return out
+}
+
+// outsideNodeStore is the schedule check for a namespace another node runs, against that node's blob store: none is known
+// of a node that has not joined.
+type outsideNodeStore struct {
+	admission.Admission
+	st        store.Store
+	placement *Placement
+}
+
+func (o outsideNodeStore) Admit(ctx context.Context, req admission.Request) (v1.Object, error) {
+	ns := req.Object.GetObjectMeta().Namespace
+	if !o.placement.Skip(ns) {
+		return o.Admission.Admit(ctx, req)
+	}
+	node, err := o.placement.NodeOf(ctx, ns)
+	if err != nil {
+		return nil, err
+	}
+	var url string
+	if node != "" {
+		obj, err := o.st.Get(ctx, v1.KindWorkerNode.GVK(), "", node)
+		if err != nil {
+			return nil, err
+		}
+		if wn, ok := obj.(*v1.WorkerNode); ok {
+			url = wn.Status.BlobStore
+		}
+	}
+	return admission.NewBackupScheduleAdmission(url).Admit(ctx, req)
 }
 
 type forwarded struct {
