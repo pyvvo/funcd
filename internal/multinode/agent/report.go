@@ -206,8 +206,7 @@ func (a *Agent) serveCalls(ctx context.Context) {
 	backoff := retryMin
 	for ctx.Err() == nil {
 		var calls []multinode.Call
-		code, err := a.do(ctx, http.MethodGet, multinode.PathCalls+"?wait="+pollWait.String(), nil, &calls)
-		if err != nil {
+		if _, err := a.do(ctx, http.MethodGet, multinode.PathCalls+"?wait="+pollWait.String(), nil, &calls); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
@@ -216,9 +215,6 @@ func (a *Agent) serveCalls(ctx context.Context) {
 			continue
 		}
 		backoff = retryMin
-		if code == http.StatusNoContent {
-			continue
-		}
 		for _, c := range calls {
 			go a.answer(ctx, c)
 		}

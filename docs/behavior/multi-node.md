@@ -89,6 +89,7 @@ recovery](disaster-recovery.md).
 | `defaultReadyFor` | 40s | `internal/multinode/liveness.go` |
 | `defaultSeenEvery` | 30s | `internal/multinode/liveness.go` |
 | `livenessTick` | 5s | `internal/multinode/liveness.go` |
+| `bodyReadTimeout` | 30s | `internal/multinode/server.go` |
 | `defaultWait` | 25s | `internal/multinode/server.go` |
 | `feedLimit` | 500 | `internal/multinode/server.go` |
 | `maxJoinBody` | 64KiB | `internal/multinode/server.go` |

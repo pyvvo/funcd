@@ -57,19 +57,21 @@ type Line struct {
 
 // Query selects + bounds a read. Namespace is required; Function, an engine's Kind and Name, OR TraceID must be set (a
 // bare namespace scan with no trace filter is rejected — see Read's guard). The rest are optional filters.
+//
+// Its JSON form carries a read to the worker node that runs the namespace (FEAT-0002 F250).
 type Query struct {
-	Namespace string
-	Function  string
+	Namespace string `json:"namespace"`
+	Function  string `json:"function,omitempty"`
 	// Kind and Name read an engine's lines, under logs/<ns>/<plural>.<name>/ (ADR-0342 Decision 2), when Function is "".
-	Kind              string
-	Name              string
-	Since             time.Time // zero ⇒ no lower bound
-	MinSeverityNumber int32     // 0 ⇒ all severities
-	Limit             int       // <= 0 ⇒ DefaultLimit; capped at MaxLimit
+	Kind              string    `json:"kind,omitempty"`
+	Name              string    `json:"name,omitempty"`
+	Since             time.Time `json:"since,omitzero"`        // zero ⇒ no lower bound
+	MinSeverityNumber int32     `json:"minSeverity,omitempty"` // 0 ⇒ all severities
+	Limit             int       `json:"limit,omitempty"`       // <= 0 ⇒ DefaultLimit; capped at MaxLimit
 	// TraceID scopes the read to one run's trace (ADR-0106): "" ⇒ no trace filter (ADR-0084 per-function
 	// behavior). When Function == "" && TraceID != "", Read scans the whole logs/<ns>/ prefix (namespace-wide,
 	// run-scoped) — every step function's lines for that run, incl. sub-workflow children (same trace, ADR-0104).
-	TraceID string
+	TraceID string `json:"traceId,omitempty"`
 }
 
 // Reader returns a function's logs, newest-bounded by Query.

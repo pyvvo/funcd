@@ -380,7 +380,7 @@ func TestANodesLateWriteChangesNothingOfAnotherObject(t *testing.T) {
 	require.Equal(t, http.StatusConflict, call(http.MethodPut, multinode.PathObjects, multinode.ObjectWrite{Kind: v1.KindJobRun, Object: raw}))
 	require.Equal(t, v1.JobRunAwaitingApproval, get().Status.Phase, "a run the node made under a taken name")
 	path := multinode.PathObjects + "?kind=JobRun&namespace=e1&name=deploy-1"
-	require.Equal(t, http.StatusBadRequest, call(http.MethodDelete, path, nil), "a delete names the object's uid")
+	require.Equal(t, http.StatusUnprocessableEntity, call(http.MethodDelete, path, nil), "a delete names the object's uid")
 	require.Equal(t, http.StatusNoContent, call(http.MethodDelete, path+"&uid=of-another-run", nil))
 	require.Equal(t, mine, get().UID, "the object a delete named was another one")
 	require.Equal(t, http.StatusNoContent, call(http.MethodDelete, path+"&uid="+string(mine), nil))

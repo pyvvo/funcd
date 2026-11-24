@@ -199,11 +199,20 @@ func (a *Agent) do(ctx context.Context, method, path string, body, out any) (int
 	case resp.StatusCode == http.StatusGone:
 		return resp.StatusCode, errGone
 	case resp.StatusCode >= 300:
-		return resp.StatusCode, fmt.Errorf("%s %s: %d %s", method, path, resp.StatusCode, strings.TrimSpace(string(data)))
+		return resp.StatusCode, fmt.Errorf("%s %s: %d %s", method, path, resp.StatusCode, detail(data))
 	case out != nil && len(data) > 0:
 		return resp.StatusCode, json.Unmarshal(data, out)
 	}
 	return resp.StatusCode, nil
+}
+
+// detail is what an answer's problem says went wrong, or the whole answer of another kind.
+func detail(answer []byte) string {
+	var p fault.Problem
+	if json.Unmarshal(answer, &p) == nil && p.Detail != "" {
+		return p.Detail
+	}
+	return strings.TrimSpace(string(answer))
 }
 
 // follow keeps the local copy with the feed, from the saved revision; one the change log no longer holds starts again

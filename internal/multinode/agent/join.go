@@ -104,7 +104,7 @@ func Join(ctx context.Context, server, token, dir, version, platform string) (v1
 		return "", fault.Wrapf(err, fault.Unavailable, op, "read the join answer")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fault.Forbiddenf(op, "the control plane refused the join (%d): %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return "", fault.Forbiddenf(op, "the control plane refused the join (%d): %s", resp.StatusCode, detail(data))
 	}
 	var out multinode.JoinResponse
 	if err := json.Unmarshal(data, &out); err != nil {

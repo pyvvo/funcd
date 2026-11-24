@@ -287,21 +287,37 @@ type Handlers interface {
 
 // NewAPI builds the huma API on a chi router and registers all operations against h.
 func NewAPI(r chi.Router, h Handlers) huma.API {
+	cfg := apiConfig("funcd API", "v1alpha1")
+	cfg.Info.Description = "funcd control-plane API — code-first via huma. " +
+		"Generated from typed Go operations; not hand-authored."
+	cfg.Components.SecuritySchemes = securitySchemes()
+	cfg.DocsPath, cfg.OpenAPIPath = "/docs", "/openapi"
+	api := humachi.New(r, cfg)
+	installRouterErrors(r, api)
+
+	RegisterRoutes(api, h)
+	return api
+}
+
+// NewInnerAPI builds on r an API of funcd's own processes, such as the node API (FEAT-0002 decision 9), on the same stack
+// and with the same errors as NewAPI's. It serves no document of itself.
+func NewInnerAPI(r chi.Router, title, version string) huma.API {
+	return humachi.New(r, apiConfig(title, version))
+}
+
+// FaultError is err as an API of NewAPI or NewInnerAPI answers it: the problem of its fault kind; nil stays nil.
+func FaultError(err error) error { return wrapFaultError(err) }
+
+// apiConfig is an API's formats, errors and document, with no path that serves the document.
+func apiConfig(title, version string) huma.Config {
 	installFaultErrors()
-	cfg := huma.Config{
+	return huma.Config{
 		OpenAPI: &huma.OpenAPI{
-			OpenAPI: "3.1.0",
-			Info: &huma.Info{
-				Title:   "funcd API",
-				Version: "v1alpha1",
-				Description: "funcd control-plane API — code-first via huma. " +
-					"Generated from typed Go operations; not hand-authored.",
-			},
-			Components:     &huma.Components{Schemas: newInlineRegistry(), SecuritySchemes: securitySchemes()},
+			OpenAPI:        "3.1.0",
+			Info:           &huma.Info{Title: title, Version: version},
+			Components:     &huma.Components{Schemas: newInlineRegistry()},
 			OnAddOperation: []huma.AddOpFunc{rejectUnknownQuery},
 		},
-		DocsPath:    "/docs",
-		OpenAPIPath: "/openapi",
 		// Register application/problem+json as a format so huma can marshal
 		// faultError (which embeds fault.Problem with RFC 9457 JSON tags).
 		// huma v2 only ships application/json and application/yaml by default.
@@ -318,11 +334,6 @@ func NewAPI(r chi.Router, h Handlers) huma.API {
 		DefaultFormat: "application/json",
 		Transformers:  []huma.Transformer{logFaultCause},
 	}
-	api := humachi.New(r, cfg)
-	installRouterErrors(r, api)
-
-	RegisterRoutes(api, h)
-	return api
 }
 
 // installRouterErrors renders the router's own 404 and 405 through huma, as problem+json.
