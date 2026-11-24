@@ -38,6 +38,7 @@ type ServerConfig struct {
 	Liveness  *Liveness
 	Calls     *Calls
 	Keys      *NamespaceKeys
+	Secrets   SecretWriter
 	Logger    *slog.Logger
 	Version   string // the control plane's release (decision 12)
 	Now       func() time.Time
@@ -112,6 +113,7 @@ func (s *Server) routes() http.Handler {
 		r.Post(PathCalls+"/{id}", s.answer)
 		r.Get(PathKeys, s.keys)
 		r.Put(PathBackup, s.backup)
+		r.Post(PathSecrets, s.secret)
 	})
 	return r
 }
@@ -622,6 +624,55 @@ func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
 		err = nil
 	}
 	writeDone(w, err)
+}
+
+// SecretWriter writes one key of a Secret as a workload that binds it (ADR-0327): the platform's secret service.
+type SecretWriter interface {
+	Put(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key, value string) error
+	Delete(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string) error
+}
+
+// secret answers POST …/secrets: a workload of a namespace placed on the node writes one key of a Secret it binds. The
+// control plane holds the Secret, so it makes the checks and the write as for a workload of its own, and the change
+// reaches the node through the feed.
+func (s *Server) secret(w http.ResponseWriter, r *http.Request) {
+	const op = "multinode.secret"
+	ctx, node := r.Context(), nodeOf(r.Context())
+	var in SecretWrite
+	if !decode(w, r, maxObjectBody, &in) {
+		return
+	}
+	switch {
+	case !s.placedOn(ctx, in.Namespace, node):
+		writeFault(w, fault.Forbiddenf(op, "namespace %s is not placed on worker node %s", in.Namespace, node))
+		return
+	case s.cfg.Secrets == nil:
+		writeFault(w, fault.Unavailablef(op, "this control plane writes no Secret"))
+		return
+	}
+	var out SecretAnswer
+	if err := s.writeSecret(ctx, in, &out); err != nil {
+		out.Error, out.Fault = err.Error(), fault.KindOf(err)
+	}
+	writeJSON(w, out)
+}
+
+func (s *Server) writeSecret(ctx context.Context, in SecretWrite, out *SecretAnswer) error {
+	var err error
+	if in.Value == nil {
+		err = s.cfg.Secrets.Delete(ctx, in.Namespace, in.Workload, string(in.Secret), in.Key)
+	} else {
+		err = s.cfg.Secrets.Put(ctx, in.Namespace, in.Workload, string(in.Secret), in.Key, *in.Value)
+	}
+	if err != nil {
+		return err
+	}
+	obj, err := s.cfg.Store.Get(ctx, v1.KindSecret.GVK(), in.Namespace, in.Secret)
+	if err != nil {
+		return err
+	}
+	out.Generation = obj.GetObjectMeta().Generation
+	return nil
 }
 
 // poll answers GET …/calls?wait=: the node's queued calls, or 204 once wait passes.

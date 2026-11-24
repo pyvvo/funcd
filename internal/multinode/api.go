@@ -36,6 +36,7 @@ const (
 	PathCalls    = "/node/v1/calls"
 	PathKeys     = "/node/v1/keys"
 	PathBackup   = "/node/v1/backup"
+	PathSecrets  = "/node/v1/secrets"
 )
 
 // JoinRequest is a node's join: its one-time token and a CSR for its node certificate.
@@ -79,6 +80,23 @@ type StatusWrite struct {
 type ObjectWrite struct {
 	Kind   v1.Kind         `json:"kind"`
 	Object json.RawMessage `json:"object"`
+}
+
+// SecretWrite is a workload's write of one key of a Secret it binds (ADR-0327), in a namespace placed on the node; a nil
+// Value removes the key.
+type SecretWrite struct {
+	Namespace v1.NamespaceName `json:"namespace"`
+	Workload  v1.WorkloadRef   `json:"workload"`
+	Secret    v1.ObjectName    `json:"secret"`
+	Key       string           `json:"key"`
+	Value     *string          `json:"value,omitempty"`
+}
+
+// SecretAnswer is the Secret's generation after the write, or the error it met and its kind.
+type SecretAnswer struct {
+	Generation int64      `json:"generation,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	Fault      fault.Kind `json:"fault,omitempty"`
 }
 
 // The node call kinds (FEAT-0002 decision 9).

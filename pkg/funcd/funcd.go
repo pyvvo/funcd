@@ -798,7 +798,7 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build secrets authorizer")
 	}
-	if err := p.secrets.build(secretsAuthz); err != nil {
+	if err := p.secrets.build(secretsAuthz, p.agent); err != nil {
 		return err
 	}
 	// ADR-0215: the storage probes read a sentinel key of the KV engine and the blob store; the dependency check the
@@ -838,7 +838,7 @@ func (p *Platform) buildControlPlane() error {
 	if c.cluster != nil {
 		cl, cerr := multinode.New(multinode.Config{Store: c.store, Logger: p.logger, Dir: c.cluster.Dir,
 			ListenAddr: c.cluster.ListenAddr, Hosts: c.cluster.Hosts, LocalNode: c.localNode, LocalRuns: c.cluster.LocalRuns,
-			Master: master})
+			Master: master, Secrets: p.secrets.facade})
 		if cerr != nil {
 			return fault.Wrapf(cerr, fault.KindOf(cerr), op, "build the node API")
 		}

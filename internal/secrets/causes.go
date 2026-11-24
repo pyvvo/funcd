@@ -27,6 +27,9 @@ var (
 	ErrKeyInvalid = fault.NewKnownCause(fault.Invalid, "secrets.key-invalid",
 		"The key is not an environment-variable name: a letter or an underscore, then letters, digits and underscores.",
 		"Use such a key.")
+	ErrControlPlaneAway = fault.NewKnownCause(fault.Unavailable, "secrets.control-plane-away",
+		"The Function's worker node does not reach its control plane, which holds the Secret and makes the write.",
+		"Retry the write; reads go on meanwhile.")
 	ErrWriteContended = fault.NewKnownCause(fault.Conflict, "secrets.write-contended",
 		"The Secret changed under each attempt to write it, as when other writes of it run at the same time.",
 		"Retry the write.")

@@ -51,7 +51,7 @@ func registerSecrets(mux facetMux, caller Ref, s Secrets, logger *slog.Logger) {
 	read := []*fault.KnownCause{secrets.ErrCallerMissing, secrets.ErrReadDenied, secrets.ErrSecretMissing,
 		secrets.ErrValueNotText}
 	write := []*fault.KnownCause{secrets.ErrCallerMissing, secrets.ErrNoBinding, secrets.ErrSecretMissing,
-		secrets.ErrWriteDenied, secrets.ErrWriteContended}
+		secrets.ErrWriteDenied, secrets.ErrWriteContended, secrets.ErrControlPlaneAway}
 	lookup := slices.Concat(read, []*fault.KnownCause{ErrSecretKeyNotFound})
 	put := slices.Concat([]*fault.KnownCause{ErrBodyTooLarge, ErrBodyUnreadable, ErrSecretBodyInvalid}, write,
 		[]*fault.KnownCause{secrets.ErrValueNotText, secrets.ErrKeyInvalid})

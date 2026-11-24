@@ -28,6 +28,7 @@ import (
 	"github.com/pyvvo/funcd/internal/kvstore"
 	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/lifecycle"
+	"github.com/pyvvo/funcd/internal/multinode/agent"
 	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/provider"
@@ -839,16 +840,20 @@ func (s *secretsProvider) Descriptors() []provider.Descriptor {
 }
 
 // build builds the resolver over authz, which sends a workload's secret::read to the PDP and a coarse read to the
-// control plane's authorizer (ADR-0321 Decision 3), then the facade over it. New builds it once the PDP exists, before
-// every other provider.
-func (s *secretsProvider) build(authz auth.Authorizer) error {
+// control plane's authorizer (ADR-0321 Decision 3), then the facade over it, whose writes a worker node's agent, node,
+// makes on its control plane (FEAT-0002). New builds it once the PDP exists, before every other provider.
+func (s *secretsProvider) build(authz auth.Authorizer, node *agent.Agent) error {
 	const op = "funcd.New"
 	c := s.cfg
 	var err error
 	if s.resolver, err = secrets.NewResolver(secrets.Deps{Store: c.store, Authorizer: authz, Logger: c.logger}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build secrets resolver")
 	}
-	if s.facade, err = secretsvc.NewFacade(secretsvc.Deps{Store: c.store, Resolver: s.resolver}); err != nil {
+	deps := secretsvc.Deps{Store: c.store, Resolver: s.resolver}
+	if node != nil {
+		deps.Forward = node.WriteSecret
+	}
+	if s.facade, err = secretsvc.NewFacade(deps); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build secret facade")
 	}
 	return nil
