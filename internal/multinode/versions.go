@@ -23,7 +23,8 @@ func newerRelease(node, controlPlane string) bool {
 }
 
 // FieldVersions are the spec fields that need a node API newer than its first version (decision 12), by kind and by
-// JSON path such as "spec.retry": a write that sets one into a namespace whose node speaks an older version is refused.
+// JSON path such as "spec.retry", which goes through the items of a list, and through a map's values as "*": a write that
+// sets one into a namespace whose node speaks an older version is refused.
 type FieldVersions map[v1.Kind]map[string]int
 
 // nodeFields is this release's FieldVersions: none while the node API has its first version only.
@@ -71,18 +72,23 @@ func (a nodeTooOld) Admit(ctx context.Context, req admission.Request) (v1.Object
 	return req.Object, nil
 }
 
-// fieldSet reports whether the JSON object raw holds a value at the dotted path.
+// fieldSet reports whether the JSON raw holds a value at the dotted path, in any item of the lists on the way.
 func fieldSet(raw json.RawMessage, path string) bool {
-	for _, key := range strings.Split(path, ".") {
-		var m map[string]json.RawMessage
-		if json.Unmarshal(raw, &m) != nil {
-			return false
-		}
-		next, ok := m[key]
-		if !ok {
-			return false
-		}
-		raw = next
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) == nil && items != nil {
+		return slices.ContainsFunc(items, func(i json.RawMessage) bool { return fieldSet(i, path) })
 	}
-	return string(raw) != "null"
+	if path == "" {
+		return string(raw) != "null"
+	}
+	key, rest, _ := strings.Cut(path, ".")
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return false
+	}
+	if key == "*" {
+		return slices.ContainsFunc(slices.Collect(maps.Values(m)), func(v json.RawMessage) bool { return fieldSet(v, rest) })
+	}
+	next, ok := m[key]
+	return ok && fieldSet(next, rest)
 }
