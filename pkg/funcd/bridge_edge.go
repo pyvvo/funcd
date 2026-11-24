@@ -8,6 +8,11 @@ import (
 	"net/netip"
 	"syscall"
 	"time"
+
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/edge"
+	"github.com/pyvvo/funcd/internal/network/egress"
 )
 
 // bridgeBindRetry paces the bind of the edge's listener on the bridge address while that address does not exist yet: the
@@ -66,5 +71,44 @@ func (p *Platform) serveBridge(ctx context.Context, serve func(*http.Server, net
 			return
 		case <-time.After(bridgeBindRetry):
 		}
+	}
+}
+
+// clientAddress names each listener request's client address (ADR-0354 Decision 2), which the rate key, the access log and
+// the backends' X-Forwarded-For read: the peer, unless the first trusted proxy entry that matches it names another. The
+// kind of an add-on object's engine is read only for an addonKinds entry, through the egress indexes and the store.
+func (p *Platform) clientAddress(next http.Handler) http.Handler {
+	proxies := p.cfg.proxies
+	if len(proxies.Entries) == 0 {
+		return next
+	}
+	sources, kinds := p.exec.egressSources, proxies.HasAddonKinds()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		peer := edge.Peer(r)
+		kind := ""
+		if ref, ok := lookupSource(sources, peer); kinds && ok && ref.Type == v1.KindAddonObject {
+			var err error
+			if kind, err = addonKindOf(context.WithoutCancel(r.Context()), p.cfg.store, ref); err != nil {
+				p.logger.WarnContext(r.Context(), "the edge cannot read the kind of the engine that called it", "error", err)
+			}
+		}
+		next.ServeHTTP(w, r.WithContext(edge.WithClient(r.Context(), proxies.Client(r, peer, kind))))
+	})
+}
+
+// lookupSource is the principal sources names for addr; false with no egress gateway, which keeps no index.
+func lookupSource(sources egress.WorkerIndex, addr netip.Addr) (auth.EntityRef, bool) {
+	if sources == nil || !addr.IsValid() {
+		return auth.EntityRef{}, false
+	}
+	return sources.Lookup(addr)
+}
+
+// warnUnmatchedKinds says at start that an addonKinds entry matches nothing without the egress gateway, which names the
+// engines that reach the edge (ADR-0354 Decision 3).
+func (p *Platform) warnUnmatchedKinds() {
+	if p.cfg.proxies.HasAddonKinds() && p.exec.egressSources == nil {
+		p.logger.Warn("server.trustedProxies: an addonKinds entry matches nothing here, since only the egress gateway's " +
+			"indexes name the engines that reach the edge (containerd with server.network.egress and a dnsForwarderPort)")
 	}
 }

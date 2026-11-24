@@ -5,7 +5,7 @@
 # Start the daemon against it:   funcd --config examples/funcdconfig.yaml
 # The file is OPTIONAL — every key has a default, so `funcd` runs with no config at all. Precedence
 # is flag > env (FUNCD_*) > this file > default, so a FUNCD_* env var still overrides any value here.
-# EVERY key but auth.credentials (file-only, ADR-0171) also has a FUNCD_* env override (ADR-0062): e.g. server.listenAddr ← FUNCD_LISTEN_ADDR,
+# EVERY key but auth.credentials and server.trustedProxies (file-only, ADR-0171, ADR-0354) also has a FUNCD_* env override (ADR-0062): e.g. server.listenAddr ← FUNCD_LISTEN_ADDR,
 # storage.dataDir ← FUNCD_DATA_DIR, log.level ← FUNCD_LOG_LEVEL, runtime.mode ← FUNCD_RUNTIME.
 #
 # As shipped this is a zero-infra DEV config: in-memory substrate (nothing on disk) + the process
@@ -23,6 +23,10 @@ server:
   # baseDomain: localhost         # namespace hosts <namespace>.<baseDomain> (ADR-0240). default: localhost
   # edgePublicScheme: http        # the edge sign-in's callback scheme behind a TLS proxy (ADR-0335). default: http
   # edgePublicPort: 0             # the callbacks' port; 0 ⇒ the data plane's bound port, none with only edgePublicScheme https. default: 0
+  # trustedProxies:               # hops whose word the edge takes for the client address, file-only (ADR-0354). default: none
+  #   - addonKinds:               # engines of these add-on kinds, on the bridge address, or cidrs: ranges
+  #       - Tunnel
+  #     header: X-Real-IP         # the header the hop sets to the client; empty walks X-Forwarded-For
   # tls:                          # HTTPS on both listeners (ADR-0111)
   #   enabled: false              # default: false (plaintext)
   #   mode: selfsigned            # selfsigned | provided | acme. default: selfsigned

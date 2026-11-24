@@ -50,6 +50,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
 	"github.com/pyvvo/funcd/internal/dataplane"
+	"github.com/pyvvo/funcd/internal/edge"
 	"github.com/pyvvo/funcd/internal/edge/authn"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/observ"
@@ -247,6 +248,8 @@ type config struct {
 	edgePublicScheme string
 	edgePublicPort   int
 	oidcBackChannel  http.RoundTripper
+	// proxies are server.trustedProxies, which name each request's client address (ADR-0354).
+	proxies edge.Proxies
 
 	// edge observability (ADR-0114, F76) + shaping (F78): RED metrics/trace/access-log; CORS/headers/
 	// compression. Zero values are pass-throughs (off by default).
@@ -1306,7 +1309,7 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0114 (F76/F78): observability wraps outer-than-limit (times the whole hop incl. rejects) but
 	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). The write stall
 	// bound is outermost, so every byte of every listener response passes it. Runtime order:
-	// WriteStall → Recover → RequestID → observ → limit → shape → dataplane.Handler.
+	// WriteStall → Recover → RequestID → client address (ADR-0354) → observ → limit → shape → dataplane.Handler.
 	dpOpts := []dataplane.Option{dataplane.WithCallGate(c.callGate()), dataplane.WithChain(callChain),
 		dataplane.WithOIDC(oidc.New(oidc.Deps{Store: c.store, CallbackURL: p.callbacks().URL, HTTPS: p.callbacks().HTTPS(),
 			BackChannel: c.oidcBackChannel, Addons: storedAddons{c.store}, Logger: p.logger}))}
@@ -1317,7 +1320,7 @@ func (p *Platform) buildControlPlane() error {
 		c.invokeDefaultTimeout, p.logger, dpOpts...)
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
 	dpHandler := gateway.Chain(dpCore, gateway.WriteStall(gateway.WriteStallTimeout), gateway.Recover(p.logger),
-		gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
+		gateway.RequestID, p.clientAddress, edgeObserv, limit.Chain(c.limits), edgeShape)
 	// Late-bind the worker-node local API invoker (ADR-0064) to the same chain minus the ingress
 	// limiter and edge observ: ADR-0112 guards the listener, so a nested fn-to-fn invoke never takes its
 	// caller's in-flight slot or rate token (#87); edge signals describe only listener requests, so an
@@ -1395,6 +1398,7 @@ func (p *Platform) WaitS3Gateway(ctx context.Context) error {
 func (p *Platform) Run(ctx context.Context) error {
 	p.logger.InfoContext(ctx, "platform starting", "addr", p.addr, "dataPlaneAddr", p.dataPlaneAddr)
 	p.logProviders(ctx)
+	p.warnUnmatchedKinds()
 
 	ctx, cancelLoops := context.WithCancel(ctx)
 	defer cancelLoops()

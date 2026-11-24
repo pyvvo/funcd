@@ -27,6 +27,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/edge"
 	"github.com/pyvvo/funcd/internal/edge/authn"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/observ"
@@ -239,6 +240,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.serveByName(w, r, ns, v1.ObjectName(name), rest, hostNS == "" && ns != "default", received, op)
 }
 
+// asClient makes r come from its client address, which a trusted proxy may have named (ADR-0354 Decisions 2 and 4): the
+// reverse proxy to a worker or an upstream entry writes X-Forwarded-For from RemoteAddr, so the backend gets the client
+// address alone, and the caller's own forwarding headers are dropped before it.
+func asClient(r *http.Request) {
+	client := edge.ClientOf(r)
+	if !client.IsValid() {
+		return
+	}
+	_, port, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		port = "0"
+	}
+	r.RemoteAddr = net.JoinHostPort(client.String(), port)
+}
+
 // outside refuses a pinned caller a request of another namespace, naming none (ADR-0353 Decision 4).
 func outside() error { return fault.Forbiddenf("dataplane.pin", "outside the caller's namespace") }
 
@@ -378,6 +394,12 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	out := c.Request
 	out.URL.Path = remainder
 	oidc.DropCookies(out) // funcd's sign-in cookies reach no backend (ADR-0335 Decision 8)
+	if !internal {
+		for _, name := range [...]string{"X-Forwarded-For", "Forwarded", "X-Real-IP"} {
+			out.Header.Del(name)
+		}
+		asClient(out)
+	}
 	out = activator.WithFunction(out, c.Target)
 	out = activator.WithAnswerCheck(out, func(res *http.Response) error {
 		if rf := s.chain.After(r.Context(), c, invoke.NewAnswer(res)); rf != nil {
@@ -473,10 +495,11 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	}
 	oidc.DropCookies(r) // funcd's sign-in cookies reach no backend (ADR-0335 Decision 8)
 	// An upstream that trusts funcd as its proxy reads the caller's address from these headers, and funcd honors no
-	// caller's own (ADR-0112): the proxy then sets X-Forwarded-For to the address funcd sees.
+	// caller's own: the proxy then sets X-Forwarded-For to the client address (ADR-0354 Decision 4).
 	for _, name := range [...]string{"X-Forwarded-For", "Forwarded", "X-Real-IP", "X-Forwarded-Host", "X-Forwarded-Proto"} {
 		r.Header.Del(name)
 	}
+	asClient(r)
 	// No edge PEP runs here, so the refusal says what an engine that is down says and names no hold (ADR-0290).
 	if _, held := s.held.NamespaceMarker(m.Namespace); held {
 		refuseHeld(w, fault.Unavailablef(op, "edge upstream unavailable"))

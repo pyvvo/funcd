@@ -23,6 +23,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/bus"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
+	"github.com/pyvvo/funcd/internal/edge"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/observ"
 	"github.com/pyvvo/funcd/internal/edge/shape"
@@ -854,6 +855,13 @@ func WithEdgePublicScheme(scheme string) Option {
 		c.edgePublicScheme = scheme
 		return nil
 	}
+}
+
+// WithTrustedProxies sets server.trustedProxies (ADR-0354): the hops whose word the edge takes for a request's client
+// address, which the rate limit's clientIP key, the access log and a backend's X-Forwarded-For use. Its Workers are the
+// worker subnet, whose addresses only an addonKinds entry trusts. The zero value trusts no proxy.
+func WithTrustedProxies(p edge.Proxies) Option {
+	return func(c *config) error { c.proxies = p; return nil }
 }
 
 // WithEdgePublicPort sets server.edgePublicPort (ADR-0335 Decision 9), the port of the edge sign-in's callbacks; 0 is
