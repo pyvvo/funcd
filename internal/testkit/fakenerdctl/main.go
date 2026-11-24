@@ -1,6 +1,7 @@
 // Command fakenerdctl is the nerdctl the tests of internal/provider/nerdctl put on PATH (ADR-0334 Implementation plan):
 // it keeps the containers and volumes it was told of in $FUNCD_FAKE_NERDCTL_DIR/state.json, appends each command and
-// what it read on its standard input to calls.jsonl there, and answers as nerdctl does. An engine's published port is
+// what it read on its standard input to calls.jsonl there, and answers as nerdctl does. One command at a time holds
+// state.lock there while it reads, answers and writes, since a worker's log follower runs beside its inspect. An engine's published port is
 // the one in the file port; a helper prints the next listing-<n> file for a find with stat, and the file tar for a
 // tar -c.
 package main
@@ -15,6 +16,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/gofrs/flock"
 )
 
 // DirEnv names the directory of the fake's state.
@@ -83,6 +86,12 @@ func run(dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		_, _ = fmt.Fprintln(stderr, "fakenerdctl: "+DirEnv+" and a command are required")
 		return 2
 	}
+	lock := flock.New(filepath.Join(dir, "state.lock"))
+	if err := lock.Lock(); err != nil {
+		_, _ = fmt.Fprintln(stderr, "fakenerdctl:", err)
+		return 2
+	}
+	defer func() { _ = lock.Unlock() }()
 	f := &fake{dir: dir, args: args, stdout: stdout, stderr: stderr,
 		st: state{Containers: map[string]container{}, Volumes: map[string]map[string]string{}}}
 	if b, err := os.ReadFile(filepath.Join(dir, "state.json")); err == nil {
