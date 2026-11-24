@@ -1,7 +1,9 @@
 # ADR-0356: A stack's outputs, plain and sensitive, reach its readers through the Secret its Job owns
 
-- **Status**: Accepted (2026-11-24), on the decider's bar of 2026-11-24, after three independent judge rounds, the
-  third with no finding
+- **Status**: Implemented (2026-11-24), review passed in its second round with one Minor, its lane cases passed on
+  containerd (`addon-infrastack` at 1d583a11, 280 s, and `addon-frp-bunny`, 197 s)
+  ([report](../reviews/adr-0356-implementation-claude-opus-5-5-2.md)); Accepted (2026-11-24), on the decider's bar of
+  2026-11-24, after three independent judge rounds, the third with no finding
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: infrastack, secrets, outputs, funcdctl, addons

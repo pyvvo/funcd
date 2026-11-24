@@ -1,7 +1,9 @@
 # ADR-0355: An OpenTofu module is pushed with its providers for each architecture and a contract from its variables
 
-- **Status**: Accepted (2026-11-24), on the decider's bar of 2026-11-24, after four independent judge rounds, the
-  fourth with no finding
+- **Status**: Implemented (2026-11-24), review passed in its third round with no finding open, its lane cases passed
+  on containerd (`addon-infrastack` at 1d583a11, 280 s)
+  ([report](../reviews/adr-0355-implementation-claude-opus-5-5-3.md)); Accepted (2026-11-24), on the decider's bar of
+  2026-11-24, after four independent judge rounds, the fourth with no finding
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: infrastack, artifacts, contracts, funcdctl, addons

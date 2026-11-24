@@ -15403,5 +15403,35 @@
     "dod_total": 14,
     "report": "docs/reviews/adr-0355-implementation-claude-opus-5-5-2.md",
     "notes": "round 2, funcd-addons feat/infra-push 655d686: outputs table and JSON split match ADR-0356 Contracts, CLAUDE.md names the Python exception; just ci green, 6 mutants killed; routed as in round 1"
+  },
+  {
+    "date": "2026-11-24",
+    "adr": "0355",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 14,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0355-implementation-claude-opus-5-5-3.md",
+    "notes": "round 3, funcd feat/infrastack-outputs 1d583a11 on feat/infrastack-apps 8d7721d0: infra-variables-refused and infra-sensitive-variable-refused pass in addon-infrastack (PASS 280s), lane guards green; routed: Decision 3's {} for a module whose every variable is sensitive (adr, the decider), ADR-0347's check at a run's start (accepted), nerdctl (env)"
+  },
+  {
+    "date": "2026-11-24",
+    "adr": "0356",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/adr-0356-implementation-claude-opus-5-5-2.md",
+    "notes": "round 2, funcd feat/infrastack-outputs 1d583a11: reach-function, output-changed and never-shown pass in addon-infrastack (PASS 280s), reach-engine in addon-frp-bunny (PASS 197s); 1 Minor (model): the reader steps retry their value; routed: infra-outputs-lists-them's test has no scenario marker (funcd-addons)"
   }
 ]
