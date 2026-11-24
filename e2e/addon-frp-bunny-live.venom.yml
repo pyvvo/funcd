@@ -180,6 +180,19 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "hello from frp-bunny"
+      # The edge took the visitor from the X-Real-IP that Bunny set and the Tunnel's engine passed on (ADR-0354): the
+      # access log's client is this host's public address as Bunny saw it, neither empty nor the engine's, in the bridge
+      # subnet.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo bash -c '
+            line=$(journalctl -u funcd-demo --no-pager -o cat | grep "edge request" | grep "function=frp-bunny-hello" | tail -1)
+            client=$(echo "$line" | grep -o "client=[^ ]*" | cut -d= -f2)
+            python3 -c "import ipaddress, sys; a = ipaddress.ip_address(sys.argv[1]); print(\"CLIENT_OK\" if a not in ipaddress.ip_network(\"10.63.0.0/16\") else \"CLIENT_IN_THE_BRIDGE_SUBNET\")" "$client"'
+        info: "the edge's client → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring CLIENT_OK
 
   - name: the App's deletion holds the stack, its destroy is approved and removes Bunny's resources, and the App goes
     steps:
