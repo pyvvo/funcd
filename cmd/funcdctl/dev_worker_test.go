@@ -4,14 +4,16 @@ package main
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -28,6 +30,7 @@ import (
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/provider/docker"
+	"github.com/pyvvo/funcd/internal/testkit/imageregistry"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -35,9 +38,25 @@ import (
 
 const workerPrefix = "funcd-dev-worker-"
 
+// mustRunOnCI fails t, from here on, at a skip when the CI variable is set: CI's Docker runs every one of these
+// scenarios (ADR-0346 plan step 8), and `go test` without -v would not show that one was skipped.
+func mustRunOnCI(t *testing.T) {
+	t.Helper()
+	if os.Getenv("CI") == "" {
+		return
+	}
+	t.Cleanup(func() {
+		if t.Skipped() {
+			t.Error("CI runs this scenario, so its skip fails it")
+		}
+	})
+}
+
 // workerImage builds, on the engine d reads, the image of the tests' Addon runtime deno2: funcd's nodejs22 runtime image
-// (images/runtime/nodejs22) with the pinned shim, which speaks ADR-0346's transport, and names it by the digest the
-// engine keeps, as an Addon names an image. An engine that keeps no digest for an image it built skips the test.
+// (images/runtime/nodejs22) with the pinned shim, which speaks ADR-0346's transport, and names it by a digest the
+// engine keeps for it, as an Addon names an image. containerd's image store keeps one for an image it built; Docker's
+// classic store, CI's, only for one it pulled, so the first scenario there pulls it (pulledImage) and the next ones
+// find that pull's digest.
 func workerImage(t *testing.T, d dockerEngine) string {
 	t.Helper()
 	recipe, err := os.ReadFile(filepath.Join("..", "..", "images", "runtime", "nodejs22", "Dockerfile"))
@@ -71,25 +90,60 @@ func workerImage(t *testing.T, d dockerEngine) string {
 	resp, err := d.client.Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
-	sc := bufio.NewScanner(resp.Body)
-	for sc.Scan() {
-		var m struct {
-			Error string `json:"error"`
-		}
-		_ = json.Unmarshal(sc.Bytes(), &m)
-		require.Empty(t, m.Error, "build the Addon runtime image")
-	}
+	require.Empty(t, streamError(resp.Body), "build the Addon runtime image")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	_, b := d.get("/images/"+tag+"/json", nil)
 	var img struct{ RepoDigests []string }
 	require.NoError(t, json.Unmarshal(b, &img))
 	for _, ref := range img.RepoDigests {
-		if strings.HasPrefix(ref, repo+"@sha256:") {
+		if name, _, _ := strings.Cut(ref, "@"); name == repo || strings.HasSuffix(name, "/"+repo) {
 			return ref
 		}
 	}
-	t.Skipf("the engine keeps no digest for an image it built, as its image store is not containerd's: %v", img.RepoDigests)
-	return ""
+	return pulledImage(t, d, tag, repo)
+}
+
+// pulledImage serves tag, as the engine d saves it, from a registry on this host's 127.0.0.1, which Docker trusts over
+// TLS without verifying it, and pulls it from there by digest, so that the engine keeps that digest for the image. An
+// engine that cannot reach this host's loopback, as one in a VM, skips the test.
+func pulledImage(t *testing.T, d dockerEngine, tag, repo string) string {
+	t.Helper()
+	resp, err := d.client.Get("http://docker/images/" + tag + "/get")
+	require.NoError(t, err)
+	img, err := imageregistry.Read(resp.Body)
+	_ = resp.Body.Close()
+	require.NoError(t, err, "read the engine's save of %s", tag)
+	srv := httptest.NewTLSServer(img.Handler(repo))
+	defer srv.Close()
+	ref := strings.TrimPrefix(srv.URL, "https://") + "/" + repo + "@" + img.Digest()
+	pull, err := d.client.Post("http://docker/images/create?"+url.Values{"fromImage": {ref}}.Encode(), "", nil)
+	require.NoError(t, err)
+	defer func() { _ = pull.Body.Close() }()
+	if why := streamError(pull.Body); pull.StatusCode != http.StatusOK || why != "" {
+		t.Skipf("the engine keeps no digest for an image it built, and cannot pull one from this host's 127.0.0.1: %s %s",
+			pull.Status, why)
+	}
+	return ref
+}
+
+// streamError is the error of the engine's reply r, read to its end: an API error's message, or the first error of a
+// message stream; "" when there is none.
+func streamError(r io.Reader) string {
+	dec := json.NewDecoder(r)
+	for {
+		var m struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		switch err := dec.Decode(&m); {
+		case errors.Is(err, io.EOF):
+			return ""
+		case err != nil:
+			return err.Error()
+		case m.Error != "" || m.Message != "":
+			return cmp.Or(m.Error, m.Message)
+		}
+	}
 }
 
 // denoAddon ships deno2 from image for Functions and Jobs.
@@ -108,11 +162,12 @@ func denoFunction(name, spec, build string) map[string]string {
 	}
 }
 
-// workers names the session's worker containers.
+// workers names the session's worker containers, funcd-dev-worker-<key>-<hash> (ADR-0346 Decision 7), and not their
+// helpers, whose names extend a worker's: on the host's network one runs beside the worker at each read of its port file.
 func (d dockerEngine) workers(key string) []string {
 	var out []string
 	for _, n := range d.containers(key) {
-		if strings.HasPrefix(n, workerPrefix) {
+		if hash, ok := strings.CutPrefix(n, workerPrefix+key+"-"); ok && len(hash) == 16 {
 			out = append(out, n)
 		}
 	}
@@ -199,6 +254,7 @@ func runJob(t *testing.T, inst *devInstance, dir, name, build string) *v1.JobRun
 // Function and a Job on deno2 run deno2's image on the engine: the Function turns Ready and answers, the run succeeds;
 // a Function on nodejs22 beside them runs on the process driver.
 func TestScenarioDevAddonWorker(t *testing.T) {
+	mustRunOnCI(t)
 	requireRuntime(t)
 	sock := requireDocker(t)
 	d := newDockerEngine(t, sock)
@@ -229,6 +285,7 @@ func TestScenarioDevAddonWorker(t *testing.T) {
 // its handler's ctx.kv, ctx.secret.put and ctx.invoke all reach funcd; a request on its listener with another token or
 // none gets 403. That pricing never sees the token is the listener's (TestDevWorkerListenerChecksItsToken).
 func TestScenarioDevAddonWorkerBindings(t *testing.T) {
+	mustRunOnCI(t)
 	requireRuntime(t)
 	sock := requireDocker(t)
 	d := newDockerEngine(t, sock)
@@ -294,6 +351,7 @@ func TestScenarioDevAddonWorkerBindings(t *testing.T) {
 // scenario: dev-addon-worker-no-engine — given dev with neither engine, a Function on deno2 fails RuntimeUnavailable
 // naming what dev tried, and a Function on nodejs22 runs.
 func TestScenarioDevAddonWorkerNoEngine(t *testing.T) {
+	mustRunOnCI(t)
 	requireRuntime(t)
 	dir := devProject(t, merge(map[string]string{"addon.yaml": denoAddon("registry.example.com/deno@sha256:" + strings.Repeat("a", 64))},
 		denoFunction("greeter", "", okBuild), nodeFunction("api", "", okBuild)))
@@ -315,6 +373,7 @@ func TestScenarioDevAddonWorkerNoEngine(t *testing.T) {
 // scenario: dev-addon-worker-output — when such a worker prints a line and its run exits 3, funcdctl job logs shows the
 // line and the run records exit code 3.
 func TestScenarioDevAddonWorkerOutput(t *testing.T) {
+	mustRunOnCI(t)
 	requireRuntime(t)
 	sock := requireDocker(t)
 	d := newDockerEngine(t, sock)
@@ -346,6 +405,7 @@ func TestScenarioDevAddonWorkerReap(t *testing.T) {
 	if runDevChild(t) {
 		return
 	}
+	mustRunOnCI(t)
 	requireRuntime(t)
 	sock := requireDocker(t)
 	d := newDockerEngine(t, sock)
@@ -411,6 +471,7 @@ func TestScenarioDevAddonWorkerLinux(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("a worker shares the host's network on a Linux host only")
 	}
+	mustRunOnCI(t)
 	requireRuntime(t)
 	sock := requireDocker(t)
 	d := newDockerEngine(t, sock)
