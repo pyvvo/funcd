@@ -1306,10 +1306,6 @@ func (p *Platform) buildControlPlane() error {
 	holdSvc := controlplane.NewHoldService(controlplane.HoldDeps{ // ADR-0206: the hold's evidence and release
 		Hold: c.hold, Store: c.store, DeadLetters: p.eventing.deadLetters, Platform: holdPlatform{p},
 	})
-	parts := p.routeNodeParts(nodeParts{
-		logs: logReader, runLogs: runLogQuerier, deadLetters: p.eventing.deadLetters, replayer: p.eventing.sensorReconciler,
-		apps: appReconciler, volumes: p.volumeDeleter(), hold: holdSvc,
-	}, holdSvc, multinode.NodeState(partAdmissions(storeReader{c.store})))
 	// ADR-0205: the platform backup cuts the event store, the metastore and the run state.
 	var backupStatus controlplane.BackupStatuser
 	if c.backupRunner != nil {
@@ -1322,8 +1318,13 @@ func (p *Platform) buildControlPlane() error {
 		}
 		backupStatus = c.backupRunner
 	}
+	parts := p.routeNodeParts(nodeParts{
+		logs: logReader, runLogs: runLogQuerier, deadLetters: p.eventing.deadLetters, replayer: p.eventing.sensorReconciler,
+		apps: appReconciler, volumes: p.volumeDeleter(), hold: holdSvc, backup: backupStatus,
+	}, holdSvc, multinode.NodeState(partAdmissions(storeReader{c.store})))
 	handler, err := controlplane.NewServer(controlplane.Deps{
 		Backup:      backupStatus,
+		Nodes:       parts.nodes, // FEAT-0002 F250: a worker node's own hold and platform backup
 		Store:       c.store,
 		Authorizer:  c.authorizer,
 		Credentials: c.credentials,

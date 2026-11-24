@@ -5,6 +5,7 @@ package funcd_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,7 +20,8 @@ const nsPath = "/apis/funcd.io/v1alpha1/namespaces/default/"
 // TestEngineLogsAnswersMatrix provokes every case the three engine logs reads list.
 func TestEngineLogsAnswersMatrix(t *testing.T) {
 	t.Parallel()
-	e := newAnswerEnv(t, funcd.WithAddonRegistries("ghcr.io"))
+	e := newAnswerEnv(t, funcd.WithAddonRegistries("ghcr.io"), asCluster(t))
+	placeOnOfflineNode(t, e)
 	registerAddons(t, e, addonFixture("rauthy", "IdentityProvider"))
 	var rows []answerRow
 	for _, op := range []struct{ id, coll, name string }{
@@ -44,6 +46,7 @@ func TestEngineLogsAnswersMatrix(t *testing.T) {
 				detail: "path.name"}},
 			answerRow{op: op.id, when: "The limit parameter", on: e, ask: ask{what: "a limit that is no integer",
 				method: http.MethodGet, path: logs + "?limit=many", token: answersDev, detail: "query.limit"}},
+			awayRow(op.id, e, http.MethodGet, strings.TrimPrefix(logs, nsPath)),
 		)
 	}
 	rows = append(rows, answerRow{op: "getAddonObjectLogs", when: "No Addon registers a kind of the plural", on: e,

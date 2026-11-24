@@ -24,6 +24,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	dlmemory "github.com/pyvvo/funcd/internal/eventing/deadletter/memory"
@@ -557,6 +558,11 @@ func TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState(t *testing.T) {
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "a Job's volume is booked on the node too")
 }
 
+// fakeBackup is a platform backup of that status.
+type fakeBackup runner.Status
+
+func (f fakeBackup) Status(context.Context) (runner.Status, error) { return runner.Status(f), nil }
+
 func TestANodeReportsItsBackupInItsWorkerNode(t *testing.T) {
 	ctx := context.Background()
 	r := startCP(t)
@@ -567,9 +573,7 @@ func TestANodeReportsItsBackupInItsWorkerNode(t *testing.T) {
 	require.NoError(t, err)
 	last := v1.NewTimestamp(time.Date(2026, 11, 17, 3, 0, 0, 0, time.UTC))
 	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
-		Commands: multinode.Commands{Backup: func(context.Context) (v1.NodeBackup, error) {
-			return v1.NodeBackup{LastSuccessTime: &last, RPORisk: true}, nil
-		}}})
+		Commands: multinode.Commands{Backup: fakeBackup{LastSuccessTime: &last, RPORisk: true}}})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -661,15 +665,31 @@ func nodeCaller(t *testing.T, r rig, dir string) func(method, path string, body 
 	}
 }
 
-// fakeHold records the hold releases and quarantine returns it ran.
+// fakeHold records the hold releases and quarantine returns it ran. Its evidence is held with the paused runs it names, until
+// its release.
 type fakeHold struct {
 	mu       sync.Mutex
+	paused   []string
+	advanced []string
 	released []v1.NamespaceName
 	returned []hold.QuarantineReturn
 }
 
-func (*fakeHold) Status(context.Context) (hold.Evidence, error) { return hold.Evidence{}, nil }
-func (*fakeHold) Release(context.Context, []string) error       { return nil }
+func (f *fakeHold) Status(context.Context) (hold.Evidence, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return hold.Evidence{Held: f.advanced == nil, PausedRuns: f.paused}, nil
+}
+
+func (f *fakeHold) Release(_ context.Context, advance []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.advanced != nil {
+		return fault.Conflictf("fakeHold.Release", "the platform is not held")
+	}
+	f.advanced = append([]string{}, advance...)
+	return nil
+}
 
 func (f *fakeHold) ReleaseNamespaces(_ context.Context, nss []v1.NamespaceName) error {
 	f.mu.Lock()
@@ -683,6 +703,63 @@ func (f *fakeHold) ReturnQuarantined(_ context.Context, q hold.QuarantineReturn)
 	defer f.mu.Unlock()
 	f.returned = append(f.returned, q)
 	return nil
+}
+
+// Each side has its own hold and its own backup: a node's are read, and its hold released, by the node's name.
+func TestANodesOwnHoldAndBackupAnswerByItsName(t *testing.T) {
+	ctx := context.Background()
+	r := startCP(t)
+	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	require.NoError(t, err)
+	here := &fakeHold{paused: []string{"default/r1"}}
+	nodes := r.cluster.Nodes(here, nil)
+	_, err = nodes.HoldStatus(ctx, "vm1")
+	require.Equal(t, fault.Unavailable, fault.KindOf(err))
+	require.ErrorContains(t, err, "worker node vm1 is offline")
+	_, err = nodes.BackupStatus(ctx, "vm2")
+	require.Equal(t, fault.NotFound, fault.KindOf(err), "%v", err)
+
+	onNode := &fakeHold{paused: []string{"e1/r1"}}
+	last := v1.NewTimestamp(time.Date(2026, 11, 17, 3, 0, 0, 0, time.UTC))
+	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+		Commands: multinode.Commands{Hold: onNode, Backup: fakeBackup{Enabled: true, LastSuccessTime: &last}}})
+	require.NoError(t, err)
+	actx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { _ = a.Run(actx); close(done) }()
+	defer func() { stop(); <-done }()
+	var ev hold.Evidence
+	eventually(t, "the node answers for its hold", func() bool {
+		ev, err = nodes.HoldStatus(ctx, "vm1")
+		return err == nil
+	})
+	require.True(t, ev.Held)
+	require.Equal(t, []string{"e1/r1"}, ev.PausedRuns)
+	st, err := nodes.BackupStatus(ctx, "vm1")
+	require.NoError(t, err)
+	require.True(t, st.Enabled)
+	require.True(t, time.Time(last).Equal(time.Time(*st.LastSuccessTime)))
+
+	require.NoError(t, nodes.ReleaseHold(ctx, "vm1", []string{"e1/files"}))
+	onNode.mu.Lock()
+	require.Equal(t, []string{"e1/files"}, onNode.advanced)
+	onNode.mu.Unlock()
+	err = nodes.ReleaseHold(ctx, "vm1", nil)
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "the node's own answer: %v", err)
+
+	ev, err = nodes.HoldStatus(ctx, "local")
+	require.NoError(t, err)
+	require.Equal(t, []string{"default/r1"}, ev.PausedRuns, "the control plane's own node is this process")
+	st, err = nodes.BackupStatus(ctx, "local")
+	require.NoError(t, err)
+	require.False(t, st.Enabled)
+	require.NoError(t, nodes.ReleaseHold(ctx, "local", nil))
+	here.mu.Lock()
+	require.NotNil(t, here.advanced)
+	here.mu.Unlock()
 }
 
 func TestANamespacesHoldIsReleasedOnTheNodeThatRunsIt(t *testing.T) {

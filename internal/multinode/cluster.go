@@ -135,6 +135,11 @@ func (c *Cluster) Volumes(local VolumeDeleter) VolumeDeleter {
 // Hold routes a namespace's hold release and quarantine return to the node that runs it.
 func (c *Cluster) Hold(local Holder) Holder { return HoldRouter{router: c.router(), Holder: local} }
 
+// Nodes reaches the worker nodes' own holds and platform backups; hold and backup are this process's, backup nil ⇒ none.
+func (c *Cluster) Nodes(hold Holder, backup Backups) Nodes {
+	return Nodes{calls: c.calls, st: c.cfg.Store, local: c.cfg.LocalNode, hold: hold, backup: backup}
+}
+
 func (c *Cluster) router() router { return router{placement: c.placement, calls: c.calls} }
 
 // Admissions are the multi-node checks of the control plane's write path.

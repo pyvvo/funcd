@@ -9,6 +9,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/multinode"
@@ -227,7 +228,7 @@ func (a *Agent) serveCalls(ctx context.Context) {
 func (a *Agent) answer(ctx context.Context, c multinode.Call) {
 	var ans multinode.Answer
 	var err error
-	if !a.isMine(c.Namespace) {
+	if !multinode.OfTheNode(c.Kind) && !a.isMine(c.Namespace) {
 		err = fault.Forbiddenf("agent.answer", "namespace %s does not run on this node", c.Namespace)
 	} else {
 		ans, err = a.run(ctx, c)
@@ -288,6 +289,21 @@ func (a *Agent) run(ctx context.Context, c multinode.Call) (multinode.Answer, er
 				err = cmd.Hold.ReturnQuarantined(ctx, q)
 			}
 		}
+	case c.Kind == multinode.CallHoldStatus && cmd.Hold != nil:
+		var ev hold.Evidence
+		ev, err = cmd.Hold.Status(ctx)
+		body(ev)
+	case c.Kind == multinode.CallReleaseHold && cmd.Hold != nil:
+		var advance []string
+		if err = json.Unmarshal(c.Body, &advance); err == nil {
+			err = cmd.Hold.Release(ctx, advance)
+		}
+	case c.Kind == multinode.CallBackupStatus:
+		var st runner.Status
+		if cmd.Backup != nil {
+			st, err = cmd.Backup.Status(ctx)
+		}
+		body(st)
 	case c.Kind == multinode.CallAdmit:
 		var obj v1.Object
 		if obj, err = a.admit(ctx, c); err == nil && obj != nil {
@@ -325,16 +341,17 @@ func (a *Agent) reportBackup(ctx context.Context) {
 	if a.cfg.Commands.Backup == nil {
 		return
 	}
-	st, err := a.cfg.Commands.Backup(ctx)
+	st, err := a.cfg.Commands.Backup.Status(ctx)
 	if err != nil {
 		a.log.WarnContext(ctx, "node agent: read the backup status", "error", err)
 		return
 	}
-	b, err := json.Marshal(st)
+	report := multinode.NodeBackup(st)
+	b, err := json.Marshal(report)
 	if err != nil || string(b) == a.backupSent {
 		return
 	}
-	if _, err := a.do(ctx, http.MethodPut, multinode.PathBackup, st, nil); err != nil {
+	if _, err := a.do(ctx, http.MethodPut, multinode.PathBackup, report, nil); err != nil {
 		a.log.WarnContext(ctx, "node agent: report the backup status", "error", err)
 		return
 	}

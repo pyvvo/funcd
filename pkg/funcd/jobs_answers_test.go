@@ -111,9 +111,11 @@ func TestJobAnswersMatrix(t *testing.T) {
 		j.Spec.Bindings.KV = []v1.FunctionKV{{Alias: "b", Store: "ghost", Table: "t"}}
 		return jsonOf(t, j)
 	}
-	applied := func(j *v1.Job) func(*testing.T, *answerEnv) {
-		return func(t *testing.T, e *answerEnv) { create(t, e.c, e.api, j) }
+	applied := func(obj v1.Object) func(*testing.T, *answerEnv) {
+		return func(t *testing.T, e *answerEnv) { create(t, e.c, e.api, obj) }
 	}
+	awayRun := jobRun("run", "hello", "")
+	awayRun.Namespace = "e1"
 	in := func(ns v1.NamespaceName, j *v1.Job) *v1.Job {
 		j.Namespace = ns
 		return j
@@ -187,6 +189,8 @@ func TestJobAnswersMatrix(t *testing.T) {
 
 			row("getJobRunLogs", "", e, ask{what: "the logs", method: http.MethodGet, path: runs + "/run/logs", token: answersDev,
 				detail: `"items"`}),
+			offlineRow("getJobRunLogs", vol, applied(awayRun), ask{what: "a run whose worker node is offline",
+				method: http.MethodGet, path: "/apis/funcd.io/v1alpha1/namespaces/e1/jobruns/run/logs"}),
 			row("getJobRunLogs", "carries no bearer token", e, ask{what: "no credential", method: http.MethodGet,
 				path: runs + "/run/logs", detail: "missing bearer token"}),
 			row("getJobRunLogs", "do not allow it", e, ask{what: "another namespace's developer", method: http.MethodGet,

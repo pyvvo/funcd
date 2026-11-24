@@ -17,6 +17,7 @@ import (
 	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -111,10 +112,16 @@ func TestAReplacedNodeComesBackFromItsBackup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, out, "master secret", "a node's credentials derive from its namespaces' masters")
 	local, _ := second.start(t)
-	ev, err := local.HoldStatus(ctx)
-	require.NoError(t, err)
+	var ev hold.Evidence
+	require.Eventually(t, func() bool {
+		ev, err = admin.HoldStatus(ctx, sdk.OnNode("vm1"))
+		return err == nil
+	}, 10*time.Second, 50*time.Millisecond, "the control plane answers for the node's hold")
 	require.True(t, ev.Held)
 	require.Equal(t, []string{"team/r1"}, reportOf(t, ev).PausedByRestore)
+	ev, err = admin.HoldStatus(ctx)
+	require.NoError(t, err)
+	require.False(t, ev.Held, "the control plane's own hold is another one")
 	obj, err := local.Get(ctx, v1.KindConfigMap, "team", "settings")
 	require.NoError(t, err)
 	require.Equal(t, "2", obj.(*v1.ConfigMap).Spec.Data["n"], "what changed since the backup comes from the control plane")
@@ -128,7 +135,7 @@ func TestAReplacedNodeComesBackFromItsBackup(t *testing.T) {
 		return err == nil && obj.(*v1.WorkflowRun).Spec.Paused
 	}, 10*time.Second, 50*time.Millisecond, "the run shows paused on the control plane")
 
-	require.NoError(t, local.ReleaseHold(ctx, nil))
+	require.NoError(t, admin.ReleaseHold(ctx, nil, sdk.OnNode("vm1")))
 	ev, err = local.HoldStatus(ctx)
 	require.NoError(t, err)
 	require.False(t, ev.Held)

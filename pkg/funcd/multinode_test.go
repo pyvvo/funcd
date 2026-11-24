@@ -429,6 +429,12 @@ func offlineRow(op string, e *answerEnv, setup func(*testing.T, *answerEnv), a a
 	return answerRow{op: op, when: "worker node that is offline", on: e, setup: setup, ask: a}
 }
 
+// awayRow is op's row for a read or an action of namespace e1, whose worker node is offline, at path under e1.
+func awayRow(op string, e *answerEnv, method, path string) answerRow {
+	return offlineRow(op, e, nil, ask{what: "a namespace whose worker node is offline", method: method,
+		path: "/apis/funcd.io/v1alpha1/namespaces/e1/" + path})
+}
+
 // withVolume is fn with a volume, which its node books.
 func withVolume(fn *v1.Function) *v1.Function {
 	fn.Spec.Volumes = []v1.VolumeEntry{{Name: "scratch", Type: v1.VolumeEmptyDir, Size: "1Mi"}}

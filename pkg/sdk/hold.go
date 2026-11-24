@@ -4,14 +4,37 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 )
 
+// NodeOption picks the worker node a call is about; without one, it is about the funcd that serves the API.
+type NodeOption func(url.Values)
+
+// OnNode makes the call about the worker node named node (FEAT-0002 F250): no such WorkerNode ⇒ fault.NotFound, an
+// offline one ⇒ fault.Unavailable.
+func OnNode(node v1.ObjectName) NodeOption {
+	return func(q url.Values) { q.Set("node", string(node)) }
+}
+
+// nodeQuery is the query opts make, with its question mark, or "".
+func nodeQuery(opts []NodeOption) string {
+	q := url.Values{}
+	for _, o := range opts {
+		o(q)
+	}
+	if len(q) == 0 {
+		return ""
+	}
+	return "?" + q.Encode()
+}
+
 // HoldStatus reads the platform hold's evidence (ADR-0206 Decision 8); admin-only.
-func (c *Client) HoldStatus(ctx context.Context) (hold.Evidence, error) {
-	body, err := c.do(ctx, http.MethodGet, c.baseURL+apiPrefix+"/hold", nil)
+func (c *Client) HoldStatus(ctx context.Context, opts ...NodeOption) (hold.Evidence, error) {
+	body, err := c.do(ctx, http.MethodGet, c.baseURL+apiPrefix+"/hold"+nodeQuery(opts), nil)
 	if err != nil {
 		return hold.Evidence{}, err
 	}
@@ -25,14 +48,14 @@ func (c *Client) HoldStatus(ctx context.Context) (hold.Evidence, error) {
 // ReleaseHold lifts the platform hold (ADR-0206 Decision 8). advance names blob EventSources, <ns>/<name>, whose
 // listed keys are marked seen instead of replayed. Not held ⇒ fault.Conflict; an advance naming no blob event of an
 // existing EventSource ⇒ fault.Invalid, both before any change.
-func (c *Client) ReleaseHold(ctx context.Context, advance []string) error {
+func (c *Client) ReleaseHold(ctx context.Context, advance []string, opts ...NodeOption) error {
 	body, err := json.Marshal(struct {
 		Advance []string `json:"advance,omitempty"`
 	}{advance})
 	if err != nil {
 		return fault.Internalf("sdk.ReleaseHold", "encode the release: %v", err)
 	}
-	_, err = c.do(ctx, http.MethodPost, c.baseURL+apiPrefix+"/hold/release", body)
+	_, err = c.do(ctx, http.MethodPost, c.baseURL+apiPrefix+"/hold/release"+nodeQuery(opts), body)
 	return err
 }
 

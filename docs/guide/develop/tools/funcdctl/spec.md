@@ -215,10 +215,14 @@ Print the backup settings recovery objectives give, as an example: --rpo (the mo
 ## `funcdctl backup status`
 
 ```text
-funcdctl backup status
+funcdctl backup status [flags]
 
 Print the platform backup status as YAML: restore points, rpoRisk, failures (admin only)
 ```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--node` | string |  | a worker node, instead of the funcd at --server |
 
 ## `funcdctl backup verify`
 
@@ -532,14 +536,19 @@ Lift the hold: timers, blob sources, Sensors, runs, rollouts, backups and sweeps
 | --- | --- | --- | --- |
 | `--advance` | stringArray | `[]` | a blob EventSource &lt;namespace&gt;/&lt;name&gt; whose listed objects are marked seen instead of fired (repeatable) |
 | `--namespace` | stringArray | `[]` | a namespace whose hold a restore left (restore run's data, an ended in-place Restore's load) is released instead of the platform's hold (repeatable) |
+| `--node` | string |  | a worker node, instead of the funcd at --server |
 
 ## `funcdctl hold status`
 
 ```text
-funcdctl hold status
+funcdctl hold status [flags]
 
 Show the hold: marker, restore report, counts, paused runs, dead letters, pending blob keys, orphan data, namespace markers
 ```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--node` | string |  | a worker node, instead of the funcd at --server |
 
 ## `funcdctl index`
 

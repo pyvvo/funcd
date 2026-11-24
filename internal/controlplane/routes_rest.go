@@ -246,8 +246,7 @@ type KVStoreHandover struct {
 // node is offline (FEAT-0002 F250): the control plane refuses it rather than skip the check.
 func nodeOffline() ErrorCase {
 	return problem(fault.Unavailable, "The namespace runs on a worker node that is offline, and the write needs a check "+
-		"that reads that node's state.", "Retry once the node polls the control plane again: funcdctl get workernodes "+
-		"shows it Ready.")
+		"that reads that node's state.", nodeBack)
 }
 
 // madeByLiveOwner is the 409 of a write to a store that a Function, a Workflow or an App made and that still exists

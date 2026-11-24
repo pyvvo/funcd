@@ -113,17 +113,25 @@ const (
 	CallAdmit             = "admit"
 	CallReleaseNamespaces = "releaseNamespaces"
 	CallReturnQuarantined = "returnQuarantined"
+	CallHoldStatus        = "holdStatus"
+	CallReleaseHold       = "releaseHold"
+	CallBackupStatus      = "backupStatus"
 )
 
-// Call is one node call the control plane queued for a node.
+// OfTheNode reports whether a call of kind is about the node itself rather than a namespace it runs.
+func OfTheNode(kind string) bool {
+	return kind == CallHoldStatus || kind == CallReleaseHold || kind == CallBackupStatus
+}
+
+// Call is one node call the control plane queued for a node; Namespace is empty in one about the node itself.
 type Call struct {
 	ID        string           `json:"id"`
 	Kind      string           `json:"kind"`
-	Namespace v1.NamespaceName `json:"namespace"`
+	Namespace v1.NamespaceName `json:"namespace,omitempty"`
 	Run       v1.ObjectName    `json:"run,omitempty"`
 	Name      string           `json:"name,omitempty"`   // a dead letter's ID, an App's or a Function's name
 	Volume    v1.ObjectName    `json:"volume,omitempty"` // a Function's volume
-	Body      json.RawMessage  `json:"body,omitempty"`   // an admission's request
+	Body      json.RawMessage  `json:"body,omitempty"`   // a command's input, such as an admission's request
 	Query     logread.Query    `json:"query"`
 }
 

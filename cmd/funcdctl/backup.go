@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/backup/plan"
+	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/backup/verify"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/platform/config"
@@ -33,14 +35,19 @@ func (a *cli) backupCmd() *cobra.Command {
 }
 
 func (a *cli) backupStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	var node string
+	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Print the platform backup status as YAML: restore points, rpoRisk, failures (admin only)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return printStatus(cmd.Context(), a, "funcdctl backup status", "encode the status", (*sdk.Client).PlatformBackup)
+			return printStatus(cmd.Context(), a, "funcdctl backup status", "encode the status", func(c *sdk.Client, ctx context.Context) (runner.Status, error) {
+				return c.PlatformBackup(ctx, onNode(node)...)
+			})
 		},
 	}
+	nodeFlag(cmd, &node)
+	return cmd
 }
 
 func (a *cli) backupVerifyCmd() *cobra.Command {

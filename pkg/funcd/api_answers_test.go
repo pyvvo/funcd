@@ -1239,6 +1239,8 @@ func TestFunctionAnswersMatrix(t *testing.T) {
 	)
 	const awayFns = "/apis/funcd.io/v1alpha1/namespaces/e1/functions"
 	rows = append(rows,
+		awayRow("getFunctionLogs", sh, http.MethodGet, "functions/echo/logs"),
+		awayRow("deleteVolume", sh, http.MethodDelete, "volumes/echo/state"),
 		offlineRow("createFunction", sh, nil, ask{what: "a Function with a volume whose worker node is offline",
 			method: http.MethodPost, path: awayFns, body: jsonOf(t, withVolume(inNamespace("e1", function("booked"))))}),
 		offlineRow("replaceFunction", sh, func(t *testing.T, e *answerEnv) { create(t, e.c, e.api, inNamespace("e1", function("grows"))) },

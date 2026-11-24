@@ -8,9 +8,11 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // The node commands besides the log reads (FEAT-0002 F250): each acts where the namespace runs.
@@ -37,10 +39,15 @@ type Commands struct {
 	Apps        AppRetrier
 	Volumes     VolumeDeleter
 	Admissions  []admission.Admission // the node-state checks before a write (NodeState)
-	// Backup reports the node's platform backup (F251); nil ⇒ the node runs none.
-	Backup func(ctx context.Context) (v1.NodeBackup, error)
-	// Hold releases the node's namespace holds and returns its quarantined data.
+	// Backup reads the node's platform backup (F251); nil ⇒ the node runs none.
+	Backup Backups
+	// Hold reads and releases the node's holds and returns its quarantined data.
 	Hold Holder
+}
+
+// Backups reads a platform backup's status (controlplane.BackupStatuser).
+type Backups interface {
+	Status(ctx context.Context) (runner.Status, error)
 }
 
 // DeadLetterRouter is the dead-letter store the API reads, lists and discards with: a namespace that a worker node runs
@@ -177,8 +184,7 @@ type Holder interface {
 }
 
 // HoldRouter releases a namespace's hold and returns its quarantined data on the node that runs the namespace (F250).
-// The status and the release of the platform's hold stay this process's own: a worker node's own API answers them for
-// that node.
+// The status and the release of the platform's hold are this process's own; a worker node's are behind Nodes.
 type HoldRouter struct {
 	router
 	Holder
@@ -229,4 +235,80 @@ func (r HoldRouter) ReturnQuarantined(ctx context.Context, q hold.QuarantineRetu
 	}
 	_, err = r.calls.Do(ctx, node, Call{Kind: CallReturnQuarantined, Namespace: q.Namespace, Body: body})
 	return err
+}
+
+// Nodes reads and releases a worker node's own hold and reads its platform backup, by the node's name (F250): each side
+// has its own hold and its own backup (decision 10). The control plane's own node is this process.
+type Nodes struct {
+	calls  *Calls
+	st     store.Store
+	local  v1.ObjectName
+	hold   Holder
+	backup Backups
+}
+
+// HoldStatus is the evidence of node's hold.
+func (n Nodes) HoldStatus(ctx context.Context, node v1.ObjectName) (hold.Evidence, error) {
+	if node == n.local {
+		return n.hold.Status(ctx)
+	}
+	var out hold.Evidence
+	err := n.ask(ctx, node, Call{Kind: CallHoldStatus}, &out)
+	return out, err
+}
+
+// ReleaseHold releases node's hold.
+func (n Nodes) ReleaseHold(ctx context.Context, node v1.ObjectName, advance []string) error {
+	if node == n.local {
+		return n.hold.Release(ctx, advance)
+	}
+	body, err := json.Marshal(advance)
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, "multinode.ReleaseHold", "marshal")
+	}
+	return n.ask(ctx, node, Call{Kind: CallReleaseHold, Body: body}, nil)
+}
+
+// BackupStatus is the status of node's platform backup; the zero Status is a node that runs none.
+func (n Nodes) BackupStatus(ctx context.Context, node v1.ObjectName) (runner.Status, error) {
+	var out runner.Status
+	if node == n.local {
+		if n.backup == nil {
+			return out, nil
+		}
+		return n.backup.Status(ctx)
+	}
+	err := n.ask(ctx, node, Call{Kind: CallBackupStatus}, &out)
+	return out, err
+}
+
+// ask sends c to node, a declared WorkerNode, and decodes its answer into out, unless nil.
+//
+//nolint:forbidigo // out is one of the node commands' typed answers
+func (n Nodes) ask(ctx context.Context, node v1.ObjectName, c Call, out any) error {
+	const op = "multinode.Nodes"
+	_, err := n.st.Get(ctx, v1.KindWorkerNode.GVK(), "", node)
+	if fault.KindOf(err) == fault.NotFound {
+		return fault.NotFoundf(op, "no WorkerNode %s is declared", node)
+	}
+	if err != nil {
+		return err
+	}
+	a, err := n.calls.Do(ctx, node, c)
+	if err != nil || out == nil {
+		return err
+	}
+	if err := json.Unmarshal(a.Body, out); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "decode worker node %s's answer", node)
+	}
+	return nil
+}
+
+// NodeBackup is what a WorkerNode's status keeps of st, its node's platform backup.
+func NodeBackup(st runner.Status) v1.NodeBackup {
+	out := v1.NodeBackup{Held: st.Held, RPORisk: st.RPORisk, LastSuccessTime: st.LastSuccessTime, NextRunTime: st.NextRunTime}
+	if st.LastFailure != nil {
+		out.LastFailure = st.LastFailure.Error
+	}
+	return out
 }

@@ -348,6 +348,7 @@ type quarantineReturnInput struct {
 }
 
 type holdReleaseInput struct {
+	NodeQuery
 	Body struct {
 		Advance    []string           `json:"advance,omitempty" doc:"With the release of the platform's hold: the blob EventSources, each as <namespace>/<name>, whose pending objects the release marks seen instead of firing them."`
 		Namespaces []v1.NamespaceName `json:"namespaces,omitempty" doc:"The namespaces whose hold to release, instead of the platform's: the hold for its data that funcd restore run sets on a namespace with a BackupSchedule, and the hold that an in-place Restore keeps when its load does not complete."`
@@ -364,8 +365,9 @@ func drForbidden(what string) ErrorCase {
 // (ADR-0228 Decision 5).
 func releaseHoldCases() []ErrorCase {
 	return slices.Concat([]ErrorCase{unauthorized(), drForbidden("release a hold"),
-		problem(fault.Invalid, "The body sets both advance and namespaces: advance applies to the release of the "+
-			"platform's hold only.", "Release the platform and the namespaces in two calls."),
+		problem(fault.Invalid, "The body sets namespaces beside advance or the node parameter, which apply to the release "+
+			"of a whole funcd's hold only.", "Release the hold and the namespaces in two calls; a namespace's worker node "+
+			"is known."),
 		problem(fault.Invalid, "An entry of advance does not name, as <namespace>/<name>, an EventSource with a blob event.",
 			"Name only blob EventSources, as funcdctl hold status lists them under pending."),
 		problem(fault.Conflict, "The body names no namespace, and the platform is not held.",
@@ -375,7 +377,7 @@ func releaseHoldCases() []ErrorCase {
 		problem(fault.Conflict, "A namespace of the body is held by an in-place Restore that is Pending or Running; the "+
 			"namespaces before it are released.", "Release the namespaces after it again; release this one once the "+
 			"Restore has ended."),
-		badQuery()}, bodyCases())
+		nodeAway(), badQuery()}, nodeQueryCases(), bodyCases())
 }
 
 // returnQuarantinedCases are the answers of a return of quarantined data (ADR-0288 Decision 6).
@@ -396,22 +398,29 @@ func returnQuarantinedCases() []ErrorCase {
 			"Delete what the object holds, if it is not needed, then return its data."),
 		problem(fault.Unavailable, "This funcd server keeps no quarantine of that kind, such as of volumes while "+
 			"volumes are off.", "Check the kind: funcdctl hold status lists the entries of the quarantine."),
-		badQuery()}, bodyCases())
+		nodeAway(), badQuery()}, bodyCases())
 }
 
 // RegisterHold registers the hold routes (ADR-0206 Decision 8), cluster-scoped and admin-only as ADR-0205's
 // backup status: GET …/hold authorizes get on WorkerNode, POST …/hold/release update; a release of namespaces
 // (ADR-0222 Decision 8) authorizes update on the Namespace instead.
-func RegisterHold(api huma.API, h Holder, authz auth.Authorizer) {
+func RegisterHold(api huma.API, h Holder, nodes Nodes, authz auth.Authorizer) {
 	const base = "/apis/funcd.io/v1alpha1/hold"
 	huma.Register(api, Describe(huma.Operation{
 		OperationID: "getHold", Method: http.MethodGet, Path: base, Tags: []string{"Hold"},
-	}, "Read the hold and its evidence", unauthorized(), drForbidden("read the hold"),
-	), func(ctx context.Context, _ *struct{}) (*holdStatusOutput, error) {
+	}, "Read the hold and its evidence", append([]ErrorCase{unauthorized(), drForbidden("read the hold")},
+		nodeQueryCases()...)...,
+	), func(ctx context.Context, in *NodeQuery) (*holdStatusOutput, error) {
 		if err := authorizeHold(ctx, authz, auth.VerbGet, v1.KindWorkerNode); err != nil {
 			return nil, wrapFaultError(err)
 		}
-		st, err := h.Status(ctx)
+		var st hold.Evidence
+		var err error
+		if in.Node == "" {
+			st, err = h.Status(ctx)
+		} else {
+			st, err = nodes.HoldStatus(ctx, in.Node)
+		}
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -422,8 +431,8 @@ func RegisterHold(api huma.API, h Holder, authz auth.Authorizer) {
 	}, "Release the hold of the platform or of namespaces", releaseHoldCases()...,
 	), func(ctx context.Context, in *holdReleaseInput) (*struct{}, error) {
 		if nss := in.Body.Namespaces; len(nss) > 0 {
-			if len(in.Body.Advance) > 0 {
-				return nil, wrapFaultError(fault.Invalidf("controlplane.ReleaseHold", "advance applies to the platform's release, not to a namespace's"))
+			if len(in.Body.Advance) > 0 || in.Node != "" {
+				return nil, wrapFaultError(fault.Invalidf("controlplane.ReleaseHold", "advance and node apply to the platform's release, not to a namespace's"))
 			}
 			if err := authorizeHold(ctx, authz, auth.VerbUpdate, v1.KindNamespace); err != nil {
 				return nil, wrapFaultError(err)
@@ -432,6 +441,9 @@ func RegisterHold(api huma.API, h Holder, authz auth.Authorizer) {
 		}
 		if err := authorizeHold(ctx, authz, auth.VerbUpdate, v1.KindWorkerNode); err != nil {
 			return nil, wrapFaultError(err)
+		}
+		if in.Node != "" {
+			return nil, wrapFaultError(nodes.ReleaseHold(ctx, in.Node, in.Body.Advance))
 		}
 		return nil, wrapFaultError(h.Release(ctx, in.Body.Advance))
 	})
@@ -473,4 +485,4 @@ func (stubHolder) ReleaseNamespaces(context.Context, []v1.NamespaceName) error  
 func (stubHolder) ReturnQuarantined(context.Context, hold.QuarantineReturn) error { return nil }
 
 // RegisterStubHold registers the hold routes with inert deps for spec generation.
-func RegisterStubHold(api huma.API) { RegisterHold(api, stubHolder{}, stubLogAuthorizer{}) }
+func RegisterStubHold(api huma.API) { RegisterHold(api, stubHolder{}, noNodes{}, stubLogAuthorizer{}) }

@@ -1,11 +1,9 @@
 package funcd
 
 import (
-	"context"
 	"net/http"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
@@ -33,21 +31,6 @@ func readOnly(next http.Handler) http.Handler {
 	})
 }
 
-// nodeBackup reports a worker node's platform backup to its control plane (FEAT-0002 F251).
-func nodeBackup(r *runner.Runner) func(context.Context) (v1.NodeBackup, error) {
-	return func(ctx context.Context) (v1.NodeBackup, error) {
-		st, err := r.Status(ctx)
-		if err != nil {
-			return v1.NodeBackup{}, err
-		}
-		out := v1.NodeBackup{Held: st.Held, RPORisk: st.RPORisk, LastSuccessTime: st.LastSuccessTime, NextRunTime: st.NextRunTime}
-		if st.LastFailure != nil {
-			out.LastFailure = st.LastFailure.Error
-		}
-		return out, nil
-	}
-}
-
 // nodeParts are the parts of the control plane's API that act on a node's state (FEAT-0002 F250), with the join-token
 // minter.
 type nodeParts struct {
@@ -58,14 +41,15 @@ type nodeParts struct {
 	apps        controlplane.AppRetrier
 	volumes     controlplane.VolumeDeleter
 	hold        controlplane.Holder
+	backup      controlplane.BackupStatuser
 	joinTokens  controlplane.JoinTokenMinter
+	nodes       controlplane.Nodes
 }
 
 // routeNodeParts gives own, this process's parts, to a worker node's agent, which answers the node calls with them and
 // with checks, the node's own checks before a write. On a control plane it wraps them in the routers that send a
 // namespace's call to the node that runs it.
 func (p *Platform) routeNodeParts(own nodeParts, holdSvc *controlplane.HoldService, checks []admission.Admission) nodeParts {
-	c := p.cfg
 	if p.agent != nil {
 		p.agent.SetLogs(own.logs, own.runLogs)
 		cmds := multinode.Commands{DeadLetters: own.deadLetters, Apps: own.apps, Volumes: own.volumes, Admissions: checks,
@@ -73,8 +57,8 @@ func (p *Platform) routeNodeParts(own nodeParts, holdSvc *controlplane.HoldServi
 		if p.eventing.sensorReconciler != nil {
 			cmds.Replayer = p.eventing.sensorReconciler
 		}
-		if c.backupRunner != nil {
-			cmds.Backup = nodeBackup(c.backupRunner)
+		if own.backup != nil {
+			cmds.Backup = own.backup
 		}
 		p.agent.SetCommands(cmds)
 	}
@@ -85,7 +69,7 @@ func (p *Platform) routeNodeParts(own nodeParts, holdSvc *controlplane.HoldServi
 	out.logs, out.runLogs = p.cluster.Logs(own.logs), p.cluster.RunLogs(own.runLogs)
 	out.deadLetters, out.replayer = p.cluster.DeadLetters(own.deadLetters), p.cluster.Replayer(own.replayer)
 	out.apps, out.volumes, out.hold = p.cluster.AppRetrier(own.apps), p.cluster.Volumes(own.volumes), p.cluster.Hold(holdSvc)
-	out.joinTokens = p.cluster
+	out.joinTokens, out.nodes = p.cluster, p.cluster.Nodes(holdSvc, own.backup)
 	return out
 }
 

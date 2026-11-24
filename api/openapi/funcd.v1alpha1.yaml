@@ -9352,6 +9352,17 @@ paths:
   /apis/funcd.io/v1alpha1/hold:
     get:
       operationId: getHold
+      parameters:
+        - description: "The WorkerNode to answer for. Left out, the funcd that serves this API: the control plane, or a worker node on its own API."
+          explode: false
+          in: query
+          name: node
+          schema:
+            description: "The WorkerNode to answer for. Left out, the funcd that serves this API: the control plane, or a worker node on its own API."
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       responses:
         "200":
           content:
@@ -9379,6 +9390,36 @@ paths:
             - type: urn:funcd:problem:forbidden
               when: "The credential's role does not allow it to read the hold: only an admin's does."
               fix: Use an admin's credential.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: The node parameter names no WorkerNode. funcdctl get workernodes lists them."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: The node parameter names no WorkerNode.
+              fix: funcdctl get workernodes lists them.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The node parameter is not a DNS-1123 label. Send a WorkerNode's name, or leave node out."
+          x-funcd-cases:
+            - type: about:blank
+              when: The node parameter is not a DNS-1123 label.
+              fix: Send a WorkerNode's name, or leave node out.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The node parameter names a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The node parameter names a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -9388,6 +9429,17 @@ paths:
   /apis/funcd.io/v1alpha1/hold/release:
     post:
       operationId: releaseHold
+      parameters:
+        - description: "The WorkerNode to answer for. Left out, the funcd that serves this API: the control plane, or a worker node on its own API."
+          explode: false
+          in: query
+          name: node
+          schema:
+            description: "The WorkerNode to answer for. Left out, the funcd that serves this API: the control plane, or a worker node on its own API."
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -9403,13 +9455,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/FaultError"
           description: |-
-            - `urn:funcd:problem:invalid`: The body sets both advance and namespaces: advance applies to the release of the platform's hold only. Release the platform and the namespaces in two calls.
+            - `urn:funcd:problem:invalid`: The body sets namespaces beside advance or the node parameter, which apply to the release of a whole funcd's hold only. Release the hold and the namespaces in two calls; a namespace's worker node is known.
             - `urn:funcd:problem:invalid`: An entry of advance does not name, as <namespace>/<name>, an EventSource with a blob event. Name only blob EventSources, as funcdctl hold status lists them under pending.
             - `about:blank`: The body is missing or is not JSON. Send a JSON body.
           x-funcd-cases:
             - type: urn:funcd:problem:invalid
-              when: "The body sets both advance and namespaces: advance applies to the release of the platform's hold only."
-              fix: Release the platform and the namespaces in two calls.
+              when: The body sets namespaces beside advance or the node parameter, which apply to the release of a whole funcd's hold only.
+              fix: Release the hold and the namespaces in two calls; a namespace's worker node is known.
             - type: urn:funcd:problem:invalid
               when: An entry of advance does not name, as <namespace>/<name>, an EventSource with a blob event.
               fix: Name only blob EventSources, as funcdctl hold status lists them under pending.
@@ -9436,6 +9488,16 @@ paths:
             - type: urn:funcd:problem:forbidden
               when: "The credential's role does not allow it to release a hold: only an admin's does."
               fix: Use an admin's credential.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: The node parameter names no WorkerNode. funcdctl get workernodes lists them."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: The node parameter names no WorkerNode.
+              fix: funcdctl get workernodes lists them.
         "409":
           content:
             application/problem+json:
@@ -9482,14 +9544,33 @@ paths:
                 $ref: "#/components/schemas/FaultError"
           description: |-
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
+            - `about:blank`: The node parameter is not a DNS-1123 label. Send a WorkerNode's name, or leave node out.
             - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
           x-funcd-cases:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
               fix: Send only the parameters that the operation lists.
             - type: about:blank
+              when: The node parameter is not a DNS-1123 label.
+              fix: Send a WorkerNode's name, or leave node out.
+            - type: about:blank
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
               fix: Correct the field at the location that the detail gives.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: |-
+            - `urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready.
+            - `urn:funcd:problem:unavailable`: The node parameter names a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready.
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+            - type: urn:funcd:problem:unavailable
+              when: The node parameter names a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -10467,8 +10548,13 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:unavailable`: funcd is held, or the App's namespace is held for its data or while a Restore loads it, so funcd calls no hook. Retry once the hold is released; funcdctl hold status shows it."
+          description: |-
+            - `urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready.
+            - `urn:funcd:problem:unavailable`: funcd is held, or the App's namespace is held for its data or while a Restore loads it, so funcd calls no hook. Retry once the hold is released; funcdctl hold status shows it.
           x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
             - type: urn:funcd:problem:unavailable
               when: funcd is held, or the App's namespace is held for its data or while a Restore loads it, so funcd calls no hook.
               fix: Retry once the hold is released; funcdctl hold status shows it.
@@ -12744,6 +12830,16 @@ paths:
             - type: about:blank
               when: The namespace in the path is not a DNS-1123 label.
               fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -12809,6 +12905,16 @@ paths:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
               fix: Send only the parameters that the operation lists.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -12882,6 +12988,16 @@ paths:
             - type: about:blank
               when: The namespace in the path is not a DNS-1123 label.
               fix: Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -12997,9 +13113,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/FaultError"
           description: |-
+            - `urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready.
             - `urn:funcd:problem:unavailable`: The platform is held, or the namespace is held for its data or while a Restore loads it, so funcd delivers no event. Retry once the hold is released: funcdctl hold release releases the platform's hold, and funcdctl hold release --namespace the namespace's, once any Restore that loads it has ended.
             - `urn:funcd:problem:unavailable`: The delivery failed again, such as on a Function that is missing, has no ready worker or answers an error; the dead letter stays, with its attempts reset and the new reason. Correct what the dead letter's reason names, then retry.
           x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
             - type: urn:funcd:problem:unavailable
               when: The platform is held, or the namespace is held for its data or while a Restore loads it, so funcd delivers no event.
               fix: "Retry once the hold is released: funcdctl hold release releases the platform's hold, and funcdctl hold release --namespace the namespace's, once any Restore that loads it has ended."
@@ -14797,6 +14917,16 @@ paths:
             - type: about:blank
               when: The limit parameter is not an integer.
               fix: Send limit as a whole number.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -16738,6 +16868,16 @@ paths:
             - type: about:blank
               when: The limit parameter is not an integer.
               fix: Send limit as a whole number.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -18697,6 +18837,16 @@ paths:
             - type: about:blank
               when: The limit parameter is not an integer.
               fix: Send limit as a whole number.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -25138,6 +25288,16 @@ paths:
             - type: about:blank
               when: The limit parameter is not an integer.
               fix: Send limit as a whole number.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -25236,6 +25396,16 @@ paths:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
               fix: Send only the parameters that the operation lists.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -25926,6 +26096,16 @@ paths:
             - type: about:blank
               when: The limit parameter is not an integer.
               fix: Send limit as a whole number.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -27212,6 +27392,16 @@ paths:
             - type: about:blank
               when: The limit parameter is not an integer.
               fix: Send limit as a whole number.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
+          x-funcd-cases:
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -27532,6 +27722,17 @@ paths:
   /apis/funcd.io/v1alpha1/platformbackup:
     get:
       operationId: getPlatformBackup
+      parameters:
+        - description: "The WorkerNode to answer for. Left out, the funcd that serves this API: the control plane, or a worker node on its own API."
+          explode: false
+          in: query
+          name: node
+          schema:
+            description: "The WorkerNode to answer for. Left out, the funcd that serves this API: the control plane, or a worker node on its own API."
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       responses:
         "200":
           content:
@@ -27559,16 +27760,41 @@ paths:
             - type: urn:funcd:problem:forbidden
               when: "The credential's role does not allow it to read the status of the platform backup: only an admin's does."
               fix: Use an admin's credential.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`urn:funcd:problem:not-found`: The node parameter names no WorkerNode. funcdctl get workernodes lists them."
+          x-funcd-cases:
+            - type: urn:funcd:problem:not-found
+              when: The node parameter names no WorkerNode.
+              fix: funcdctl get workernodes lists them.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: "`about:blank`: The node parameter is not a DNS-1123 label. Send a WorkerNode's name, or leave node out."
+          x-funcd-cases:
+            - type: about:blank
+              when: The node parameter is not a DNS-1123 label.
+              fix: Send a WorkerNode's name, or leave node out.
         "503":
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:unavailable`: funcd could not list backup.target, where the platform backup writes: the bucket does not exist, the URL is wrong, or the target fails. Check backup.target and the key of backup.credentialsFile, then read the status again."
+          description: |-
+            - `urn:funcd:problem:unavailable`: funcd could not list backup.target, where the platform backup writes: the bucket does not exist, the URL is wrong, or the target fails. Check backup.target and the key of backup.credentialsFile, then read the status again.
+            - `urn:funcd:problem:unavailable`: The node parameter names a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready.
           x-funcd-cases:
             - type: urn:funcd:problem:unavailable
               when: "funcd could not list backup.target, where the platform backup writes: the bucket does not exist, the URL is wrong, or the target fails."
               fix: Check backup.target and the key of backup.credentialsFile, then read the status again.
+            - type: urn:funcd:problem:unavailable
+              when: The node parameter names a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []
@@ -27691,11 +27917,16 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/FaultError"
-          description: "`urn:funcd:problem:unavailable`: This funcd server keeps no quarantine of that kind, such as of volumes while volumes are off. Check the kind: funcdctl hold status lists the entries of the quarantine."
+          description: |-
+            - `urn:funcd:problem:unavailable`: This funcd server keeps no quarantine of that kind, such as of volumes while volumes are off. Check the kind: funcdctl hold status lists the entries of the quarantine.
+            - `urn:funcd:problem:unavailable`: The namespace runs on a worker node that is offline. Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready.
           x-funcd-cases:
             - type: urn:funcd:problem:unavailable
               when: This funcd server keeps no quarantine of that kind, such as of volumes while volumes are off.
               fix: "Check the kind: funcdctl hold status lists the entries of the quarantine."
+            - type: urn:funcd:problem:unavailable
+              when: The namespace runs on a worker node that is offline.
+              fix: "Retry once the node polls the control plane again: funcdctl get workernodes shows it Ready."
       security:
         - bearer: []
         - apiKey: []

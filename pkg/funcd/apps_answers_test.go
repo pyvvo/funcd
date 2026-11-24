@@ -69,7 +69,8 @@ func TestAppAnswersMatrix(t *testing.T) {
 	t.Parallel()
 	hd, err := hold.Open(t.TempDir())
 	require.NoError(t, err)
-	e := newAnswerEnv(t, funcd.WithHold(hd))
+	e := newAnswerEnv(t, funcd.WithHold(hd), asCluster(t))
+	placeOnOfflineNode(t, e)
 	require.NoError(t, hd.HoldNamespace("held", hold.Marker{Reason: hold.ReasonData, Since: v1.NewTimestamp(time.Now())}))
 	image := "file://" + filepath.Join(artifact(t, ""), "handler.mjs")
 	e.workers.serve(t, "migrate", func(w http.ResponseWriter, _ *http.Request) {
@@ -225,6 +226,7 @@ func TestAppAnswersMatrix(t *testing.T) {
 			{op: "retryApp", when: "is held", on: e, ask: ask{what: "a held namespace", method: http.MethodPost,
 				path: strings.Replace(apps, "/default/", "/held/", 1) + "/any/retry", token: answersAdmin,
 				detail: "funcd is held: app any calls no hook"}},
+			awayRow("retryApp", e, http.MethodPost, "apps/any/retry"),
 		},
 	)
 	runMatrix(t, rows)

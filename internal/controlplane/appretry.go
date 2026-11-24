@@ -35,7 +35,7 @@ func RegisterAppRetry(api huma.API, retrier AppRetrier, authz auth.Authorizer) {
 		Tags:                         []string{"App"},
 		RejectUnknownQueryParameters: true,
 	}, "Retry the failed hook of an App", unauthorized(), forbidden("update Apps in the namespace"),
-		app.notFound(), badPath(app.path()), badQuery(),
+		app.notFound(), badPath(app.path()), badQuery(), nodeAway(),
 		problem(fault.Conflict, "The App has no hook to call again: its latest revision neither failed on a "+
 			"pre-hook nor is current with a failed post-hook.",
 			"Read the App's status for what holds its rollout; only a failed hook can be retried."),

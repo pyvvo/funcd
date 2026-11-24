@@ -66,7 +66,7 @@ func RegisterDeadLetters(api huma.API, store deadletter.Store, replayer Replayer
 		Method:      http.MethodGet,
 		Path:        base,
 		Tags:        []string{"DeadLetter"},
-	}, "List the dead letters of a namespace", unauthorized(), read, badPath("namespace"),
+	}, "List the dead letters of a namespace", unauthorized(), read, badPath("namespace"), nodeAway(),
 	), func(ctx context.Context, in *deadLetterListInput) (*deadLetterListOutput, error) {
 		if err := authorizeDeadLetters(ctx, authz, in.Namespace, auth.VerbGet); err != nil {
 			return nil, wrapFaultError(err)
@@ -85,7 +85,7 @@ func RegisterDeadLetters(api huma.API, store deadletter.Store, replayer Replayer
 		Method:      http.MethodGet,
 		Path:        base + "/{id}",
 		Tags:        []string{"DeadLetter"},
-	}, "Read a dead letter", unauthorized(), read, missing, badPath("namespace"),
+	}, "Read a dead letter", unauthorized(), read, missing, badPath("namespace"), nodeAway(),
 	), func(ctx context.Context, in *deadLetterItemInput) (*deadLetterItemOutput, error) {
 		if err := authorizeDeadLetters(ctx, authz, in.Namespace, auth.VerbGet); err != nil {
 			return nil, wrapFaultError(err)
@@ -103,7 +103,7 @@ func RegisterDeadLetters(api huma.API, store deadletter.Store, replayer Replayer
 		Path:        base + "/{id}/replay",
 		Tags:        []string{"DeadLetter"},
 	}, "Replay a dead letter", slices.Concat([]ErrorCase{unauthorized(), write, missing, badPath("namespace"),
-		badQuery()}, replayCases())...,
+		badQuery(), nodeAway()}, replayCases())...,
 	), func(ctx context.Context, in *deadLetterItemInput) (*struct{}, error) {
 		if err := authorizeDeadLetters(ctx, authz, in.Namespace, auth.VerbDelete); err != nil {
 			return nil, wrapFaultError(err)
@@ -116,7 +116,7 @@ func RegisterDeadLetters(api huma.API, store deadletter.Store, replayer Replayer
 		Method:      http.MethodDelete,
 		Path:        base + "/{id}",
 		Tags:        []string{"DeadLetter"},
-	}, "Discard a dead letter", unauthorized(), write, badPath("namespace"), badQuery(),
+	}, "Discard a dead letter", unauthorized(), write, badPath("namespace"), badQuery(), nodeAway(),
 	), func(ctx context.Context, in *deadLetterItemInput) (*struct{}, error) {
 		if err := authorizeDeadLetters(ctx, authz, in.Namespace, auth.VerbDelete); err != nil {
 			return nil, wrapFaultError(err)

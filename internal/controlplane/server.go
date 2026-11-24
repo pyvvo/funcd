@@ -54,6 +54,9 @@ type Deps struct {
 	// Hold is the platform hold's status and release (ADR-0206). Optional; when set, NewServer registers
 	// GET …/hold and POST …/hold/release.
 	Hold Holder
+	// Nodes reaches the worker nodes' own holds and platform backups (FEAT-0002 F250). Optional; nil ⇒ no worker node
+	// joins this funcd.
+	Nodes Nodes
 	// Planner plans a dry-run App write (ADR-0220). Optional; nil ⇒ a dry-run App create or replace answers
 	// fault.Unavailable.
 	Planner AppPlanner
@@ -107,10 +110,14 @@ func NewServer(d Deps) (http.Handler, error) {
 	if d.AppRetrier != nil {
 		RegisterAppRetry(api, d.AppRetrier, d.Authorizer)
 	}
-	RegisterPlatformBackup(api, d.Backup, d.Authorizer) // ADR-0205: the platform backup status
+	nodes := d.Nodes
+	if nodes == nil {
+		nodes = noNodes{}
+	}
+	RegisterPlatformBackup(api, d.Backup, nodes, d.Authorizer) // ADR-0205: the platform backup status
 	// ADR-0206: the hold's evidence and its release, admin-only.
 	if d.Hold != nil {
-		RegisterHold(api, d.Hold, d.Authorizer)
+		RegisterHold(api, d.Hold, nodes, d.Authorizer)
 	}
 	if d.Volumes != nil {
 		RegisterVolumes(api, d.Volumes, d.Authorizer)

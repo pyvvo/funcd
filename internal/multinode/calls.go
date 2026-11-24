@@ -77,6 +77,9 @@ func (c *Calls) Do(ctx context.Context, node v1.ObjectName, call Call) (Answer, 
 	q := c.queue(node)
 	if q.polls == 0 && c.now().Sub(q.lastPoll) > callOffline {
 		c.mu.Unlock()
+		if call.Namespace == "" {
+			return Answer{}, fault.Unavailablef(op, "worker node %s is offline", node)
+		}
 		return Answer{}, fault.Unavailablef(op, "worker node %s of namespace %s is offline", node, call.Namespace)
 	}
 	q.pending = append(q.pending, p)

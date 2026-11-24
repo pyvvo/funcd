@@ -224,9 +224,12 @@ func TestDisasterRecoveryAnswersMatrix(t *testing.T) {
 
 			{op: "releaseHold", on: held, ask: ask{what: "a namespace held for its data", method: http.MethodPost,
 				path: release, token: answersAdmin, body: `{"namespaces":["spare"]}`}},
-			{op: "releaseHold", when: "sets both advance and namespaces", on: held, ask: ask{
-				what: "an advance beside namespaces", method: http.MethodPost, path: release, token: answersAdmin,
-				body: `{"namespaces":["elsewhere"],"advance":["default/files"]}`, detail: "advance applies to the platform's"}},
+			{op: "releaseHold", when: "sets namespaces beside advance or the node parameter", on: held, ask: ask{
+				what: "a node beside namespaces", method: http.MethodPost, path: release + "?node=vm1", token: answersAdmin,
+				body: `{"namespaces":["elsewhere"]}`, detail: "advance and node apply to the platform's release"}},
+			{op: "releaseHold", when: "The namespace runs on a worker node that is offline", on: held, ask: ask{
+				what: "a namespace of an offline worker node", method: http.MethodPost, path: release, token: answersAdmin,
+				body: `{"namespaces":["e1"]}`, detail: "worker node vm1 of namespace e1 is offline"}},
 			{op: "releaseHold", when: "An entry of advance", on: held, ask: ask{what: "an advance that names no EventSource",
 				method: http.MethodPost, path: release, token: answersAdmin, body: `{"advance":["files"]}`,
 				detail: `advance "files": want`}},
@@ -316,6 +319,21 @@ func TestDisasterRecoveryAnswersMatrix(t *testing.T) {
 				token: answersAdmin, detail: "list the backup target: the bucket does not exist"}},
 		},
 	)
+	for _, r := range []struct{ op, method, path, body string }{
+		{"getHold", http.MethodGet, apis + "/hold", ""}, {"releaseHold", http.MethodPost, release, `{}`},
+		{"getPlatformBackup", http.MethodGet, apis + "/platformbackup", ""},
+	} {
+		row := func(when, node, detail string) answerRow {
+			return answerRow{op: r.op, when: when, on: held, ask: ask{what: "node " + node, method: r.method,
+				path: r.path + "?node=" + node, token: answersAdmin, body: r.body, detail: detail}}
+		}
+		rows = append(rows, row("names no WorkerNode", "ghost", "no WorkerNode ghost is declared"),
+			row("names a worker node that is offline", "vm1", "worker node vm1 is offline"),
+			row("The node parameter is not a DNS-1123", "Not_A_Label", "query.node"))
+	}
+	rows = append(rows, answerRow{op: "returnQuarantined", when: "runs on a worker node that is offline", on: held, ask: ask{
+		what: "a namespace of an offline worker node", method: http.MethodPost, path: giveBack, token: answersAdmin,
+		body: `{"kind":"KVStore","namespace":"e1","name":"old"}`, detail: "is offline"}})
 	rows = append(rows, offlineRow("createRestore", held, nil, ask{what: "an in-place Restore whose worker node is offline",
 		method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/namespaces/e1/restores", body: jsonOf(t, drRestore("e1", "away", inPlace))}))
 	runMatrix(t, rows)

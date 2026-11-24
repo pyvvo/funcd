@@ -10,8 +10,8 @@ import (
 )
 
 // PlatformBackup reads the platform backup's status (ADR-0205); only an admin may.
-func (c *Client) PlatformBackup(ctx context.Context) (runner.Status, error) {
-	body, err := c.do(ctx, http.MethodGet, c.baseURL+apiPrefix+"/platformbackup", nil)
+func (c *Client) PlatformBackup(ctx context.Context, opts ...NodeOption) (runner.Status, error) {
+	body, err := c.do(ctx, http.MethodGet, c.baseURL+apiPrefix+"/platformbackup"+nodeQuery(opts), nil)
 	if err != nil {
 		return runner.Status{}, err
 	}
