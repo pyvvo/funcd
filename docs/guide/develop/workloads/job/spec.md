@@ -446,6 +446,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `start` | 409 | `urn:funcd:problem:conflict` | Another run of the namespace holds the name: a run of another Job, or one with another input. | Start the run under another name, or with no name, so that funcd names it. |
 | `start` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
 | `start` | 413 | `urn:funcd:problem:payload-too-large` | The run's input is larger than job.payloadLimit. | Pass large data by reference, such as the key of an object in a Bucket. |
+| `start` | 422 | none | The input does not match the Job's input schema: funcd answers as a Function's call answers an input off its contract, with the contract's `{"error", "details"}` body, which the error keeps as its detail. | Send an input that the Job's contract takes. |
 | `get` | 403 | `urn:funcd:problem:forbidden` | The Function binds no Job under the alias. | Start or read a run under an alias of spec.bindings.job, or add the alias there. |
 | `get` | 403 | `urn:funcd:problem:forbidden` | Cedar denies the Function job::start or job::read on the bound Job, as when a namespace Policy forbids it. | Ask the operator to lift the forbid. |
 | `get` | 404 | `urn:funcd:problem:not-found` | No run of the bound Job has the name: the name is another Job's run's, or job.retention removed the run. | Read a run that ctx.job.start returned, before job.retention removes it. |
@@ -472,6 +473,7 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `start` | 409 | `urn:funcd:problem:conflict` | Another run of the namespace holds the name: a run of another Job, or one with another input. | Start the run under another name, or with no name, so that funcd names it. |
 | `start` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
 | `start` | 413 | `urn:funcd:problem:payload-too-large` | The run's input is larger than job.payloadLimit. | Pass large data by reference, such as the key of an object in a Bucket. |
+| `start` | 422 | none | The input does not match the Job's input schema: funcd answers as a Function's call answers an input off its contract, with the contract's `{"error", "details"}` body, which the error keeps as its detail. | Send an input that the Job's contract takes. |
 | `get` | 403 | `urn:funcd:problem:forbidden` | The Function binds no Job under the alias. | Start or read a run under an alias of spec.bindings.job, or add the alias there. |
 | `get` | 403 | `urn:funcd:problem:forbidden` | Cedar denies the Function job::start or job::read on the bound Job, as when a namespace Policy forbids it. | Ask the operator to lift the forbid. |
 | `get` | 404 | `urn:funcd:problem:not-found` | No run of the bound Job has the name: the name is another Job's run's, or job.retention removed the run. | Read a run that ctx.job.start returned, before job.retention removes it. |

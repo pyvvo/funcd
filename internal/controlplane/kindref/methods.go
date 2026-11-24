@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +22,14 @@ import (
 type methodEndpoint struct {
 	Endpoint string              // a pattern of local.Endpoints, or "" for a method that calls no endpoint
 	Except   []*fault.KnownCause // the endpoint's causes that the method does not surface
+	Relayed  []relayedAnswer     // answers the method surfaces that are no declared cause of its endpoint
+}
+
+// relayedAnswer is an answer that an endpoint relays as a Function's call answers it, rather than as a declared cause:
+// a start's input off its Job's contract (ADR-0349 Decision 4, amended 2026-11-24).
+type relayedAnswer struct {
+	Status    int
+	When, Fix string
 }
 
 // methods maps a language ("TypeScript", "Python") and a method ("kv.put", "kv.put_if_absent"; a method of the
@@ -73,6 +82,11 @@ func methodTable() map[string]map[string]methodEndpoint {
 	sent := func(endpoint string, never ...*fault.KnownCause) methodEndpoint {
 		return methodEndpoint{Endpoint: endpoint, Except: append([]*fault.KnownCause{local.ErrBodyUnreadable}, never...)}
 	}
+	start := sent(jobStart)
+	start.Relayed = []relayedAnswer{{Status: http.StatusUnprocessableEntity,
+		When: "The input does not match the Job's input schema: funcd answers as a Function's call answers an input off " +
+			"its contract, with the contract's `{\"error\", \"details\"}` body, which the error keeps as its detail.",
+		Fix: "Send an input that the Job's contract takes."}}
 	tsQuery := sent(sqlQuery, local.ErrSQLBodyMalformed, local.ErrSQLNoStatements, local.ErrSQLTooManyStatements)
 	pyQuery := sent(sqlQuery, local.ErrSQLNoStatements, local.ErrSQLTooManyStatements)
 	return map[string]map[string]methodEndpoint{
@@ -87,7 +101,7 @@ func methodTable() map[string]map[string]methodEndpoint {
 			"config.get": {}, "config.list": {},
 			"secret.get": secretRead, "secret.list": at(secret), "secret.put": secretWrite, "secret.del": at(secDel),
 			"lake.get": {}, "addon.fetch": sent(addonCall),
-			"job.start": sent(jobStart), "job.get": at(jobGet),
+			"job.start": start, "job.get": at(jobGet),
 		},
 		"Python": {
 			"log": {}, "invoke": sent("POST /invoke/{alias}"), "remaining_ms": {},
@@ -100,7 +114,7 @@ func methodTable() map[string]map[string]methodEndpoint {
 			"config.get": {}, "config.list": {},
 			"secret.get": secretRead, "secret.list": at(secret), "secret.put": secretWrite, "secret.delete": at(secDel),
 			"lake.get": {}, "addon.fetch": sent(addonCall),
-			"job.start": sent(jobStart), "job.get": at(jobGet),
+			"job.start": start, "job.get": at(jobGet),
 		},
 	}
 }
@@ -184,6 +198,10 @@ func (h handlerDocs) failures(lang string, c handlerClient) []string {
 			p := fault.ToProblem(cause.Errorf("", ""))
 			rows = append(rows, "| `"+m.Name+"` | "+strconv.Itoa(p.Status)+" | `"+p.Type+"` | "+reference.Cell(cause.When())+
 				" | "+reference.Cell(cause.Fix())+" |")
+		}
+		for _, a := range entry.Relayed {
+			rows = append(rows, "| `"+m.Name+"` | "+strconv.Itoa(a.Status)+" | none | "+reference.Cell(a.When)+" | "+
+				reference.Cell(a.Fix)+" |")
 		}
 	}
 	if !calls {
