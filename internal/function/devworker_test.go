@@ -39,7 +39,8 @@ func onDevImages(runs bool, why, host string, socks *socketLog) func(*function.D
 // ADR-0346 Decisions 2, 5 and 6: on an image runtime, a worker on an Addon's runtime runs its Revision's image in the
 // container shape, with the local API on a listener of its own and funcd's endpoints by the host it reaches them by,
 // only in the keys the hooks mark, and no host path, as the decider ruled on 2026-11-24 for dev's DuckDB extension
-// folder; a Function on funcd's runtimes beside it keeps the process shape and sets no Image.
+// folder, while a bound config key of that name stays; a Function on funcd's runtimes beside it keeps the process shape
+// and sets no Image.
 func TestDevAddonWorkerSpec(t *testing.T) {
 	t.Parallel()
 	const extDir = "/opt/duckdb-ext"
@@ -59,6 +60,12 @@ func TestDevAddonWorkerSpec(t *testing.T) {
 			cm.Spec.Data = map[string]string{"UPSTREAM": "http://127.0.0.1:7777"}
 			_, err := h.st.Create(context.Background(), cm)
 			require.NoError(t, err)
+			obj, _ = v1.NewObject(v1.KindConfigMap)
+			ext := obj.(*v1.ConfigMap)
+			ext.Name, ext.Namespace, ext.ResourceGroup = "ext", "default", "rg1"
+			ext.Spec.Data = map[string]string{"DUCKDB_EXTENSION_DIRECTORY": "/srv/duckdb"}
+			_, err = h.st.Create(context.Background(), ext)
+			require.NoError(t, err)
 			bind := func(fn *v1.Function) {
 				bindBucket(fn)
 				bindLake(fn)
@@ -66,10 +73,11 @@ func TestDevAddonWorkerSpec(t *testing.T) {
 			}
 			h.create(t, "greeter", func(fn *v1.Function) { onDeno2(fn); bind(fn) })
 			h.create(t, "plain", bind)
-			h.reconcile(t, "greeter")
-			h.reconcile(t, "plain")
-			h.requireReady(t, "greeter")
-			h.requireReady(t, "plain")
+			h.create(t, "configured", func(fn *v1.Function) { onDeno2(fn); fn.Spec.Bindings.Config = []v1.ObjectName{"ext"} })
+			for _, name := range []string{"greeter", "plain", "configured"} {
+				h.reconcile(t, name)
+				h.requireReady(t, name)
+			}
 
 			id := runtime.NewInstanceID("default", "greeter", "greeter-1", 0)
 			spec := h.rt.specOf(id)
@@ -100,6 +108,10 @@ func TestDevAddonWorkerSpec(t *testing.T) {
 			require.Equal(t, "http://127.0.0.1:9000", plain.Env["AWS_ENDPOINT_URL_S3"])
 			require.Equal(t, "127.0.0.1:1", plain.Env["FUNCD_LAKE_LAKE_URL"])
 			require.Equal(t, extDir, plain.Env["DUCKDB_EXTENSION_DIRECTORY"], "a process worker reads dev's folder")
+
+			configured := h.rt.specOf(runtime.NewInstanceID("default", "configured", "configured-1", 0))
+			require.Equal(t, denoImageA, configured.Image)
+			require.Equal(t, "/srv/duckdb", configured.Env["DUCKDB_EXTENSION_DIRECTORY"], "a bound config key of that name stays")
 		})
 	}
 }
