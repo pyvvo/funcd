@@ -108,6 +108,10 @@ func (p *Platform) routeNodeParts(own nodeParts, holdSvc *controlplane.HoldServi
 	return out
 }
 
+// elsewhere reports whether a worker node runs namespace ns (FEAT-0002): a control plane that worker nodes join leaves the
+// namespace's objects, its runs, its Routes and its children to that node.
+func (p *Platform) elsewhere(ns v1.NamespaceName) bool { return p.cluster != nil && p.cluster.Skip(ns) }
+
 // ClusterAddr is the node API's bound address on a control plane that worker nodes join (WithCluster); "" ⇒ none.
 func (p *Platform) ClusterAddr() string {
 	if p.cluster == nil {

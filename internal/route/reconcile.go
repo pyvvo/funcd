@@ -50,6 +50,8 @@ type Deps struct {
 	// (ADR-0163); 0 ⇒ backendRequeue and resyncPeriod.
 	ReferentPollInterval time.Duration
 	ResyncInterval       time.Duration
+	// Skip leaves the Routes of a namespace that a worker node runs to that node's edge (FEAT-0002); nil skips none.
+	Skip func(v1.NamespaceName) bool
 }
 
 // Reconciler drives Route → programmed edge router.
@@ -60,6 +62,7 @@ type Reconciler struct {
 	// backendRequeue and resync are the requeues while a backend is missing and otherwise.
 	backendRequeue time.Duration
 	resync         time.Duration
+	skip           func(v1.NamespaceName) bool
 }
 
 // NewReconciler builds the Route reconciler.
@@ -74,7 +77,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	if l == nil {
 		l = slog.Default()
 	}
-	r := &Reconciler{store: d.Store, routes: d.Routes, logger: l.With("component", "route"), backendRequeue: d.ReferentPollInterval, resync: d.ResyncInterval}
+	r := &Reconciler{store: d.Store, routes: d.Routes, logger: l.With("component", "route"), backendRequeue: d.ReferentPollInterval,
+		resync: d.ResyncInterval, skip: d.Skip}
 	if r.backendRequeue <= 0 {
 		r.backendRequeue = backendRequeue
 	}
@@ -136,7 +140,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 }
 
-// evaluate lists every Route in (namespace, name) order and returns the Routes, the result of each
+// evaluate lists every Route this process serves in (namespace, name) order and returns the Routes, the result of each
 // one whose backend is missing, and the compiled entries of the others.
 func (r *Reconciler) evaluate(ctx context.Context) ([]*v1.Route, map[routeKey]evalResult, []router.Entry, error) {
 	list, err := r.store.List(ctx, v1.KindRoute.GVK(), store.ListOptions{})
@@ -145,7 +149,7 @@ func (r *Reconciler) evaluate(ctx context.Context) ([]*v1.Route, map[routeKey]ev
 	}
 	routes := make([]*v1.Route, 0, len(list.Items))
 	for _, o := range list.Items {
-		if rt, ok := o.(*v1.Route); ok {
+		if rt, ok := o.(*v1.Route); ok && (r.skip == nil || !r.skip(rt.Namespace)) {
 			routes = append(routes, rt)
 		}
 	}

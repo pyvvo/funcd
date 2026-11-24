@@ -835,8 +835,6 @@ func (p *Platform) buildControlPlane() error {
 	if p.agent != nil {
 		masters = p.agent.NamespaceMaster
 	}
-	// FEAT-0002: a control plane that worker nodes join leaves each namespace placed on one to it.
-	var skip func(v1.NamespaceName) bool
 	if c.cluster != nil {
 		cl, cerr := multinode.New(multinode.Config{Store: c.store, Logger: p.logger, Dir: c.cluster.Dir,
 			ListenAddr: c.cluster.ListenAddr, Hosts: c.cluster.Hosts, LocalNode: c.localNode, LocalRuns: c.cluster.LocalRuns,
@@ -844,10 +842,10 @@ func (p *Platform) buildControlPlane() error {
 		if cerr != nil {
 			return fault.Wrapf(cerr, fault.KindOf(cerr), op, "build the node API")
 		}
-		p.cluster, skip = cl, cl.Skip
+		p.cluster = cl
 	}
 	ctrl, err := controller.New(controller.Deps{Store: c.store, Logger: p.logger, RetryBackoffMax: c.pacing.RetryBackoffMax,
-		Skip: skip})
+		Skip: p.elsewhere})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build controller")
 	}
@@ -1027,7 +1025,7 @@ func (p *Platform) buildControlPlane() error {
 	p.activator = act
 
 	if p.collector, err = gc.New(gc.Deps{Store: c.store, Purger: bucketPurger{shared: c.blob}, Interval: c.gcSweepInterval,
-		Logger: p.logger, Skip: skip}); err != nil {
+		Logger: p.logger, Skip: p.elsewhere}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build garbage collector")
 	}
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
@@ -1073,7 +1071,7 @@ func (p *Platform) buildControlPlane() error {
 	// wait
 	runsCfg := function.RunsConfig{MaxRunning: c.jobMaxRunning, PayloadLimit: c.jobPayloadLimit,
 		Retention: c.jobRetention, Enqueue: ctrl.Enqueue, Hold: c.gate(), NamespaceHold: c.nsGate(), Chain: callChain,
-		Client: workerClient(calls, 0)}
+		Client: workerClient(calls, 0), Skip: p.elsewhere}
 	if p.exec.egressWorkers != nil {
 		runsCfg.Egress = p.exec.egressWorkers // a run's worker is indexed as its Job before its one call (ADR-0351 Decision 6)
 	}
@@ -1092,7 +1090,7 @@ func (p *Platform) buildControlPlane() error {
 	// both the reconciler and the data-plane handler share the one live table.
 	routeReconciler, err := route.NewReconciler(route.Deps{
 		Store: c.store, Routes: edgeAgg, Logger: p.logger,
-		ReferentPollInterval: c.pacing.ReferentPollInterval, ResyncInterval: c.pacing.RouteResyncInterval,
+		ReferentPollInterval: c.pacing.ReferentPollInterval, ResyncInterval: c.pacing.RouteResyncInterval, Skip: p.elsewhere,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build route reconciler")
@@ -1188,6 +1186,7 @@ func (p *Platform) buildControlPlane() error {
 	p.workflowSweeper = workflow.NewRunReconciler(c.store, wfEngine, p.exec.traces(), p.logger, c.pacing.ReferentPollInterval)
 	p.workflowSweeper.SetHold(c.gate())
 	p.workflowSweeper.SetNamespaceHold(c.nsGate())
+	p.workflowSweeper.SetSkip(p.elsewhere)
 	ctrl.Register(v1.KindWorkflowRun.GVK(), p.workflowSweeper)
 	// ADR-0199: the App reconciler writes an App's parts; a change to a part it controls or marks, or to an
 	// object a ref entry names, requeues the App.

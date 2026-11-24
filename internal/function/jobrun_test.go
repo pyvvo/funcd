@@ -488,6 +488,42 @@ func TestJobRunRetention(t *testing.T) {
 	h.getRun(t, "hello-open")
 }
 
+// FEAT-0002: the runs of a namespace that a worker node runs take no slot of this process, and its boot and its sweep
+// leave them as they are.
+func TestJobRunsOfAnotherNodesNamespaceAreLeftToIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newRunHarness(t, 1)
+	h.readyJob(t, "hello", nil)
+	elsewhere := func(name string, edit func(*v1.JobRun)) {
+		h.run(t, name, "hello", "", func(r *v1.JobRun) { r.Namespace = "e1"; edit(r) })
+	}
+	elsewhere("away-running", func(r *v1.JobRun) { r.Status.Phase = v1.JobRunRunning })
+	elsewhere("away-waiting", func(*v1.JobRun) {})
+	elsewhere("away-old", func(r *v1.JobRun) {
+		r.Status.End(v1.JobRunSucceeded, "", "", v1.NewTimestamp(h.clk.Now().Add(-2*time.Hour)))
+	})
+	h.run(t, "hello-a", "hello", "", nil)
+	h.reconcileRun(t, "hello-a")
+	requireRun(t, h.getRun(t, "hello-a"), v1.JobRunPending, v1.JobRunQueued) // an all-in-one counts every namespace
+
+	runs := function.RunsWith(h.r, function.RunsConfig{MaxRunning: 1, Retention: time.Hour, Hold: h.hold, NamespaceHold: h.hold,
+		Skip: func(ns v1.NamespaceName) bool { return ns == "e1" }}, h.exec.launch)
+	t.Cleanup(runs.Close)
+	require.NoError(t, runs.Boot(ctx))
+	n, err := runs.SweepExpired(ctx)
+	require.NoError(t, err)
+	require.Zero(t, n)
+	for name, phase := range map[v1.ObjectName]v1.JobRunPhase{"away-running": v1.JobRunRunning, "away-waiting": "", "away-old": v1.JobRunSucceeded} {
+		obj, err := h.st.Get(ctx, v1.KindJobRun.GVK(), "e1", name)
+		require.NoError(t, err)
+		require.Equal(t, phase, obj.(*v1.JobRun).Status.Phase, "%s", name)
+	}
+	_, err = runs.Reconcile(ctx, controller.Request{GVK: v1.KindJobRun.GVK(), Namespace: "default", Name: "hello-a"})
+	require.NoError(t, err)
+	require.Equal(t, v1.JobRunRunning, h.getRun(t, "hello-a").Status.Phase)
+}
+
 // A Job's change reaches its open runs only.
 func TestJobRunMapJob(t *testing.T) {
 	t.Parallel()

@@ -145,6 +145,27 @@ func TestScenarioRouteReconcilesReady(t *testing.T) {
 	_ = ctx
 }
 
+// FEAT-0002: a control plane serves no Route of a namespace that a worker node runs, and leaves its status to the node.
+func TestARouteOfAnotherNodesNamespaceIsNotServedHere(t *testing.T) {
+	_, st, rtr, agg, _ := setupAggregator(t, nil)
+	rec, err := route.NewReconciler(route.Deps{Store: st, Routes: agg, Skip: func(ns v1.NamespaceName) bool { return ns == "e1" }})
+	require.NoError(t, err)
+	for _, ns := range []v1.NamespaceName{"default", "e1"} {
+		seedNamespace(t, st, string(ns), "")
+		seedFunction(t, st, ns, "web")
+		seedRoute(t, st, ns, "web", string(ns)+".example.com", "/", "web")
+	}
+	reconcile(t, rec, "default", "web")
+	m, ok := rtr.Resolve("default.example.com", "/", "GET")
+	require.True(t, ok)
+	require.Equal(t, v1.NamespaceName("default"), m.Namespace)
+	_, ok = rtr.Resolve("e1.example.com", "/", "GET")
+	require.False(t, ok, "its host is its node's")
+	obj, err := st.Get(context.Background(), v1.KindRoute.GVK(), "e1", "web")
+	require.NoError(t, err)
+	require.Empty(t, obj.(*v1.Route).Status.Phase, "its status is its node's")
+}
+
 // scenario: route-not-ready-missing-backend
 func TestScenarioRouteNotReadyMissingBackend(t *testing.T) {
 	_, st, rtr, rec := setup(t)
