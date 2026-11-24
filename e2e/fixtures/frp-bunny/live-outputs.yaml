@@ -1,0 +1,14 @@
+# The outputs Secret of the live frp-bunny App: its stack's Job frp-bunny-stack owns it and writes FRP_TOKEN into it
+# at the apply; it holds the key, empty, until then.
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: frp-bunny-outputs
+  namespace: default
+  resourceGroup: default
+spec:
+  owner:
+    kind: Job
+    name: frp-bunny-stack
+  data:
+    FRP_TOKEN: ""

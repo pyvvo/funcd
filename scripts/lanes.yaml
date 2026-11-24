@@ -1072,3 +1072,109 @@ job:
       - pyreport-approved
     tries: 60
   venom: e2e/job.venom.yml
+
+addon-infrastack:
+  description: pyvvo/funcd-addons' InfraStack add-on on real containerd (ADR-0344, ADR-0345, ADR-0348, ADR-0349) — an admin registers the add-on's Addon, which ships the OpenTofu runtime and the Engineless kind InfraStack; the add-on's example stack previews, is approved, applies with its state in a Bucket prefix through the S3 gateway and turns Ready, and once deleted it is held until its approved destroy succeeded.
+  # The add-on's files come from the pinned funcd-addons module, and its Addon pulls the OpenTofu image from GHCR by
+  # the digest it pins; a lane that also stages opentofu.tar serves that image from e2e/laneregistry instead.
+  optional: true
+  module: github.com/pyvvo/funcd-addons
+  dir: infrastack/examples
+  stage:
+    - random-stack
+    - random-stack.yaml
+    - from: infrastack/app/addon.yaml
+      module: github.com/pyvvo/funcd-addons
+      to: addon.yaml
+    - from: infrastack/reconciler/infrastack-reconciler.mjs
+      module: github.com/pyvvo/funcd-addons
+      to: infrastack-reconciler.mjs
+    - from: infrastack/reconciler/infrastack-reconciler.contract.yaml
+      module: github.com/pyvvo/funcd-addons
+      to: infrastack-reconciler.contract.yaml
+    - from: e2e/fixtures/addon-infrastack-funcdconfig.yaml
+      to: funcdconfig.yaml
+  tokens:
+    admin: addon-infrastack-lane-admin
+    developer: addon-infrastack-lane-developer
+  push:
+    - artifact: random-stack
+      ref: random-stack
+      entry: main.tf
+    - artifact: infrastack-reconciler.mjs
+      ref: infrastack-reconciler
+  venom: e2e/addon-infrastack.venom.yml
+
+addon-frp-bunny:
+  description: funcd-functions' frp-bunny App on real containerd with egress on and no spend (ADR-0345, ADR-0352, ADR-0353) — the fake module in place of Bunny's, a local frps on the bridge over websocket, and pyvvo/funcd-addons' InfraStack and Tunnel Addons; the App's stack previews, is approved and applies, the Tunnel's frpc dials frps with the stack's FRP_TOKEN through the egress gateway, a call to frps with the public host reaches the hello Function through frpc and the edge, and the App's deletion waits for the stack's approved destroy.
+  # The App comes from the pinned funcd-functions module and the add-ons' files from the pinned funcd-addons module;
+  # the Addons pull their images from GHCR by the digests they pin, and a lane that also stages opentofu.tar and
+  # tunnel.tar serves those images from e2e/laneregistry instead. frps is fatedier/frps's binary, by digest.
+  optional: true
+  module: github.com/pyvvo/funcd-functions
+  dir: apps/frp-bunny
+  copy: true
+  build:
+    - id=$(docker create --platform "linux/$(go env GOARCH)" fatedier/frps:v0.72.0@sha256:17abb20dd392557a44070d9726954630c0eb1f7a9bd6ead5ae9150d165179ea4) && docker cp "$id":/usr/bin/frps frps && docker rm "$id"
+  stage:
+    - app
+    - infra/fake
+    - hello
+    - values/lane.yaml
+    - frps
+    - from: infrastack/app/addon.yaml
+      module: github.com/pyvvo/funcd-addons
+      to: opentofu-addon.yaml
+    - from: tunnel/app/addon.yaml
+      module: github.com/pyvvo/funcd-addons
+      to: tunnel-addon.yaml
+    - from: infrastack/reconciler/infrastack-reconciler.mjs
+      module: github.com/pyvvo/funcd-addons
+      to: infrastack-reconciler.mjs
+    - from: infrastack/reconciler/infrastack-reconciler.contract.yaml
+      module: github.com/pyvvo/funcd-addons
+      to: infrastack-reconciler.contract.yaml
+    - from: e2e/fixtures/frp-bunny/funcdconfig.yaml
+      to: funcdconfig.yaml
+    - from: e2e/fixtures/frp-bunny/secrets.yaml
+      to: secrets.yaml
+    - from: e2e/fixtures/frp-bunny/egress.yaml
+      to: egress.yaml
+  tokens:
+    admin: addon-frp-bunny-lane-admin
+    developer: addon-frp-bunny-lane-developer
+  venom: e2e/addon-frp-bunny.venom.yml
+
+addon-frp-bunny-live:
+  description: funcd-functions' frp-bunny App against Bunny itself, which spends (about $0.47 a month while it runs) — the addon-frp-bunny lane with infra/bunny in place of the fake module, the API key from the file VENOM_VAR_bunnykeyfile names, and the pull zone VENOM_VAR_bunnyname; the public name answers through Bunny, and the stack's approved destroy removes what it created.
+  # Never in lima-example-all: its suite refuses to deploy unless its operator names the pull zone, the Magic Containers
+  # registry Id and the key file.
+  optional: true
+  module: github.com/pyvvo/funcd-functions
+  dir: apps/frp-bunny
+  stage:
+    - app
+    - infra/bunny
+    - hello
+    - values/bunny.yaml
+    - egress.yaml
+    - from: infrastack/app/addon.yaml
+      module: github.com/pyvvo/funcd-addons
+      to: opentofu-addon.yaml
+    - from: tunnel/app/addon.yaml
+      module: github.com/pyvvo/funcd-addons
+      to: tunnel-addon.yaml
+    - from: infrastack/reconciler/infrastack-reconciler.mjs
+      module: github.com/pyvvo/funcd-addons
+      to: infrastack-reconciler.mjs
+    - from: infrastack/reconciler/infrastack-reconciler.contract.yaml
+      module: github.com/pyvvo/funcd-addons
+      to: infrastack-reconciler.contract.yaml
+    - from: e2e/fixtures/frp-bunny/funcdconfig.yaml
+      to: funcdconfig.yaml
+    - from: e2e/fixtures/frp-bunny/live-outputs.yaml
+      to: live-outputs.yaml
+  tokens:
+    admin: addon-frp-bunny-live-lane-admin
+    developer: addon-frp-bunny-live-lane-developer
+  venom: e2e/addon-frp-bunny-live.venom.yml

@@ -1,0 +1,236 @@
+# Venom e2e suite for the addon-frp-bunny-live containerd lane: funcd-functions' frp-bunny App against Bunny itself.
+# It creates paid Bunny resources, frps on Magic Containers and its pull zone, about $0.47 a month, and destroys them
+# at its end through the stack's approved destroy run, also after a failed step. It runs only when its operator names
+# the pull zone, the Magic Containers registry Id and the file that holds the Bunny API key:
+#
+#   VENOM_VAR_bunnyname=<name> VENOM_VAR_bunnyregistry=<id> VENOM_VAR_bunnykeyfile=<file> just lima-example addon-frp-bunny-live
+#
+# The key goes into the VM on standard input, into a Secret through a file only root reads, and that file is removed:
+# no step prints it, puts it on a command line or logs it. Magic Containers' own pull zone for the container's CDN
+# endpoint, named mc-<id>, outlives the destroy: delete it in Bunny's dashboard.
+name: addon-frp-bunny-live — the frp-bunny App on Bunny, applied, called and destroyed (containerd lane, spends)
+
+vars:
+  devtoken: addon-frp-bunny-live-lane-developer
+  admintoken: addon-frp-bunny-live-lane-admin
+  registry: oci-layout:///mnt/funcd-deps/registry
+  bunnyname: ""
+  bunnyregistry: ""
+  bunnykeyfile: ""
+
+testcases:
+  - name: the operator named the pull zone, the registry Id and the key file
+    steps:
+      - type: exec
+        script: |
+          name='{{.bunnyname}}'; reg='{{.bunnyregistry}}'; key='{{.bunnykeyfile}}'
+          echo "$name" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,48}[a-z0-9])?$' || { echo "set VENOM_VAR_bunnyname to the pull zone's name"; exit 1; }
+          echo "$reg" | grep -Eq '^[0-9]+$' || { echo "set VENOM_VAR_bunnyregistry to the Magic Containers registry Id"; exit 1; }
+          [ -s "$key" ] || { echo "set VENOM_VAR_bunnykeyfile to a file that holds the Bunny API key"; exit 1; }
+          limactl shell --workdir / {{.vm}} sudo touch /opt/lane/LIVE_OK
+          echo "LIVE RUN: https://$name.b-cdn.net"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LIVE RUN"
+
+  - name: the add-ons' images come from GHCR, or from the lane's registries when the lane stages them
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo bash -c '
+            set -e
+            if [ ! -f /opt/lane/opentofu.tar ]; then echo FROM_GHCR; exit 0; fi
+            serve() {
+              systemctl stop "$1" 2>/dev/null || true
+              systemctl reset-failed "$1" 2>/dev/null || true
+              rm -f "/opt/lane/$2.digest"
+              systemd-run --unit "$1" /mnt/funcd-deps/laneregistry "/opt/lane/$2.tar" "funcd/$2" "127.0.0.1:$3" \
+                "/opt/lane/$1.crt" "/opt/lane/$2.digest"
+              for i in $(seq 120); do [ -s "/opt/lane/$2.digest" ] && break; sleep 1; done
+              install -m 0644 "/opt/lane/$1.crt" "/usr/local/share/ca-certificates/funcd-$1.crt"
+              sed -i -E "s#ghcr.io/pyvvo/funcd-$2@sha256:[A-Za-z0-9-]+#127.0.0.1:$3/funcd/$2@$(cat /opt/lane/$2.digest)#" "/opt/lane/$2-addon.yaml"
+            }
+            serve lane-registry opentofu 5443
+            serve lane-registry-tunnel tunnel 5444
+            update-ca-certificates >/dev/null
+            curl -sf -o /dev/null https://127.0.0.1:5443/v2/ && curl -sf -o /dev/null https://127.0.0.1:5444/v2/
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            echo FROM_LANE_REGISTRIES'
+        info: "images → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: the Bunny API key becomes the Secret bunny-api, and the outputs Secret and the EgressPolicies are applied
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo install -m 0600 /dev/stdin /opt/lane/bunny.key < '{{.bunnykeyfile}}'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir /opt/lane {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} bash -c '
+            set -e
+            umask 077
+            python3 -c "import base64; k = open(\"bunny.key\", \"rb\").read().strip(); open(\"bunny-api.yaml\", \"w\").write(\"apiVersion: funcd.io/v1alpha1\nkind: Secret\nmetadata:\n  name: bunny-api\n  namespace: default\n  resourceGroup: default\nspec:\n  data:\n    BUNNYNET_API_KEY: \" + base64.b64encode(k).decode() + \"\n\")"
+            funcdctl apply -f bunny-api.yaml
+            shred -u bunny-api.yaml bunny.key
+            funcdctl apply -f live-outputs.yaml
+            sed "s/<name>/{{.bunnyname}}/g" egress.yaml | funcdctl apply -f -'
+        info: "secrets and egress → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied Secret/bunny-api"
+          - result.systemout ShouldContainSubstring "applied EgressPolicy/frp-bunny-tunnel"
+
+  - name: an admin registers both Addons, and the App's images and template are pushed, with the Bunny module
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} bash -c '
+            funcdctl apply -f /opt/lane/opentofu-addon.yaml && funcdctl apply -f /opt/lane/tunnel-addon.yaml'
+        info: "admin apply → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "applied Addon/infrastack"
+          - result.systemout ShouldContainSubstring "applied Addon/tunnel"
+      - type: exec
+        script: |
+          limactl shell --workdir /opt/lane {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} bash -c '
+            set -e
+            sed -e "s#^registry: .*#registry: {{.registry}}#" -e "s#^name: .*#name: {{.bunnyname}}#" \
+              -e "s#^imageRegistry: .*#imageRegistry: {{.bunnyregistry}}#" values/bunny.yaml > values/live.yaml
+            funcdctl push infra/bunny {{.registry}}/frp-bunny-module:0.1.0 --entry main.tf
+            funcdctl push hello/hello.mjs {{.registry}}/frp-bunny-hello:0.1.0
+            funcdctl push infrastack-reconciler.mjs {{.registry}}/infrastack-reconciler:0.1.0
+            funcdctl app lock app -f values/live.yaml
+            funcdctl push --template app {{.registry}}/frp-bunny:0.1.0
+            echo PUSHED'
+        info: "pushes → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring PUSHED
+
+  - name: the App deploys, and its stack's run, three resources to add, is approved and applies on Bunny
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir /opt/lane {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} bash -c '
+            [ -f LIVE_OK ] || { echo "the operator named no live run"; exit 1; }
+            funcdctl app deploy {{.registry}}/frp-bunny:0.1.0 -n default -f values/live.yaml --name frp-bunny --no-wait'
+        retry: 15
+        delay: 2
+        info: "deploy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: &stack |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            st=$(funcdctl get InfraStack frp-bunny-stack -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin).get(\"status\",{});r=([c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"Ready\"] or [{}])[0];print(\"PHASE=\"+s.get(\"phase\",\"\")+\",REASON=\"+str(r.get(\"reason\",\"\"))+\",MESSAGE=\"+r.get(\"message\",\"\"))")
+            echo "$st"
+            case "$st" in *Failed*) run=$(echo "$st" | grep -o "frp-bunny-stack-[a-z0-9-]*" | head -1); funcdctl job logs "$run" -n default 2>&1 | tail -25;; esac'
+        retry: 120
+        delay: 2
+        info: "stack → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring REASON=AwaitingApproval
+      - type: exec
+        script: &approve |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            set -e
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            run=$(funcdctl job runs frp-bunny-stack -n default -o json | python3 -c "import sys,json;print([r[\"metadata\"][\"name\"] for r in json.load(sys.stdin) if r.get(\"status\",{}).get(\"phase\")==\"AwaitingApproval\"][0])")
+            funcdctl get jobrun "$run" -n default -o json > /tmp/run.json
+            python3 -c "import json;d=json.load(open(\"/tmp/run.json\"))[\"status\"][\"preview\"][\"document\"];print(\"RUN=$run,ACTION=%s,ADD=%d,DESTROY=%d\" % (d[\"action\"],d[\"add\"],d[\"destroy\"]));[print(r[\"address\"], r[\"actions\"]) for r in d[\"resources\"]]"
+            funcdctl job approve "$run" -n default --digest "$(python3 -c "import json;print(json.load(open(\"/tmp/run.json\"))[\"status\"][\"preview\"][\"digest\"])")" >/dev/null
+            echo APPROVED'
+        info: "approval → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ACTION=apply,ADD=3,DESTROY=0
+          - result.systemout ShouldContainSubstring APPROVED
+      - type: exec
+        script: *stack
+        retry: 300
+        delay: 2
+        info: "stack → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith PHASE=Ready,
+
+  - name: the public name answers through Bunny's pull zone, frps, the Tunnel and the edge
+    steps:
+      # Magic Containers starts frps after the apply, and the Tunnel's engine restarts with the token the apply wrote.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} bash -c '
+            out=$(curl -s -m 10 https://{{.bunnyname}}.b-cdn.net/)
+            case "$out" in *"hello from frp-bunny"*) echo "$out"; exit 0;; esac
+            echo NOT_YET
+            funcdctl get Tunnel frp-bunny-tunnel -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin).get(\"status\",{});print(\"TUNNEL\",s.get(\"phase\"),[(c.get(\"type\"),c.get(\"reason\"),c.get(\"message\",\"\")[:200]) for c in s.get(\"conditions\",[])])"
+            funcdctl logs Tunnel/frp-bunny-tunnel -n default --limit 8 2>&1 | tail -8'
+        retry: 100
+        delay: 6
+        info: "public name → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "hello from frp-bunny"
+
+  - name: the App's deletion holds the stack, its destroy is approved and removes Bunny's resources, and the App goes
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
+            funcdctl app delete frp-bunny -n default --no-wait
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: *stack
+        retry: 120
+        delay: 2
+        info: "stack → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "which destroys frp-bunny-stack, awaits approval"
+      - type: exec
+        script: *approve
+        info: "approval → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ACTION=destroy
+          - result.systemout ShouldContainSubstring APPROVED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get app frp-bunny -n default >/dev/null 2>&1 || echo APP_GONE
+            funcdctl get InfraStack frp-bunny-stack -n default >/dev/null 2>&1 || echo STACK_GONE'
+        retry: 300
+        delay: 2
+        info: "after the destroy → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring APP_GONE
+          - result.systemout ShouldContainSubstring STACK_GONE
+
+  - name: the Secrets, the EgressPolicies and the Addons go; Magic Containers' own mc- pull zone is left to the operator
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} sudo bash -c '
+            export FUNCD_SERVER=http://127.0.0.1:8080
+            rm -f /opt/lane/bunny.key /opt/lane/bunny-api.yaml
+            for s in frp-bunny-outputs bunny-api; do FUNCD_TOKEN={{.devtoken}} funcdctl delete secret $s -n default || true; done
+            for e in frp-bunny-stack frp-bunny-tunnel; do FUNCD_TOKEN={{.devtoken}} funcdctl delete egresspolicy $e -n default || true; done
+            FUNCD_TOKEN={{.admintoken}} funcdctl delete addon tunnel || true
+            FUNCD_TOKEN={{.admintoken}} funcdctl delete addon infrastack || true
+            systemctl stop lane-registry lane-registry-tunnel 2>/dev/null || true
+            echo "CLEANED: delete the pull zone mc-<id> of the Magic Containers app {{.bunnyname}} in Bunny'"'"'s dashboard"'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring CLEANED
