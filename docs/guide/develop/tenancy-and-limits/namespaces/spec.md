@@ -88,6 +88,7 @@ This page lists the spec and status fields of Namespace, ResourceGroup and Worke
 | `pendingJoin` | object, [`WorkerNode.status.pendingJoin`](#workernodestatuspendingjoin) | The one-time join token minted for the node and not used yet, kept as a hash. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
 | `platform` | string | The OS and CPU of the node, such as linux/arm64. |
+| `renewedCertificate` | object, [`WorkerNode.status.certificate`](#workernodestatuscertificate) | The certificate that the node asked for in place of its own, in the last third of its life; it becomes certificate once the node uses it. |
 | `version` | string | The funcd release that the node runs, as it reported it. |
 
 ### `WorkerNode.status.backup`

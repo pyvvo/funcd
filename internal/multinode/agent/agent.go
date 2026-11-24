@@ -44,13 +44,14 @@ type Config struct {
 	Commands multinode.Commands     // the node's local parts that answer the other node commands
 	Version  string
 	Platform string
+	Now      func() time.Time // nil ⇒ time.Now
 }
 
 // Agent keeps a node's local store a copy of the namespaces placed on it (FEAT-0002 F243), writes their status and the
 // children the node owns back (F244), and answers the node calls (F250).
 type Agent struct {
 	cfg Config
-	id  identity
+	id  atomic.Pointer[identity]
 	log *slog.Logger
 
 	mu       sync.Mutex
@@ -86,9 +87,13 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	a := &Agent{cfg: cfg, id: id, log: cfg.Logger.With("component", "node-agent", "node", id.name),
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	a := &Agent{cfg: cfg, log: cfg.Logger.With("component", "node-agent", "node", id.name),
 		mine: map[v1.NamespaceName]bool{}, keys: keys, pushed: map[string]string{}, unsent: map[string]url.Values{},
 		resynced: make(chan struct{}, 1)}
+	a.id.Store(&id)
 	if cl, ok := cfg.Store.(store.ChangeLog); ok {
 		a.local = cl.Timeline()
 	}
@@ -106,7 +111,7 @@ func New(cfg Config) (*Agent, error) {
 }
 
 // Name is the node's name, the one it joined under.
-func (a *Agent) Name() v1.ObjectName { return a.id.name }
+func (a *Agent) Name() v1.ObjectName { return a.id.Load().name }
 
 // SetLogs gives the agent the node's local log reads, once the node's platform built them.
 func (a *Agent) SetLogs(logs multinode.LogReader, runLogs multinode.RunLogReader) {
@@ -123,13 +128,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.Prepare(ctx); err != nil {
 		return err
 	}
-	a.log.InfoContext(ctx, "node agent starting", "server", a.id.server, "since", a.cursor)
+	a.log.InfoContext(ctx, "node agent starting", "server", a.id.Load().server, "since", a.cursor)
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 	var wg sync.WaitGroup
 	var err error
 	for _, loop := range []func(context.Context){
-		func(ctx context.Context) { err = a.follow(ctx); stop() }, a.report, a.serveCalls} {
+		func(ctx context.Context) { err = a.follow(ctx); stop() }, a.report, a.serveCalls, a.renew} {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -149,7 +154,7 @@ func (a *Agent) loadMine(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, obj := range res.Items {
-		if n, ok := obj.(*v1.Namespace); ok && n.Spec.Node == a.id.name {
+		if n, ok := obj.(*v1.Namespace); ok && n.Spec.Node == a.id.Load().name {
 			a.mine[v1.NamespaceName(n.Name)] = true
 		}
 	}
@@ -194,7 +199,8 @@ func (a *Agent) do(ctx context.Context, method, path string, body, out any) (int
 	}
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, method, a.id.server+path, rd)
+	id := a.id.Load()
+	req, err := http.NewRequestWithContext(ctx, method, id.server+path, rd)
 	if err != nil {
 		return 0, err
 	}
@@ -204,7 +210,7 @@ func (a *Agent) do(ctx context.Context, method, path string, body, out any) (int
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := a.id.client.Do(req)
+	resp, err := id.client.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -411,7 +417,7 @@ func (a *Agent) applyNamespace(ctx context.Context, c store.Change) {
 	if c.Type != store.Deleted {
 		var n v1.Namespace
 		if err := json.Unmarshal(c.Object, &n); err == nil {
-			placed = n.Spec.Node == a.id.name
+			placed = n.Spec.Node == a.id.Load().name
 		}
 	}
 	was := a.isMine(ns)

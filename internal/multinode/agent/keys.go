@@ -27,7 +27,7 @@ func (a *Agent) NamespaceMaster(ns v1.NamespaceName) ([]byte, error) {
 	defer a.mu.Unlock()
 	k, ok := a.keys[ns]
 	if !ok {
-		return nil, fault.Unavailablef("agent.NamespaceMaster", "worker node %s holds no master for namespace %s yet", a.id.name, ns)
+		return nil, fault.Unavailablef("agent.NamespaceMaster", "worker node %s holds no master for namespace %s yet", a.id.Load().name, ns)
 	}
 	return k.Key, nil
 }

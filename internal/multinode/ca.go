@@ -16,6 +16,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -28,7 +29,12 @@ const (
 	caLifetime   = 10 * 365 * 24 * time.Hour
 	certLifetime = 365 * 24 * time.Hour
 	certBackdate = time.Hour
+	// renewWithin is the end of a certificate's life in which it is renewed.
+	renewWithin = certLifetime / 3
 )
+
+// RenewalDue reports whether a certificate that ends at notAfter is to be renewed.
+func RenewalDue(notAfter, now time.Time) bool { return now.After(notAfter.Add(-renewWithin)) }
 
 // CA is the cluster's certificate authority (FEAT-0002 decision 2). It signs the node API's server certificate and each
 // node's client certificate; its key stays in the control plane's cluster directory.
@@ -191,6 +197,31 @@ func (c *CA) SignNode(csrPEM []byte, node v1.ObjectName, now time.Time) ([]byte,
 		return nil, "", time.Time{}, fault.Wrapf(err, fault.Internal, op, "sign the node certificate")
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), serial.Text(16), notAfter, nil
+}
+
+// serverCertificate is the node API's certificate, signed again before it ends.
+type serverCertificate struct {
+	ca    *CA
+	hosts []string
+	now   func() time.Time
+
+	mu       sync.Mutex
+	cert     *tls.Certificate
+	notAfter time.Time
+}
+
+func (s *serverCertificate) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	if s.cert == nil || RenewalDue(s.notAfter, now) {
+		cert, err := s.ca.ServerCertificate(s.hosts, now)
+		if err != nil {
+			return nil, err
+		}
+		s.cert, s.notAfter = &cert, now.Add(certLifetime)
+	}
+	return s.cert, nil
 }
 
 func newSerial() (*big.Int, error) {

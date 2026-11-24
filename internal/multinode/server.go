@@ -64,8 +64,8 @@ func NewServer(cfg ServerConfig, listenAddr string, hosts []string) (*Server, er
 	if !ok {
 		return nil, fault.Invalidf(op, "the store keeps no change log")
 	}
-	cert, err := cfg.CA.ServerCertificate(hosts, cfg.Now())
-	if err != nil {
+	cert := &serverCertificate{ca: cfg.CA, hosts: hosts, now: cfg.Now}
+	if _, err := cert.get(nil); err != nil {
 		return nil, err
 	}
 	ln, err := net.Listen("tcp", listenAddr)
@@ -78,7 +78,7 @@ func NewServer(cfg ServerConfig, listenAddr string, hosts []string) (*Server, er
 		ReadHeaderTimeout: readHeaderTimeout,
 		ErrorLog:          slog.NewLogLogger(cfg.Logger.Handler(), slog.LevelWarn),
 		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert}, ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: cfg.CA.Pool(),
+			GetCertificate: cert.get, ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: cfg.CA.Pool(),
 			MinVersion: tls.VersionTLS13,
 		},
 	}
@@ -110,6 +110,8 @@ func (s *Server) routes() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.authNode)
 		api := nodeAPI(r)
+		handle(api, op(http.MethodPost, PathRenew, maxJoinBody), s.renew)
+		handle(api, op(http.MethodPut, PathRenew, 0), s.renewed)
 		handle(api, op(http.MethodGet, PathSnapshot, 0), s.snapshot)
 		handle(api, op(http.MethodGet, PathFeed, 0), s.feed)
 		handle(api, op(http.MethodGet, PathChildren, 0), s.children)
@@ -153,8 +155,9 @@ func nodeOf(ctx context.Context) v1.ObjectName {
 	return n
 }
 
-// authNode admits a node by the certificate it joined with: verified against the CA, and still the one its WorkerNode
-// names, so a new join or a deleted WorkerNode ends the old certificate. A node speaking a node API version this control
+// authNode admits a node by the certificate it joined with, or the one it renewed it with: verified against the CA, and
+// one its WorkerNode names, so a new join or a deleted WorkerNode ends the old ones, and the first call with a renewed
+// certificate ends the one before. A node speaking a node API version this control
 // plane does not serve gets 426, and one on a newer release than the control plane's 409 (decision 12).
 func (s *Server) authNode(next http.Handler) http.Handler {
 	const op = "multinode.authNode"
@@ -180,7 +183,15 @@ func (s *Server) authNode(next http.Handler) http.Handler {
 			return
 		}
 		n, ok := obj.(*v1.WorkerNode)
-		if !ok || n.Status.Certificate == nil || n.Status.Certificate.Serial != leaf.SerialNumber.Text(16) {
+		serial := leaf.SerialNumber.Text(16)
+		switch renewed := ok && n.Status.RenewedCertificate.Is(serial); {
+		case ok && n.Status.Certificate.Is(serial):
+		case renewed:
+			if err := s.useRenewed(r.Context(), node, serial); err != nil {
+				fault.WriteProblem(w, err)
+				return
+			}
+		default:
 			fault.WriteProblem(w, fault.Unauthorizedf(op, "this certificate is not the node's current one; join again"))
 			return
 		}
@@ -188,6 +199,40 @@ func (s *Server) authNode(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), nodeKey{}, node)))
 	})
 }
+
+// useRenewed makes node's renewed certificate of serial its certificate.
+func (s *Server) useRenewed(ctx context.Context, node v1.ObjectName, serial string) error {
+	return writeNodeStatus(ctx, s.cfg.Store, node, func(n *v1.WorkerNode) bool {
+		if !n.Status.RenewedCertificate.Is(serial) {
+			return false
+		}
+		n.Status.Certificate, n.Status.RenewedCertificate = n.Status.RenewedCertificate, nil
+		return true
+	})
+}
+
+type renewInput struct{ Body RenewRequest }
+
+// renew answers POST …/renew: a new certificate for the node's key. The node's certificate stays until it uses the new one,
+// so an answer that never reaches it costs nothing.
+func (s *Server) renew(ctx context.Context, in *renewInput) (*joinOutput, error) {
+	node, now := nodeOf(ctx), s.cfg.Now()
+	cert, serial, notAfter, err := s.cfg.CA.SignNode(in.Body.CSR, node, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeNodeStatus(ctx, s.cfg.Store, node, func(n *v1.WorkerNode) bool {
+		n.Status.RenewedCertificate = &v1.NodeCertificate{Serial: serial, NotAfter: v1.NewTimestamp(notAfter), IssuedAt: v1.NewTimestamp(now)}
+		return true
+	}); err != nil {
+		return nil, err
+	}
+	s.cfg.Logger.InfoContext(ctx, "worker node certificate renewed", "node", node, "notAfter", notAfter)
+	return &joinOutput{Body: JoinResponse{Certificate: cert, CA: s.cfg.CA.PEM()}}, nil
+}
+
+// renewed answers PUT …/renew, a node's first call with its renewed certificate: authNode made it the node's certificate.
+func (s *Server) renewed(context.Context, *struct{}) (*struct{}, error) { return nil, nil }
 
 func tooNew(op, release, ours string) error {
 	return fault.Conflictf(op, "this node runs funcd %s, newer than the control plane's %s: upgrade the control plane first", release, ours)
@@ -255,7 +300,7 @@ func (s *Server) join(ctx context.Context, req *joinInput) (*joinOutput, error) 
 		}
 		cert = pemCert
 		n.Status.Certificate = &v1.NodeCertificate{Serial: serial, NotAfter: v1.NewTimestamp(notAfter), IssuedAt: v1.NewTimestamp(now)}
-		n.Status.PendingJoin = nil
+		n.Status.PendingJoin, n.Status.RenewedCertificate = nil, nil
 		return true
 	})
 	switch {

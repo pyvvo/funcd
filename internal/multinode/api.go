@@ -38,6 +38,7 @@ const (
 	PathReport   = "/node/v1/report"
 	PathSecrets  = "/node/v1/secrets"
 	PathChildren = "/node/v1/children"
+	PathRenew    = "/node/v1/renew"
 )
 
 // JoinRequest is a node's join: its one-time token and a CSR for its node certificate.
@@ -52,6 +53,11 @@ type JoinRequest struct {
 type JoinResponse struct {
 	Certificate []byte `json:"certificate"`
 	CA          []byte `json:"ca"`
+}
+
+// RenewRequest asks for a new certificate in place of the node's own, answered as the join is.
+type RenewRequest struct {
+	CSR []byte `json:"csr"`
 }
 
 // Snapshot is every object of a node's namespaces at Rev, the Namespace objects included; a node follows the feed after

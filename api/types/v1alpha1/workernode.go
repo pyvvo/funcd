@@ -26,6 +26,8 @@ type WorkerNodeStatus struct {
 	LastSeen Timestamp `json:"lastSeen,omitzero" doc:"When the node last polled the control plane."`
 	// Certificate is the node certificate the control plane issued at the join.
 	Certificate *NodeCertificate `json:"certificate,omitempty" doc:"The node certificate that the control plane issued when the node joined."`
+	// RenewedCertificate is the certificate the node asked for in place of Certificate, until its first call with it.
+	RenewedCertificate *NodeCertificate `json:"renewedCertificate,omitempty" doc:"The certificate that the node asked for in place of its own, in the last third of its life; it becomes certificate once the node uses it."`
 	// PendingJoin is the one-time join token waiting to be used, as a hash.
 	PendingJoin *PendingJoin `json:"pendingJoin,omitempty" doc:"The one-time join token minted for the node and not used yet, kept as a hash."`
 	// BlobStore is the address of the node's blob store, as the node reported it (decision 9): a BackupSchedule of one of
@@ -50,6 +52,9 @@ type NodeCertificate struct {
 	NotAfter Timestamp `json:"notAfter" doc:"When the certificate expires."`
 	IssuedAt Timestamp `json:"issuedAt" doc:"When the node joined and got the certificate."`
 }
+
+// Is reports whether c is the certificate of serial; a nil c is none.
+func (c *NodeCertificate) Is(serial string) bool { return c != nil && c.Serial == serial }
 
 // PendingJoin is a one-time join token not used yet.
 type PendingJoin struct {

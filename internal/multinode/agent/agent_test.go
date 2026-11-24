@@ -307,6 +307,48 @@ func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {
 	require.ErrorIs(t, err, fs.ErrNotExist)
 }
 
+// A node renews its certificate in the last third of its life, and its first call with the new one ends the old one.
+func TestANodeRenewsItsCertificateBeforeItEnds(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t)
+	certificate := func() *v1.WorkerNode {
+		obj, err := n.cp.Get(ctx, v1.KindWorkerNode.GVK(), "", "vm1")
+		require.NoError(t, err)
+		return obj.(*v1.WorkerNode)
+	}
+	first := certificate().Status.Certificate
+	require.NotNil(t, first)
+	old := nodeCaller(t, n.rig, n.dir)
+	run := func(after time.Duration) func() {
+		a, err := agent.New(agent.Config{Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+			Now: func() time.Time { return time.Now().Add(after) }})
+		require.NoError(t, err)
+		actx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { _ = a.Run(actx); close(done) }()
+		return func() { cancel(); <-done }
+	}
+	stop := run(200 * 24 * time.Hour)
+	time.Sleep(200 * time.Millisecond)
+	require.Equal(t, first.Serial, certificate().Status.Certificate.Serial, "a certificate in its first two thirds stays")
+	stop()
+	stop = run(300 * 24 * time.Hour)
+	_, err := n.cp.Create(ctx, configMap("e1", "a", "1"))
+	require.NoError(t, err)
+	onNode(t, n, v1.KindConfigMap, "a", "the node follows on", anyConfigMap)
+	eventually(t, "the node uses its new certificate", func() bool {
+		c := certificate().Status
+		return c.Certificate.Serial != first.Serial && c.RenewedCertificate == nil
+	})
+	status, _ := old(http.MethodGet, multinode.PathChildren, nil)
+	require.Equal(t, http.StatusUnauthorized, status, "the old certificate ends")
+	stop()
+	defer run(0)()
+	_, err = n.cp.Create(ctx, configMap("e1", "b", "1"))
+	require.NoError(t, err)
+	onNode(t, n, v1.KindConfigMap, "b", "a restarted node uses the new one", anyConfigMap)
+}
+
 func TestANodeOnANewerReleaseThanTheControlPlaneIsRefused(t *testing.T) {
 	ctx := context.Background()
 	r := startCP(t, func(c *multinode.Config) { c.Version = "v0.40.0" })
@@ -604,7 +646,7 @@ func TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers(t *testing.T) {
 //nolint:forbidigo // body is one of the node API's typed requests, sent as JSON
 func nodeCaller(t *testing.T, r rig, dir string) func(method, path string, body any) (int, []byte) {
 	t.Helper()
-	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "node.crt"), filepath.Join(dir, "node.key"))
+	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "node.pem"), filepath.Join(dir, "node.pem"))
 	require.NoError(t, err)
 	caPEM, err := os.ReadFile(filepath.Join(dir, "ca.crt"))
 	require.NoError(t, err)

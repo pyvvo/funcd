@@ -32,8 +32,9 @@ func TestADeleteTheControlPlaneDidNotTakeIsSentAgain(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	a := &Agent{cfg: Config{Store: store.New(memory.New())}, id: identity{name: "vm1", server: srv.URL, client: srv.Client()},
+	a := &Agent{cfg: Config{Store: store.New(memory.New())},
 		log: slog.New(slog.DiscardHandler), mine: map[v1.NamespaceName]bool{"e1": true}, pushed: map[string]string{}, unsent: map[string]url.Values{}}
+	a.id.Store(&identity{name: "vm1", server: srv.URL, client: srv.Client()})
 	run := &v1.JobRun{}
 	run.Name, run.Namespace, run.UID = "report-1", "e1", "u1"
 	a.push(ctx, store.Deleted, run)

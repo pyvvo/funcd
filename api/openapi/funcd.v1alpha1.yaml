@@ -7715,6 +7715,9 @@ components:
         platform:
           description: The OS and CPU of the node, such as linux/arm64.
           type: string
+        renewedCertificate:
+          $ref: "#/components/schemas/NodeCertificate"
+          description: The certificate that the node asked for in place of its own, in the last third of its life; it becomes certificate once the node uses it.
         version:
           description: The funcd release that the node runs, as it reported it.
           type: string

@@ -25,6 +25,7 @@ recovery](disaster-recovery.md).
 | A join token | `funcdctl node token` mints a token bound to the node's name, kept only as a hash; a new token ends an unused old one | `defaultTokenTTL` 1 h, at most `maxTokenTTL` 24 h | the token, shown once | decided | decider 2026-11-16, #1479, `TestAJoinTokenNeedsADeclaredNodeAndABoundedLife` |
 | Joining | `funcd node join` checks the CA the token names before it sends the token, then swaps it for a node certificate; a used or expired token is refused | none | `joined as worker node <name>`; 403 | decided | decider 2026-11-16, #1479, `TestAJoinRefusesAControlPlaneWithAnotherCA` |
 | A name a running node holds | A join under the name of a node that polls is refused, so no machine takes over another's name | none | 409 `a running node holds the name` | decided | decider 2026-11-16, #1479 |
+| A certificate near its end | The node renews its certificate in the last third of its life, and its first call with the new one ends the old one; a node away past the end joins again. The node API signs its own again too | `certLifetime` 8760 h, `renewWithin` its last third, looked at every `renewEvery` 1 h | `node certificate renewed` | accepted | `TestANodeRenewsItsCertificateBeforeItEnds` |
 | Placing a namespace | `spec.node` names a declared WorkerNode; the control plane's reconcilers and owner GC skip the namespace, and the node runs it whole | none | `spec.node names WorkerNode <n>, which is not declared` | decided | decider 2026-11-16, #1483, `TestPlacementSkipsWhatAnotherNodeRuns` |
 | Moving a namespace | Refused while it holds objects, since its data stays on the node that ran it; an empty namespace moves. Its data moves with workload backups, restored on the new node | none | 409 `holds objects, so its spec.node cannot change` | accepted | `TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects` |
 | Following | The node takes a snapshot, then long-polls the change log, and keeps its revision on disk, so a restart of either side resumes with nothing lost | `defaultWait` 25 s per poll | `node agent: feed resumed` | decided | decider 2026-11-16, #1480, `TestANodeResumesFromItsSavedRevision` |
@@ -78,6 +79,7 @@ recovery](disaster-recovery.md).
 | `idleConnTimeout` | 1m30s | `internal/multinode/agent/join.go` |
 | `joinRequestTimeout` | 30s | `internal/multinode/agent/join.go` |
 | `maxJoinAnswer` | 1MiB | `internal/multinode/agent/join.go` |
+| `renewEvery` | 1h | `internal/multinode/agent/renew.go` |
 | `secretEcho` | 2s | `internal/multinode/agent/secrets.go` |
 | `secretEchoPoll` | 5ms | `internal/multinode/agent/secrets.go` |
 | `caLifetime` | 87600h | `internal/multinode/ca.go` |

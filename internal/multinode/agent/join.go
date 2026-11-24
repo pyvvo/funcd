@@ -31,12 +31,11 @@ import (
 
 // The node's identity files, in its cluster directory.
 const (
-	keyFile    = "node.key"
-	certFile   = "node.crt"
-	caFile     = "ca.crt"
-	serverFile = "server"
-	nameFile   = "name"
-	cursorFile = "cursor"
+	identityFile = "node.pem" // the node certificate and its key, in one file that a renewal replaces at once
+	caFile       = "ca.crt"
+	serverFile   = "server"
+	nameFile     = "name"
+	cursorFile   = "cursor"
 )
 
 // The join's and the node API client's bounds.
@@ -73,18 +72,11 @@ func Join(ctx context.Context, server, token, dir, version, platform string) (v1
 			return fmt.Errorf("the control plane at %s does not present the CA the join token names", server)
 		},
 	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, csr, err := newKey(tok.Node)
 	if err != nil {
-		return "", fault.Wrapf(err, fault.Internal, op, "generate the node key")
+		return "", err
 	}
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: string(tok.Node)},
-	}, key)
-	if err != nil {
-		return "", fault.Wrapf(err, fault.Internal, op, "make the CSR")
-	}
-	body, err := json.Marshal(multinode.JoinRequest{Token: tok.String(), Version: version, Platform: platform,
-		CSR: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})})
+	body, err := json.Marshal(multinode.JoinRequest{Token: tok.String(), Version: version, Platform: platform, CSR: csr})
 	if err != nil {
 		return "", fault.Wrapf(err, fault.Internal, op, "marshal the join")
 	}
@@ -110,19 +102,18 @@ func Join(ctx context.Context, server, token, dir, version, platform string) (v1
 	if err := json.Unmarshal(data, &out); err != nil {
 		return "", fault.Wrapf(err, fault.Internal, op, "decode the join answer")
 	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	id, err := identityPEM(out.Certificate, key)
 	if err != nil {
-		return "", fault.Wrapf(err, fault.Internal, op, "encode the node key")
+		return "", err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fault.Wrapf(err, fault.Internal, op, "create %s", dir)
 	}
 	files := map[string][]byte{
-		keyFile:    pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
-		certFile:   out.Certificate,
-		caFile:     pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
-		serverFile: []byte(strings.TrimRight(server, "/") + "\n"),
-		nameFile:   []byte(string(tok.Node) + "\n"),
+		identityFile: id,
+		caFile:       pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
+		serverFile:   []byte(strings.TrimRight(server, "/") + "\n"),
+		nameFile:     []byte(string(tok.Node) + "\n"),
 	}
 	for name, b := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
@@ -131,6 +122,29 @@ func Join(ctx context.Context, server, token, dir, version, platform string) (v1
 	}
 	joinedAgain(dir)
 	return tok.Node, nil
+}
+
+// newKey makes a node key, and its CSR for node.
+func newKey(node v1.ObjectName) (*ecdsa.PrivateKey, []byte, error) {
+	const op = "agent.newKey"
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, fault.Wrapf(err, fault.Internal, op, "generate the node key")
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: string(node)}}, key)
+	if err != nil {
+		return nil, nil, fault.Wrapf(err, fault.Internal, op, "make the CSR")
+	}
+	return key, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}), nil
+}
+
+// identityPEM is the node certificate with its key.
+func identityPEM(certPEM []byte, key *ecdsa.PrivateKey) ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, "agent.identityPEM", "encode the node key")
+	}
+	return append(bytes.Clone(certPEM), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})...), nil
 }
 
 // joinedAgain makes a node that joins anew start from a whole snapshot; its store, if it still has it, keeps the runs the
@@ -174,11 +188,13 @@ func JoinedName(dir string) (v1.ObjectName, error) {
 	return v1.ObjectName(strings.TrimSpace(string(b))), nil
 }
 
-// identity is what a joined node reads back from its cluster directory.
+// identity is what a joined node reads back from its cluster directory, and the client its certificate makes.
 type identity struct {
-	name   v1.ObjectName
-	server string
-	client *http.Client
+	name     v1.ObjectName
+	server   string
+	roots    *x509.CertPool
+	notAfter time.Time
+	client   *http.Client
 }
 
 func loadIdentity(dir string) (identity, error) {
@@ -202,19 +218,34 @@ func loadIdentity(dir string) (identity, error) {
 	if err != nil {
 		return identity{}, err
 	}
-	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, certFile), filepath.Join(dir, keyFile))
+	pair, err := read(identityFile)
 	if err != nil {
-		return identity{}, fault.Wrapf(err, fault.Invalid, op, "load the node certificate")
+		return identity{}, err
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(caPEM) {
 		return identity{}, fault.Invalidf(op, "%s holds no certificate", caFile)
 	}
-	tr := &http.Transport{
-		TLSClientConfig:     &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: roots, MinVersion: tls.VersionTLS13},
+	id := identity{name: v1.ObjectName(strings.TrimSpace(string(name))), server: strings.TrimSpace(string(server)), roots: roots}
+	return id.with(pair)
+}
+
+// with is id under the certificate and key of pair, with a client of its own.
+func (id identity) with(pair []byte) (identity, error) {
+	const op = "agent.identity"
+	cert, err := tls.X509KeyPair(pair, pair)
+	if err != nil {
+		return identity{}, fault.Wrapf(err, fault.Invalid, op, "load the node certificate")
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return identity{}, fault.Wrapf(err, fault.Invalid, op, "parse the node certificate")
+	}
+	id.notAfter = leaf.NotAfter
+	id.client = &http.Client{Transport: &http.Transport{
+		TLSClientConfig:     &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: id.roots, MinVersion: tls.VersionTLS13},
 		MaxIdleConnsPerHost: 8,
 		IdleConnTimeout:     idleConnTimeout,
-	}
-	return identity{name: v1.ObjectName(strings.TrimSpace(string(name))), server: strings.TrimSpace(string(server)),
-		client: &http.Client{Transport: tr}}, nil
+	}}
+	return id, nil
 }

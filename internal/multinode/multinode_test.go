@@ -2,6 +2,7 @@ package multinode
 
 import (
 	"context"
+	"crypto/x509"
 	"testing"
 	"time"
 
@@ -142,6 +143,27 @@ func TestABackupSchedulesTargetStaysOutsideItsNodesBlobStore(t *testing.T) {
 	require.ErrorContains(t, admit("e1", "node-blobs"), "inside the blob store")
 	require.NoError(t, admit("e1", "cp-blobs"), "the control plane's store is another one")
 	require.NoError(t, admit("e2", "node-blobs"), "nothing is known of a node that has not joined")
+}
+
+// The node API's own certificate is signed again before it ends, so a control plane that runs for years keeps its nodes.
+func TestTheNodeAPIsCertificateIsRenewedBeforeItEnds(t *testing.T) {
+	now := time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)
+	ca, err := LoadOrCreateCA(t.TempDir(), now)
+	require.NoError(t, err)
+	c := &serverCertificate{ca: ca, now: func() time.Time { return now }}
+	first, err := c.get(nil)
+	require.NoError(t, err)
+	now = now.Add(certLifetime - renewWithin)
+	same, err := c.get(nil)
+	require.NoError(t, err)
+	require.Equal(t, first.Certificate[0], same.Certificate[0])
+	now = now.Add(time.Hour)
+	next, err := c.get(nil)
+	require.NoError(t, err)
+	require.NotEqual(t, first.Certificate[0], next.Certificate[0])
+	leaf, err := x509.ParseCertificate(next.Certificate[0])
+	require.NoError(t, err)
+	require.True(t, leaf.NotAfter.Equal(now.Add(certLifetime)))
 }
 
 func TestAWorkerNodeANamespaceNamesCannotBeDeleted(t *testing.T) {
