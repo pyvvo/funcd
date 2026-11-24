@@ -19,7 +19,7 @@ func shopTemplate(t *testing.T) string {
 	return devProject(t, map[string]string{
 		"app/app.yaml": "name: shop\nversion: 1.0.0\nregistry: registry.example\nimages:\n  migrate: shop-migrate:1.0.0\n",
 		"app/resources/job.yaml": "jobs:\n  - name: migrate\n    runtime: nodejs22\n    handler: handle\n" +
-			"    image: ${{ images.migrate }}\n",
+			"    image: ${{ images.migrate }}\n    approval:\n      bypass: true\n",
 		"build/migrate.mjs":           "export function handle() { return { v: 1 }; }\n",
 		"build/migrate.contract.yaml": "runtime: nodejs22\ninput: {}\noutput: {}\n",
 	})
