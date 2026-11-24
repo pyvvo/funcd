@@ -1,6 +1,7 @@
 # ADR-0357: An App never waits for its stacks, and a part that reads their outputs waits for them
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-11-24), on the decider's bar of 2026-11-24, after five independent judge rounds, the
+  fifth with no finding
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: apps, addons, infrastack, rollout, hooks
