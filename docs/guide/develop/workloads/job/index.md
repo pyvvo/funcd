@@ -9,82 +9,83 @@ A [Job](../../../platform/workloads/job.md) is code that runs to its end, such a
 the Job is a **JobRun**, which carries an input. funcd calls the Job's handler once for the run and keeps its answer as
 the run's **result**.
 
-This example applies the Job `report` to a running server, starts a run for the month `2026-10`, reads its result and
-its logs, then cancels a second run. It needs funcdctl ([Install](../../../get-started/install.md)) and a funcd server
-on the same machine whose API listens at `127.0.0.1:8080`, such as [`funcd --memory`](../../running-funcd/index.md),
-which accepts the built-in token `funcd-dev-token` in the namespace `default`. To run a `nodejs22` handler, funcd
-needs Node.js on its `PATH`.
+This example applies the Job `report`, or `pyreport` in Python, to a running server, starts a run for the month
+`2026-10`, reads its result and its logs, then cancels a second run. It needs funcdctl
+([Install](../../../get-started/install.md)), Git, and a funcd server on the same machine whose API listens at
+`127.0.0.1:8080`, such as [`funcd --memory`](../../running-funcd/index.md), which accepts the built-in token
+`funcd-dev-token` in the namespace `default`. funcd runs the TypeScript handler with the Node.js on its `PATH`, and the
+Python handler with the `python3` on its `PATH`, Python 3.12 or later, or the interpreter that `FUNCD_PYTHON` names.
 
 The handler is a [Function's handler](../function/index.md#write-a-handler-and-its-contract): it receives the run's
-input in `event.data`, and its return value, in JSON, is the run's result. Its file, here `report.mjs`, needs its
-contract, `report.contract.yaml`, beside it: a Job whose artifact carries no contract is not Ready. This handler takes `{"month": "2026-10"}`, logs the
-month and returns a count of rows. Push it with [`funcdctl push`](../../tools/funcdctl/spec.md#funcdctl-push) into an
-OCI layout in the current directory, which the server on the same machine reads:
-
-```console
-$ funcdctl push report.mjs "oci-layout://$PWD/registry:report"
-oci-layout:///home/dev/jobs/registry:report@sha256:4b69fbdf58313be910dfecd0d75860646efcd10ede13015de1ecfaf5e329481f
-```
-
-The Job `report`, from
-[`job.yaml`](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/job/job.yaml). Save it as
-`job.yaml` and replace `image` with the reference that the push printed:
-
-::include[../../../../../api/types/v1alpha1/examples/job/job.yaml#job]
-
+input in `event.data`, and its return value, in JSON, is the run's result. This one logs the month with the name of
+its run, works for three seconds, so that the cancel below catches a run while it runs, and returns one row for each
+day of the month. Its contract takes `month` alone, and a Job whose artifact carries no contract is not Ready.
+[`funcdctl push`](../../tools/funcdctl/spec.md#funcdctl-push) writes the artifact into an OCI layout in the current
+directory, which the server on the same machine reads; replace the Job's `image` with the reference that it prints.
 [`timeout`](spec.md#jobspec) bounds each run's call, and [`concurrency`](spec.md#jobspec) lets two runs of the Job hold
-a worker at once. Apply the Job, then repeat `get` until `status.phase` is `Ready`:
+a worker at once.
 
-```console
-$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token apply -f job.yaml
-applied Job/report
-$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token get job report -n default -o json
-```
-
-Start a run with [`funcdctl job run`](../../tools/funcdctl/spec.md#funcdctl-job-run). It prints the run's name; without
-a name, funcd names the run after its Job with a suffix. Then repeat
+After the apply, repeat `get` until `status.phase` is `Ready`. [`funcdctl job run`](../../tools/funcdctl/spec.md#funcdctl-job-run)
+starts a run and prints its name; without a name, funcd names the run after its Job with a suffix. Repeat
 [`funcdctl job describe`](../../tools/funcdctl/spec.md#funcdctl-job-describe) until the phase is `Succeeded`, `Failed`
-or `Cancelled`:
-
-```console
-$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run report report-1 --input '{"month":"2026-10"}'
-report-1
-$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe report-1
-RUN report-1   job: report   phase: Running
-reason:    message: the worker of revision "report-v1" runs the handler
-revision: report-v1   digest: sha256:4b69fbdf58313be910dfecd0d75860646efcd10ede13015de1ecfaf5e329481f
-started by: dev
-started: 2026-11-23T22:47:15.024Z
-trace: 61d07d62ad83fc9872a026be2e3054ae
-full logs: funcdctl job logs report-1
-$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe report-1
-RUN report-1   job: report   phase: Succeeded
-revision: report-v1   digest: sha256:4b69fbdf58313be910dfecd0d75860646efcd10ede13015de1ecfaf5e329481f
-started by: dev
-started: 2026-11-23T22:47:15.024Z   ended: 2026-11-23T22:47:18.122Z   duration: 3s98ms
-result: {"month":"2026-10","rows":42}
-trace: 61d07d62ad83fc9872a026be2e3054ae
-full logs: funcdctl job logs report-1
-```
-
-The run pinned the Job's current **Revision**, `report-v1`, when it started, and keeps it to its end. `started by`
-is the subject of the credential that created the run, which grants nothing. The input must match the input schema
-of the Job's contract: `job run` with `{"day":1}` is refused with 422 `InputSchemaMismatch`, naming
-`body.spec.input.day` and `body.spec.input.month`.
+or `Cancelled`. The run pinned the Job's current **Revision** when it started, and keeps it to its end; `started by`
+is the subject of the credential that created the run, which grants nothing. An input off the contract, such as
+`{"day":1}`, is refused with 422 `InputSchemaMismatch`, naming `body.spec.input.day` and `body.spec.input.month`.
 
 [`funcdctl job logs`](../../tools/funcdctl/spec.md#funcdctl-job-logs) prints the run's records: its worker's output
 and logs, and the records of the calls that the run made, found by its trace ID. Records appear within
 [`funclog.segmentMaxAge`](../../running-funcd/spec.md#funcdconfigyaml), so repeat the command until they do. `-o wide`
-adds each record's `source`, `inv`, `trace` and arguments:
+adds each record's `source`, `inv` and `trace`. [`funcdctl job cancel`](../../tools/funcdctl/spec.md#funcdctl-job-cancel)
+cancels a run: a run that has not started ends at once, and a running run's worker is stopped first, so its handler
+may have done part of its work. [`funcdctl job runs`](../../tools/funcdctl/spec.md#funcdctl-job-runs) lists a Job's
+runs, newest first.
+
+### TypeScript
+
+The handler, in `src/main.ts`:
+
+::include[../../../../../_repos/funcd-typescript/examples/job-report/src/main.ts#handler]
+
+Its contract, in `report.contract.yaml`:
+
+::include[../../../../../_repos/funcd-typescript/examples/job-report/report.contract.yaml#contract]
+
+The Job `report`, in `report.yaml`:
+
+::include[../../../../../_repos/funcd-typescript/examples/job-report/report.yaml#job]
+
+Clone the repository, push the committed build `report.mjs` with its contract beside it, and replace `image` in
+`report.yaml` with the reference that the push prints:
 
 ```console
-$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job logs report-1 -o wide
-2026-11-23T22:47:15.080Z [INFO] 0 funcd-shim: listening on 127.0.0.1:62348 source=stdout
-2026-11-23T22:47:15.109Z [INFO] 0 building the report of source=console inv=703ee4cc7e7c22d1 trace=61d07d62ad83fc9872a026be2e3054ae args=["building the report of","2026-10"]
+$ git clone https://github.com/pyvvo/funcd-typescript
+$ cd funcd-typescript/examples/job-report
+$ funcdctl push report.mjs "oci-layout://$PWD/registry:report"
+oci-layout:///home/dev/funcd-typescript/examples/job-report/registry:report@sha256:d124133ffbb80a5f496f4bc9adcbd7253d9ba6c29d5642382074f3b36d6a31e0
 ```
 
-[`funcdctl job cancel`](../../tools/funcdctl/spec.md#funcdctl-job-cancel) cancels a run. A run that has not started
-ends at once; a running run's worker is stopped first, so its handler may have done part of its work:
+Apply the Job, start a run, and read it:
+
+```console
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token apply -f report.yaml
+applied Job/report
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token get job report -n default -o json
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run report report-1 --input '{"month":"2026-10"}'
+report-1
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe report-1
+RUN report-1   job: report   phase: Succeeded
+revision: report-v1   digest: sha256:d124133ffbb80a5f496f4bc9adcbd7253d9ba6c29d5642382074f3b36d6a31e0
+started by: dev
+started: 2026-11-23T23:59:25.895Z   ended: 2026-11-23T23:59:29.097Z   duration: 3s202ms
+result: {"month":"2026-10","rows":31}
+trace: beccbdf49268b7cae8e7de5ada16e4b0
+full logs: funcdctl job logs report-1
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job logs report-1 -o wide
+2026-11-23T23:59:26.037Z [INFO] 0 funcd-shim: listening on 127.0.0.1:58210 source=stdout
+2026-11-23T23:59:26.082Z [INFO] 0 building the report of 2026-10 in run report-1 source=console inv=12d0eb3882cceb46 trace=beccbdf49268b7cae8e7de5ada16e4b0 args=["building the report of 2026-10 in run report-1"]
+```
+
+Start a second run, cancel it while it runs, and read it:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run report report-2 --input '{"month":"2026-11"}'
@@ -94,21 +95,83 @@ cancel requested for report-2
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe report-2
 RUN report-2   job: report   phase: Cancelled
 reason: Cancelled   message: spec.cancel: the worker was stopped, and the handler may have done part of its work
-revision: report-v1   digest: sha256:4b69fbdf58313be910dfecd0d75860646efcd10ede13015de1ecfaf5e329481f
+revision: report-v1   digest: sha256:d124133ffbb80a5f496f4bc9adcbd7253d9ba6c29d5642382074f3b36d6a31e0
 started by: dev
-started: 2026-11-23T22:47:18.239Z   ended: 2026-11-23T22:47:19.288Z   duration: 1s47ms
-trace: a29057228e18dc0eafa09c7a1ec4b766
+started: 2026-11-23T23:59:29.317Z   ended: 2026-11-23T23:59:30.855Z   duration: 1s538ms
+trace: efeff33a9f4006868293e109685e480b
 full logs: funcdctl job logs report-2
 ```
 
-[`funcdctl job runs report`](../../tools/funcdctl/spec.md#funcdctl-job-runs) lists the Job's runs, newest first.
+### Python
+
+The handler, in `src/main.py`:
+
+::include[../../../../../_repos/funcd-python/examples/job-report/src/main.py#handler]
+
+Its contract, in `pyreport.contract.yaml`:
+
+::include[../../../../../_repos/funcd-python/examples/job-report/pyreport.contract.yaml#contract]
+
+The Job `pyreport`, in `report.yaml`:
+
+::include[../../../../../_repos/funcd-python/examples/job-report/report.yaml#job]
+
+The handler needs no third-party package, so it is pushed as one file, `pyreport.py`, beside its contract. Clone the
+repository, push it, and replace `image` in `report.yaml` with the reference that the push prints:
+
+```console
+$ git clone https://github.com/pyvvo/funcd-python
+$ cd funcd-python/examples/job-report
+$ mkdir -p dist && cp src/main.py dist/pyreport.py && cp pyreport.contract.yaml dist/
+$ funcdctl push dist/pyreport.py "oci-layout://$PWD/registry:pyreport"
+oci-layout:///home/dev/funcd-python/examples/job-report/registry:pyreport@sha256:600449c953fee8acbea825d3a373f9640091bff6b342a895bbf475c7e588397f
+```
+
+Apply the Job, start a run, and read it:
+
+```console
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token apply -f report.yaml
+applied Job/pyreport
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token get job pyreport -n default -o json
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run pyreport pyreport-1 --input '{"month":"2026-10"}'
+pyreport-1
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe pyreport-1
+RUN pyreport-1   job: pyreport   phase: Succeeded
+revision: pyreport-v1   digest: sha256:600449c953fee8acbea825d3a373f9640091bff6b342a895bbf475c7e588397f
+started by: dev
+started: 2026-11-23T23:59:30.990Z   ended: 2026-11-23T23:59:34.141Z   duration: 3s151ms
+result: {"month":"2026-10","rows":31}
+trace: 6aca9e21767590a4a59bb60b380f9a78
+full logs: funcdctl job logs pyreport-1
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job logs pyreport-1 -o wide
+2026-11-23T23:59:31.081Z [INFO] 0 funcd-shim: listening on 127.0.0.1:58245 source=stdout
+2026-11-23T23:59:31.118Z [INFO] 0 building the report of 2026-10 in run pyreport-1 source=stdout
+```
+
+Start a second run, cancel it while it runs, and read it:
+
+```console
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job run pyreport pyreport-2 --input '{"month":"2026-11"}'
+pyreport-2
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job cancel pyreport-2
+cancel requested for pyreport-2
+$ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token job describe pyreport-2
+RUN pyreport-2   job: pyreport   phase: Cancelled
+reason: Cancelled   message: spec.cancel: the worker was stopped, and the handler may have done part of its work
+revision: pyreport-v1   digest: sha256:600449c953fee8acbea825d3a373f9640091bff6b342a895bbf475c7e588397f
+started by: dev
+started: 2026-11-23T23:59:34.250Z   ended: 2026-11-23T23:59:35.793Z   duration: 1s543ms
+trace: 51c7777ae8d47fff2ded8845b2953907
+full logs: funcdctl job logs pyreport-2
+```
 
 ## Read the run in the handler
 
-Besides a Function's context, a Job's handler gets `ctx.run`: the run's `name`, its `job`, the `revision` that it
-pinned, its `phase`, which is `run` for the run's call, and `startedBy`, `started_by` in Python, the subject of the
-credential that created the run. The handler calls the context's methods, such as `ctx.log`, as a Function's handler
-does; the Spec tab lists them under [Handler API](spec.md#handler-api).
+Besides a Function's context, a Job's handler gets `ctx.run`, `context.run` in Python: the run's `name`, its `job`,
+the `revision` that it pinned, its `phase`, which is `run` for the run's call, and `startedBy`, `started_by` in
+Python, the subject of the credential that created the run. The handlers of the first example log `ctx.run.name`. The
+handler calls the context's methods, such as `ctx.log`, as a Function's handler does; the Spec tab lists them under
+[Handler API](spec.md#handler-api).
 
 funcd calls the handler once for each run and never again for that run, even when the run fails or funcd stops
 during it: work that must happen again takes a new run.
@@ -121,8 +184,8 @@ A JobRun is also a manifest: [`spec.job`](spec.md#jobrunspec) names the Job, in 
 
 ::include[../../../../../api/types/v1alpha1/examples/job/jobrun.yaml#jobrun]
 
-Save it as `jobrun.yaml` and apply it. A run created before its Job waits in `Pending` with `JobNotFound` until the
-Job exists, then starts as `report-1` did:
+Save it as `jobrun.yaml` and apply it; for the Python Job, `spec.job` is `pyreport`. A run created before its Job
+waits in `Pending` with `JobNotFound` until the Job exists, then starts as `report-1` did:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token apply -f jobrun.yaml
@@ -207,3 +270,10 @@ The Job itself is Ready once funcd has checked it as it checks a Function before
 | Message or cause | Action |
 | --- | --- |
 | `kind "Job" is namespaced; a namespace is required`, from `funcdctl get job` | Add `-n <namespace>`. The `funcdctl job` commands take `default` when `-n` is unset. |
+
+## Examples
+
+- [funcd-typescript/examples/job-report](https://github.com/pyvvo/funcd-typescript/tree/main/examples/job-report): the
+  Job `report`, its handler and its contract.
+- [funcd-python/examples/job-report](https://github.com/pyvvo/funcd-python/tree/main/examples/job-report): the Job
+  `pyreport`, its handler and its contract.

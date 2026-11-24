@@ -957,8 +957,24 @@ addon-rauthy-restore:
   venom: e2e/addon-rauthy-restore.venom.yml
 
 job:
-  description: A Job's runs on real containerd (ADR-0347) — a run that ends Succeeded with no container left, a cancel that stops the run's container within the grace, and a funcd crash during a run that leaves it Interrupted with no container.
+  description: A Job's runs on real containerd (ADR-0347) — the job-report examples of funcd-typescript and funcd-python each report on a month, a run that ends Succeeded with no container left, a cancel that stops the run's container within the grace, and a funcd crash during a run that leaves it Interrupted with no container.
+  module: github.com/pyvvo/funcd-typescript
+  dir: examples/job-report
+  # The Python example needs no third-party package, so its src/main.py is pushed as one file, pyreport.py beside its
+  # contract file, under py/; job-sleep's fixtures drive the cancel and crash cases.
   stage:
+    - report.mjs
+    - report.contract.yaml
+    - report.yaml
+    - from: examples/job-report/src/main.py
+      module: github.com/pyvvo/funcd-python
+      to: py/pyreport.py
+    - from: examples/job-report/pyreport.contract.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/pyreport.contract.yaml
+    - from: examples/job-report/report.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/report.yaml
     - from: e2e/fixtures/job-sleep.mjs
       to: job-sleep.mjs
     - from: e2e/fixtures/job-sleep.contract.json
@@ -969,16 +985,26 @@ job:
       to: job-input-short.json
     - from: e2e/fixtures/job-input-long.json
       to: job-input-long.json
+    - from: e2e/fixtures/job-input-month.json
+      to: job-input-month.json
     - from: e2e/fixtures/job-funcdconfig.yaml
       to: funcdconfig.yaml
   push:
+    - artifact: report.mjs
+      ref: report
+    - artifact: py/pyreport.py
+      ref: pyreport
     - artifact: job-sleep.mjs
       ref: job-sleep
   apply:
+    - report.yaml
+    - py/report.yaml
     - job-sleep.yaml
   ready:
     kind: job
     names:
+      - report
+      - pyreport
       - sleeper
     tries: 60
   venom: e2e/job.venom.yml

@@ -38,7 +38,7 @@ func TestScenarioGuideExamplesApply(t *testing.T) {
 		require.Contains(t, files, file, "every example file is applied")
 	}
 	for _, inc := range guideIncludes(t, filepath.Join("docs", "guide")) {
-		if file, pinned := inc.target(t); pinned && filepath.Ext(file) == ".yaml" && !inAppTemplate(file) {
+		if file, pinned := inc.target(t); pinned && laneManifest(file) {
 			require.Contains(t, files, file, "every lane manifest that a page includes is applied")
 		}
 	}
@@ -166,12 +166,18 @@ func guideManifests(t *testing.T) []string {
 		})
 	require.NoError(t, err)
 	for _, inc := range guideIncludes(t, filepath.Join("docs", "guide")) {
-		if file, pinned := inc.target(t); pinned && filepath.Ext(file) == ".yaml" && !inAppTemplate(file) {
+		if file, pinned := inc.target(t); pinned && laneManifest(file) {
 			files = append(files, file)
 		}
 	}
 	slices.Sort(files)
 	return slices.Compact(files)
+}
+
+// laneManifest reports whether file, a YAML file of a pinned module that a page includes, is a manifest that funcdctl
+// apply sends: not an artifact's contract file, <name>.contract.yaml (ADR-0247), and not a file of an App template.
+func laneManifest(file string) bool {
+	return filepath.Ext(file) == ".yaml" && !strings.HasSuffix(filepath.Base(file), ".contract.yaml") && !inAppTemplate(file)
 }
 
 // inAppTemplate reports whether file is a file of an App template: its app.yaml, beside a resources/ folder, or one of
@@ -189,6 +195,15 @@ func inAppTemplate(file string) bool {
 	}
 	fi, err := os.Stat(filepath.Join(filepath.Dir(dir), "app.yaml"))
 	return err == nil && fi.Mode().IsRegular()
+}
+
+// An artifact's contract file, which a page may include beside its handler, is no manifest that the guide applies, and
+// the Job's resource file beside it is one.
+func TestContractIsNoGuideManifest(t *testing.T) {
+	t.Parallel()
+	ts := langmod.Dir(t, langmod.TypeScript)
+	require.False(t, laneManifest(filepath.Join(ts, "examples", "log-burst", "log-burst.contract.yaml")))
+	require.True(t, laneManifest(filepath.Join(ts, "examples", "log-burst", "burst.yaml")))
 }
 
 // An App template's app.yaml and its resources are left out of the manifests that the guide applies, and a lane

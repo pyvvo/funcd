@@ -2,6 +2,8 @@
 # named <run>.run on real containerd. Every step drives funcdctl in the VM, co-located with the daemon.
 #
 # It proves, end to end:
+#   0. job-report-examples — a run of each language's job-report example, report and pyreport, ends Succeeded with the
+#      month's rows.
 #   1. job-run-succeeds — a run ends Succeeded with its result, and its container is gone after the answer.
 #   2. job-cancel-stops-run — a cancel stops the run's container within the driver's grace and ends it Cancelled.
 #   3. job-restart-interrupts — funcd killed while a run runs: at its next start the run is Failed with Interrupted,
@@ -13,6 +15,33 @@ vars:
   ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
 
 testcases:
+  - name: job-report-examples — a run of each language's job-report example ends Succeeded with the month's rows
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl job run report lane-report --input @/opt/lane/job-input-month.json && funcdctl job run pyreport lane-pyreport --input @/opt/lane/job-input-month.json'
+        info: "job run lane-report, lane-pyreport → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl get jobrun lane-report -n default -o json' | python3 -c 'import sys,json;s=json.load(sys.stdin).get("status",{});print("PHASE="+s.get("phase",""),"RESULT="+json.dumps(s.get("result"),separators=(",",":")))'
+        retry: 30
+        delay: 2
+        info: "lane-report → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - 'result.systemout ShouldContainSubstring RESULT={"month":"2026-10","rows":31}'
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl get jobrun lane-pyreport -n default -o json' | python3 -c 'import sys,json;s=json.load(sys.stdin).get("status",{});print("PHASE="+s.get("phase",""),"RESULT="+json.dumps(s.get("result"),separators=(",",":")))'
+        retry: 30
+        delay: 2
+        info: "lane-pyreport → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - 'result.systemout ShouldContainSubstring RESULT={"month":"2026-10","rows":31}'
+
   - name: job-run-succeeds — a run ends Succeeded with its result, and no container of it remains
     steps:
       - type: exec
