@@ -77,7 +77,7 @@ func settingsPlurals(ctx context.Context, r StoreReader) (map[string]bool, error
 	out := map[string]bool{}
 	for _, obj := range addons {
 		if a, ok := obj.(*v1.Addon); ok {
-			for _, st := range a.Spec.Settings {
+			for _, st := range a.Spec.KindAttributes().Settings {
 				out[v1.AddonPlural(st.Kind)] = true
 			}
 		}

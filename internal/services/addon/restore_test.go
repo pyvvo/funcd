@@ -51,17 +51,13 @@ func newRestoreRig(t *testing.T) *restoreRig {
 	st := store.New(memory.New())
 	t.Cleanup(func() { _ = st.Close() })
 	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}, ObjectMeta: v1.ObjectMeta{Name: "fake"},
-		Spec: v1.AddonSpec{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"},
-			Image:    "ghcr.io/pyvvo/fake@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809",
-			Env:      map[string]string{"MODE": "serve"},
-			Storage:  &v1.AddonStorage{Path: "/app/data", UID: os.Geteuid(), GID: os.Getegid()},
-			Snapshot: &v1.AddonSnapshot{Path: "/app/data/backups"},
-			Restore: &v1.AddonRestore{Path: "/app/data/restore",
-				Env: map[string]string{fakeaddon.RestoreEnv: `${{ "file:" + restore.file }}`}}}}
+		Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Image: "ghcr.io/pyvvo/fake@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809", Workloads: []v1.Workload{v1.WorkloadEngine},
+			Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"}, Env: map[string]string{"MODE": "serve"}, Storage: &v1.AddonStorage{Path: "/app/data", UID: os.Geteuid(), GID: os.Getegid()}, Snapshot: &v1.AddonSnapshot{Path: "/app/data/backups"}, Restore: &v1.AddonRestore{Path: "/app/data/restore",
+				Env: map[string]string{fakeaddon.RestoreEnv: `${{ "file:" + restore.file }}`}}}}}}}
 	register(t, st, a)
 	rt := fakeaddon.New(t)
 	g := &heldGate{Gate: hold.Never}
-	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: rt, Modes: []string{v1.AddonRuntimeContainerd},
+	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: rt, RunsImages: true,
 		Files: rt, Volumes: rt, Hold: g, QuarantinePeriod: time.Hour})
 	require.NoError(t, err)
 	rig := &restoreRig{ctx: ctx, st: st, rt: rt, r: r, held: g}
@@ -408,7 +404,7 @@ func TestIssue1511_ADeletionAfterARestartFollowsTheObjectsPolicy(t *testing.T) {
 		r.data(t, loginRef())
 
 		g := &heldGate{Gate: hold.Never, on: c.heldAtStart}
-		restarted, err := addon.NewReconciler(addon.Deps{Store: r.st, Provider: r.rt, Modes: []string{v1.AddonRuntimeContainerd},
+		restarted, err := addon.NewReconciler(addon.Deps{Store: r.st, Provider: r.rt, RunsImages: true,
 			Files: r.rt, Volumes: r.rt, Hold: g, QuarantinePeriod: time.Hour})
 		require.NoError(t, err)
 		r.r = restarted

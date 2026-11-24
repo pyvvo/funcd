@@ -91,7 +91,7 @@ func (s *addonProvider) Descriptors() []provider.Descriptor {
 func (s *addonProvider) Admissions(r admission.StoreReader) []admission.Admission {
 	c := s.cfg
 	return append(controlplane.NewAddonAdmissions(controlplane.AddonRules{Store: r, Registries: c.addonRegistries,
-		AnyRegistry: c.addonAnyRegistry, Reserved: s.reserved}),
+		AnyRegistry: c.addonAnyRegistry, Reserved: s.reserved, Overrides: c.imageOverrides}),
 		admission.NewAddonObjectQuotaAdmission(r, cmp.Or(c.addonMaxObjects, defaultAddonObjectsPerNamespace),
 			cmp.Or(c.addonMaxSettings, defaultAddonSettingsPerNamespace)))
 }
@@ -210,14 +210,15 @@ func (s *addonProvider) Reclaim(ctx context.Context) error {
 	return s.reconciler.ReclaimOrphans(ctx, s.cfg.quarantineNow())
 }
 
-// build builds the engine runtime, which runs containerd's engines, or the runtime WithAddonRuntime gives with its
-// modes, the reconciler, which watches the Addons, the Secrets its objects bind, the Restores that load them and the
-// AppRevisions that move an App's parts, and the Addon's reconciler, which stamps its revisions (ADR-0339). A
-// runtime that is also workload.AddonFiles and provider.Volumes reaches the engines' files and storage (ADR-0333).
+// build builds the engine runtime, which runs the engines' images on a containerd server and none on a process server,
+// or takes the runtime WithAddonRuntime gives, which runs them (ADR-0344 Decision 9), the reconciler, which watches the
+// Addons, the Secrets its objects bind, the Restores that load them and the AppRevisions that move an App's parts, and
+// the Addon's reconciler, which stamps its revisions (ADR-0339). A runtime that is also workload.AddonFiles and
+// provider.Volumes reaches the engines' files and storage (ADR-0333).
 func (s *addonProvider) build(d addonDeps) error {
 	const op = "funcd.New"
 	c := s.cfg
-	engineRuntime, modes := c.addonRuntime, c.addonModes
+	engineRuntime, runsImages := c.addonRuntime, true
 	if engineRuntime == nil {
 		var err error
 		if engineRuntime, err = provider.NewRuntime(provider.Deps{
@@ -226,21 +227,14 @@ func (s *addonProvider) build(d addonDeps) error {
 		}); err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "build the add-on provider runtime")
 		}
-		modes = nil
-		if c.imageFor != nil {
-			modes = []string{v1.AddonRuntimeContainerd}
-		}
-	}
-	serverMode := "process"
-	if c.imageFor != nil {
-		serverMode = v1.AddonRuntimeContainerd
+		runsImages = c.imageFor != nil
 	}
 	s.engines = engineRuntime
 	followDevLines(engineRuntime, "", d.engineLine)
 	s.files, _ = engineRuntime.(workload.AddonFiles)
 	volumes, _ := engineRuntime.(provider.Volumes)
 	rec, err := addonsvc.NewReconciler(addonsvc.Deps{
-		Store: c.store, Provider: engineRuntime, Secrets: d.secrets, Routes: d.routes, Modes: modes, ServerMode: serverMode,
+		Store: c.store, Provider: engineRuntime, Secrets: d.secrets, Routes: d.routes, RunsImages: runsImages,
 		Logger: c.logger, SupervisionPeriod: c.pacing.SupervisionPeriod, ReferentPollInterval: c.pacing.ReferentPollInterval,
 		EnginePollInterval: c.pacing.EnginePollInterval, Files: s.files, Volumes: volumes, Hold: c.gate(),
 		QuarantinePeriod: c.quarantinePeriodOrDefault(), Now: c.quarantineNow, FollowCurrent: c.addonFollowCurrent,

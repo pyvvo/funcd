@@ -50,7 +50,7 @@ func (c *Calls) Target(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadR
 	if err != nil {
 		return local.AddonTarget{}, err
 	}
-	clean, ok := pathx.Kept(path, spec.AddonBasePath(), spec.PrivatePaths)
+	clean, ok := pathx.Kept(path, spec.AddonBasePath(), spec.KindAttributes().PrivatePaths)
 	if !ok {
 		return local.AddonTarget{}, local.ErrAddonPathRefused.Errorf(op, "the edge entry of %q does not serve %s", alias, path)
 	}
@@ -132,7 +132,7 @@ func (c *Calls) served(ctx context.Context, o *v1.AddonObject) (v1.AddonSpec, er
 		return v1.AddonSpec{}, fault.Wrapf(err, fault.KindOf(err), op, "list Addons")
 	}
 	for _, obj := range list.Items {
-		if a, ok := obj.(*v1.Addon); ok && v1.SameAddonKind(a.Spec.Kind, o.Spec.Kind) {
+		if a, ok := obj.(*v1.Addon); ok && v1.SameAddonKind(a.Spec.Kind(), o.Spec.Kind) {
 			return a.Spec, nil
 		}
 	}

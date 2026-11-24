@@ -40,7 +40,7 @@ func newRevRig(t *testing.T) *revRig {
 	rig.stamp(t)
 	for _, gen := range []string{"rauthy-2", "rauthy-3"} {
 		cur := rig.addon(t)
-		cur.Spec.Env = map[string]string{"GEN": gen}
+		cur.Spec.Runtimes[0].Attributes.Env = map[string]string{"GEN": gen}
 		_, err := rig.st.Update(rig.ctx, cur)
 		require.NoError(t, err)
 		rig.stamp(t)
@@ -55,10 +55,10 @@ func newUnstampedRig(t *testing.T) *revRig {
 	st := store.New(memory.New())
 	t.Cleanup(func() { _ = st.Close() })
 	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}, ObjectMeta: v1.ObjectMeta{Name: "rauthy"},
-		Spec: v1.AddonSpec{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"},
-			Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809"}}
+		Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809", Workloads: []v1.Workload{v1.WorkloadEngine},
+			Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"}}}}}}
 	rt := fakeaddon.New(t)
-	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: rt, Modes: []string{v1.AddonRuntimeContainerd}})
+	r, err := addon.NewReconciler(addon.Deps{Store: st, Provider: rt, RunsImages: true})
 	require.NoError(t, err)
 	_, err = st.Create(ctx, a)
 	require.NoError(t, err)
@@ -209,7 +209,7 @@ func TestIssue1536_PartTakesTheAddonsFirstRevision(t *testing.T) {
 	require.NotNil(t, g.rt.Engine(provider.ProviderRef{Namespace: "default", Name: "web-auth-login"}), "its engine runs")
 
 	cur := g.addon(t)
-	cur.Spec.Env = map[string]string{"GEN": "rauthy-2"}
+	cur.Spec.Runtimes[0].Attributes.Env = map[string]string{"GEN": "rauthy-2"}
 	_, err := g.st.Update(g.ctx, cur)
 	require.NoError(t, err)
 	g.stamp(t)

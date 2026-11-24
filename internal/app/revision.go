@@ -124,7 +124,7 @@ func (r *Reconciler) addonRecords(ctx context.Context, spec v1.AppSpec, back *v1
 	var out []v1.AppAddonRevision
 	for _, k := range kinds {
 		for _, o := range res.Items {
-			if ad, ok := o.(*v1.Addon); ok && v1.SameAddonKind(ad.Spec.Kind, k) && ad.Status.CurrentRevision != "" {
+			if ad, ok := o.(*v1.Addon); ok && v1.SameAddonKind(ad.Spec.Kind(), k) && ad.Status.CurrentRevision != "" {
 				out = append(out, v1.AppAddonRevision{Kind: k, Revision: ad.Status.CurrentRevision})
 			}
 		}

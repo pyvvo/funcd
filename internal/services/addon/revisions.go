@@ -111,7 +111,7 @@ func (r addonRevisions) retire(ctx context.Context, a *v1.Addon, current v1.Obje
 	if len(old) == 0 {
 		return false, nil
 	}
-	used, err := r.usedRevisions(ctx, a.Spec.Kind)
+	used, err := r.usedRevisions(ctx, a.Spec.Kind())
 	if err != nil {
 		return false, err
 	}
@@ -245,7 +245,7 @@ func (r *Reconciler) followApp(ctx context.Context, a *v1.Addon, o *v1.AddonObje
 	}
 	o.Status.AppRevision = latest.Name
 	if !r.followCurrent {
-		o.Status.AddonRevision = cmp.Or(recordOf(latest, a.Spec.Kind), a.Status.CurrentRevision)
+		o.Status.AddonRevision = cmp.Or(recordOf(latest, a.Spec.Kind()), a.Status.CurrentRevision)
 	}
 	return nil
 }

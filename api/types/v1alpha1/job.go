@@ -26,7 +26,7 @@ const (
 // run, and Concurrency is how many of its runs may hold a worker at once (ADR-0347 Decision 1). It has no scaling,
 // replicas, pooling, protocol or ingress.
 type JobSpec struct {
-	Runtime            RuntimeName         `json:"runtime,omitempty" doc:"The runtime that runs the code, such as nodejs22 or python314. A Job without one is not Ready, with ShapeInvalid, and one whose runtime this node cannot run is not Ready, with RuntimeUnavailable."`
+	Runtime            RuntimeName         `json:"runtime,omitempty" doc:"The runtime that runs the code, such as nodejs22 or python314, or one that an Addon ships for Jobs. A Job without one is not Ready, with ShapeInvalid, and one whose runtime this node cannot run is not Ready, with RuntimeUnavailable."`
 	Handler            string              `json:"handler,omitempty" pattern:"^[A-Za-z_][A-Za-z0-9_.]*$" doc:"The name of the export that the shim calls once for each run, such as handle. A Job without one, or whose code has no such export, is not Ready, with ShapeInvalid."`
 	Image              string              `json:"image,omitempty" doc:"The OCI reference of the code's artifact: a registry reference with a tag or a digest, or an oci-layout:// reference to a layout on the server's disk. A Job whose image is missing, or cannot be resolved or pulled, starts no run."`
 	ImageDigest        string              `json:"imageDigest,omitempty" pattern:"^sha256:[a-f0-9]{64}$" doc:"The sha256 digest that funcd pulls the image by and checks it against. Unset, funcd resolves the image to its digest when it creates the Revision of a new spec and keeps that digest, so a tag that moves later changes nothing."`

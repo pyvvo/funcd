@@ -337,10 +337,12 @@ type config struct {
 	lakeProvider provider.Runtime
 	// sqlProvider overrides the SQLDatabase engine runtime (ADR-0232); nil ⇒ the production runtime.
 	sqlProvider provider.Runtime
-	// addonRuntime overrides the add-on engines' runtime, and addonModes are the runtime.mode values it serves
-	// (ADR-0332 Decision 3, ADR-0334); nil ⇒ the production runtime, serving containerd on a containerd server.
+	// addonRuntime overrides the add-on engines' runtime, which runs images (ADR-0334, ADR-0344 Decision 9); nil ⇒ the
+	// production runtime, which runs them on a containerd server and none on a process server.
 	addonRuntime provider.Runtime
-	addonModes   []string
+	// imageOverrides are the runtime names runtime.containerd.imageOverride maps, which no Addon may ship (ADR-0344
+	// Decision 4).
+	imageOverrides []string
 	// addonRegistries are addons.registries, the registries an Addon's image may come from (ADR-0332 Decision 6);
 	// addonMaxObjects is addons.maxObjectsPerNamespace, 0 ⇒ the default (20), negative disables the cap;
 	// addonMaxSettings is addons.maxSettingsPerNamespace, 0 ⇒ the default (200) (ADR-0340 Decision 6).
@@ -968,6 +970,9 @@ func (p *Platform) buildControlPlane() error {
 	jobs := fnReconciler.Jobs()
 	ctrl.Register(v1.KindJob.GVK(), jobs)
 	ctrl.Watches(v1.KindJobRun.GVK(), jobs.MapRun)
+	// ADR-0344 Decisions 7 and 11: an Addon's change requeues the Functions and Jobs whose runtime an Addon may ship
+	ctrl.Watches(v1.KindAddon.GVK(), fnReconciler.MapAddon)
+	ctrl.Watches(v1.KindAddon.GVK(), jobs.MapAddon)
 	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
 	ctrl.Watches(v1.KindRevision.GVK(), fnReconciler.MapRevision)
 	ctrl.Watches(v1.KindRestore.GVK(), fnReconciler.MapRestore) // a Restore into a volume clears DataMissing (ADR-0262)

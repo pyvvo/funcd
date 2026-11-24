@@ -97,10 +97,9 @@ func newSettingsRig(t *testing.T, timeout time.Duration) *settingsRig {
 		clock: time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)}
 	t.Cleanup(func() { cancel(); _ = g.st.Close() })
 	register(t, g.st, &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}, ObjectMeta: v1.ObjectMeta{Name: "rauthy"},
-		Spec: v1.AddonSpec{Kind: "IdentityProvider", Port: 8080, BasePath: "/auth/v1", Readiness: v1.AddonReadiness{Path: "/auth/v1/ping"},
-			Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809",
-			Settings: []v1.AddonSettings{{Kind: "RauthyPasswordPolicy", Target: "spec.config.provider", Resync: v1.Duration(time.Minute),
-				Function: v1.AddonSettingsFunction{Ref: "rauthy-settings"}, Schema: json.RawMessage(policySchema)}}}})
+		Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809", Workloads: []v1.Workload{v1.WorkloadEngine},
+			Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080, BasePath: "/auth/v1", Readiness: v1.AddonReadiness{Path: "/auth/v1/ping"}, Settings: []v1.AddonSettings{{Kind: "RauthyPasswordPolicy", Target: "spec.config.provider", Resync: v1.Duration(time.Minute),
+				Function: v1.AddonSettingsFunction{Ref: "rauthy-settings"}, Schema: json.RawMessage(policySchema)}}}}}}})
 	g.r = g.reconciler(timeout)
 	g.target("login")
 	g.function("rauthy-settings", map[string]v1.ObjectName{"idp": "login"})
@@ -109,7 +108,7 @@ func newSettingsRig(t *testing.T, timeout time.Duration) *settingsRig {
 
 // reconciler is a reconciler of the rig's store, as a funcd start builds one: it knows nothing of earlier calls.
 func (g *settingsRig) reconciler(timeout time.Duration) *addon.Reconciler {
-	r, err := addon.NewReconciler(addon.Deps{Store: g.st, Provider: readyRuntime{}, Modes: []string{v1.AddonRuntimeContainerd},
+	r, err := addon.NewReconciler(addon.Deps{Store: g.st, Provider: readyRuntime{}, RunsImages: true,
 		SupervisionPeriod: time.Hour, Now: g.now})
 	require.NoError(g.t, err)
 	r.SetSettingsCaller(g.caller, func(req controller.Request) { g.ended <- req }, timeout)

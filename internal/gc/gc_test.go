@@ -67,8 +67,8 @@ func object(t testing.TB, kind v1.Kind, name v1.ObjectName) v1.Object {
 	}
 	switch o := obj.(type) {
 	case *v1.Addon:
-		o.Spec = v1.AddonSpec{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/"},
-			Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809"}
+		o.Spec = v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809", Workloads: []v1.Workload{v1.WorkloadEngine},
+			Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/"}}}}}
 	case *v1.AddonRevision:
 		o.Spec.Addon, o.Spec.Number = "rauthy", 1
 	case *v1.Workflow:

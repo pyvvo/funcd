@@ -61,11 +61,9 @@ type Deps struct {
 	Secrets provider.SecretResolver
 	// Routes takes each object's edge entry (ADR-0138); nil programs none.
 	Routes router.EntrySetter
-	// Modes are the runtime.mode values whose engines this runtime runs: containerd on a containerd server and under
-	// funcdctl dev, none on a process server (ADR-0332 Decision 3). ServerMode is the server's runtime.mode, which a
-	// RuntimeUnavailable message names.
-	Modes      []string
-	ServerMode string
+	// RunsImages is whether Provider runs images, as it does on containerd and under funcdctl dev: on a process server
+	// it runs none, and each object waits Pending, RuntimeUnavailable, naming the process driver (ADR-0344 Decision 9).
+	RunsImages bool
 	Logger     *slog.Logger
 	// SupervisionPeriod requeues a Ready object, so a dead engine is re-created (ADR-0142); 0 ⇒
 	// controller.SupervisionPeriod. ReferentPollInterval re-checks a wait no watch ends, a lifted forbid (ADR-0163);
@@ -94,8 +92,7 @@ type Reconciler struct {
 	prov          provider.Runtime
 	secrets       provider.SecretResolver
 	routes        router.EntrySetter
-	modes         []string
-	serverMode    string
+	runsImages    bool
 	logger        *slog.Logger
 	period        time.Duration
 	referentPoll  time.Duration
@@ -149,7 +146,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	}
 	return &Reconciler{
 		store: d.Store, prov: d.Provider, secrets: d.Secrets, routes: d.Routes,
-		modes: d.Modes, serverMode: d.ServerMode, logger: logger.With("component", "services.addon.reconciler"),
+		runsImages: d.RunsImages, logger: logger.With("component", "services.addon.reconciler"),
 		period:       period,
 		referentPoll: orDefault(d.ReferentPollInterval, defaultPollInterval),
 		enginePoll:   min(orDefault(d.EnginePollInterval, defaultPollInterval), period),

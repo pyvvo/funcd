@@ -67,15 +67,16 @@ func (k addons) Write(ctx context.Context, w FileWriter, ns v1.NamespaceName, m 
 	case a == nil:
 		return MemberFile{}, marked{fault.NotFoundf(op, "member %s: no Addon registers the kind %s, so none declares its snapshot.path",
 			member, m.Kind), ErrNoSnapshot}
-	case a.Spec.Snapshot == nil:
+	case a.Spec.KindAttributes().Snapshot == nil:
 		return MemberFile{}, marked{fault.NotFoundf(op, "member %s: the add-on %s declares no snapshot.path", member, a.Name), ErrNoSnapshot}
 	case k.files == nil:
 		return MemberFile{}, fault.Unavailablef(op, "member %s: this server reaches no add-on engine's files", member)
 	}
-	file, rc, err := k.files.Newest(ctx, ns, m.Name, a.Spec.StorageDir(a.Spec.Snapshot.Path), addonSnapshotQuiet)
+	at := a.Spec.KindAttributes()
+	file, rc, err := k.files.Newest(ctx, ns, m.Name, at.StorageDir(at.Snapshot.Path), addonSnapshotQuiet)
 	if fault.KindOf(err) == fault.NotFound {
 		return MemberFile{}, marked{fault.Wrapf(err, fault.NotFound, op, "member %s: its engine has written no snapshot under %s yet",
-			member, a.Spec.Snapshot.Path), ErrNoSnapshot}
+			member, at.Snapshot.Path), ErrNoSnapshot}
 	}
 	if err != nil {
 		return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "member %s: read its snapshot", member)
@@ -110,7 +111,7 @@ func (k addons) addonOf(ctx context.Context, ns v1.NamespaceName, kind v1.Kind, 
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list Addons")
 	}
 	for _, o := range l.Items {
-		if a, ok := o.(*v1.Addon); ok && v1.SameAddonKind(a.Spec.Kind, string(kind)) {
+		if a, ok := o.(*v1.Addon); ok && v1.SameAddonKind(a.Spec.Kind(), string(kind)) {
 			return a, nil
 		}
 	}
@@ -137,7 +138,7 @@ func (k addons) Destination(ctx context.Context, ns v1.NamespaceName, rm v1.Rest
 		return nil, err
 	case a == nil:
 		return nil, fault.Unavailablef(op, "member %s/%s: no Addon registers the kind %s", rm.Kind, rm.Name, rm.Kind)
-	case a.Spec.Restore == nil:
+	case a.Spec.KindAttributes().Restore == nil:
 		return nil, fault.Invalidf(op, "member %s/%s: the add-on %s declares no restore.path", rm.Kind, rm.Name, a.Name)
 	case k.files == nil:
 		return nil, fault.Unavailablef(op, "member %s/%s: this server reaches no add-on engine's files", rm.Kind, rm.Name)
@@ -149,9 +150,10 @@ func (k addons) Destination(ctx context.Context, ns v1.NamespaceName, rm v1.Rest
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "%s %s/%s", rm.Kind, ns, rm.Name)
 	}
+	at := a.Spec.KindAttributes()
 	d := addonDestination{st: k.st, files: k.files, ns: ns, name: rm.Name, uid: obj.GetObjectMeta().UID,
-		dir: a.Spec.StorageDir(a.Spec.Restore.Path), timeout: a.Spec.Restore.EffectiveTimeout(), restore: restoreOf(ctx)}
-	if s := a.Spec.Storage; s != nil {
+		dir: at.StorageDir(at.Restore.Path), timeout: at.Restore.EffectiveTimeout(), restore: restoreOf(ctx)}
+	if s := at.Storage; s != nil {
 		d.owner, d.group = s.UID, s.GID
 	}
 	return d, nil

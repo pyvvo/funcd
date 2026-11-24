@@ -61,9 +61,8 @@ func (h *harness) addonAt(rev v1.ObjectName) {
 	obj, err := h.st.Get(h.ctx, v1.KindAddon.GVK(), "", "rauthy")
 	if err != nil {
 		a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddon.GVK().APIVersion(), Kind: v1.KindAddon},
-			ObjectMeta: v1.ObjectMeta{Name: "rauthy"}, Spec: v1.AddonSpec{Kind: "IdentityProvider", Port: 8080,
-				Readiness: v1.AddonReadiness{Path: "/"},
-				Image:     "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809"}}
+			ObjectMeta: v1.ObjectMeta{Name: "rauthy"}, Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809", Workloads: []v1.Workload{v1.WorkloadEngine},
+				Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/"}}}}}}
 		obj = h.create(a)
 	}
 	a := obj.(*v1.Addon)

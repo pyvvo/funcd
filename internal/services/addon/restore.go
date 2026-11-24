@@ -50,7 +50,7 @@ func (r *Reconciler) restoreStep(ctx context.Context, a *v1.Addon, o *v1.AddonOb
 		return restoreNone, nil
 	case m.State == v1.AddonRestoreLoaded:
 		return restoreLoaded, nil
-	case a.Spec.Restore == nil:
+	case a.Spec.KindAttributes().Restore == nil:
 		return restoreNone, nil
 	}
 	has, err := r.hasCopy(ctx, a, o)
@@ -83,7 +83,7 @@ func (r *Reconciler) hasCopy(ctx context.Context, a *v1.Addon, o *v1.AddonObject
 	if r.files == nil {
 		return true, nil
 	}
-	_, rc, err := r.files.Newest(ctx, o.Namespace, o.Name, a.Spec.StorageDir(a.Spec.Restore.Path), 0)
+	_, rc, err := r.files.Newest(ctx, o.Namespace, o.Name, a.Spec.KindAttributes().StorageDir(a.Spec.KindAttributes().Restore.Path), 0)
 	if fault.KindOf(err) == fault.NotFound {
 		return false, nil
 	}
@@ -96,10 +96,10 @@ func (r *Reconciler) hasCopy(ctx context.Context, a *v1.Addon, o *v1.AddonObject
 
 // clearCopy empties restore.path; nothing without file access or a restore.path.
 func (r *Reconciler) clearCopy(ctx context.Context, a *v1.Addon, o *v1.AddonObject) error {
-	if r.files == nil || a.Spec.Restore == nil {
+	if r.files == nil || a.Spec.KindAttributes().Restore == nil {
 		return nil
 	}
-	if err := r.files.Clear(ctx, o.Namespace, o.Name, a.Spec.StorageDir(a.Spec.Restore.Path)); err != nil {
+	if err := r.files.Clear(ctx, o.Namespace, o.Name, a.Spec.KindAttributes().StorageDir(a.Spec.KindAttributes().Restore.Path)); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), "services.addon.clearCopy", "remove the copy of %s/%s", o.Namespace, o.Name)
 	}
 	return nil
@@ -107,12 +107,12 @@ func (r *Reconciler) clearCopy(ctx context.Context, a *v1.Addon, o *v1.AddonObje
 
 // restoreEnv renders restore.env over the object's config and restore.file, the copy's path in the engine.
 func restoreEnv(a *v1.Addon, o *v1.AddonObject) (map[string]string, error) {
-	file, err := json.Marshal(map[string]string{"file": path.Join(a.Spec.Restore.Path, o.Status.Restore.File)})
+	file, err := json.Marshal(map[string]string{"file": path.Join(a.Spec.KindAttributes().Restore.Path, o.Status.Restore.File)})
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, "services.addon.restoreEnv", "encode restore.file")
 	}
-	env, err := RenderEnv(a.Spec.Restore.Env, map[string]json.RawMessage{configDoc: configOf(o), restoreDoc: file},
-		restoreSchemas(a.Spec.Config))
+	env, err := RenderEnv(a.Spec.KindAttributes().Restore.Env, map[string]json.RawMessage{configDoc: configOf(o), restoreDoc: file},
+		restoreSchemas(a.Spec.KindAttributes().Config))
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, "services.addon.restoreEnv", "spec.restore.env")
 	}

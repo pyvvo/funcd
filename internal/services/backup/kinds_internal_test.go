@@ -251,10 +251,8 @@ func addonCopy(t *testing.T) (*v1.Backup, keySecrets, *fakeaddon.Runtime) {
 	st := store.New(storemem.New())
 	for _, o := range []v1.Object{
 		&v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}, ObjectMeta: v1.ObjectMeta{Name: "rauthy"},
-			Spec: v1.AddonSpec{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"},
-				Image:    "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809",
-				Storage:  &v1.AddonStorage{Path: "/app/data"},
-				Snapshot: &v1.AddonSnapshot{Path: "/app/data/backups"}}},
+			Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809", Workloads: []v1.Workload{v1.WorkloadEngine},
+				Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080, Readiness: v1.AddonReadiness{Path: "/ping"}, Storage: &v1.AddonStorage{Path: "/app/data"}, Snapshot: &v1.AddonSnapshot{Path: "/app/data/backups"}}}}}},
 		&v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject},
 			ObjectMeta: v1.ObjectMeta{Name: "login", Namespace: "orders", ResourceGroup: "app"}, Spec: v1.AddonObjectSpec{Kind: "IdentityProvider"}},
 	} {

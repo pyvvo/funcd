@@ -44,7 +44,6 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/scheduler"
 	"github.com/pyvvo/funcd/internal/secrets"
-	lakesvc "github.com/pyvvo/funcd/internal/services/lake"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/volume"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -674,7 +673,11 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	// spec left it unset (ADR-0035). pinned is the Revision's authoritative digest, used to
 	// materialize; an unresolvable ref → Failed (never a silent/wrong deploy).
 	prevRevision := fn.Status.CurrentRevision
-	pinned, err := r.ensureRevision(ctx, fn)
+	sh, err := r.shippedRuntime(ctx, fn.Spec.Runtime)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	rev, err := r.ensureRevision(ctx, fn, sh)
 	if err != nil {
 		switch {
 		case errors.Is(err, errArtifactUnresolved):
@@ -693,6 +696,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		}
 		return controller.Result{}, err
 	}
+	pinned := rev.Spec.ImageDigest
 	if fn.Status.CurrentRevision != prevRevision {
 		// a newer apply supersedes the revision that was coming up, so retire it now (ADR-0143 Decision 4.1)
 		again, derr := r.drain(ctx, fn)
@@ -718,10 +722,16 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		return r.heldThenGate(ctx, fn, gateFailure{reason: "ShapeInvalid", message: verr.Error(), phase: v1.PhaseFailed, shapeInvalid: true}, idx, drainAfter, nil)
 	}
 
-	// 3a. runtime gate (issue #371, ADR-0149 Decision 2): a runtime that no shim on this node runs, or the Lake
-	// engine image, fails here, before pooling's assign. An absent containerd image fails at Create instead (step 4).
-	if msg, missing := r.runtimeUnavailable(fn); missing {
-		return r.heldThenGate(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed}, idx, drainAfter, nil)
+	// 3a. runtime gate (issue #371, ADR-0149 Decision 2, ADR-0344 Decision 6): a runtime that no shim on this node runs,
+	// the Lake engine image, or an Addon's runtime that does not serve Functions here fails, before pooling's assign. A
+	// Revision created before its Addon's runtime served it records the image first (ADR-0344 Decision 8). An absent
+	// containerd image fails at Create instead (step 4).
+	recorded, err := r.fillRuntimeImage(ctx, functionWorkload(fn), rev, sh)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	if g, failed := r.runtimeGate(functionWorkload(fn), sh, recorded); failed {
+		return r.heldThenGate(ctx, fn, g, idx, drainAfter, nil)
 	}
 
 	// 3b. resources gate (ADR-0291 Decision 4): a Function written past admission, such as by a restore, with a
@@ -1357,6 +1367,10 @@ func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) (steady b
 		return false, time.Time{}
 	}
 	if rr, ok := fn.Status.Conditions.Get(condRevisionReady); !ok || rr.Status != v1.ConditionTrue {
+		return false, time.Time{}
+	}
+	// an Addon's runtime is read on each pass, so its gate fails once its Addon changes (ADR-0344 Decision 6)
+	if !ownRuntime(fn.Spec.Runtime) && r.runtimeGateFails(ctx, fn, v1.ObjectName(c)) {
 		return false, time.Time{}
 	}
 	desired := r.desiredReplicas(fn)
@@ -2496,34 +2510,37 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 // drift it. It follows ADR-0172's table: a deleted namesake's Revision is dropped and the generation stamped afresh,
 // another Function's is never touched (errRevisionStampFailed), and a stamped Revision that is gone fails closed
 // (errRevisionMissing). The create path first retires every worker labelled with the Revision's name: the owner
-// garbage collector may already have deleted a deleted namesake's Revision (ADR-0170).
-func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (string, error) {
+// garbage collector may already have deleted a deleted namesake's Revision (ADR-0170). A Revision created while sh, the
+// Addon runtime fn's runtime resolves to, serves Functions records its image (ADR-0344 Decision 8).
+func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function, sh shipped) (*v1.Revision, error) {
 	return r.stamp(ctx, stampSubject{
-		w:          functionWorkload(fn),
-		revision:   v1.ObjectName(revisionName(fn)),
-		current:    v1.ObjectName(fn.Status.CurrentRevision),
-		setCurrent: func(rev v1.ObjectName) { fn.Status.CurrentRevision = string(rev) },
-		judge:      func(rev *v1.Revision) revisionOwner { return revisionOf(rev, fn) },
-		retire:     func(ctx context.Context, rev v1.ObjectName) error { return r.retireStale(ctx, fn, rev) },
+		w:            functionWorkload(fn),
+		runtimeImage: sh.imageFor(functionWorkload(fn)),
+		revision:     v1.ObjectName(revisionName(fn)),
+		current:      v1.ObjectName(fn.Status.CurrentRevision),
+		setCurrent:   func(rev v1.ObjectName) { fn.Status.CurrentRevision = string(rev) },
+		judge:        func(rev *v1.Revision) revisionOwner { return revisionOf(rev, fn) },
+		retire:       func(ctx context.Context, rev v1.ObjectName) error { return r.retireStale(ctx, fn, rev) },
 	})
 }
 
 // stampSubject is what a Revision snapshots (ADR-0347 Decision 2): a Function's spec, or a Job's through the fields it
-// shares with a Function's. judge is ADR-0172 Decision 5's table for its kind, and retire, when set, runs before the
-// create.
+// shares with a Function's, and runtimeImage, the image of the Addon runtime that serves it (ADR-0344 Decision 8). judge
+// is ADR-0172 Decision 5's table for its kind, and retire, when set, runs before the create.
 type stampSubject struct {
-	w          workload
-	revision   v1.ObjectName
-	current    v1.ObjectName
-	setCurrent func(v1.ObjectName)
-	judge      func(*v1.Revision) revisionOwner
-	retire     func(ctx context.Context, rev v1.ObjectName) error
+	w            workload
+	runtimeImage string
+	revision     v1.ObjectName
+	current      v1.ObjectName
+	setCurrent   func(v1.ObjectName)
+	judge        func(*v1.Revision) revisionOwner
+	retire       func(ctx context.Context, rev v1.ObjectName) error
 }
 
 // stamp is ensureRevision for any subject: it adopts the subject's own stored Revision, drops a deleted namesake's,
 // refuses another's, and otherwise creates it with the digest pinned once (ADR-0035), naming the subject in spec.function
-// or spec.job and in its controller reference; it returns the Revision's digest.
-func (r *Reconciler) stamp(ctx context.Context, s stampSubject) (string, error) {
+// or spec.job and in its controller reference; it returns the Revision, whose spec carries its digest.
+func (r *Reconciler) stamp(ctx context.Context, s stampSubject) (*v1.Revision, error) {
 	const op = "function.ensureRevision"
 	m := s.w.meta()
 	existing, err := r.getRevision(ctx, m.Namespace, s.revision)
@@ -2533,22 +2550,22 @@ func (r *Reconciler) stamp(ctx context.Context, s stampSubject) (string, error) 
 		case revSelf:
 			return r.adoptRevision(ctx, s, existing)
 		case revOther:
-			return "", stampTaken(existing)
+			return nil, stampTaken(existing)
 		}
 		if derr := r.dropRevision(ctx, existing); derr != nil {
-			return "", derr
+			return nil, derr
 		}
 	case fault.KindOf(err) != fault.NotFound:
-		return "", fault.Wrapf(err, fault.KindOf(err), op, "get revision")
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "get revision")
 	case s.current == s.revision:
-		return "", fmt.Errorf("%w: %s", errRevisionMissing, s.revision)
+		return nil, fmt.Errorf("%w: %s", errRevisionMissing, s.revision)
 	}
 	// create path: pin the digest — explicit if set, else resolve the ref (ADR-0035).
 	pinned := s.w.spec.ImageDigest
 	if pinned == "" {
 		d, rerr := r.pinDigest(ctx, s.w.spec.Image)
 		if rerr != nil {
-			return "", rerr
+			return nil, rerr
 		}
 		pinned = d
 	}
@@ -2563,7 +2580,7 @@ func (r *Reconciler) stamp(ctx context.Context, s stampSubject) (string, error) 
 		Number:  m.Generation,
 		Runtime: s.w.spec.Runtime,
 		Handler: s.w.spec.Handler,
-		Image:   s.w.spec.Image, ImageDigest: pinned,
+		Image:   s.w.spec.Image, ImageDigest: pinned, RuntimeImage: s.runtimeImage,
 	}
 	if owner.Kind == v1.KindJob {
 		rev.Spec.Job = owner.Name
@@ -2572,50 +2589,58 @@ func (r *Reconciler) stamp(ctx context.Context, s stampSubject) (string, error) 
 	}
 	if s.retire != nil {
 		if err := s.retire(ctx, rev.Name); err != nil {
-			return "", err
+			return nil, err
 		}
 	}
-	if _, cerr := r.store.Create(ctx, rev); cerr != nil {
+	stored, cerr := r.store.Create(ctx, rev)
+	if cerr != nil {
 		switch fault.KindOf(cerr) {
 		case fault.Conflict:
 			return r.settleCreateConflict(ctx, s, cerr)
 		case fault.Invalid:
-			return "", fmt.Errorf("%w: %w", errRevisionStampFailed, cerr)
+			return nil, fmt.Errorf("%w: %w", errRevisionStampFailed, cerr)
 		}
-		return "", fault.Wrapf(cerr, fault.KindOf(cerr), op, "create revision")
+		return nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create revision")
 	}
 	s.setCurrent(s.revision)
-	return pinned, nil
+	if created, ok := stored.(*v1.Revision); ok {
+		return created, nil
+	}
+	return rev, nil
 }
 
 // settleCreateConflict reads the Revision a concurrent create stored under the subject's name: its own is adopted,
 // another's fails the stamp, and a deleted namesake's returns the Conflict, so the next pass drops it (ADR-0172).
-func (r *Reconciler) settleCreateConflict(ctx context.Context, s stampSubject, conflict error) (string, error) {
+func (r *Reconciler) settleCreateConflict(ctx context.Context, s stampSubject, conflict error) (*v1.Revision, error) {
 	const op = "function.ensureRevision"
 	cur, err := r.getRevision(ctx, s.w.meta().Namespace, s.revision)
 	if err != nil {
-		return "", fault.Wrapf(err, fault.KindOf(err), op, "get revision after a create conflict")
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "get revision after a create conflict")
 	}
 	switch s.judge(cur) {
 	case revSelf:
 		return r.adoptRevision(ctx, s, cur)
 	case revOther:
-		return "", stampTaken(cur)
+		return nil, stampTaken(cur)
 	}
-	return "", fault.Wrapf(conflict, fault.Conflict, op, "create revision")
+	return nil, fault.Wrapf(conflict, fault.Conflict, op, "create revision")
 }
 
 // adoptRevision makes rev, the subject's own, its current revision. A ref-less one (stamped before 2dc9d26) first gets
 // the subject as its controller: the reconciler's one metadata write to a Revision (ADR-0172 Decision 5).
-func (r *Reconciler) adoptRevision(ctx context.Context, s stampSubject, rev *v1.Revision) (string, error) {
+func (r *Reconciler) adoptRevision(ctx context.Context, s stampSubject, rev *v1.Revision) (*v1.Revision, error) {
 	if _, owned := v1.ControllerOf(rev.OwnerReferences); !owned {
 		rev.OwnerReferences = append(rev.OwnerReferences, s.w.controllerRef())
-		if _, err := r.store.Update(ctx, rev); err != nil {
-			return "", fault.Wrapf(err, fault.KindOf(err), "function.adoptRevision", "adopt revision %q", rev.Name)
+		updated, err := r.store.Update(ctx, rev)
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), "function.adoptRevision", "adopt revision %q", rev.Name)
+		}
+		if u, ok := updated.(*v1.Revision); ok {
+			rev = u
 		}
 	}
 	s.setCurrent(rev.Name)
-	return rev.Spec.ImageDigest, nil
+	return rev, nil
 }
 
 // getRevision reads Revision name of namespace ns.
@@ -3161,31 +3186,6 @@ func (r *Reconciler) familyShim(rt v1.RuntimeName) []string {
 // reasonRuntimeUnavailable is the reason of a Function whose runtime this node cannot serve (ADR-0149 Decision 4).
 const reasonRuntimeUnavailable = "RuntimeUnavailable"
 
-// runtimeUnavailable is the runtime gate (ADR-0149 Decision 2). In process mode a runtime is unavailable when no shim
-// runs it and the Function does not pool on a host of its own (issue #371); in containerd mode the Lake
-// engine image is not a function runtime. The legacy mode without a Materializer is never gated.
-func (r *Reconciler) runtimeUnavailable(fn *v1.Function) (string, bool) {
-	rt := fn.Spec.Runtime
-	var cause string
-	switch {
-	case r.materializer == nil:
-		return "", false
-	case r.endpointMode == EndpointLoopback:
-		if r.shimFor(rt) != nil {
-			return "", false
-		}
-		if r.pooled(fn) {
-			return "", false
-		}
-		cause = "no shim is registered for it"
-	case r.endpointMode == EndpointNetnsFixedPort && rt == lakesvc.DuckDBRuntime:
-		cause = "it is the Lake engine image, not a function runtime"
-	default:
-		return "", false
-	}
-	return unavailablePrefix(rt) + ": " + cause, true
-}
-
 // unavailablePrefix is the message prefix of every RuntimeUnavailable outcome (ADR-0149 Decision 4).
 func unavailablePrefix(rt v1.RuntimeName) string {
 	return fmt.Sprintf("runtime %q is not available on this node", rt)
@@ -3381,7 +3381,9 @@ func (r *Reconciler) workerSpec(ctx context.Context, w workload, rev v1.ObjectNa
 	// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command empty), the artifact is bind-mounted
 	// read-only, each volume is a bind of its leaf alone (ADR-0262), the local API socket is bound in at its in-container
 	// path, and the shim binds a fixed netns port.
-	spec.Image = r.imageFor(string(w.spec.Runtime))
+	if spec.Image, err = r.workerImage(ctx, w, rev); err != nil {
+		return runtime.WorkerSpec{}, err
+	}
 	spec.Mounts = append([]runtime.Mount{{Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true}}, volMounts...)
 	if sock != "" {
 		spec.Mounts = append(spec.Mounts, runtime.Mount{Source: sock, Target: containerInvokeSocket})

@@ -128,14 +128,21 @@ type addonEnv struct {
 	admin, dev *sdk.Client
 }
 
-func startAddons(t *testing.T, modes []string, opts ...Option) *addonEnv {
+func startAddons(t *testing.T, opts ...Option) *addonEnv {
+	t.Helper()
+	rt := newAddonRuntime(t)
+	return startAddonPlatform(t, rt, append([]Option{WithAddonRuntime(rt)}, opts...)...)
+}
+
+// startAddonPlatform starts a platform with opts, whose add-on engines run on the fake runtime rt only when opts say so:
+// without WithAddonRuntime they run on a process server's own provider runtime, which runs no image.
+func startAddonPlatform(t *testing.T, rt *addonRuntime, opts ...Option) *addonEnv {
 	t.Helper()
 	ctx := context.Background()
-	rt := newAddonRuntime(t)
 	p, err := New(append([]Option{InMemory(),
 		WithCredentials(Credential{Token: addonAdminToken, Role: "admin"},
 			Credential{Token: addonDevToken, Role: "developer", Namespaces: []string{"default", "team"}}),
-		WithAddonRuntime(rt, modes...), WithAddonRegistries("ghcr.io", "docker.io"),
+		WithAddonRegistries("ghcr.io", "docker.io"),
 		WithPacing(Pacing{SupervisionPeriod: 100 * time.Millisecond, ReferentPollInterval: 50 * time.Millisecond,
 			EnginePollInterval: 50 * time.Millisecond})}, opts...)...)
 	require.NoError(t, err)
@@ -154,16 +161,9 @@ func startAddons(t *testing.T, modes []string, opts ...Option) *addonEnv {
 // dynamic-client path is private, with an issuer in its config and its keys in a Secret.
 func rauthyAddon(name v1.ObjectName) *v1.Addon {
 	a := &v1.Addon{TypeMeta: tmeta(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: name}}
-	a.Spec = v1.AddonSpec{
-		Kind: "IdentityProvider", Image: "ghcr.io/pyvvo/funcd-rauthy" + addonDigest, Port: 8080,
-		BasePath: "/auth/v1", PrivatePaths: []string{"/auth/v1/clients_dyn"},
-		Readiness: v1.AddonReadiness{Path: "/auth/v1/ping"},
-		Storage:   &v1.AddonStorage{Path: "/app/data", UID: 10001, GID: 10001},
-		Config: json.RawMessage(`{"type":"object","properties":{"issuer":{"type":"string"},"port":{"type":"integer"}},` +
-			`"required":["issuer","port"],"additionalProperties":false}`),
-		Env:        map[string]string{"PUB_URL": "${{ config.issuer }}", "LISTEN_PORT": "${{ config.port }}", "LOG_LEVEL": "info"},
-		SecretKeys: []string{"ENC_KEYS"},
-	}
+	a.Spec = v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: v1.RuntimeName(name), Image: "ghcr.io/pyvvo/funcd-rauthy" + addonDigest, Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080, BasePath: "/auth/v1", PrivatePaths: []string{"/auth/v1/clients_dyn"}, Readiness: v1.AddonReadiness{Path: "/auth/v1/ping"}, Storage: &v1.AddonStorage{Path: "/app/data", UID: 10001, GID: 10001}, Config: json.RawMessage(`{"type":"object","properties":{"issuer":{"type":"string"},"port":{"type":"integer"}},` +
+			`"required":["issuer","port"],"additionalProperties":false}`), Env: map[string]string{"PUB_URL": "${{ config.issuer }}", "LISTEN_PORT": "${{ config.port }}", "LOG_LEVEL": "info"}, SecretKeys: []string{"ENC_KEYS"}}}}}
 	return a
 }
 
@@ -276,7 +276,7 @@ const addonsPath = "/apis/funcd.io/v1alpha1/addons"
 // plural funcdctl and the SDK list in every namespace with no code for the kind.
 func TestScenarioAddonRegisterAdminOnly(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	status, detail := e.send(t, http.MethodPost, addonsPath, addonDevToken, rauthyAddon("rauthy"))
 	require.Equal(t, http.StatusForbidden, status, detail)
 	status, _ = e.send(t, http.MethodGet, addonsPath, addonDevToken, nil)
@@ -299,15 +299,15 @@ func TestScenarioAddonRegisterAdminOnly(t *testing.T) {
 // addons.registries does not list is refused 400 (ADR-0148 Decision 1: Invalid is 400).
 func TestScenarioAddonImagePinned(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	tagged := rauthyAddon("rauthy")
-	tagged.Spec.Image = "ghcr.io/pyvvo/funcd-rauthy:0.1.1"
+	tagged.Spec.Runtimes[0].Image = "ghcr.io/pyvvo/funcd-rauthy:0.1.1"
 	status, detail := e.send(t, http.MethodPost, addonsPath, addonAdminToken, tagged)
 	require.Equal(t, http.StatusUnprocessableEntity, status, detail)
-	require.Contains(t, detail, "body.spec.image")
+	require.Contains(t, detail, "body.spec.runtimes[0].image")
 
 	elsewhere := rauthyAddon("rauthy")
-	elsewhere.Spec.Image = "quay.io/pyvvo/funcd-rauthy" + addonDigest
+	elsewhere.Spec.Runtimes[0].Image = "quay.io/pyvvo/funcd-rauthy" + addonDigest
 	status, detail = e.send(t, http.MethodPost, addonsPath, addonAdminToken, elsewhere)
 	require.Equal(t, http.StatusBadRequest, status, detail)
 	require.Contains(t, detail, "addons.registries")
@@ -319,14 +319,14 @@ func TestScenarioAddonImagePinned(t *testing.T) {
 // (ADR-0148 Decision 1).
 func TestScenarioAddonEnvChecked(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	a := rauthyAddon("rauthy")
-	a.Spec.Env["ADMIN_EMAIL"] = "${{ config.adminEmail }}"
+	a.Spec.Runtimes[0].Attributes.Env["ADMIN_EMAIL"] = "${{ config.adminEmail }}"
 	status, detail := e.send(t, http.MethodPost, addonsPath, addonAdminToken, a)
 	require.Equal(t, http.StatusBadRequest, status, detail)
 	require.Contains(t, detail, "ADMIN_EMAIL")
 
-	a.Spec.Env["ADMIN_EMAIL"] = "admin@${{ config.issuer }}"
+	a.Spec.Runtimes[0].Attributes.Env["ADMIN_EMAIL"] = "admin@${{ config.issuer }}"
 	status, detail = e.send(t, http.MethodPost, addonsPath, addonAdminToken, a)
 	require.Equal(t, http.StatusBadRequest, status, "a value is a literal or one expression: %s", detail)
 }
@@ -335,7 +335,7 @@ func TestScenarioAddonEnvChecked(t *testing.T) {
 // serves it at its host with the path kept. Its engine is fenced with no endpoint and admits only funcd.
 func TestScenarioAddonObjectRuns(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, rauthyKeys("default", map[string]string{"ENC_KEYS": "k1"}))
 	e.apply(t, e.dev, identityProvider("default", "rauthy-keys"))
@@ -370,7 +370,7 @@ func TestScenarioAddonObjectRuns(t *testing.T) {
 // scenario: addon-kind-unregistered — an object of a kind no Addon registers is refused 404.
 func TestScenarioAddonKindUnregistered(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	_, err := e.dev.Apply(e.ctx, identityProvider("default"))
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "%v", err)
 	_, err = e.dev.List(e.ctx, "identityproviders", "default")
@@ -380,7 +380,7 @@ func TestScenarioAddonKindUnregistered(t *testing.T) {
 // scenario: addon-config-schema — a config that breaks the Addon's schema is refused 422, naming the property.
 func TestScenarioAddonConfigSchema(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	o := identityProvider("default")
 	o.Spec.Config = json.RawMessage(`{"issuer":"https://login.example.com/auth/v1","port":8080,"colour":"blue"}`)
@@ -413,7 +413,7 @@ func TestIssue1535_ConfigInvalidWaitsForTheHoldsStop(t *testing.T) {
 // addonConfigInvalid is addon-config-invalid's body; held holds the hold's engine stop until after the status is read.
 func addonConfigInvalid(t *testing.T, held bool) {
 	t.Helper()
-	e := startAddons(t, []string{"containerd"}, WithAddonsFollowingCurrent())
+	e := startAddons(t, WithAddonsFollowingCurrent())
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	e.waitReason(t, "default", "login", v1.PhaseReady, "")
@@ -438,7 +438,7 @@ func addonConfigInvalid(t *testing.T, held bool) {
 // rauthyWithRealm is rauthy's Addon whose config schema also requires a realm, which login's config lacks.
 func rauthyWithRealm() *v1.Addon {
 	a := rauthyAddon("rauthy")
-	a.Spec.Config = json.RawMessage(`{"type":"object","properties":{"issuer":{"type":"string"},"port":{"type":"integer"},` +
+	a.Spec.Runtimes[0].Attributes.Config = json.RawMessage(`{"type":"object","properties":{"issuer":{"type":"string"},"port":{"type":"integer"},` +
 		`"realm":{"type":"string"}},"required":["issuer","port","realm"],"additionalProperties":false}`)
 	return a
 }
@@ -448,7 +448,7 @@ func rauthyWithRealm() *v1.Addon {
 // name takes no object.
 func TestScenarioAddonRemoved(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	e.waitReason(t, "default", "login", v1.PhaseReady, "")
@@ -467,7 +467,7 @@ func TestScenarioAddonRemoved(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, status, "replace gets 404 while no Addon registers the kind")
 
 	other := rauthyAddon("rauthy")
-	other.Spec.Kind = "EchoService"
+	other.Spec.Runtimes[0].Attributes.Kind = "EchoService"
 	e.apply(t, e.admin, other)
 	e.p.controller.Enqueue(controller.Request{GVK: v1.KindAddonObject.GVK(), Namespace: "default", Name: "login"})
 	require.True(t, poll.Never(func() bool {
@@ -491,7 +491,7 @@ func TestScenarioAddonRemoved(t *testing.T) {
 // engine's own address; a .. segment or a cleaned path outside basePath is 404.
 func TestScenarioAddonPrivatePath(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	o := e.waitReason(t, "default", "login", v1.PhaseReady, "")
@@ -515,31 +515,26 @@ func TestScenarioAddonPrivatePath(t *testing.T) {
 	require.Equal(t, http.StatusOK, res.StatusCode, "funcd reaches the private path at the engine's own address")
 }
 
-// scenario: addon-runtime-unavailable — on a server whose add-on runtime serves no mode, as a process server, login
-// waits Pending, RuntimeUnavailable, naming both modes; an Addon that lists the process runtime is refused 422.
-func TestScenarioAddonRuntimeUnavailable(t *testing.T) {
+// scenario: addon-engine-process-server — on a process server, whose provider runtime runs no image, login waits
+// Pending, RuntimeUnavailable, naming the process driver, and no engine starts (ADR-0344 Decision 9).
+func TestScenarioAddonEngineProcessServer(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, nil)
+	rt := newAddonRuntime(t)
+	e := startAddonPlatform(t, rt)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	o := e.waitReason(t, "default", "login", v1.PhasePending, "RuntimeUnavailable")
 	c, _ := o.Status.Conditions.Get("Ready")
-	require.Contains(t, c.Message, "containerd")
-	require.Contains(t, c.Message, "process")
-	_, _, starts := e.rt.state(ref("default", "login"))
+	require.Contains(t, c.Message, "process driver")
+	require.Contains(t, c.Message, "runs no image")
+	_, _, starts := rt.state(ref("default", "login"))
 	require.Zero(t, starts, "no engine")
-
-	process := rauthyAddon("other")
-	process.Spec.Kind, process.Spec.Runtimes = "Other", []string{"process"}
-	status, detail := e.send(t, http.MethodPost, addonsPath, addonAdminToken, process)
-	require.Equal(t, http.StatusUnprocessableEntity, status, detail)
-	require.Contains(t, detail, "body.spec.runtimes")
 }
 
 // scenario: addon-secret-keys — only the keys secretKeys lists reach the engine, and a changed Secret replaces it.
 func TestScenarioAddonSecretKeys(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, rauthyKeys("default", map[string]string{"ENC_KEYS": "k1", "BOOTSTRAP_ADMIN_PASSWORD": "p"}))
 	e.apply(t, e.dev, identityProvider("default", "rauthy-keys"))
@@ -559,7 +554,7 @@ func TestScenarioAddonSecretKeys(t *testing.T) {
 // engine; once applied, login turns Ready.
 func TestScenarioAddonSecretMissing(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default", "rauthy-keys"))
 	e.waitReason(t, "default", "login", v1.PhasePending, "SecretNotFound")
@@ -574,11 +569,11 @@ func TestScenarioAddonSecretMissing(t *testing.T) {
 // with no code for its kind.
 func TestScenarioAddonSecondKind(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	whoami := &v1.Addon{TypeMeta: tmeta(v1.KindAddon), ObjectMeta: v1.ObjectMeta{Name: "whoami"}}
-	whoami.Spec = v1.AddonSpec{Kind: "EchoService", Image: "docker.io/traefik/whoami" + addonDigest, Port: 80,
-		Readiness: v1.AddonReadiness{Path: "/health"}}
+	whoami.Spec = v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "echoservice", Image: "docker.io/traefik/whoami" + addonDigest, Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: "EchoService", Port: 80, Readiness: v1.AddonReadiness{Path: "/health"}}}}}
 	e.apply(t, e.admin, whoami)
 	e.apply(t, e.dev, identityProvider("default"))
 	echo := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: "EchoService"}}
@@ -605,7 +600,7 @@ func TestScenarioAddonSecondKind(t *testing.T) {
 // each is refused, the clash with another Addon 409, the rest 400.
 func TestAddonKindRules(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	for kind, want := range map[string]int{
 		"Function":         http.StatusBadRequest, // funcd's kind
@@ -615,12 +610,12 @@ func TestAddonKindRules(t *testing.T) {
 		"Identityprovider": http.StatusConflict,   // rauthy's kind, in another case
 	} {
 		a := rauthyAddon("other")
-		a.Spec.Kind = kind
+		a.Spec.Runtimes[0].Attributes.Kind = kind
 		status, detail := e.send(t, http.MethodPost, addonsPath, addonAdminToken, a)
 		require.Equal(t, want, status, "%s: %s", kind, detail)
 	}
 	changed := rauthyAddon("rauthy")
-	changed.Spec.Kind = "Directory"
+	changed.Spec.Runtimes[0].Attributes.Kind = "Directory"
 	status, detail := e.send(t, http.MethodPut, addonsPath+"/rauthy", addonAdminToken, changed)
 	require.Equal(t, http.StatusBadRequest, status, detail)
 	require.Contains(t, detail, "cannot change")
@@ -630,7 +625,7 @@ func TestAddonKindRules(t *testing.T) {
 // another namespace has its own count.
 func TestAddonObjectCap(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"}, WithAddonObjectQuota(1))
+	e := startAddons(t, WithAddonObjectQuota(1))
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	second := identityProvider("default")
@@ -645,16 +640,16 @@ func TestAddonObjectCap(t *testing.T) {
 // keeps its engines, and its next change is refused.
 func TestAddonRegistryRemovedStopsNoEngine(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"}, WithAddonRegistries("docker.io"))
+	e := startAddons(t, WithAddonRegistries("docker.io"))
 	a := rauthyAddon("rauthy")
-	a.TypeMeta, a.Spec.Runtimes = tmeta(v1.KindAddon), nil
+	a.TypeMeta = tmeta(v1.KindAddon)
 	_, err := e.p.cfg.store.Create(e.ctx, a)
 	require.NoError(t, err, "stored while ghcr.io was listed")
 	e.apply(t, e.dev, identityProvider("default"))
 	e.waitReason(t, "default", "login", v1.PhaseReady, "")
 
 	changed := rauthyAddon("rauthy")
-	changed.Spec.Env["LOG_LEVEL"] = "debug"
+	changed.Spec.Runtimes[0].Attributes.Env["LOG_LEVEL"] = "debug"
 	_, err = e.admin.Apply(e.ctx, changed)
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "the next change is refused: %v", err)
 	_, running, _ := e.rt.state(ref("default", "login"))
@@ -665,7 +660,7 @@ func TestAddonRegistryRemovedStopsNoEngine(t *testing.T) {
 // BindingResolveFailed, with no engine.
 func TestAddonSecretForbidden(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	e.apply(t, e.dev, rauthyKeys("default", map[string]string{"ENC_KEYS": "k1"}))
 	pol := &v1.Policy{TypeMeta: tmeta(v1.KindPolicy)}
@@ -687,7 +682,7 @@ func TestAddonSecretForbidden(t *testing.T) {
 // edgeDefaults.auth does not reach it; ingress.path and the authenticated mode are refused.
 func TestAddonEntryStance(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	ns := &v1.Namespace{TypeMeta: tmeta(v1.KindNamespace), ObjectMeta: v1.ObjectMeta{Name: "team"}}
 	ns.Spec.EdgeDefaults = &v1.EdgeDefaults{Auth: &v1.EdgeAuth{Mode: v1.AuthAuthenticated}}
 	e.apply(t, e.admin, ns)
@@ -715,7 +710,7 @@ func TestAddonEntryStance(t *testing.T) {
 // add-on's kind, and store nothing.
 func TestAddonObjectDryRun(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	got, err := e.dev.Apply(e.ctx, identityProvider("default"), sdk.DryRun())
 	require.NoError(t, err)
@@ -737,7 +732,7 @@ func TestAddonObjectDryRun(t *testing.T) {
 // refused, so its paths answer 503, and shows IngressReady=False, ProviderNotFound, until the provider exists.
 func TestAddonObjectProviderNotFound(t *testing.T) {
 	t.Parallel()
-	e := startAddons(t, []string{"containerd"})
+	e := startAddons(t)
 	e.apply(t, e.admin, rauthyAddon("rauthy"))
 	login := identityProvider("default")
 	login.Spec.Ingress.Auth = &v1.RouteAuth{Mode: v1.AuthOIDC, Provider: "sso"}
@@ -795,7 +790,7 @@ func TestAddonRuntimeIndexesEachEngineBeforeItStarts(t *testing.T) {
 		return nil
 	}}))
 	addon := rauthyAddon("rauthy")
-	addon.Spec.Storage = nil
+	addon.Spec.Runtimes[0].Attributes.Storage = nil
 	login := identityProvider("default")
 	login.TypeMeta, login.Spec.Kind = tmeta(v1.KindAddonObject), "IdentityProvider"
 	seedObjects(t, st, addon, login)

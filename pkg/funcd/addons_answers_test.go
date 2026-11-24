@@ -5,6 +5,7 @@ package funcd_test
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,11 +30,8 @@ const (
 func addonFixture(name v1.ObjectName, kind string) *v1.Addon {
 	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddon.GVK().APIVersion(), Kind: v1.KindAddon}}
 	a.Name = name
-	a.Spec = v1.AddonSpec{Kind: kind, Image: "ghcr.io/pyvvo/funcd-rauthy" + addonImageHash, Port: 8080,
-		BasePath: "/auth/v1", PrivatePaths: []string{"/auth/v1/clients_dyn"},
-		Readiness: v1.AddonReadiness{Path: "/auth/v1/ping"},
-		Config:    json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"issuer":{"type":"string"}},"required":["issuer"]}`),
-		Env:       map[string]string{"PUB_URL": "${{ config.issuer }}"}}
+	a.Spec = v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: v1.RuntimeName(strings.ToLower(kind)), Image: "ghcr.io/pyvvo/funcd-rauthy" + addonImageHash, Workloads: []v1.Workload{v1.WorkloadEngine},
+		Attributes: &v1.AddonAttributes{Kind: kind, Port: 8080, BasePath: "/auth/v1", PrivatePaths: []string{"/auth/v1/clients_dyn"}, Readiness: v1.AddonReadiness{Path: "/auth/v1/ping"}, Config: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"issuer":{"type":"string"}},"required":["issuer"]}`), Env: map[string]string{"PUB_URL": "${{ config.issuer }}"}}}}}
 	return a
 }
 
@@ -60,10 +58,10 @@ func TestAddonAnswersMatrix(t *testing.T) {
 	e := newAnswerEnv(t, funcd.WithAddonRegistries("ghcr.io"))
 	registerAddons(t, e, addonFixture("rauthy", "IdentityProvider"))
 	broken := addonFixture("rauthy", "IdentityProvider")
-	broken.Spec.PrivatePaths = []string{"/admin"}
+	broken.Spec.Runtimes[0].Attributes.PrivatePaths = []string{"/admin"}
 	shared := clusterFixture{kind: "Addon", kinds: "Addons", path: "addons", name: "rauthy",
 		json: jsonOf(t, addonFixture("rauthy", "IdentityProvider")), broken: jsonOf(t, broken),
-		detail: `spec.privatePaths[0] "/admin" is not under spec.basePath "/auth/v1"`}.sharedRows(e)
+		detail: `spec.runtimes[0].attributes.privatePaths[0] "/admin" is not under spec.runtimes[0].attributes.basePath "/auth/v1"`}.sharedRows(e)
 	// One kind is one Addon's, so the Addons that the rows create register kinds of their own.
 	for i, r := range shared {
 		switch {
@@ -86,16 +84,18 @@ func TestAddonAnswersMatrix(t *testing.T) {
 		edit(&a.Spec)
 		return jsonOf(t, a)
 	}
-	quay := func(s *v1.AddonSpec) { s.Image = "quay.io/pyvvo/funcd-rauthy" + addonImageHash }
-	untyped := func(s *v1.AddonSpec) { s.Env = map[string]string{"PUB_URL": "${{ config.nope }}"} }
+	quay := func(s *v1.AddonSpec) { s.Runtimes[0].Image = "quay.io/pyvvo/funcd-rauthy" + addonImageHash }
+	untyped := func(s *v1.AddonSpec) {
+		s.Runtimes[0].Attributes.Env = map[string]string{"PUB_URL": "${{ config.nope }}"}
+	}
 	row := func(op, when string, a ask) answerRow {
 		a.token = answersAdmin
 		return answerRow{op: op, when: when, on: e, ask: a}
 	}
-	// A replace keeps spec.kind but can add a settings kind that another Addon registers (ADR-0340 Decision 2).
+	// A replace keeps the kind but can add a settings kind that another Addon registers (ADR-0340 Decision 2).
 	twin := row("replaceAddon", "Another Addon registers", ask{what: "a settings kind another Addon registers",
 		method: http.MethodPut, path: addonsPath + "/rauthy", body: edited(func(s *v1.AddonSpec) {
-			s.Settings = []v1.AddonSettings{{Kind: "TwinService", Target: "spec.config.provider",
+			s.Runtimes[0].Attributes.Settings = []v1.AddonSettings{{Kind: "TwinService", Target: "spec.config.provider",
 				Function: v1.AddonSettingsFunction{Ref: "settings"},
 				Schema: json.RawMessage(`{"type":"object","additionalProperties":false,` +
 					`"properties":{"provider":{"type":"string"}},"required":["provider"]}`)}}
@@ -104,23 +104,23 @@ func TestAddonAnswersMatrix(t *testing.T) {
 	runMatrix(t, append(shared,
 		row("createAddon", "is a kind of funcd's", ask{what: "a kind of funcd's", method: http.MethodPost,
 			path: addonsPath, body: other("lake", "Lake", func(*v1.AddonSpec) {}), detail: "is a kind of funcd's own"}),
-		row("createAddon", "The registry of spec.image", ask{what: "an image from an unlisted registry",
+		row("createAddon", "The registry of a runtime's image", ask{what: "an image from an unlisted registry",
 			method: http.MethodPost, path: addonsPath, body: other("quay", "QuayService", quay),
 			detail: "does not come from a registry that addons.registries lists"}),
-		row("createAddon", "spec.config is not a JSON Schema", ask{what: "an env value the schema does not type",
-			method: http.MethodPost, path: addonsPath, body: other("untyped", "UntypedService", untyped), detail: "spec.env"}),
+		row("createAddon", "The kind entry's config is not a JSON Schema", ask{what: "an env value the schema does not type",
+			method: http.MethodPost, path: addonsPath, body: other("untyped", "UntypedService", untyped), detail: "attributes.env"}),
 		row("createAddon", "Another Addon registers", ask{what: "a kind another Addon registers", method: http.MethodPost,
 			path: addonsPath, body: other("twin", "IdentityProvider", func(*v1.AddonSpec) {}),
 			detail: `Addon "rauthy" registers kind "IdentityProvider"`}),
 
 		row("replaceAddon", "is a kind of funcd's", ask{what: "a changed kind", method: http.MethodPut,
-			path: addonsPath + "/rauthy", body: edited(func(s *v1.AddonSpec) { s.Kind = "OtherService" }),
-			detail: `spec.kind cannot change from "IdentityProvider" to "OtherService"`}),
-		row("replaceAddon", "The registry of spec.image", ask{what: "an image from an unlisted registry",
+			path: addonsPath + "/rauthy", body: edited(func(s *v1.AddonSpec) { s.Runtimes[0].Attributes.Kind = "OtherService" }),
+			detail: `the kind cannot change from "IdentityProvider" to "OtherService"`}),
+		row("replaceAddon", "The registry of a runtime's image", ask{what: "an image from an unlisted registry",
 			method: http.MethodPut, path: addonsPath + "/rauthy", body: edited(quay),
 			detail: "does not come from a registry that addons.registries lists"}),
-		row("replaceAddon", "spec.config is not a JSON Schema", ask{what: "an env value the schema does not type",
-			method: http.MethodPut, path: addonsPath + "/rauthy", body: edited(untyped), detail: "spec.env"}),
+		row("replaceAddon", "The kind entry's config is not a JSON Schema", ask{what: "an env value the schema does not type",
+			method: http.MethodPut, path: addonsPath + "/rauthy", body: edited(untyped), detail: "attributes.env"}),
 		twin,
 	))
 }
