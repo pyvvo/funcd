@@ -142,24 +142,21 @@ func (e *addonEnv) waitSent(t *testing.T, lengthMin int) {
 	}, kindWithin, 20*time.Millisecond, "the engine holds lengthMin %d; last %s", lengthMin, &last)
 }
 
+// rauthyKinds is rauthy's Addon whose RauthyPasswordPolicy names the image policies and whose RauthyClient names the
+// Function clients of the namespace.
+func rauthyKinds(policies string) *v1.Addon {
+	a := rauthySettingsAddon("rauthy")
+	kinds := a.Spec.Runtimes[0].Attributes.Settings
+	kinds[0].Function.Image, kinds[1].Function = policies, v1.AddonFunction{Ref: "clients"}
+	return a
+}
+
 // scenario: addon-function-image — a policy brings the Function of its kind's image, which applies it to login's engine
 // through self; once the policy is deleted and the engine's default is back, the Function goes.
-//
-// scenario: addon-config-no-longer-fits — login moves to a revision whose contract refuses the policy: the call is
-// refused before the Function runs, the policy is ReconcileFailed naming the path, and the engine keeps it; an edit that
-// fits is applied by the next call.
-//
-// scenario: addon-function-ref — a call off a ref's Function's contract fails, and the object names the path.
-//
-// An App that holds login and its policy turns Ready: a settings part records the App's revision it follows.
 func TestScenarioAddonFunctionOnARealFunction(t *testing.T) {
 	t.Parallel()
 	e := startKinds(t)
-	a := rauthySettingsAddon("rauthy")
-	kinds := a.Spec.Runtimes[0].Attributes.Settings
-	kinds[0].Function.Image = e.push(t, policiesSrc, settingsContract(policyCall, clientCall))
-	kinds[1].Function = v1.AddonFunction{Ref: "clients"}
-	e.register(t, a)
+	e.register(t, rauthyKinds(e.push(t, policiesSrc, settingsContract(policyCall, clientCall))))
 	e.apply(t, e.dev, identityProvider("default"))
 	status, detail := e.create(t, policiesPath, policy("default", "strict", "login", 8, 64))
 	require.True(t, created(status), "%d %s", status, detail)
@@ -167,22 +164,27 @@ func TestScenarioAddonFunctionOnARealFunction(t *testing.T) {
 	e.waitSent(t, 8)
 	require.Contains(t, e.rt.calls(), "PUT /auth/v1/password_policy")
 
-	clients := settingsFn("default", "login")
-	clients.Name, clients.Spec.Image = "clients", e.push(t, policiesSrc, settingsContract(policyCall,
-		`{"properties":{"provider":{"type":"string"},"clientId":{"type":"string","minLength":3}},"required":["provider","clientId"]}`))
-	_, clients.Spec.ImageDigest, _ = strings.Cut(clients.Spec.Image, "@")
-	e.apply(t, e.dev, clients)
-	status, detail = e.create(t, clientsPath, client("default", "web", "w"))
-	require.True(t, created(status), "no schema judges a ref's object: %d %s", status, detail)
-	require.Contains(t, e.waitSettled(t, "web", v1.PhasePending, "ReconcileFailed"), "/objects/0/config/clientId")
+	status, detail = e.send(t, http.MethodDelete, fmt.Sprintf(policiesPath, "default")+"/strict", addonDevToken, nil)
+	require.True(t, created(status), "%d %s", status, detail)
+	e.waitSent(t, 14)
+	e.waitFunction(t, "default", "login-rauthypasswordpolicy", false)
+}
+
+// scenario: addon-config-no-longer-fits — login moves to a revision whose contract refuses the policy: the call is
+// refused before the Function runs, the policy is ReconcileFailed naming the path, and the engine keeps it; an edit that
+// fits is applied by the next call.
+func TestScenarioAddonConfigNoLongerFits(t *testing.T) {
+	t.Parallel()
+	e := startKinds(t)
+	e.register(t, rauthyKinds(e.push(t, policiesSrc, settingsContract(policyCall, clientCall))))
+	e.apply(t, e.dev, identityProvider("default"))
+	status, detail := e.create(t, policiesPath, policy("default", "strict", "login", 8, 64))
+	require.True(t, created(status), "%d %s", status, detail)
+	e.waitSettled(t, "strict", v1.PhaseReady, "")
 
 	stricter := `{"properties":{"provider":{"type":"string"},"lengthMin":{"type":"integer","minimum":12},"lengthMax":{"type":"integer"}},` +
 		`"required":["provider","lengthMin","lengthMax"]}`
-	a = rauthySettingsAddon("rauthy")
-	kinds = a.Spec.Runtimes[0].Attributes.Settings
-	kinds[0].Function.Image = e.push(t, policiesSrc, settingsContract(stricter, clientCall))
-	kinds[1].Function = v1.AddonFunction{Ref: "clients"}
-	e.register(t, a)
+	e.register(t, rauthyKinds(e.push(t, policiesSrc, settingsContract(stricter, clientCall))))
 	edited := identityProvider("default")
 	edited.Spec.Config = json.RawMessage(`{"issuer":"https://login.example.com/auth/v2","port":8080}`)
 	e.apply(t, e.dev, edited)
@@ -192,12 +194,30 @@ func TestScenarioAddonFunctionOnARealFunction(t *testing.T) {
 	require.True(t, created(status), "%d %s", status, detail)
 	e.waitSettled(t, "strict", v1.PhaseReady, "")
 	e.waitSent(t, 16)
+}
 
-	status, detail = e.send(t, http.MethodDelete, fmt.Sprintf(policiesPath, "default")+"/strict", addonDevToken, nil)
+// scenario: addon-function-ref — no schema judges a write of a ref's object, and a call off that Function's contract
+// fails, the object naming the path.
+func TestScenarioAddonFunctionRefOnARealFunction(t *testing.T) {
+	t.Parallel()
+	e := startKinds(t)
+	e.register(t, rauthyKinds(e.push(t, policiesSrc, settingsContract(policyCall, clientCall))))
+	e.apply(t, e.dev, identityProvider("default"))
+	clients := settingsFn("default", "login")
+	clients.Name, clients.Spec.Image = "clients", e.push(t, policiesSrc, settingsContract(policyCall,
+		`{"properties":{"provider":{"type":"string"},"clientId":{"type":"string","minLength":3}},"required":["provider","clientId"]}`))
+	_, clients.Spec.ImageDigest, _ = strings.Cut(clients.Spec.Image, "@")
+	e.apply(t, e.dev, clients)
+	status, detail := e.create(t, clientsPath, client("default", "web", "w"))
 	require.True(t, created(status), "%d %s", status, detail)
-	e.waitSent(t, 14)
-	e.waitFunction(t, "default", "login-rauthypasswordpolicy", false)
+	require.Contains(t, e.waitSettled(t, "web", v1.PhasePending, "ReconcileFailed"), "/objects/0/config/clientId")
+}
 
+// An App that holds login and its policy turns Ready: a settings part records the App's revision it follows.
+func TestAppWithASettingsPartTurnsReady(t *testing.T) {
+	t.Parallel()
+	e := startKinds(t)
+	e.register(t, rauthyKinds(e.push(t, policiesSrc, settingsContract(policyCall, clientCall))))
 	app := loginApp("default", "web-auth")
 	app.Spec.Addons = append(app.Spec.Addons, v1.AppAddon{Name: "web-auth-strict", AddonObjectSpec: v1.AddonObjectSpec{
 		Kind: "RauthyPasswordPolicy", Config: policy("default", "", "web-auth-login", 18, 64).Spec.Config}})
