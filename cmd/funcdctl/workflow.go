@@ -312,27 +312,34 @@ func (a *cli) workflowCancelCmd() *cobra.Command {
 // renders a troubleshooting view: per step its phase · attempts · duration · error, the run trace-id,
 // and a pointer to the full logs (ADR-0100). `-o json` returns the raw object (the prior default).
 func (a *cli) workflowDescribeCmd() *cobra.Command {
+	return a.runDescribeCmd("workflow", v1.KindWorkflowRun, "Show a workflow run's per-step troubleshooting state (phase, attempts, duration, error)",
+		func(obj v1.Object) error { return a.renderRunDescribe(obj.(*v1.WorkflowRun)) })
+}
+
+// runDescribeCmd is `funcdctl <group> describe <run>`: it reads the run, an object of kind, and prints it with render,
+// or the object itself with `-o json`.
+func (a *cli) runDescribeCmd(group string, kind v1.Kind, short string, render func(v1.Object) error) *cobra.Command {
 	var ns, output string
 	cmd := &cobra.Command{
 		Use:   "describe <run>",
-		Short: "Show a workflow run's per-step troubleshooting state (phase, attempts, duration, error)",
+		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := checkOutput("funcdctl workflow describe", output, "json"); err != nil {
+			if err := checkOutput("funcdctl "+group+" describe", output, "json"); err != nil {
 				return err
 			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err
 			}
-			obj, err := c.Get(cmd.Context(), v1.KindWorkflowRun, v1.NamespaceName(nsOrDefault(ns)), v1.ObjectName(args[0]))
+			obj, err := c.Get(cmd.Context(), kind, v1.NamespaceName(nsOrDefault(ns)), v1.ObjectName(args[0]))
 			if err != nil {
 				return err
 			}
 			if output == "json" {
 				return a.renderObject(obj, true)
 			}
-			return a.renderRunDescribe(obj.(*v1.WorkflowRun))
+			return render(obj)
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")

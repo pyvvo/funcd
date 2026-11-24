@@ -149,32 +149,8 @@ func (a *cli) jobLogsCmd() *cobra.Command {
 // jobDescribeCmd shows a run: its phase and reason, the revision and digest it ran, who started it, its times and its
 // result. `-o json` prints the object.
 func (a *cli) jobDescribeCmd() *cobra.Command {
-	var ns, output string
-	cmd := &cobra.Command{
-		Use:   "describe <run>",
-		Short: "Show a run: phase, reason, revision, digest, who started it, its times and its result",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := checkOutput("funcdctl job describe", output, "json"); err != nil {
-				return err
-			}
-			c, err := a.sdkClient()
-			if err != nil {
-				return err
-			}
-			obj, err := c.Get(cmd.Context(), v1.KindJobRun, v1.NamespaceName(nsOrDefault(ns)), v1.ObjectName(args[0]))
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				return a.renderObject(obj, true)
-			}
-			return a.renderJobRunDescribe(obj.(*v1.JobRun))
-		},
-	}
-	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
-	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: rendered (default) or json")
-	return cmd
+	return a.runDescribeCmd("job", v1.KindJobRun, "Show a run: phase, reason, revision, digest, who started it, its times and its result",
+		func(obj v1.Object) error { return a.renderJobRunDescribe(obj.(*v1.JobRun)) })
 }
 
 // renderJobRunDescribe prints a run's view. A message and a result can carry a handler's text, so they pass through
