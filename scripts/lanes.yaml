@@ -993,10 +993,13 @@ job:
     - from: e2e/fixtures/job-input-september.json
       to: job-input-september.json
     - from: examples/job-planner/planner.mjs
+      module: github.com/pyvvo/funcd-typescript
       to: planner/planner.mjs
     - from: examples/job-planner/planner.contract.yaml
+      module: github.com/pyvvo/funcd-typescript
       to: planner/planner.contract.yaml
     - from: examples/job-planner/planner.yaml
+      module: github.com/pyvvo/funcd-typescript
       to: planner/planner.yaml
     - from: examples/job-planner/src/main.py
       module: github.com/pyvvo/funcd-python
