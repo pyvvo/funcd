@@ -4,6 +4,8 @@
   on containerd (`addon-infrastack` at 1d583a11, 280 s)
   ([report](../reviews/adr-0355-implementation-claude-opus-5-5-3.md)); Accepted (2026-11-24), on the decider's bar of
   2026-11-24, after four independent judge rounds, the fourth with no finding
+- **Amended in place**: 2026-11-24, by the decider, recorded on [#1021](https://github.com/pyvvo/funcd/issues/1021): a
+  run's `variables` record stays closed when the module has no variable that is not sensitive (Decision 3)
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: infrastack, artifacts, contracts, funcdctl, addons
@@ -48,6 +50,9 @@ the path; and a run that only plans answers what would change, for F141's drift 
   the stack shows `InvalidVariables`.
 - `scenario: infra-sensitive-variable-refused`: Given a module whose variable `token` is sensitive; when a run's
   variables set `token`; then its creation answers 422; with `TF_VAR_token` in a Secret the Job binds, the run plans.
+- `scenario: infra-sensitive-only-module`: Given a module whose only variable `token` is sensitive; when the plugin
+  writes its contract; then its `variables` record is closed with no member, so a run's input that sets `token` is
+  refused (amended 2026-11-24).
 - `scenario: infra-plan-run`: Given a module whose one resource is `random_pet.name`, applied with `prefix: a`; when a
   run with action `plan` and `prefix: b` runs; then it applies nothing and answers `{"plan": {"add": 0, "change": 0,
   "destroy": 0, "replace": 1, "resources": ["random_pet.name"]}}`.
@@ -135,7 +140,9 @@ where the runtime installs providers from.
    `TF_VAR_<name>` keys of its bound ConfigMaps and Secrets, and the module's defaults, a module pushed by hand
    included. Its output is a closed record of two
    optional members: `outputs`, a closed record of the module's outputs that are not sensitive, each any value, none
-   required; and `plan`, Decision 5's finding. A record that would have no member is the empty schema `{}`. The
+   required; and `plan`, Decision 5's finding. A record that would have no member is the empty schema `{}`, except
+   `variables`, which stays closed with no member, so a module whose every variable is sensitive admits none in a
+   run's input (amended 2026-11-24). The
    runtime answers in this shape: an apply `{"outputs": {…}}`, a destroy `{}`, a `plan` run `{"plan": {…}}`; so a
    contract written by hand for this runtime takes it too.
 4. **The run's providers.** The runtime runs `tofu init -plugin-dir=<module>/.funcd-providers` when the module holds
@@ -285,8 +292,9 @@ In pyvvo/funcd-addons, on the InfraStack add-on; funcd's code does not change:
    `apps/frp-bunny/infra/bunny/bunny.contract.yaml` and `apps/frp-bunny/infra/fake/fake.contract.yaml`.
 4. A test that the plugin's `IMAGE` is its Addon's `opentofu1` image.
 
-Tests, each written to pass: the type table, row by row, `infra-remote-module-refused` and the push's half of
-`infra-local-files-refused` in `plugin_test.py`, its run's half in `handler_test.py`;
+Tests, each written to pass: the type table, row by row, `infra-remote-module-refused`, the push's half of
+`infra-local-files-refused` and `infra-sensitive-only-module` (amended 2026-11-24) in `plugin_test.py`, its run's half
+in `handler_test.py`;
 `infra-push-builds-index` with the fakes, and in the add-on's CI against an OCI layout with real OpenTofu;
 `infra-run-downloads-nothing`, `infra-provider-mismatch`, `infra-plan-run` and `infra-module-pushed-by-hand` in
 `image_check.py`; `infra-variables-refused` and `infra-sensitive-variable-refused` as cases of the InfraStack lane that
@@ -299,7 +307,8 @@ F141's work adds to funcd's `e2e/` (`addon-infrastack.venom.yml`), on a module t
 - [ ] The plugin calls funcd only through `$FUNCDCTL`, and runs OpenTofu only in its Addon's image, by digest, or in
   the image `INFRASTACK_OPENTOFU_IMAGE` names.
 - [ ] The push refuses a child module outside the folder, and each platform's bundle holds only its own packages.
-- [ ] Each row of the type table has a test, and no generated input schema holds a sensitive variable.
+- [ ] Each row of the type table has a test, and no generated input schema holds a sensitive variable, nor admits one
+  through an empty `variables` record (amended 2026-11-24).
 - [ ] A `plan` run writes no output and keeps no saved plan.
 
 ## Consequences
