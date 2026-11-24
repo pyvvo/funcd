@@ -4,6 +4,7 @@
   containerd (`addon-infrastack` at 1d583a11, 280 s, and `addon-frp-bunny`, 197 s)
   ([report](../reviews/adr-0356-implementation-claude-opus-5-5-2.md)); Accepted (2026-11-24), on the decider's bar of
   2026-11-24, after three independent judge rounds, the third with no finding
+- **Superseded in part by**: [ADR-0358](0358-an-add-on-kinds-function-comes-from-an-image-and-its-contract-is-the-kinds-schema.md) (2026-11-24) — Decision 8 (which Job a stack's outputs come from).
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: infrastack, secrets, outputs, funcdctl, addons

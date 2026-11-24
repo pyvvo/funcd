@@ -5,6 +5,7 @@
   folded
 - **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md)
   (2026-11-23) — Decision 3: the add-on proxy's token names the caller's kind (Decision 4).
+- **Superseded in part by**: [ADR-0358](0358-an-add-on-kinds-function-comes-from-an-image-and-its-contract-is-the-kinds-schema.md) (2026-11-24) — Decision 1 (a Function that an object controls is no user of it).
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, local-api, shims, auth, network

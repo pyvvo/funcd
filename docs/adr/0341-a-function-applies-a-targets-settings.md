@@ -4,6 +4,7 @@
   [report](../reviews/adr-0341-implementation-claude-opus-5-5.md)); Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider ("I accept all ADR"), after three rounds of an independent judge, every Blocker and Major
   folded
 - **Superseded in part by**: [ADR-0345](0345-a-function-reconciles-an-engineless-kind-and-a-deletion-waits-for-its-destroy.md) (2026-11-23) — Decisions 3 and 8 (an engineless object's `spec.functions` may name its own kind; `addons.settingsTimeout` bounds the engineless call too).
+- **Superseded in part by**: [ADR-0358](0358-an-add-on-kinds-function-comes-from-an-image-and-its-contract-is-the-kinds-schema.md) (2026-11-24) — Decisions 1 (a kind is read from a pin), 3 (an image's Function) and 4 (two more reasons).
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, reconcile, functions

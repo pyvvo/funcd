@@ -1,6 +1,8 @@
 # ADR-0358: An add-on kind's Function comes from an image, and its contract is the kind's schema
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-11-24), by the decider ("funcd should follow the contract. and yes let use image by
+  default"), after three rounds of an independent judge, every Blocker and Major folded; that the Function goes once its
+  empty list is applied came after them, on the decider's question, and the model checks it
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, functions, contracts, admission
