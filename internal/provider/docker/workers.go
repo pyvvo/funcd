@@ -644,14 +644,18 @@ func (w *workers) snapshotLocked(id containerrt.InstanceID, inst *worker) contai
 func (w *workers) Logs(_ context.Context, id containerrt.InstanceID) (io.ReadCloser, error) {
 	w.mu.Lock()
 	inst, ok := w.instances[id]
+	var out *workerpipe.Output
+	if ok {
+		out = inst.out
+	}
 	w.mu.Unlock()
 	switch {
 	case !ok:
 		return nil, fault.NotFoundf("docker.workers.Logs", "instance %q not found", id)
-	case inst.out == nil:
+	case out == nil:
 		return io.NopCloser(strings.NewReader("")), nil
 	}
-	return inst.out.Tail(), nil
+	return out.Tail(), nil
 }
 
 // Exec runs cmd in a helper that mounts the worker's volumes where the worker has them (best-effort, as the port allows).
