@@ -60,7 +60,7 @@ testcases:
         info: "lane-approve before its approval → {{.result.systemout}}"
         assertions:
           - result.systemout ShouldContainSubstring PHASE=AwaitingApproval
-          - result.systemout ShouldContainSubstring DIGEST=sha256:
+          - 'result.systemout ShouldContainSubstring DIGEST=sha256:'
           - 'result.systemout ShouldContainSubstring PREVIEW={"month":"2026-10","rows":31}'
         vars:
           digest:
@@ -89,7 +89,7 @@ testcases:
         info: "lane-pyapprove before its approval → {{.result.systemout}}"
         assertions:
           - result.systemout ShouldContainSubstring PHASE=AwaitingApproval
-          - result.systemout ShouldContainSubstring DIGEST=sha256:
+          - 'result.systemout ShouldContainSubstring DIGEST=sha256:'
           - 'result.systemout ShouldContainSubstring PREVIEW={"month":"2026-10","rows":31}'
         vars:
           pydigest:
