@@ -229,14 +229,18 @@ stops writing parts, `Ready` has the stop's reason in any phase.
 | `Failed` | `ChildNotReady` | A part was still pending when `app.upgradeTimeout` ran out. The revision stays `Failed`, and `Ready` stays `False`, even once its parts are ready: apply a new spec, such as a fix or a rollback. |
 | `Ready` condition | `ChildNotOwned` | An object of a part's name exists, and the App does not own it, such as a store that a deleted App kept. funcd writes no part until the object is gone, or until the App names it with `ref`. |
 | `Ready` condition | `ChildInvalid` | funcd refused the write of a part, and writes no part after it. The message holds the refusal. |
-| `Ready` condition | `SecretNotFound` or `SecretKeyMissing` | A Secret that the App declares, or one of its keys, does not exist. funcd writes no part until it exists. |
+| `Ready` condition | `SecretNotFound` or `SecretKeyMissing` | A Secret that the App declares, or one of its keys, does not exist. funcd writes no part until it exists. A key of a Secret that one of the App's Jobs owns stops nothing: the parts that read it are `Lagging` until the Job writes it. |
 | `Ready` condition | `RequirementNotMet` | An App that `spec.requires` names does not exist, is not `Ready`, or has a version out of the range. |
 | `Ready` condition | `RefNotFound` | The object that a `ref` entry names does not exist. |
 | `Paused` condition | `SpecPaused` | The App is paused, as [Changes and deletion](#changes-and-deletion) explains. |
 | Another reason | | The message of the `Ready` condition gives the cause. |
 
 `status.currentRevision` names the revision whose rollout last completed, and `status.latestRevision` the newest.
-`status.children` lists each part, in write order, as `Ready`, `NotStarted`, `Pending` with a reason, or `Pruning`.
+`status.children` lists each part, in write order, as `Ready`, `NotStarted`, `Pending` with a reason, `Lagging` with a
+reason, or `Pruning`. A `Lagging` part waits for what funcd does not run: a stack that is not applied, such as one whose
+change waits for approval (`AwaitingApproval`), or a part that reads a key its stack's Job has not written yet
+(`SecretKeyMissing: Secret/<name> <key>`), which funcd writes once the key exists. The App's `Ready`, the switch to a new
+revision and its deadline leave a `Lagging` part out.
 [`funcdctl app history`](../../tools/funcdctl/spec.md#funcdctl-app-history) lists the revisions: `Deploying` until
 current, then `Ready`, or `Failed`. `funcdctl get apprevision <name> -n <namespace> -o json` prints a revision's
 conditions:
@@ -262,8 +266,8 @@ A new revision rolls out in this order:
 3. It writes the parts in the order of `status.children`: ConfigMaps, KV stores, Buckets, SQL databases, add-on
    objects, Functions, Jobs, Workflows, EventSources, Sensors, Routes, Sites, Lakes and BackupSchedules. An unchanged
    part stays as it is.
-4. Once no part is pending, it becomes current, and funcd calls the post-hooks.
-5. Then funcd deletes the dropped parts, `Pruning` until then: a dropped store whose `deletion` is `delete` goes with
+4. Once no part is pending, it becomes current, and funcd calls the post-hooks, once no part is `Lagging` or pending.
+5. Then funcd deletes the dropped parts, `Pruning` until then and while a part is `Lagging`: a dropped store whose `deletion` is `delete` goes with
    its data, and one with `retain`, the default, stays. A part still in use by a Workflow run or another object stays.
 
 A failed revision leaves `currentRevision` on the one before, but the parts that it wrote keep the new spec. It stays
