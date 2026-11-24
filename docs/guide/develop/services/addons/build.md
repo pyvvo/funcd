@@ -5,8 +5,9 @@ description: Package an engine built outside funcd as an add-on, with rauthy and
 
 ## Usage
 
-An add-on is an engine image and an `Addon` manifest. The manifest names the kind the add-on adds and tells funcd how
-to run, serve and back up one engine per object of that kind. funcd runs no code of the add-on in its own process.
+An add-on is a set of images and an `Addon` manifest. The manifest lists the runtimes the add-on ships: one entry may
+run the kind the add-on adds, and tells funcd how to run, serve and back up one engine per object of that kind; other
+entries are runtimes that Functions and Jobs name. funcd runs no code of the add-on in its own process.
 [rauthy](https://github.com/pyvvo/funcd-addons/tree/main/rauthy) in
 [pyvvo/funcd-addons](https://github.com/pyvvo/funcd-addons) is the example on this page: its Addon adds the kind
 `IdentityProvider`, and its funcdctl plugin, `funcdctl-rauthy`, writes the Secret each object binds.
@@ -48,13 +49,15 @@ On a server, an engine reaches nothing outward: funcd fences its network, and on
 
 ## The Addon
 
-rauthy's [`addon.yaml`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/app/addon.yaml), part by part:
+rauthy's [`addon.yaml`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/app/addon.yaml) ships one runtime,
+`rauthy`, whose `workloads` hold `Engine` alone: one engine of its image runs per object of its kind. Its `image` and
+its `attributes`, part by part:
 
 - `kind: IdentityProvider` is the kind users declare, at `/apis/funcd.io/v1alpha1/namespaces/<ns>/identityproviders`.
   funcdctl takes it as `IdentityProvider`, `identityprovider` or `identityproviders`. A lower-case word that ends in
   s is read as a plural, so a kind that ends in s, such as `Redis`, is typed with its capital letter or as its
   plural, `rediss`.
-- `image` is pinned by digest, from a registry the server's `addons.registries` lists.
+- The entry's `image` is pinned by digest, from a registry the server's `addons.registries` lists.
 - `port`, `basePath`, `readiness.path` and `storage` describe the engine, as the table above does.
 - `privatePaths` lists paths under `basePath` that the edge never serves. rauthy's client registration,
   `/auth/v1/clients_dyn`, is one: funcd registers clients itself, at the engine's own address.
@@ -77,7 +80,7 @@ rauthy's [`addon.yaml`](https://github.com/pyvvo/funcd-addons/blob/main/rauthy/a
 ## Settings kinds
 
 Some engines keep a setting behind their own API, often for their whole instance, such as rauthy's password policy. An
-Addon gives such a setting a kind of its own in `settings`. An object of a settings kind runs no engine: it names its
+Addon gives such a setting a kind of its own in its engine entry's `settings`. An object of a settings kind runs no engine: it names its
 target, an object of the Addon's `kind` in the same namespace, and the kind's Function applies it to that target's
 engine.
 
