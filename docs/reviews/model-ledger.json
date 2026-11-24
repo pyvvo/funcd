@@ -15283,5 +15283,20 @@
     "dod_total": 13,
     "report": "docs/reviews/adr-0354-implementation-claude-opus-5-5-2.md",
     "notes": "round 2 on 5364fcb4: round 1's Minor (limitsConfig's doc comment) fixed; the tunnel rows moved unchanged to their own behavior chapter"
+  },
+  {
+    "date": "2026-11-24",
+    "adr": "0346",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 2,
+    "model_attributed": 3,
+    "dod_passed": 17,
+    "dod_total": 20,
+    "report": "docs/reviews/adr-0346-implementation-claude-opus-5-5.md",
+    "notes": "at 22c299fc: Major (model): the five real-engine dev scenarios skip on CI's docker-ce 28.0.4, whose classic image store gives a built image no digest (dev_worker_test.go:91), so plan step 8's Job on Linux in CI is unmet and dev-addon-worker-linux passes nowhere; Minor (model): funcdctl-dev.md:51 does not name the workers; Minor (model): four rules no test reaches (mutants M3e lakeHook marking, M6a retire's listener release, M9 pull to RuntimeUnavailable, M13 stale port file survive); 27 of 32 mutants caught, M5d equivalent; routed (adr): ListenerFor(ref, id) follows ADR-0351 Decision 2, and ADR-0346 has no back-link for it; routed (uncovered): dev's host DUCKDB_EXTENSION_DIRECTORY reaches a container worker"
   }
 ]
