@@ -2,7 +2,10 @@
 
 - **Status**: Reviewing (2026-11-24, implemented); Accepted (2026-11-23), by the decider, after five rounds of an
   independent judge, every Blocker and Major folded
-- **Amended in place**: 2026-11-24, on the decider's delegation ("shouldn't left anything open", then "Accept"), after the implementation review routed four rulings: a kind keeps its workload on an Addon created again, an engine object's mark (Decision 1); an engineless object takes no engine field (Decision 3); a later event of an ended JobRun (Decision 4); the forced ResourceGroup delete holds too (Decision 6); the object quota (Decision 9)
+- **Amended in place**: 2026-11-24, on the decider's delegation ("shouldn't left anything open", then "Accept"), after
+  the implementation review routed four rulings: a kind keeps its workload on an Addon created again, an engine
+  object's mark (Decision 1); an engineless object takes no engine field (Decision 3); a later event of an ended
+  JobRun (Decision 4); the forced ResourceGroup delete holds too (Decision 6); the object quota (Decision 9)
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, reconcile, functions, deletion, apps
@@ -95,7 +98,8 @@ calls over a stream; a general finalizer mechanism.
    `resync` (1s to 24h, unset 10m, as a settings kind's). An image or any other attribute is refused, 400 naming it.
    An engineless object pins its AddonRevision as an engine's object does (ADR-0339 Decisions 2 and 3), and its
    Function and resync come from that revision. Its first pass stores `status.workload: Engineless`, and no call
-   carries it before that write is stored. An engine object's pass stores `Engine` once its engine converged. The mark
+   carries it before that write is stored. An engine object's pass stores `Engine` once funcd has tried to start its
+   engine, which may already have made its storage. The mark
    outlives the Addon: a replace that moves the kind between `Engine` and `Engineless` is refused 400, and the create
    of an Addon for a kind whose stored object is marked the other way 409, naming it (amended 2026-11-24).
 2. **The call.** An engineless object's group is its namespace, its kind and its Function: the `ref` of its
@@ -136,7 +140,8 @@ calls over a stream; a general finalizer mechanism.
 6. **The hold.** An object whose `status.workload` is `Engineless` and whose `spec.deletion` is `delete` is held at
    its deletion, whether or not a call has carried it yet: the API's DELETE, the owner garbage collector, an App's
    prune and a forced ResourceGroup delete, which then answers 409 naming it as for a refused member (ADR-0170 Decision
-   8) (amended 2026-11-24), remove it through `DeleteAddonObject`, which sets its `metadata.deletionTimestamp` instead. The DELETE answers 202 with the object,
+   8) (amended 2026-11-24), remove it through `DeleteAddonObject`, which sets its `metadata.deletionTimestamp`
+   instead. The DELETE answers 202 with the object,
    with `If-Match` checked as today, and 202 again for a deleting object. A write to a deleting object is stored, and
    it stays deleting. Its group's lists carry it with `deleting: true`. Only an ok answer to a call that carried it so,
    at its uid, removes it; a call sent before its deletion removes nothing. Any other answer writes its status, Ready
@@ -231,8 +236,8 @@ type CallObject struct {
 	Config     json.RawMessage `json:"config"`
 }
 
-// AddonObjectStatus gains the workload of the object's kind, stored at its first pass: Engineless, or Engine once its
-// engine converged (Decision 1, amended 2026-11-24).
+// AddonObjectStatus gains the workload of the object's kind, stored at its first pass: Engineless, or Engine once funcd
+// has tried to start its engine (Decision 1, amended 2026-11-24).
 Workload Workload `json:"workload,omitempty"`
 
 // DeleteAddonObject removes obj, or holds it as Decision 6 says and returns it (internal/gc).

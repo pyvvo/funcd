@@ -286,7 +286,7 @@ components:
           $ref: "#/components/schemas/AddonRestoreState"
           description: "The in-place Restore whose copy the engine loads: it goes once an engine started without restore.env is Ready, or once that Restore has failed or is gone. While it stands, the namespace is held."
         workload:
-          description: "The workload of the object's kind, which funcd stores at the object's first pass: Engineless for a kind whose objects run no engine, Engine once its engine has run. No call of its Function carries the object before then, and a deletion holds only an Engineless object. An Addon created again for the kind keeps it."
+          description: "The workload of the object's kind, which funcd stores at the object's first pass: Engineless for a kind whose objects run no engine, Engine once funcd has tried to start its engine. No call of its Function carries the object before then, and a deletion holds only an Engineless object. An Addon created again for the kind keeps it."
           enum:
             - Function
             - Job

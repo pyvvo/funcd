@@ -193,7 +193,7 @@ This page lists the spec and status fields of Addon, AddonObject and AddonRevisi
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
 | `restore` | object, [`AddonObject.status.restore`](#addonobjectstatusrestore) | The in-place Restore whose copy the engine loads: it goes once an engine started without restore.env is Ready, or once that Restore has failed or is gone. While it stands, the namespace is held. |
-| `workload` | string, one of `Function`, `Job`, `Engine`, `Engineless` | The workload of the object's kind, which funcd stores at the object's first pass: Engineless for a kind whose objects run no engine, Engine once its engine has run. No call of its Function carries the object before then, and a deletion holds only an Engineless object. An Addon created again for the kind keeps it. |
+| `workload` | string, one of `Function`, `Job`, `Engine`, `Engineless` | The workload of the object's kind, which funcd stores at the object's first pass: Engineless for a kind whose objects run no engine, Engine once funcd has tried to start its engine. No call of its Function carries the object before then, and a deletion holds only an Engineless object. An Addon created again for the kind keeps it. |
 
 ### `AddonObject.status.restore`
 
