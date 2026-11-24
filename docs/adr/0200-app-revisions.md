@@ -7,6 +7,7 @@
 - **Superseded in part by**: [ADR-0214](0214-app-hooks.md) (2026-10-10) — Decisions 4-7 for an App with hooks.
 - **Superseded in part by**: [ADR-0219](0219-app-requirements.md) (2026-10-10) — Decisions 3-6: startedAt waits for the requirements.
 - **Superseded in part by**: [ADR-0339](0339-an-add-ons-versions-are-revisions-each-object-pins.md) (2026-11-22) — Decisions 3, 5 and 6 (a stamp records each add-on kind's revision; `ChildrenReady` and the switch wait for a part's pin).
+- **Superseded in part by**: [ADR-0357](0357-an-app-never-waits-for-its-stacks-and-a-part-waits-for-their-outputs.md) (2026-11-24) — Decision 5: `Applied` counts a `Lagging` part as written.
 - **Date**: 2026-10-08 (self-accepted under adr-batch after a five-finder grounding, three judge rounds and two confirm
   judges; the main session made an unset `app.upgradeTimeout` default non-breaking)
 - **Deciders**: green-0-rabbit

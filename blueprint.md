@@ -419,10 +419,14 @@ FEAT-0010): typed sections (`kv`, `buckets`, `functions`, `workflows`, `eventSou
 writes. Admission refuses an inconsistent App before anything is stored, with quotas counted over all its parts. The
 App controller writes the parts with platform rights, as a Workflow writes its steps, writes back a part edited by
 hand, reports one status in which an idle Function counts as ready, and prunes a dropped part once no part is pending
-and nothing else uses it. Deleting the App removes its tree through the garbage collector; a KV store or a Bucket goes
+or lagging and nothing else uses it. Deleting the App removes its tree through the garbage collector; a KV store or a Bucket goes
 only when its entry says `deletion: delete`. Every spec change is stamped as a read-only `AppRevision`
-([ADR-0200](docs/adr/0200-app-revisions.md)), which becomes current, and lets dropped parts go, only once every part
-is Ready within `app.upgradeTimeout`; a timed-out upgrade is `Failed` and the previous revision stays current, with no
+([ADR-0200](docs/adr/0200-app-revisions.md)), which becomes current only once every part is Ready within
+`app.upgradeTimeout`, a `Lagging` part aside: an engineless part such as a stack, which may wait for a person, or a
+part that waits for a stack's outputs, which the App writes only once they exist
+([ADR-0357](docs/adr/0357-an-app-never-waits-for-its-stacks-and-a-part-waits-for-their-outputs.md)). Dropped parts go,
+and the post-hooks run, once it is current and no part is pending or lagging, and the end of a wait restarts the
+deadline; a timed-out upgrade is `Failed` and the previous revision stays current, with no
 automatic rollback, while the parts keep the new spec; `funcdctl app history` lists the revisions and `funcdctl app rollback` re-applies one as a new
 revision. An App can be paused for manual work and records each self-heal ([ADR-0212](docs/adr/0212-app-self-heal-and-pause.md));
 it defines its ConfigMaps under content-hashed names and declares, never holds, the Secrets it needs

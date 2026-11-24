@@ -1,6 +1,7 @@
 # ADR-0212: App self-heal record and pause
 
 - **Status**: Implemented (2026-10-10)
+- **Superseded in part by**: [ADR-0357](0357-an-app-never-waits-for-its-stacks-and-a-part-waits-for-their-outputs.md) (2026-11-24) — Decisions 1 and 6: the write that ends a part's lag is no self-heal, and the deadline gains the end of a part's wait as a start term.
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit

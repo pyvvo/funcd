@@ -5,6 +5,7 @@
   folded
 - **Superseded in part by**: [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md) (2026-11-23) — Decision 2 (a template's `addon.yaml` must add a kind; funcdctl refuses one that adds none).
 - **Superseded in part by**: [ADR-0345](0345-a-function-reconciles-an-engineless-kind-and-a-deletion-waits-for-its-destroy.md) (2026-11-23) — Decision 5 (an App's engineless parts go first in its prune and its collection).
+- **Superseded in part by**: [ADR-0357](0357-an-app-never-waits-for-its-stacks-and-a-part-waits-for-their-outputs.md) (2026-11-24) — Decision 4: an engineless add-on part not Ready at its generation is `Lagging`.
 - **Date**: 2026-11-19
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, app, templates, funcdctl
