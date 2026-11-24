@@ -224,7 +224,7 @@ two moments, never on a timer: a run waits in `AwaitingApproval` with no deadlin
 | `Succeeded` | none | The handler answered; its answer is the run's result. |
 | `Failed` | `PreviewFailed`, `PayloadLimitExceeded` | The preview answered an error, or more than `job.payloadLimit` bytes. |
 | `Rejected` | `Rejected` | A person rejected the run; the message is the reason. The handler never ran. |
-| `Cancelled` | `Cancelled`, `JobDeleted` | The run was cancelled, or its Job was deleted or created again while the run waited. The handler never ran. |
+| `Cancelled` | `Cancelled`, `JobDeleted` | The run was cancelled, or its Job was deleted or created again. A run that ends before `Running` never ran its handler; a `Running` run's worker is stopped, and its handler may have done part of its work. |
 
 The Job page's [Status](index.md#status) holds the reasons that every run shares, such as `HandlerFailed`.
 
