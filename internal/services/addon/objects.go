@@ -13,6 +13,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/ownedstore"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -202,6 +203,9 @@ func (r *Reconciler) storeStatus(ctx context.Context, o *v1.AddonObject) error {
 // due, 0 for none before the supervision period. The group is every object of o's namespace and kind that fn
 // reconciles and whose first pass stored its mark, sorted by name.
 func (r *Reconciler) syncGroup(ctx context.Context, at v1.AddonAttributes, o *v1.AddonObject, fn *v1.Function) (time.Duration, error) {
+	if ownedstore.Marked(fn.OwnerReferences, o) && !checked(fn) {
+		return 0, nil
+	}
 	objs, err := r.groupObjects(ctx, at.Kind, o.Namespace, fn.Name)
 	if err != nil {
 		return 0, err

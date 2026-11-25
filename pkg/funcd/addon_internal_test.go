@@ -29,11 +29,14 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// addonRuntime is a fake add-on engine runtime: every engine is Ready at once and served by one httptest engine, which
-// records the path and the body of each call and answers it with that path. It counts the engines it starts: a Converge with no
-// engine running, or with another spec than the running engine's, as the real runtime replaces one (#1195).
+// addonRuntime is a fake add-on engine runtime: every engine is Ready at once, or after bootsIn's passes, and served by one
+// httptest engine, which records the path and the body of each call and answers it with that path. It counts the engines it
+// starts: a Converge with no engine running, or with another spec than the running engine's, as the real runtime replaces
+// one (#1195).
 type addonRuntime struct {
 	mu        sync.Mutex
+	boots     int
+	booting   map[provider.ProviderRef]int
 	engine    *httptest.Server
 	specs     map[provider.ProviderRef]provider.ProviderSpec
 	running   map[provider.ProviderRef]bool
@@ -68,8 +71,8 @@ func (h *teardownHold) waitHold() {
 }
 
 func newAddonRuntime(t *testing.T) *addonRuntime {
-	r := &addonRuntime{specs: map[provider.ProviderRef]provider.ProviderSpec{}, running: map[provider.ProviderRef]bool{},
-		starts: map[provider.ProviderRef]int{}, teardowns: map[provider.ProviderRef]int{}}
+	r := &addonRuntime{booting: map[provider.ProviderRef]int{}, specs: map[provider.ProviderRef]provider.ProviderSpec{},
+		running: map[provider.ProviderRef]bool{}, starts: map[provider.ProviderRef]int{}, teardowns: map[provider.ProviderRef]int{}}
 	r.engine = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		body, _ := io.ReadAll(req.Body)
 		r.mu.Lock()
@@ -87,9 +90,14 @@ func (r *addonRuntime) Converge(_ context.Context, spec provider.ProviderSpec) (
 	old, had := r.specs[spec.Ref]
 	if !r.running[spec.Ref] || !had || !reflect.DeepEqual(old, spec) {
 		r.starts[spec.Ref]++
+		r.booting[spec.Ref] = r.boots
 	}
 	r.specs[spec.Ref], r.running[spec.Ref] = spec, true
-	return provider.ProviderStatus{Running: 1, Ready: true, Address: strings.TrimPrefix(r.engine.URL, "http://")}, nil
+	ready := r.booting[spec.Ref] == 0
+	if !ready {
+		r.booting[spec.Ref]--
+	}
+	return provider.ProviderStatus{Running: 1, Ready: ready, Address: strings.TrimPrefix(r.engine.URL, "http://")}, nil
 }
 
 func (r *addonRuntime) Teardown(_ context.Context, ref provider.ProviderRef) error {

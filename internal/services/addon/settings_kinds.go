@@ -119,8 +119,8 @@ func says(schema json.RawMessage) bool {
 
 // AdmitSettings checks a write of an object of settings kind st against its constraints (ADR-0340 Decision 4): its
 // immutable fields against old, the counts and unique fields against others, the namespace's other objects of the
-// kind, and each rule, which schema types; with no schema, no rule judges it (ADR-0358 Decision 5). The caller holds the
-// namespace's admission lock.
+// kind, and each rule, which schema types; a nil one, of a contract that is not read, lets no rule judge it (ADR-0358
+// Decision 5). The caller holds the namespace's admission lock.
 func AdmitSettings(st *v1.AddonSettings, schema json.RawMessage, o, old *v1.AddonObject, others []*v1.AddonObject) error {
 	const op = "admission.addon-settings"
 	c := st.Constraints
@@ -158,7 +158,7 @@ func AdmitSettings(st *v1.AddonSettings, schema json.RawMessage, o, old *v1.Addo
 			}
 		}
 	}
-	if !says(schema) {
+	if schema == nil {
 		return nil
 	}
 	rules, err := parseRules(st, schema)

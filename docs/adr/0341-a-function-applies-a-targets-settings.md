@@ -60,8 +60,8 @@ Experiment 0026 built the loop on rauthy and measured it.
   that does not bind `login`, or no Addon that declares the kind, *Then* `strict` is `Pending` with `TargetNotFound`,
   `TargetNotReady`, `FunctionNotFound`, `FunctionNotBound` or `AddonNotFound`, even after an earlier Ready, and no call
   is made for it.
-- `scenario: settings-function-change` — *When* the Function gets a new revision, or the alias it binds `login` under
-  changes, *Then* the next pass of `login` sends its list again.
+- `scenario: settings-function-change` — *When* a new revision of the Function answers, or the alias it binds `login`
+  under changes, *Then* the next pass of `login` sends its list again (amended 2026-11-25).
 - `scenario: settings-function-per-target` — *Given* rauthy's App template deployed twice in `shop`, as `web-auth`
   and `admin-auth`, whose IdentityProviders name their own Functions in `spec.functions`, and a third IdentityProvider
   `ops-login` that names none, *When* a policy is applied for each, *Then* each App's target's list goes to its own
@@ -255,7 +255,7 @@ func (i *HTTPInvoker) InvokeReply(ctx context.Context, ns v1.NamespaceName, fn v
 
 | Consumes | Exposes |
 |---|---|
-| the Addon's `settings` (ADR-0340); the Function's `bindings.addon` (ADR-0338) and its current revision | the call of Decision 2; `invoke.AddonSettings`; the add-on object's `spec.functions` |
+| the Addon's `settings` (ADR-0340); the Function's `bindings.addon` (ADR-0338) and the revision that answers (amended 2026-11-25) | the call of Decision 2; `invoke.AddonSettings`; the add-on object's `spec.functions` |
 | `addons.settingsTimeout` | the reasons `Progressing`, `ReconcileFailed`, `NoResult`, `AddonNotFound`, `TargetNotFound`, `TargetNotReady`, `FunctionNotFound`, `FunctionNotBound` |
 
 ## Implementation plan

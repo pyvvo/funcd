@@ -67,6 +67,12 @@ const (
 	revisionHashLen = 8
 )
 
+// FunctionRevisionName is the name of a Function's Revision of generation (ADR-0020): <function>-<generation>, shortened
+// with the generation last.
+func FunctionRevisionName(function ObjectName, generation int64) ObjectName {
+	return revisionLabel(string(function), strconv.FormatInt(generation, 10))
+}
+
 // JobRevisionName is the name of a Job's Revision of generation (ADR-0347 Decision 2): <job>-v<generation>, shortened
 // as a Function's Revision name is, with -v<generation> last. A Function's Revision name ends in -<digits>, so the two
 // never meet.

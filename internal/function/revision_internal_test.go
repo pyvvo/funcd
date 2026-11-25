@@ -43,7 +43,7 @@ func TestRevisionName(t *testing.T) {
 		fn.Name, fn.Generation = v1.ObjectName(c.name), c.gen
 		got := revisionName(fn)
 		require.Equal(t, c.want, got, "%d characters at generation %d", len(c.name), c.gen)
-		require.LessOrEqual(t, len(got), maxRevisionName)
+		require.LessOrEqual(t, len(got), 63)
 		require.NoError(t, v1.ObjectName(got).Validate())
 		require.Equal(t, got, revisionName(fn), "stable")
 	}

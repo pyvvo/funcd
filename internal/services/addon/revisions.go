@@ -68,10 +68,10 @@ func (r addonRevisions) Reconcile(ctx context.Context, req controller.Request) (
 	}
 	rev, unread, err := r.readImages(ctx, rev)
 	if err != nil {
-		return controller.Result{}, retryOnConflict(err, op)
-	}
-	if err := r.report(ctx, a, rev, unread); err != nil {
 		return controller.Result{}, err
+	}
+	if stored, err := r.report(ctx, a, rev, unread); err != nil || !stored {
+		return controller.Result{}, err // not stored: the Addon changed, and its event brings the next pass
 	}
 	left, err := r.retire(ctx, a, name)
 	if err != nil || (!left && len(unread) == 0) {
@@ -81,9 +81,9 @@ func (r addonRevisions) Reconcile(ctx context.Context, req controller.Request) (
 }
 
 // report names rev the Addon's current revision and sets its Ready condition: True once every image of rev's kinds was
-// read and its constraints fit what they say (ADR-0358 Decision 4). Nothing waits for it. A Conflict is left to the pass
-// that the conflicting write brings.
-func (r addonRevisions) report(ctx context.Context, a *v1.Addon, rev *v1.AddonRevision, unread map[string]error) error {
+// read and its constraints fit what they say (ADR-0358 Decision 4). Nothing waits for it. It returns whether the stored
+// Addon reads so: false after a Conflict, when the stored status still names another revision.
+func (r addonRevisions) report(ctx context.Context, a *v1.Addon, rev *v1.AddonRevision, unread map[string]error) (bool, error) {
 	cond, phase := readiness(a, rev, unread), v1.PhaseReady
 	if cond.Status != v1.ConditionTrue {
 		phase = v1.PhasePending
@@ -91,14 +91,14 @@ func (r addonRevisions) report(ctx context.Context, a *v1.Addon, rev *v1.AddonRe
 	was, ok := a.Status.Conditions.Get(condReady)
 	if ok && a.Status.CurrentRevision == rev.Name && a.Status.Phase == phase && was.Status == cond.Status && was.Reason == cond.Reason &&
 		was.Message == cond.Message && was.ObservedGeneration == cond.ObservedGeneration {
-		return nil
+		return true, nil
 	}
 	a.Status.CurrentRevision, a.Status.Phase, a.Status.ObservedGeneration = rev.Name, phase, a.Generation
 	a.Status.Conditions.Set(cond)
 	if _, err := r.store.Update(ctx, a); err != nil {
-		return retryOnConflict(err, "services.addon.Revisions")
+		return false, retryOnConflict(err, "services.addon.Revisions")
 	}
-	return nil
+	return true, nil
 }
 
 // readiness is the Addon's Ready condition for rev.

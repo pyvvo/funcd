@@ -158,10 +158,13 @@ func TestScenarioAddonContractOfThePin(t *testing.T) {
 	e.register(t, rauthySettingsAddon("rauthy"))
 	e.apply(t, e.dev, identityProvider("default"))
 	e.pin(t, "default", "login", "rauthy-1", rauthyAddon("rauthy").Spec.Runtimes[0].Image)
-	app := loginApp("default", "web-auth")
-	app.Spec.Addons = append(app.Spec.Addons, v1.AppAddon{Name: "web-auth-strict", AddonObjectSpec: v1.AddonObjectSpec{
-		Kind: "RauthyPasswordPolicy", Config: policy("default", "", "web-auth-login", 8, 64).Spec.Config}})
-	e.apply(t, e.dev, app)
+	withPolicy := func(o *v1.AddonObject) *v1.App {
+		app := loginApp("default", "web-auth")
+		app.Spec.Addons = append(app.Spec.Addons, v1.AppAddon{Name: "web-auth-strict", AddonObjectSpec: v1.AddonObjectSpec{
+			Kind: "RauthyPasswordPolicy", Config: o.Spec.Config}})
+		return app
+	}
+	e.apply(t, e.dev, withPolicy(policy("default", "", "web-auth-login", 8, 64)))
 	e.pin(t, "default", "web-auth-login", "rauthy-1", rauthyAddon("rauthy").Spec.Runtimes[0].Image)
 
 	e.images.set(newerSettingsImage, settingsContract(agedPolicyCall, clientCall))
@@ -175,19 +178,11 @@ func TestScenarioAddonContractOfThePin(t *testing.T) {
 	status, detail = e.replace(t, policiesPath, agedPolicy("web-auth-strict", "web-auth-login"))
 	require.Equal(t, http.StatusUnprocessableEntity, status, "web-auth-login pins rauthy-1: %s", detail)
 
-	edited := identityProvider("default")
-	edited.Spec.Config = json.RawMessage(`{"issuer":"https://login.example.com/auth/v2","port":8080}`)
-	e.apply(t, e.dev, edited)
-	e.pin(t, "default", "login", "rauthy-2", rauthyAddon("rauthy").Spec.Runtimes[0].Image)
+	e.moved(t, "rauthy-2")
 	status, detail = e.create(t, policiesPath, agedPolicy("strict", "login"))
 	require.True(t, created(status), "login moved: %d %s", status, detail)
 
-	app.Spec.Addons[1].Config = agedPolicy("", "web-auth-login").Spec.Config
-	obj, err := e.dev.Get(e.ctx, v1.KindApp, "default", "web-auth")
-	require.NoError(t, err)
-	app.ResourceVersion = obj.(*v1.App).ResourceVersion
-	_, err = e.dev.Apply(e.ctx, app)
-	require.NoError(t, err, "an upgrade whose parts are both moves the target with the policy")
+	e.apply(t, e.dev, withPolicy(agedPolicy("", "web-auth-login"))) // an upgrade whose parts are both moves the target with the policy
 }
 
 // scenario: addon-function-ref — with function.ref funcd creates nothing, and a write is checked against no schema.

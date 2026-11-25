@@ -12,14 +12,17 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/testkit/langmod"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -62,14 +65,36 @@ const stacksSrc = `export async function handle(ctx, event) {
 type kindsEnv struct {
 	*addonEnv
 	artifacts string
-	layouts   layoutImages
+	layouts   *layoutImages
 }
 
-// layoutImages reads each image from the OCI layout it was pushed to, in place of its registry.
-type layoutImages map[string]string
+// layoutImages reads each image from the OCI layout it was pushed to, in place of its registry, which answers once up.
+type layoutImages struct {
+	mu   sync.Mutex
+	refs map[string]string
+	down bool
+}
 
-func (l layoutImages) Read(ctx context.Context, image string) (v1.RuntimeName, v1.WorkflowContract, error) {
-	return addonImages{}.Read(ctx, l[image])
+func (l *layoutImages) Read(ctx context.Context, image string) (v1.RuntimeName, v1.WorkflowContract, error) {
+	l.mu.Lock()
+	ref, down := l.refs[image], l.down
+	l.mu.Unlock()
+	if down {
+		return "", v1.WorkflowContract{}, fault.Unavailablef("test", "%s is down", downRegistry)
+	}
+	return addonImages{}.Read(ctx, ref)
+}
+
+func (l *layoutImages) set(image, ref string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.refs[image] = ref
+}
+
+func (l *layoutImages) setDown(down bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.down = down
 }
 
 func startKinds(t *testing.T) *kindsEnv {
@@ -79,7 +104,7 @@ func startKinds(t *testing.T) *kindsEnv {
 	dir, err := os.MkdirTemp("", "funcd") // not t.TempDir(): a socket path under it would overrun the limit (#41)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	e := &kindsEnv{artifacts: dir, layouts: layoutImages{}}
+	e := &kindsEnv{artifacts: dir, layouts: &layoutImages{refs: map[string]string{}}}
 	e.addonEnv = startAddons(t, WithRuntimeShim(node, langmod.NodeShim(t)), WithArtifactStore(dir), WithAddonImages(e.layouts))
 	return e
 }
@@ -95,7 +120,7 @@ func (e *kindsEnv) push(t *testing.T, src string, c v1.WorkflowContract) string 
 	digest, err := artifact.Push(e.ctx, layout+":kind", file, blob, "nodejs22", "")
 	require.NoError(t, err)
 	image, ref := downRegistry+"/pyvvo/kind@"+digest, layout+"@"+digest
-	e.layouts[image] = ref
+	e.layouts.set(image, ref)
 	m, fn := artifact.NewOrasMaterializer(e.artifacts, v1.HostPlatform()), &v1.Function{}
 	fn.Spec.Image, fn.Spec.ImageDigest = ref, digest
 	_, err = m.Materialize(e.ctx, fn)
@@ -104,6 +129,10 @@ func (e *kindsEnv) push(t *testing.T, src string, c v1.WorkflowContract) string 
 	require.NoError(t, err)
 	return image
 }
+
+// stricterPolicyCall refuses the policy of lengthMin 8 that policyCall takes.
+const stricterPolicyCall = `{"properties":{"provider":{"type":"string"},"lengthMin":{"type":"integer","minimum":12},"lengthMax":{"type":"integer"}},` +
+	`"required":["provider","lengthMin","lengthMax"]}`
 
 // waitSettled waits until ns/name is in phase with the Ready reason reason at its generation, and returns its message.
 func (e *addonEnv) waitSettled(t *testing.T, name v1.ObjectName, phase v1.Phase, reason string) string {
@@ -125,6 +154,13 @@ func (r *addonRuntime) sent() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.bodies)
+}
+
+// bootsIn makes each engine that starts from now on answer after passes passes.
+func (r *addonRuntime) bootsIn(passes int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.boots = passes
 }
 
 // waitSent waits until the last body that an engine got holds lengthMin, as rauthy would enforce it.
@@ -182,18 +218,104 @@ func TestScenarioAddonConfigNoLongerFits(t *testing.T) {
 	require.True(t, created(status), "%d %s", status, detail)
 	e.waitSettled(t, "strict", v1.PhaseReady, "")
 
-	stricter := `{"properties":{"provider":{"type":"string"},"lengthMin":{"type":"integer","minimum":12},"lengthMax":{"type":"integer"}},` +
-		`"required":["provider","lengthMin","lengthMax"]}`
-	e.register(t, rauthyKinds(e.push(t, policiesSrc, settingsContract(stricter, clientCall))))
-	edited := identityProvider("default")
-	edited.Spec.Config = json.RawMessage(`{"issuer":"https://login.example.com/auth/v2","port":8080}`)
-	e.apply(t, e.dev, edited)
+	e.register(t, rauthyKinds(e.push(t, policiesSrc, settingsContract(stricterPolicyCall, clientCall))))
+	e.moved(t, "rauthy-2")
 	require.Contains(t, e.waitSettled(t, "strict", v1.PhasePending, "ReconcileFailed"), "/objects/0/config/lengthMin")
 	e.waitSent(t, 8)
 	status, detail = e.replace(t, policiesPath, policy("default", "strict", "login", 16, 64))
 	require.True(t, created(status), "%d %s", status, detail)
 	e.waitSettled(t, "strict", v1.PhaseReady, "")
 	e.waitSent(t, 16)
+}
+
+// A policy off its contract, stored before its image was read: its first call is refused before the Function runs, though
+// funcd creates the Function in the pass that has that call due.
+func TestAddonFirstCallMeetsItsContract(t *testing.T) {
+	t.Parallel()
+	e := startKinds(t)
+	e.layouts.setDown(true)
+	e.apply(t, e.admin, rauthyKinds(e.push(t, policiesSrc, settingsContract(policyCall, clientCall))))
+	e.waitAddon(t, "rauthy", "ArtifactNotReady")
+	e.apply(t, e.dev, identityProvider("default"))
+	status, detail := e.create(t, policiesPath, settingsObject("RauthyPasswordPolicy", "default", "strict", `{"provider":"login","lengthMin":"eight","lengthMax":64}`))
+	require.True(t, created(status), "no contract judges it yet: %d %s", status, detail)
+	e.waitReason(t, "default", "strict", v1.PhasePending, "ArtifactNotReady")
+
+	e.layouts.setDown(false)
+	require.Contains(t, e.waitSettled(t, "strict", v1.PhasePending, "ReconcileFailed"), "/objects/0/config/lengthMin")
+	require.Empty(t, e.rt.sent(), "the engine keeps what it has")
+}
+
+// A policy that the contract of login's pin refuses, whose Function is deleted by hand: funcd puts it back, and its call
+// is refused.
+func TestAddonRecreatedFunctionMeetsItsContract(t *testing.T) {
+	t.Parallel()
+	e := startKinds(t)
+	e.register(t, rauthyKinds(e.push(t, policiesSrc, settingsContract(policyCall, clientCall))))
+	e.apply(t, e.dev, identityProvider("default"))
+	status, detail := e.create(t, policiesPath, policy("default", "strict", "login", 8, 64))
+	require.True(t, created(status), "%d %s", status, detail)
+	e.waitSettled(t, "strict", v1.PhaseReady, "")
+	e.register(t, rauthyKinds(e.push(t, policiesSrc, settingsContract(stricterPolicyCall, clientCall))))
+	e.moved(t, "rauthy-2")
+	e.waitSettled(t, "strict", v1.PhasePending, "ReconcileFailed")
+	sent, first := len(e.rt.sent()), e.function(t, "default", "login-rauthypasswordpolicy").UID
+	require.NoError(t, e.dev.Delete(e.ctx, v1.KindFunction, "default", "login-rauthypasswordpolicy"))
+	require.Eventually(t, func() bool {
+		fn := e.function(t, "default", "login-rauthypasswordpolicy")
+		return fn != nil && fn.UID != first && fn.Status.CurrentRevision != ""
+	}, kindWithin, 20*time.Millisecond, "it is back")
+	require.True(t, poll.Never(func() bool { return len(e.rt.sent()) > sent }, 500*time.Millisecond, 20*time.Millisecond),
+		"the engine keeps what it has")
+}
+
+// scenario: addon-config-no-longer-fits, while the Function sleeps, as it does five minutes after a call, and login's
+// engine takes a while to answer: the call that its readiness has due waits for the new image's revision, and is refused.
+func TestScenarioAddonConfigNoLongerFitsASleepingFunction(t *testing.T) {
+	t.Parallel()
+	e := startKinds(t)
+	e.rt.bootsIn(3)
+	e.register(t, rauthyKinds(e.push(t, policiesSrc, settingsContract(policyCall, clientCall))))
+	e.apply(t, e.dev, identityProvider("default"))
+	status, detail := e.create(t, policiesPath, policy("default", "strict", "login", 8, 64))
+	require.True(t, created(status), "%d %s", status, detail)
+	e.waitSettled(t, "strict", v1.PhaseReady, "")
+	require.Eventually(t, func() bool {
+		fn := e.function(t, "default", "login-rauthypasswordpolicy")
+		if fn.Status.Phase == v1.PhaseIdle && fn.Status.ServingRevision == "" {
+			return true
+		}
+		fn.Status.Phase = v1.PhaseIdle
+		_, _ = e.p.cfg.store.Update(e.ctx, fn)
+		return false
+	}, kindWithin, 50*time.Millisecond, "the Function sleeps")
+	sent := len(e.rt.sent())
+
+	// Another bundle, so another image of another revision, whose code the call would wake.
+	e.register(t, rauthyKinds(e.push(t, policiesSrc+"\n", settingsContract(stricterPolicyCall, clientCall))))
+	e.moved(t, "rauthy-2")
+	require.Contains(t, e.waitSettled(t, "strict", v1.PhasePending, "ReconcileFailed"), "/objects/0/config/lengthMin")
+	require.Len(t, e.rt.sent(), sent, "the engine keeps what it has")
+}
+
+// A stack off its contract, stored before its image was read: its first call is refused, so its Function starts no run.
+func TestEnginelessFirstCallMeetsItsContract(t *testing.T) {
+	t.Parallel()
+	e := startKinds(t)
+	e.layouts.setDown(true)
+	e.applyStackJob(t)
+	e.apply(t, e.admin, e.stacksAddon(t))
+	e.waitAddon(t, "infrastack", "ArtifactNotReady")
+	stack := edgeStack()
+	stack.Spec.Config = json.RawMessage(`{"zone":"off the contract"}`)
+	e.apply(t, e.dev, stack)
+	e.waitReason(t, "default", "bunny-edge", v1.PhasePending, "ArtifactNotReady")
+
+	e.layouts.setDown(false)
+	require.Contains(t, e.waitSettled(t, "bunny-edge", v1.PhasePending, "ReconcileFailed"), "zone")
+	runs, err := e.admin.List(e.ctx, v1.KindJobRun, "default")
+	require.NoError(t, err)
+	require.Empty(t, runs)
 }
 
 // scenario: addon-function-ref — no schema judges a write of a ref's object, and a call off that Function's contract
@@ -226,27 +348,45 @@ func TestAppWithASettingsPartTurnsReady(t *testing.T) {
 	e.waitSent(t, 18)
 }
 
+// applyStackJob stores the Job bunny-edge, whose runs end at once.
+func (e *kindsEnv) applyStackJob(t *testing.T) {
+	t.Helper()
+	ref, digest := PushJob(t, t.TempDir(), "bunny-edge", "export function handle(ctx, event) { return { op: event.data?.op ?? null }; }\n", "")
+	job := &v1.Job{TypeMeta: tmeta(v1.KindJob), ObjectMeta: v1.ObjectMeta{Name: "bunny-edge", Namespace: "default", ResourceGroup: "rg1"}}
+	job.Spec.Runtime, job.Spec.Handler, job.Spec.Image, job.Spec.ImageDigest = "nodejs22", "handle", ref, digest
+	job.Spec.Approval.Bypass = true
+	e.apply(t, e.admin, job)
+}
+
+// stacksAddon is InfraStack's Addon, whose Function comes from stacksSrc's image.
+func (e *kindsEnv) stacksAddon(t *testing.T) *v1.Addon {
+	t.Helper()
+	a := infraStackAddon()
+	a.Spec.Runtimes[0].Attributes.Function = &v1.AddonFunction{Image: e.push(t, stacksSrc,
+		v1.WorkflowContract{Input: json.RawMessage(kindCall("InfraStack", `{"properties":{"region":{"type":"string"}}}`))})}
+	a.Spec.Runtimes[0].Attributes.Resync = v1.Duration(time.Second)
+	return a
+}
+
+// edgeStack is the stack bunny-edge, which binds the Job bunny-edge as stack.
+func edgeStack() *v1.AddonObject {
+	stack := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: "InfraStack"}}
+	stack.Name, stack.Namespace, stack.ResourceGroup = "bunny-edge", "default", "rg1"
+	stack.Spec.Config = json.RawMessage(`{"region":"fra"}`)
+	stack.Spec.Bindings.Job = []v1.FunctionJob{{Alias: "stack", Job: "bunny-edge"}}
+	return stack
+}
+
 // scenario: engineless-function-image — the stack bunny-edge binds the Job bunny-edge as stack, and the Function
 // bunny-edge-infrastack, created from the kind's image, starts that Job's run; deleted with deletion: delete, the stack
 // and its Function stay until the destroy run Succeeded.
 func TestScenarioEnginelessFunctionOnARealFunction(t *testing.T) {
 	t.Parallel()
 	e := startKinds(t)
-	ref, digest := PushJob(t, t.TempDir(), "bunny-edge", "export function handle(ctx, event) { return { op: event.data?.op ?? null }; }\n", "")
-	job := &v1.Job{TypeMeta: tmeta(v1.KindJob), ObjectMeta: v1.ObjectMeta{Name: "bunny-edge", Namespace: "default", ResourceGroup: "rg1"}}
-	job.Spec.Runtime, job.Spec.Handler, job.Spec.Image, job.Spec.ImageDigest = "nodejs22", "handle", ref, digest
-	job.Spec.Approval.Bypass = true
-	e.apply(t, e.admin, job)
-	a := infraStackAddon()
-	a.Spec.Runtimes[0].Attributes.Function = &v1.AddonFunction{Image: e.push(t, stacksSrc,
-		v1.WorkflowContract{Input: json.RawMessage(kindCall("InfraStack", `{"properties":{"region":{"type":"string"}}}`))})}
-	a.Spec.Runtimes[0].Attributes.Resync = v1.Duration(time.Second)
-	e.register(t, a)
-
-	stack := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: "InfraStack"}}
-	stack.Name, stack.Namespace, stack.ResourceGroup = "bunny-edge", "default", "rg1"
-	stack.Spec.Deletion, stack.Spec.Config = v1.DeletionDelete, json.RawMessage(`{"region":"fra"}`)
-	stack.Spec.Bindings.Job = []v1.FunctionJob{{Alias: "stack", Job: "bunny-edge"}}
+	e.applyStackJob(t)
+	e.register(t, e.stacksAddon(t))
+	stack := edgeStack()
+	stack.Spec.Deletion = v1.DeletionDelete
 	e.apply(t, e.dev, stack)
 	e.waitSettled(t, "bunny-edge", v1.PhaseReady, "")
 	runs, err := e.p.cfg.store.Get(e.ctx, v1.KindJobRun.GVK(), "default", "bunny-edge-1")

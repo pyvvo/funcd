@@ -70,7 +70,8 @@ contracts judge the call, not the write.
 
 A kind is read whole from the revision that its target pins: the image, its contract, the constraints and the resync.
 funcd reads an image's contract once, from the registry, when the Addon is registered, and keeps it with the revision,
-so no write and no pass waits on a registry. A change of the Addon reaches a target when the target moves.
+so no write of an object and no engine's start reads a registry. While a registry hangs, the Addon's own pass waits for
+it up to 10 s, then tries again later. A change of the Addon reaches a target when the target moves.
 
 ## Engineless kinds
 

@@ -718,8 +718,8 @@ func settingsTarget(ctx context.Context, r admission.StoreReader, k servedKind, 
 	return nil, nil
 }
 
-// imageSchema is what rev's image of kind says of one object's config, nil when it is not read, says nothing, or says
-// what does not compile: that fails its Function, and checks no write.
+// imageSchema is what rev's image of kind says of one object's config: {} when it says nothing, and nil when it is not
+// read, or says what does not compile, which fails its Function and checks no write.
 func imageSchema(rev *v1.AddonRevision, kind string) json.RawMessage {
 	if rev == nil {
 		return nil
@@ -731,6 +731,9 @@ func imageSchema(rev *v1.AddonRevision, kind string) json.RawMessage {
 	schema := addonsvc.KindSchema(kc.Contract, kind)
 	if _, err := contract.Compile(schema); err != nil {
 		return nil
+	}
+	if len(schema) == 0 {
+		return json.RawMessage(`{}`)
 	}
 	return schema
 }

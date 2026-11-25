@@ -186,7 +186,8 @@ func (r *Reconciler) seeTarget(ns v1.NamespaceName, name v1.ObjectName, ready bo
 	return s.epoch
 }
 
-// forgetTarget drops what this process knows of a deleted object's calls.
+// forgetTarget drops what this process knows of a deleted object's calls, those of the Function that funcd created for
+// an engineless one included.
 func (r *Reconciler) forgetTarget(ns v1.NamespaceName, name v1.ObjectName) {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
@@ -194,6 +195,11 @@ func (r *Reconciler) forgetTarget(ns v1.NamespaceName, name v1.ObjectName) {
 	for k := range r.settings {
 		if k.ns == ns && k.target == name {
 			delete(r.settings, k)
+		}
+	}
+	for k := range r.groups {
+		if k.ns == ns && k.fn == v1.AddonFunctionName(name, k.kind) {
+			delete(r.groups, k)
 		}
 	}
 }
@@ -313,6 +319,9 @@ func (r *Reconciler) syncSettings(ctx context.Context, a *v1.Addon, rev *v1.Addo
 			}
 			continue
 		}
+		if created && !checked(fn) {
+			continue
+		}
 		cause, wait := r.settingsDue(key, digest, st.EffectiveResync())
 		if cause != "" {
 			call := SettingsCall{Kind: st.Kind, Cause: cause, Target: SettingsTarget{Kind: a.Spec.Kind(), Name: o.Name, Alias: alias},
@@ -362,6 +371,13 @@ func settingsDigest(epoch int, address string, fn *v1.Function, alias string, ob
 // stamped would be answered by the code it replaces, and nothing would send it again before the resync.
 func answering(fn *v1.Function) string {
 	return cmp.Or(fn.Status.ServingRevision, fn.Status.CurrentRevision)
+}
+
+// checked reports whether a call to fn, which funcd creates, meets the contract of the code that answers it (ADR-0358
+// Decision 5): a revision of it serves, or the one that a call wakes is stamped from its spec. Before that stamp, whose
+// event brings the next pass, a call is checked against no contract, or against that of the image it replaces.
+func checked(fn *v1.Function) bool {
+	return fn.Status.ServingRevision != "" || fn.Status.CurrentRevision == string(v1.FunctionRevisionName(fn.Name, fn.Generation))
 }
 
 // settingsDue names the cause of a call that is due for key now, the first of start, change, retry and resync that

@@ -276,7 +276,12 @@ func TestAddonObjectValidate(t *testing.T) {
 		"no namespace":              func(o *AddonObject) { o.Namespace = "" },
 		"a config that is no map":   func(o *AddonObject) { o.Spec.Config = json.RawMessage(`[1]`) },
 		"a Secret name that is bad": func(o *AddonObject) { o.Spec.Bindings.Secret = []ObjectName{"Bad_Name"} },
-		"an ingress path":           func(o *AddonObject) { o.Spec.Ingress.Path = "/auth" },
+		"a Job alias that is bad":   func(o *AddonObject) { o.Spec.Bindings.Job = []FunctionJob{{Alias: "Stack", Job: "bunny-edge"}} },
+		"a Job alias twice": func(o *AddonObject) {
+			o.Spec.Bindings.Job = []FunctionJob{{Alias: "stack", Job: "bunny-edge"}, {Alias: "stack", Job: "site"}}
+		},
+		"a Job name that is bad": func(o *AddonObject) { o.Spec.Bindings.Job = []FunctionJob{{Alias: "stack", Job: "Bunny_Edge"}} },
+		"an ingress path":        func(o *AddonObject) { o.Spec.Ingress.Path = "/auth" },
 		"the authenticated mode": func(o *AddonObject) {
 			o.Spec.Ingress.Auth = &RouteAuth{Mode: AuthAuthenticated}
 		},
@@ -295,6 +300,20 @@ func TestAddonObjectValidate(t *testing.T) {
 	require.NoError(t, o.Validate(), "the open mode")
 	o.Spec.Ingress.Auth = &RouteAuth{Mode: AuthOIDC, Provider: "sso"}
 	require.NoError(t, o.Validate(), "the oidc mode on a host")
+}
+
+// ADR-0358 Decision 2: the Function of a kind's image is named <object>-<kind in lower case>, at most 63 characters, the
+// object's name cut and followed by a hash of it when it would be longer, so two long names stay apart.
+func TestAddonFunctionName(t *testing.T) {
+	require.Equal(t, ObjectName("login-rauthypasswordpolicy"), AddonFunctionName("login", "RauthyPasswordPolicy"))
+	kind := "R" + strings.Repeat("p", maxImageKind-1)
+	for _, n := range []int{1, 22, 23, 63} {
+		name := AddonFunctionName(ObjectName(strings.Repeat("a", n)), kind)
+		require.LessOrEqual(t, len(name), 63, "%d characters", n)
+		require.NoError(t, name.Validate())
+		require.True(t, strings.HasSuffix(string(name), "-"+strings.ToLower(kind)), "%s", name)
+	}
+	require.NotEqual(t, AddonFunctionName(ObjectName(strings.Repeat("a", 62)), kind), AddonFunctionName(ObjectName(strings.Repeat("a", 63)), kind))
 }
 
 // rauthyCopies is rauthy's Addon with hiqlite's snapshot and restore folders (ADR-0333 Decision 1).

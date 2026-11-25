@@ -16,6 +16,7 @@ import (
 	"github.com/pyvvo/funcd/internal/services/addon"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 )
 
 // ADR-0358: a kind's Function comes from its image, and the image's contract is the kind's schema.
@@ -33,9 +34,17 @@ type fakeImages struct {
 	mu   sync.Mutex
 	says map[string]v1.WorkflowContract
 	asks int
+	hook func() // runs once, in the middle of the next read
 }
 
 func (f *fakeImages) Read(_ context.Context, image string) (v1.RuntimeName, v1.WorkflowContract, error) {
+	f.mu.Lock()
+	hook := f.hook
+	f.hook = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.asks++
@@ -131,12 +140,52 @@ func (g *settingsRig) created(name v1.ObjectName) *v1.Function {
 	return obj.(*v1.Function)
 }
 
-// applied passes login until strict is Ready.
-func (g *settingsRig) applied(name v1.ObjectName) {
+// stampFunctions does the Function controller's part for each Function that funcd created: it stamps the revision of its
+// spec, which a call waits for.
+func stampFunctions(t *testing.T, st store.Store) {
+	t.Helper()
+	list, err := st.List(context.Background(), v1.KindFunction.GVK(), store.ListOptions{Namespace: "default"})
+	require.NoError(t, err)
+	for _, item := range list.Items {
+		fn := item.(*v1.Function)
+		if c, ok := v1.ControllerOf(fn.OwnerReferences); !ok || c.Kind != v1.KindAddonObject {
+			continue
+		}
+		fn.Status.CurrentRevision = string(v1.FunctionRevisionName(fn.Name, fn.Generation))
+		_, err := st.Update(context.Background(), fn)
+		require.NoError(t, err)
+	}
+}
+
+// converge passes login, then stamps what that pass created, whose event brings login's next pass.
+func (g *settingsRig) converge() {
 	g.t.Helper()
 	g.pass("login")
+	stampFunctions(g.t, g.st)
+	g.pass("login")
+}
+
+// applied passes login until its call made name Ready.
+func (g *settingsRig) applied(name v1.ObjectName) {
+	g.t.Helper()
+	g.converge()
 	g.callEnds("login")
 	g.requireReady(name, g.object(name).Generation)
+}
+
+// noCall requires that no call starts, where one would on a goroutine of its own.
+func (g *settingsRig) noCall(why string) {
+	g.t.Helper()
+	n := len(g.caller.got())
+	require.True(g.t, poll.Never(func() bool { return len(g.caller.got()) > n }, 50*time.Millisecond, 5*time.Millisecond), why)
+}
+
+// lastCall is the last call the settings Functions got.
+func (g *settingsRig) lastCall() gotCall {
+	g.t.Helper()
+	calls := g.caller.got()
+	require.NotEmpty(g.t, calls)
+	return calls[len(calls)-1]
 }
 
 const policyFunction = v1.ObjectName("login-rauthypasswordpolicy")
@@ -246,8 +295,6 @@ func TestScenarioAddonFunctionFollowsThePin(t *testing.T) {
 	g.images.set(settings2, callContract("RauthyPasswordPolicy", policyProperties+`,"maxAge":{"type":"integer"}`))
 	g.policy("strict", "login", 16)
 	g.applied("strict")
-	g.revise(policyFunction, string(policyFunction)+"-1")
-	g.applied("strict")
 
 	g.editAddon(func(at *v1.AddonAttributes) { at.Settings[0].Function.Image = settings2 })
 	g.pass("login")
@@ -255,14 +302,11 @@ func TestScenarioAddonFunctionFollowsThePin(t *testing.T) {
 	before := len(g.caller.got())
 
 	g.editLogin(func(s *v1.AddonObjectSpec) { s.Resources.Memory = "64Mi" })
-	g.pass("login")
+	g.converge()
 	require.Equal(t, settings2, g.created(policyFunction).Spec.Image, "login moved to rauthy-2")
-	g.revise(policyFunction, string(policyFunction)+"-2")
-	g.pass("login")
 	g.callEnds("login")
-	calls := g.caller.got()
-	require.Greater(t, len(calls), before)
-	require.Equal(t, "change", calls[len(calls)-1].call.Cause)
+	require.Len(t, g.caller.got(), before+1)
+	require.Equal(t, "change", g.lastCall().call.Cause)
 }
 
 // scenario: addon-function-repaired — a created Function that is deleted or differs is put back while a policy names
@@ -308,9 +352,8 @@ func TestScenarioAddonFunctionOwn(t *testing.T) {
 	})
 	g.pass("login")
 	g.callEnds("login")
-	calls := g.caller.got()
-	require.Equal(t, v1.ObjectName("my-settings"), calls[len(calls)-1].fn)
-	require.Equal(t, "idp", calls[len(calls)-1].call.Target.Alias)
+	require.Equal(t, v1.ObjectName("my-settings"), g.lastCall().fn)
+	require.Equal(t, "idp", g.lastCall().call.Target.Alias)
 	require.Nil(t, g.created(policyFunction), "funcd's own goes")
 	require.NotNil(t, g.created("my-settings"))
 }
@@ -446,6 +489,14 @@ func newImageStacks(t *testing.T) *enginelessRig {
 	return g
 }
 
+// converge passes name, then stamps what that pass created, whose event brings name's next pass.
+func (g *enginelessRig) converge(name v1.ObjectName) {
+	g.t.Helper()
+	g.pass(name)
+	stampFunctions(g.t, g.st)
+	g.pass(name)
+}
+
 // scenario: engineless-function-image — the stack bunny-edge, which binds the Job bunny-edge as stack, brings the
 // Function bunny-edge-infrastack, which binds that Job and no object, and alone gets the stack's list; deleted with
 // deletion: delete, the stack and its Function stay until the Function's ok.
@@ -460,7 +511,7 @@ func TestScenarioEnginelessFunctionImage(t *testing.T) {
 		require.NoError(t, err)
 		g.marked(name)
 	}
-	g.pass("bunny-edge")
+	g.converge("bunny-edge")
 	g.callEnds("bunny-edge")
 	call := g.lastCall()
 	require.Equal(t, v1.ObjectName("bunny-edge-infrastack"), call.fn)

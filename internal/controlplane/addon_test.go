@@ -2,6 +2,7 @@ package controlplane_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -95,4 +96,69 @@ func TestAddonAdmissionsTakeTheLock(t *testing.T) {
 			require.True(t, a.Handles(gvk, op), "%s handles %s", name, op)
 		}
 	}
+}
+
+// reads is a StoreReader over fixed objects.
+type reads []v1.Object
+
+func (s reads) List(_ context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error) {
+	var out []v1.Object
+	for _, o := range s {
+		if o.GroupVersionKind() == gvk && (ns == "" || o.GetNamespace() == ns) {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
+
+// rauthyRevision is the revision number of rauthy, whose image says what schema the config of a RauthyPasswordPolicy has.
+func rauthyRevision(number int64, spec v1.AddonSpec, schema string) *v1.AddonRevision {
+	rev := &v1.AddonRevision{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonRevision}}
+	rev.Name, rev.Spec = v1.AddonRevisionName("rauthy", number), v1.AddonRevisionSpec{Addon: "rauthy", Number: number, Spec: spec}
+	rev.Status.Contracts = []v1.AddonKindContract{{Kind: "RauthyPasswordPolicy", Runtime: "nodejs22", Contract: v1.WorkflowContract{
+		Input: json.RawMessage(`{"properties":{"objects":{"type":"array","items":{"type":"object","properties":{"config":` + schema + `}}}}}`)}}}
+	return rev
+}
+
+// ADR-0358 Decision 5: a settings object's target is of its Addon's own kind, so an object of another kind that has the
+// name pins nothing for it, and the current revision judges its write; before any revision has the kind, no contract does,
+// and the Addon's own constraints stand.
+func TestAddonSettingsWriteWithNoPin(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}}
+	a.Name = "rauthy"
+	a.Spec = v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:" + strings.Repeat("a", 64),
+		Workloads: []v1.Workload{v1.WorkloadEngine}, Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080, Settings: []v1.AddonSettings{{
+			Kind: "RauthyPasswordPolicy", Target: "spec.config.provider", Constraints: v1.AddonConstraints{Count: v1.AddonCount{PerTarget: 1}},
+			Function: v1.AddonFunction{Image: "ghcr.io/pyvvo/rauthy-settings@sha256:" + strings.Repeat("b", 64)}}}}}}}
+	object := func(kind string, name v1.ObjectName, config string) *v1.AddonObject {
+		o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject}}
+		o.Name, o.Namespace, o.Spec.Kind, o.Spec.Config = name, "default", kind, json.RawMessage(config)
+		return o
+	}
+	admit := func(objs reads, o *v1.AddonObject) error {
+		for _, ad := range controlplane.NewAddonAdmissions(controlplane.AddonRules{Store: objs}) {
+			if !ad.Handles(v1.KindAddonObject.GVK(), admission.Create) {
+				continue
+			}
+			if _, err := ad.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindAddonObject.GVK(), Object: o}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	strict := object("RauthyPasswordPolicy", "strict", `{"provider":"login"}`)
+	other := object("RauthyPasswordPolicy", "other", `{"provider":"login","maxAge":30}`)
+	require.NoError(t, admit(reads{a}, other), "no contract is read yet")
+	require.ErrorContains(t, admit(reads{a, strict}, other), "count.perTarget", "the Addon's own constraints stand")
+
+	former := rauthyRevision(1, a.Spec, `{"type":"object","additionalProperties":false,"properties":{"provider":{"type":"string"},"maxAge":{"type":"integer"}}}`)
+	current := rauthyRevision(2, a.Spec, `{"type":"object","additionalProperties":false,"properties":{"provider":{"type":"string"}}}`)
+	a.Status.CurrentRevision = current.Name
+	login := object("IdentityProvider", "login", `{}`)
+	login.Status.AddonRevision = former.Name
+	require.NoError(t, admit(reads{a, former, current, login}, other), "login pins the former one")
+	login.Spec.Kind = "InfraStack"
+	require.ErrorContains(t, admit(reads{a, former, current, login}, other), "maxAge", "an InfraStack of that name is no target")
 }

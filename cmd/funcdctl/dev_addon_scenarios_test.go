@@ -240,14 +240,17 @@ func (k kindImage) Read(_ context.Context, image string) (v1.RuntimeName, v1.Wor
 	return "nodejs22", k.contract, nil
 }
 
-// pulledKind pushes src as a kind's image and pulls it into the artifact cache of dev over dir with cfg.
-func pulledKind(t *testing.T, cfg devConfig, dir, src string) kindImage {
+// pulledKind pushes src as a kind's image, whose objects' config is config, and pulls it into the artifact cache of dev over
+// dir with cfg.
+func pulledKind(t *testing.T, cfg devConfig, dir, src, config string) kindImage {
 	t.Helper()
 	ctx := context.Background()
 	contract := v1.WorkflowContract{Input: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{` +
-		`"kind":{"type":"string"},"cause":{"type":"string"},"objects":{"type":"array","items":{"type":"object","additionalProperties":false,` +
+		`"kind":{"type":"string"},"cause":{"type":"string"},"target":{"type":"object","additionalProperties":false,` +
+		`"properties":{"kind":{"type":"string"},"name":{"type":"string"},"alias":{"type":"string"}}},` +
+		`"objects":{"type":"array","items":{"type":"object","additionalProperties":false,` +
 		`"properties":{"name":{"type":"string"},"uid":{"type":"string"},"generation":{"type":"integer"},"deleting":{"type":"boolean"},` +
-		`"config":{"type":"object","additionalProperties":false,"properties":{"region":{"type":"string"}}}}}}}}`)}
+		`"config":` + config + `}}}}}`)}
 	blob, err := artifact.ContractBlob(contract.Input, []byte(`{}`))
 	require.NoError(t, err)
 	file := filepath.Join(t.TempDir(), "kind.mjs")
@@ -266,14 +269,63 @@ func pulledKind(t *testing.T, cfg devConfig, dir, src string) kindImage {
 	return kindImage{name: "127.0.0.1:1/pyvvo/kind@" + digest, contract: contract}
 }
 
-// scenario: addon-function-dev — a folder registers an Addon whose kind names an image: the Function that funcd creates
-// from it runs beside the folder's own, and the object turns Ready. Its contract judges the folder's objects.
+// echoPolicySrc calls its target's engine through the binding of the call, and answers each object ok.
+const echoPolicySrc = `export async function handle(ctx, event) {
+  const { target, objects } = event.data;
+  const res = await ctx.addon.fetch(target.alias, '/');
+  if (!res.ok) throw new Error('the engine answered ' + res.status);
+  return { results: objects.map((o) => ({ name: o.name, ok: true })) };
+}
+`
+
+// scenario: addon-function-dev — a folder registers an Addon whose settings kind names an image: the image's Function runs
+// there, beside the folder's own, and calls the engine that the object names, so the object turns Ready; with the last one
+// gone, the Function goes.
 func TestScenarioAddonFunctionDev(t *testing.T) {
+	requireRuntime(t)
+	sock := requireDocker(t)
+	ctx := context.Background()
+	dir := devProject(t, nodeFunction("api", "", okBuild))
+	cfg := devConfig{cacheDir: t.TempDir()}
+	key := sessionKey(t, cfg, dir)
+	removeKeyAtCleanup(t, sock, key)
+	image := pulledKind(t, cfg, dir, echoPolicySrc, `{"type":"object","additionalProperties":false,`+
+		`"properties":{"provider":{"type":"string"},"lengthMin":{"type":"integer"}},"required":["provider"]}`)
+	cfg.addonImages = image
+	addon := strings.Replace(echoAddon, "      attributes:\n", "      attributes:\n        settings:\n          - kind: EchoPolicy\n"+
+		"            target: spec.config.provider\n            function:\n              image: "+image.name+"\n", 1)
+	writeProject(t, dir, map[string]string{"addon.yaml": addon, "echo.yaml": echoObject, "strict.yaml": `apiVersion: funcd.io/v1alpha1
+kind: EchoPolicy
+metadata:
+  name: strict
+spec:
+  config:
+    provider: echo
+    lengthMin: 8
+`})
+	inst, _ := startAddonDev(t, dir, cfg)
+	waitObject(t, inst, "EchoPolicy", "strict", "Ready", ready)
+	obj, err := inst.client.Get(ctx, v1.KindFunction, devNamespace, "echo-echopolicy")
+	require.NoError(t, err)
+	fn := obj.(*v1.Function)
+	require.Equal(t, image.name, fn.Spec.Image)
+	require.Equal(t, []v1.FunctionAddon{{Alias: "self", Object: "echo"}}, fn.Spec.Bindings.Addon)
+
+	require.NoError(t, os.Remove(filepath.Join(dir, "strict.yaml")))
+	require.Eventually(t, func() bool {
+		_, err := inst.client.Get(ctx, v1.KindFunction, devNamespace, "echo-echopolicy")
+		return fault.KindOf(err) == fault.NotFound
+	}, time.Minute, 100*time.Millisecond, "its Function goes with the last object")
+}
+
+// An engineless kind's image runs under dev too, and its contract judges the folder's objects.
+func TestEnginelessFunctionDev(t *testing.T) {
 	requireRuntime(t)
 	ctx := context.Background()
 	dir := devProject(t, nodeFunction("api", "", okBuild))
 	cfg := devConfig{cacheDir: t.TempDir(), addonDrivers: noEngine()}
-	image := pulledKind(t, cfg, dir, "export const handle = (ctx, event) => ({ results: event.data.objects.map((o) => ({ name: o.name, ok: true })) });\n")
+	image := pulledKind(t, cfg, dir, "export const handle = (ctx, event) => ({ results: event.data.objects.map((o) => ({ name: o.name, ok: true })) });\n",
+		`{"type":"object","additionalProperties":false,"properties":{"region":{"type":"string"}}}`)
 	cfg.addonImages = image
 	writeProject(t, dir, map[string]string{"stacks.yaml": `apiVersion: funcd.io/v1alpha1
 kind: Addon
