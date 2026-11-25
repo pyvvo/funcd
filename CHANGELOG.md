@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.49.0](https://github.com/pyvvo/funcd/compare/v0.48.0...v0.49.0) (2026-11-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **addons:** an add-on kind's Function comes from an image, and its contract is the kind's schema (ADR-0358)
+
+### Features
+
+* **addons:** an add-on kind's Function comes from an image, and its contract is the kind's schema (ADR-0358) ([2a93b7e](https://github.com/pyvvo/funcd/commit/2a93b7e67d142b90c9a56b72230ef1cef799ff86))
+
+
+### Bug Fixes
+
+* **addons:** one settings call at most runs for a target that is created again ([2a93b7e](https://github.com/pyvvo/funcd/commit/2a93b7e67d142b90c9a56b72230ef1cef799ff86))
+* **addons:** the list that a new revision of a kind's Function brings is answered by that revision ([2a93b7e](https://github.com/pyvvo/funcd/commit/2a93b7e67d142b90c9a56b72230ef1cef799ff86))
+* **apps:** an App that holds a settings object turns Ready ([2a93b7e](https://github.com/pyvvo/funcd/commit/2a93b7e67d142b90c9a56b72230ef1cef799ff86))
+
 ## [0.48.0](https://github.com/pyvvo/funcd/compare/v0.47.0...v0.48.0) (2026-11-24)
 
 
