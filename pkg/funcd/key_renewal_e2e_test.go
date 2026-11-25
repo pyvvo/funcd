@@ -71,13 +71,15 @@ func (r *renewalRig) read(t *testing.T, ak, sk string) error {
 }
 
 // load calls s every 50 ms and samples its phase and the S3 read of the latest pair until stop, recording every
-// failed call or read, every phase other than Ready with its reason, and the pairs seen.
+// failed call or read, with the age of its pair, every phase other than Ready with its reason and message, and the pairs
+// seen.
 type load struct {
 	mu               sync.Mutex
 	failed, statuses []string
 	keys             map[string]bool
 	firstAK, firstSK string
 	lastAK, lastSK   string
+	lastAt           time.Time
 	wg               sync.WaitGroup
 	stopped          chan struct{}
 }
@@ -103,7 +105,7 @@ func (r *renewalRig) startLoad(t *testing.T) *load {
 				if l.firstAK == "" {
 					l.firstAK, l.firstSK = out.AK, out.SK
 				}
-				l.lastAK, l.lastSK = out.AK, out.SK
+				l.lastAK, l.lastSK, l.lastAt = out.AK, out.SK, time.Now()
 			}
 			l.mu.Unlock()
 			time.Sleep(50 * time.Millisecond)
@@ -120,16 +122,16 @@ func (r *renewalRig) startLoad(t *testing.T) *load {
 			if fn := r.function(t, "s"); fn.Status.Phase != v1.PhaseReady {
 				c, _ := fn.Status.Conditions.Get("Ready")
 				l.mu.Lock()
-				l.statuses = append(l.statuses, string(fn.Status.Phase)+"/"+c.Reason)
+				l.statuses = append(l.statuses, string(fn.Status.Phase)+"/"+c.Reason+": "+c.Message)
 				l.mu.Unlock()
 			}
 			l.mu.Lock()
-			ak, sk := l.lastAK, l.lastSK
+			ak, sk, at := l.lastAK, l.lastSK, l.lastAt
 			l.mu.Unlock()
 			if ak != "" {
 				if err := r.read(t, ak, sk); err != nil {
 					l.mu.Lock()
-					l.failed = append(l.failed, "S3 read with the current pair: "+err.Error())
+					l.failed = append(l.failed, "S3 read with the pair a call gave "+time.Since(at).String()+" ago: "+err.Error())
 					l.mu.Unlock()
 				}
 			}
@@ -176,7 +178,7 @@ func TestScenarioKeyRenewalUnderLoad(t *testing.T) {
 				if tc.replicas > 1 {
 					t.Errorf("rolling renewals left s %s", s)
 				} else {
-					require.Equal(t, string(v1.PhaseDegraded)+"/Renewing", s, "a lone replica's renewal is not an exit")
+					require.Regexp(t, "^"+string(v1.PhaseDegraded)+"/Renewing: ", s, "a lone replica's renewal is not an exit")
 				}
 			}
 			require.Error(t, rig.read(t, l.firstAK, l.firstSK), "the first pair is refused two windows later")
