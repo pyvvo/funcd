@@ -16,7 +16,7 @@ The server's `addons.registries` must list the registry of the add-on's image, `
 registers the add-on from a release, piping its manifest to `funcdctl apply -f -`:
 
 ```sh
-curl -fsSL https://github.com/pyvvo/funcd-addons/releases/download/v0.3.0/rauthy.yaml | funcdctl apply -f -
+curl -fsSL https://github.com/pyvvo/funcd-addons/releases/latest/download/rauthy.yaml | funcdctl apply -f -
 ```
 
 The Addon lists the runtimes the add-on ships, each with its image pinned by digest. rauthy's one entry serves the
@@ -155,14 +155,12 @@ engineless parts are gone.
 
 An App template can carry the add-on with the Functions, values and hooks that run beside it: its `addon.yaml` holds the
 Addon, which an admin's `funcdctl app deploy` registers or updates before the App, and the App's `addons` section holds
-the objects of its kind. rauthy's template holds an IdentityProvider `<app>-login` and its own settings Function
-`<app>-settings`, which the IdentityProvider names for its policies:
+the objects of its kind. rauthy's template holds an IdentityProvider `<app>-login`, whose policies funcd applies with
+the Function that the Addon names:
 
 ::include[../../../../../_repos/funcd-addons/rauthy/app/resources/rauthy.yaml]
 
 ```sh
-funcdctl push settings/rauthy-settings.mjs <registry>/rauthy-settings:0.2.0
-funcdctl app lock app -f values.yaml
 funcdctl push --template app <registry>/rauthy:0.2.0
 funcdctl app deploy <registry>/rauthy:0.2.0 -f values.yaml --name web-auth
 ```
