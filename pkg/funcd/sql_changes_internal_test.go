@@ -171,6 +171,7 @@ func TestScenarioRecreatedDatabaseFires(t *testing.T) {
 	require.Equal(t, http.StatusOK, e.post(t, "", delivery("e2", 3, insertMilk)), "a restored engine's new epoch")
 	require.Len(t, e.fired(), 2)
 
+	e.waitReady(t, "todo-db", 1) // the controller has seen it: a delete before its first watch raises no pass
 	require.NoError(t, e.p.cfg.store.Delete(e.ctx, v1.KindSQLDatabase.GVK(), "default", "todo-db", ""))
 	require.Eventually(t, func() bool {
 		n, err := e.p.eventStore.ChangeWatermarks().Get(e.ctx, "default", "todo-db", "e1")
