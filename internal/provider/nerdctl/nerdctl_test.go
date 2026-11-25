@@ -288,6 +288,8 @@ func TestWorkersThroughNerdctl(t *testing.T) {
 	w, err := docker.NewWorkers(ctx, cli{bin: bin}, key, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
+	require.Equal(t, v1.PlatformLinuxARM64, w.(containerrt.ImageRunner).ImagePlatform(), "nerdctl's own platform")
+	find(t, calls(t, dir), []string{"version", "--format", "{{.Client.Os}}/{{.Client.Arch}}"})
 
 	bundle := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(bundle, "handler.mjs"), []byte("export function handle() {}\n"), 0o600))

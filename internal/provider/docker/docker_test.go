@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -216,6 +217,30 @@ func TestSessionKeyAndVersion(t *testing.T) {
 	require.Equal(t, maxAPIVersion, apiVersion("1.53"))
 	require.Equal(t, "1.41", apiVersion("1.41"))
 	require.Equal(t, maxAPIVersion, apiVersion(""), "an engine that names no version")
+}
+
+// ADR-0145 Decision 6: the engine's platform is the one its version names; an answer that names none is an error.
+func TestEnginePlatform(t *testing.T) {
+	t.Parallel()
+	for body, want := range map[string]v1.OCIPlatform{
+		`{"Os":"linux","Arch":"arm64","Version":"29.2.1"}`: v1.PlatformLinuxARM64,
+		`{"Os":"linux"}`: "",
+		`not json`:       "",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "/version", r.URL.Path)
+			_, _ = io.WriteString(w, body)
+		}))
+		got, err := (&engineAPI{http: srv.Client(), base: srv.URL}).Platform(context.Background())
+		srv.Close()
+		require.Equal(t, want, got, body)
+		if want == "" {
+			require.Equal(t, fault.Internal, fault.KindOf(err), body)
+			require.ErrorContains(t, err, "version")
+		} else {
+			require.NoError(t, err)
+		}
+	}
 }
 
 // ADR-0334 Decision 4: the newest file whose size and time are the same in both listings, the engine's times compared

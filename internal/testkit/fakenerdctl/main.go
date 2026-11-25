@@ -175,6 +175,8 @@ func (f *fake) matches(labels map[string]string) bool {
 func (f *fake) answer() int {
 	a, last := f.args, f.args[len(f.args)-1]
 	switch {
+	case a[0] == "version":
+		_, _ = fmt.Fprintln(f.stdout, "linux/arm64")
 	case a[0] == "ps":
 		for _, n := range slices.Sorted(maps.Keys(f.st.Containers)) {
 			if f.matches(f.st.Containers[n].Labels) {

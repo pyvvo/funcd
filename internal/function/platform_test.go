@@ -28,6 +28,7 @@ import (
 const (
 	digestHere      = "sha256:here"
 	digestElsewhere = "sha256:elsewhere"
+	digestNode      = "sha256:node"
 	digestOutage    = "sha256:outage"
 )
 
@@ -46,6 +47,8 @@ func (f *fakePlatforms) Platforms(_ context.Context, _, digest string) ([]v1.OCI
 		return []v1.OCIPlatform{"plan9/mips", v1.HostPlatform()}, nil
 	case digestElsewhere:
 		return []v1.OCIPlatform{"plan9/mips"}, nil
+	case digestNode:
+		return []v1.OCIPlatform{v1.HostPlatform()}, nil
 	case digestOutage:
 		return nil, fault.Unavailablef("fake.Platforms", "registry unreachable")
 	}

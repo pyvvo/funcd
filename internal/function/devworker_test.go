@@ -4,12 +4,16 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
@@ -17,16 +21,19 @@ import (
 // ADR-0346: under funcdctl dev, a worker on an Addon's runtime is built in the container shape for dev's image side.
 
 // devImages is the fake runtime as funcdctl dev's runtime.Pair presents it (ADR-0346 Decision 1): it runs images or
-// says why not, and its container workers reach funcd's listeners at host.
+// says why not, its container workers reach funcd's listeners at host, and they run on platform.
 type devImages struct {
 	*fakeRuntime
 	runs      bool
 	why, host string
+	platform  v1.OCIPlatform
 }
 
 func (d devImages) RunsImages() (bool, string) { return d.runs, d.why }
 
 func (d devImages) EndpointHost() string { return d.host }
+
+func (d devImages) ImagePlatform() v1.OCIPlatform { return d.platform }
 
 // onDevImages runs the harness's workers on devImages, with the local API on socks.
 func onDevImages(runs bool, why, host string, socks *socketLog) func(*function.Deps) {
@@ -132,6 +139,118 @@ func TestDevAddonWorkerGateNamesWhy(t *testing.T) {
 		`worker driver of this server runs: `+why)
 	h.requireReady(t, "plain")
 	require.Empty(t, h.rt.specOf(runtime.NewInstanceID("default", "greeter", "greeter-1", 0)).Name, "no worker is created")
+}
+
+// platformFetches is a materializer that records the platform of each fetch, "" for the node's, by the Function's or the
+// Job's name.
+type platformFetches struct {
+	next function.Materializer
+	mu   sync.Mutex
+	seen map[v1.ObjectName][]v1.OCIPlatform
+}
+
+func (m *platformFetches) Materialize(ctx context.Context, fn *v1.Function) (string, error) {
+	return m.MaterializeFor(ctx, fn, "")
+}
+
+func (m *platformFetches) MaterializeFor(ctx context.Context, fn *v1.Function, p v1.OCIPlatform) (string, error) {
+	m.mu.Lock()
+	m.seen[fn.Name] = append(m.seen[fn.Name], p)
+	m.mu.Unlock()
+	return m.next.Materialize(ctx, fn)
+}
+
+// of is the platform of every fetch of name's bundle, which the test asks to be one and the same.
+func (m *platformFetches) of(t *testing.T, name v1.ObjectName) v1.OCIPlatform {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	require.NotEmpty(t, m.seen[name], "%s's bundle is fetched", name)
+	require.Len(t, slices.Compact(slices.Clone(m.seen[name])), 1, "%s: %v", name, m.seen[name])
+	return m.seen[name][0]
+}
+
+// onEngine makes the harness run dev's container workers on platform, "" with no engine, beside a node of the host's, and
+// record in got the platform of each fetch.
+func onEngine(platform v1.OCIPlatform, why string, got *platformFetches) []func(*function.Deps) {
+	return []func(*function.Deps){withPlatforms(&fakePlatforms{}), func(d *function.Deps) {
+		d.Runtime = devImages{fakeRuntime: d.Runtime.(*fakeRuntime), runs: platform != "", why: why, host: "funcd.host", platform: platform}
+		d.InvokeSockets = &socketLog{}
+		got.next, got.seen = d.Materializer, map[v1.ObjectName][]v1.OCIPlatform{}
+		d.Materializer = got
+	}}
+}
+
+// ADR-0145 Decision 6: under funcdctl dev, a Function's and a Job's worker on an Addon's runtime is placed by its
+// container engine's platform and gets that platform's bundle, the contract of a call too; one on funcd's runtimes keeps
+// the node's for both.
+func TestDevAddonWorkerPlatform(t *testing.T) {
+	t.Parallel()
+	got := &platformFetches{}
+	h := newExecRig(t, 1<<20, onEngine("plan9/mips", "", got)...)
+	h.putAddon(t, denoImageA, v1.WorkloadFunction, v1.WorkloadJob)
+	at := func(rt v1.RuntimeName, digest string) func(*v1.Function) {
+		return func(fn *v1.Function) { fn.Spec.Runtime, fn.Spec.ImageDigest = rt, digest }
+	}
+	h.create(t, "engine-only", at("deno2", digestElsewhere))
+	h.create(t, "both", at("deno2", digestHere))
+	h.create(t, "node-only", at("deno2", digestNode))
+	h.create(t, "process", at("nodejs22", digestHere))
+	h.create(t, "process-elsewhere", at("nodejs22", digestElsewhere))
+	for _, name := range []string{"engine-only", "both", "node-only", "process", "process-elsewhere"} {
+		h.reconcile(t, name)
+	}
+	for _, name := range []string{"engine-only", "both"} {
+		h.requireReady(t, name)
+		require.Equal(t, denoImageA, h.workerImage(v1.ObjectName(name), v1.ObjectName(name+"-1")))
+		fn := h.getFn(t, name)
+		_, err := h.r.ContractOf(context.Background(), activator.FunctionRef{Namespace: "default", Name: fn.Name}, fn)
+		require.NoError(t, err)
+		require.Equal(t, v1.OCIPlatform("plan9/mips"), got.of(t, fn.Name), "the engine's bundle, the contract's too")
+	}
+	h.requireReady(t, "process")
+	require.Empty(t, got.of(t, "process"), "the node's bundle")
+	for name, runs := range map[string]v1.OCIPlatform{"node-only": "plan9/mips", "process-elsewhere": v1.HostPlatform()} {
+		ready := h.condition(t, name, "Ready")
+		require.Equal(t, "NoMatchingPlatform", ready.Reason, name)
+		require.Contains(t, ready.Message, "node local runs "+string(runs), name)
+		require.NotContains(t, got.seen, v1.ObjectName(name), "no bundle is fetched")
+	}
+
+	h.readyJob(t, func(s *v1.JobSpec) { s.Runtime, s.ImageDigest = "deno2", digestElsewhere })
+	h.serveRun(t, "hello-1", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+	h.run(t, "hello-1", `{}`, nil)
+	h.pass(t, "hello-1")
+	requireEnd(t, h.end(t, "hello-1"), v1.JobRunSucceeded, "")
+	require.Equal(t, v1.OCIPlatform("plan9/mips"), got.of(t, "hello"))
+}
+
+// ADR-0145 Decision 6 and ADR-0346 Decision 1: with no container engine no worker runs on an Addon's runtime, whatever
+// its bundle's platforms, and the Function and the Job say so: not that their bundle fits no node.
+func TestDevAddonWorkerPlatformWithNoEngine(t *testing.T) {
+	t.Parallel()
+	const unavailable = `runtime "deno2" is not available on this node: it is an Addon's image, which no worker driver of this ` +
+		`server runs: no container engine answered`
+	h := newShimHarness(t, http.StatusOK, false, onEngine("", "no container engine answered", &platformFetches{})...)
+	h.putAddon(t, denoImageA, v1.WorkloadFunction, v1.WorkloadJob)
+	h.create(t, "engine-only", func(fn *v1.Function) { onDeno2(fn); fn.Spec.ImageDigest = digestElsewhere })
+	h.reconcile(t, "engine-only")
+	h.requireUnavailable(t, "engine-only", unavailable)
+
+	ctx := context.Background()
+	obj, _ := v1.NewObject(v1.KindJob)
+	job := obj.(*v1.Job)
+	job.Name, job.Namespace, job.ResourceGroup = "hello", "default", "rg1"
+	job.Spec = v1.JobSpec{Runtime: "deno2", Handler: "handle", Image: "file://" + h.artifact, ImageDigest: digestElsewhere}
+	_, err := h.st.Create(ctx, job)
+	require.NoError(t, err)
+	_, err = h.r.Jobs().Reconcile(ctx, controller.Request{GVK: v1.KindJob.GVK(), Namespace: "default", Name: "hello"})
+	require.NoError(t, err)
+	got, err := h.st.Get(ctx, v1.KindJob.GVK(), "default", "hello")
+	require.NoError(t, err)
+	ready := readyOf(t, got.(*v1.Job))
+	require.Equal(t, "RuntimeUnavailable", ready.Reason)
+	require.Equal(t, unavailable, ready.Message)
 }
 
 // ADR-0346 Decision 6: a worker's listener goes when its Create fails, when the worker of a revision that no longer

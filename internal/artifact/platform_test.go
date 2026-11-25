@@ -137,6 +137,27 @@ func TestScenarioPullSelectsNodePlatform(t *testing.T) {
 	}
 }
 
+// ADR-0145 Decision 3: a node of a platform the index lacks, as a Mac under funcdctl dev, fetches the bundle of the
+// platform its worker runs on, each platform's in a cache dir of its own, and none for itself.
+func TestMaterializeForAnotherPlatform(t *testing.T) {
+	t.Parallel()
+	_, ref, digest := multiArch(t)
+	fn := mkFunction(t, ref, digest)
+	m := artifact.NewOrasMaterializer(t.TempDir(), "darwin/arm64")
+	for _, p := range []v1.OCIPlatform{v1.PlatformLinuxARM64, v1.PlatformLinuxAMD64} {
+		for range 2 {
+			path, err := m.MaterializeFor(context.Background(), fn, p)
+			require.NoError(t, err)
+			body, err := os.ReadFile(path) //nolint:gosec // test-owned
+			require.NoError(t, err)
+			require.Contains(t, string(body), "# built for "+string(p))
+		}
+	}
+	_, err := m.Materialize(context.Background(), fn)
+	require.Equal(t, fault.NotFound, fault.KindOf(err))
+	require.ErrorContains(t, err, "no bundle for darwin/arm64")
+}
+
 // scenario: pull-no-matching-platform
 func TestScenarioPullNoMatchingPlatform(t *testing.T) {
 	t.Parallel()

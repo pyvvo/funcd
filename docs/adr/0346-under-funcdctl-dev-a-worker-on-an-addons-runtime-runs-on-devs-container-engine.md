@@ -5,6 +5,9 @@
   ([report](../reviews/adr-0346-implementation-claude-opus-5-5-3.md)); Reviewing (2026-11-24, implemented); Accepted
   (2026-11-23), by the decider ("accept"), with the token transport of Decision 6 and option A, after three rounds of
   an independent judge, every Blocker and Major folded
+- **Amended in place**: 2026-11-25, by the decider on [#1581](https://github.com/pyvvo/funcd/pull/1581): the image side
+  also names its platform, for its workers' bundles (Decision 2 and Contracts;
+  [ADR-0145](0145-multi-arch-function-bundles-and-arch-aware-placement.md) Decision 6)
 - **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md) (2026-11-23) — the Contracts' ListenerFor takes the caller's ref
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
@@ -90,8 +93,9 @@ Desktop's gateway.
    runtime runs images, and otherwise fails it as on a process server. When dev finds no engine, its image side is
    `runtime.NoImages(why)`, whose reason is the engine search's (ADR-0334 Decision 1).
 2. **The worker's shape.** A Function's or Job's worker on an Addon's runtime is built in the container shape
-   (`function.go:3305-3316`): no `Command`, the artifact under `/var/funcd/artifact` in the bundle volume, mounted
-   read-only, and `Image` the image its Revision recorded (ADR-0344 Decision 8). On an engine that shares the host's
+   (`function.go:3305-3316`): no `Command`, the artifact, its bundle for the engine's platform (ADR-0145 Decision 6,
+   amended 2026-11-25), under `/var/funcd/artifact` in the bundle volume, mounted read-only, and `Image` the image its
+   Revision recorded (ADR-0344 Decision 8). On an engine that shares the host's
    network (Decision 5) it takes no `FUNCD_PORT`, so the shim binds the loopback, and writes its port to
    `FUNCD_PORTFILE` in a second, writable volume at `/run/funcd`, which the helper makes the image user's; on an
    engine in a VM it takes `FUNCD_PORT` 8080 and no port file. No other Function or Job worker in process mode sets
@@ -161,7 +165,8 @@ None.
 // ImageRunner is a worker runtime that may run a worker from an image (internal/runtime).
 type ImageRunner interface {
 	RunsImages() (ok bool, why string)
-	EndpointHost() string // "127.0.0.1" on the host's network, "funcd.host" on an engine in a VM
+	EndpointHost() string          // "127.0.0.1" on the host's network, "funcd.host" on an engine in a VM
+	ImagePlatform() v1.OCIPlatform // the platform it runs images on, "" when it runs none (amended 2026-11-25)
 }
 
 // NoImages runs no image, and says why; dev uses it when it finds no engine (internal/runtime).
@@ -173,7 +178,7 @@ func Pair(process, images Runtime) Runtime
 // NewWorkers runs workers on dev's container engine, nerdctl's through the same Engine (internal/provider/docker).
 func NewWorkers(ctx context.Context, eng Engine, key string, logger *slog.Logger) (runtime.Runtime, error)
 
-// The engine client grows (internal/provider/docker).
+// The engine client grows (internal/provider/docker); Engine gains Platform, the engine's own (amended 2026-11-25).
 type Container struct {
 	// … today's fields
 	ExitCode int

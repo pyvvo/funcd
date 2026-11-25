@@ -68,6 +68,10 @@ func TestScenarioPlacementFiltersByPlatform(t *testing.T) {
 	require.True(t, errors.Is(err, scheduler.ErrNoMatchingPlatform))
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.Contains(t, err.Error(), "artifact provides [linux/amd64]; node local runs linux/arm64")
+	_, err = s.Schedule(context.Background(), scheduler.Request{
+		Namespace: "default", Name: "reader", Platforms: []v1.OCIPlatform{v1.PlatformLinuxARM64}, WorkerPlatform: v1.PlatformLinuxAMD64,
+	})
+	require.ErrorContains(t, err, "artifact provides [linux/arm64]; node local runs linux/amd64", "a container worker's platform")
 
 	p, err := s.Schedule(context.Background(), scheduler.Request{
 		Namespace: "default", Name: "reader", Platforms: []v1.OCIPlatform{v1.PlatformLinuxAMD64, v1.PlatformLinuxARM64},

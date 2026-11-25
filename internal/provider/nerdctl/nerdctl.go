@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/provider/docker"
 )
 
@@ -145,6 +146,19 @@ func lines(b []byte) []string {
 		}
 	}
 	return out
+}
+
+// Platform is nerdctl's own platform: it runs beside containerd, in the VM when the engine is in one.
+func (c cli) Platform(ctx context.Context) (v1.OCIPlatform, error) {
+	out, err := c.run(ctx, nil, "version", "--format", "{{.Client.Os}}/{{.Client.Arch}}")
+	if err != nil {
+		return "", err
+	}
+	p := v1.OCIPlatform(strings.TrimSpace(string(out)))
+	if err := p.Validate(); err != nil {
+		return "", fault.Wrapf(err, fault.Internal, "nerdctl", "the platform of nerdctl's version")
+	}
+	return p, nil
 }
 
 func (c cli) Containers(ctx context.Context, labels map[string]string) ([]string, error) {

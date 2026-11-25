@@ -119,6 +119,8 @@ func (e *procEngine) Inspect(_ context.Context, name string) (Container, bool, e
 	}
 }
 
+func (*procEngine) Platform(context.Context) (v1.OCIPlatform, error) { return "plan9/mips", nil }
+
 func (*procEngine) Pull(context.Context, string) error { return nil }
 
 func (e *procEngine) Run(_ context.Context, spec RunSpec) error {
@@ -398,6 +400,7 @@ func TestWorkersRunTheSpecOnTheEngine(t *testing.T) {
 		ok, why := w.RunsImages()
 		require.True(t, ok)
 		require.Empty(t, why)
+		require.Equal(t, v1.OCIPlatform("plan9/mips"), w.ImagePlatform(), "the engine's platform")
 
 		require.NoError(t, w.Stop(context.Background(), inst.ID))
 		require.NoError(t, w.Remove(context.Background(), inst.ID))
@@ -501,6 +504,7 @@ func TestWorkersRefuseAnEngineWithoutTheHostsNetwork(t *testing.T) {
 	ok, why := w.RunsImages()
 	require.False(t, ok)
 	require.Equal(t, rootless.refused, why)
+	require.Empty(t, w.ImagePlatform(), "no worker runs on it")
 	_, err := w.Create(context.Background(), workerSpec(t, nil, "sleep", "30"))
 	require.ErrorIs(t, err, containerrt.ErrImageUnavailable)
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
@@ -569,6 +573,11 @@ func TestWorkersOnDocker(t *testing.T) {
 	ok, why := ir.RunsImages()
 	require.True(t, ok, why)
 	host := ir.EndpointHost()
+	machine, err := rt.Engine().Exec(ctx, Helper{Name: workerPrefix + key + "-uname", Image: HelperImage,
+		Labels: map[string]string{KeyLabel: key, roleLabel: roleHelper}}, "uname", "-m")
+	require.NoError(t, err)
+	arch := map[string]string{"aarch64": "arm64", "x86_64": "amd64"}[strings.TrimSpace(string(machine))]
+	require.Equal(t, v1.OCIPlatform("linux/"+arch), ir.ImagePlatform(), "what a container of the engine runs on")
 
 	funcd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "funcd-answers") }))
 	t.Cleanup(funcd.Close)

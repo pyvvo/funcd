@@ -29,6 +29,7 @@ import (
 
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/provider/docker"
 	"github.com/pyvvo/funcd/internal/testkit/imageregistry"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -216,17 +217,23 @@ func waitPhase(t *testing.T, inst *devInstance, name string, phase v1.Phase) *v1
 	return fn
 }
 
-// runJob applies Job name on deno2 from build, written under the folder's jobs/, whose runs need no approval
-// (ADR-0348), and its run name-1, and returns the run once it has ended.
+// runJob applies Job name on deno2 from build, written under the folder's jobs/, and returns its run name-1 once it has
+// ended.
 func runJob(t *testing.T, inst *devInstance, dir, name, build string) *v1.JobRun {
 	t.Helper()
-	ctx := context.Background()
 	writeProject(t, dir, map[string]string{"jobs/" + name + "/handler.mjs": build})
+	return runJobImage(t, inst, name, "file://"+filepath.Join(dir, "jobs", name, "handler.mjs"), "")
+}
+
+// runJobImage applies Job name on deno2 from image at digest, whose runs need no approval (ADR-0348), and its run
+// name-1, and returns the run once it has ended.
+func runJobImage(t *testing.T, inst *devInstance, name, image, digest string) *v1.JobRun {
+	t.Helper()
+	ctx := context.Background()
 	obj, _ := v1.NewObject(v1.KindJob)
 	job := obj.(*v1.Job)
 	setMeta(&job.ObjectMeta, v1.ObjectName(name))
-	job.Spec = v1.JobSpec{Runtime: "deno2", Handler: "handle", Image: "file://" + filepath.Join(dir, "jobs", name, "handler.mjs"),
-		Approval: v1.JobApproval{Bypass: true}}
+	job.Spec = v1.JobSpec{Runtime: "deno2", Handler: "handle", Image: image, ImageDigest: digest, Approval: v1.JobApproval{Bypass: true}}
 	_, err := inst.client.Apply(ctx, job)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
@@ -279,6 +286,69 @@ func TestScenarioDevAddonWorker(t *testing.T) {
 	require.JSONEq(t, `{"done":true}`, string(run.Status.Result))
 	require.Eventually(t, func() bool { return len(d.workers(key)) == 1 }, time.Minute, 100*time.Millisecond,
 		"the run's worker is removed with its run")
+}
+
+// engineBundles pushes, into an OCI layout of t's own, a deno2 bundle for each of linux/amd64 and linux/arm64 whose
+// handler answers the platform it was built for, and indexes them; it returns the index's ref and digest.
+func engineBundles(t *testing.T) (ref, digest string) {
+	t.Helper()
+	ctx := context.Background()
+	layout := "oci-layout://" + filepath.Join(t.TempDir(), "layout")
+	var sources []string
+	for _, p := range []v1.OCIPlatform{v1.PlatformLinuxAMD64, v1.PlatformLinuxARM64} {
+		file := filepath.Join(t.TempDir(), "handler.mjs")
+		require.NoError(t, os.WriteFile(file, []byte("export function handle() { return { bundle: '"+string(p)+"' }; }\n"), 0o600))
+		source := layout + ":" + p.Arch()
+		_, err := artifact.Push(ctx, source, file, []byte(`{"dialect":"https://json-schema.org/draft/2020-12/schema",`+
+			`"input":{"type":"object"},"output":{"type":"object"}}`), "deno2", p)
+		require.NoError(t, err)
+		sources = append(sources, source)
+	}
+	ref = layout + ":both"
+	digest, err := artifact.PushIndex(ctx, ref, sources)
+	require.NoError(t, err)
+	return ref, digest
+}
+
+// platform is the platform the engine runs its containers on.
+func (d dockerEngine) platform() v1.OCIPlatform {
+	_, b := d.get("/version", nil)
+	var v struct{ Os, Arch string }
+	require.NoError(d.t, json.Unmarshal(b, &v))
+	return v1.OCIPlatform(v.Os + "/" + v.Arch)
+}
+
+// scenario: dev-addon-worker-platform (ADR-0145 Decision 6) — given funcdctl dev on Docker, a Function and a Job on
+// deno2 whose image is an index of Linux bundles run the bundle of the engine's platform, on a Mac too, whose own
+// platform the index lacks.
+func TestScenarioDevAddonWorkerPlatform(t *testing.T) {
+	mustRunOnCI(t)
+	requireRuntime(t)
+	sock := requireDocker(t)
+	d := newDockerEngine(t, sock)
+	ctx := context.Background()
+	dir := devProject(t, merge(map[string]string{"addon.yaml": denoAddon(workerImage(t, d))}, nodeFunction("api", "", okBuild)))
+	cfg := devConfig{cacheDir: t.TempDir()}
+	key := sessionKey(t, cfg, dir)
+	removeKeyAtCleanup(t, sock, key)
+	inst, _ := startAddonDev(t, dir, cfg)
+	ref, digest := engineBundles(t)
+	want := `{"bundle":"` + string(d.platform()) + `"}`
+
+	obj, _ := v1.NewObject(v1.KindFunction)
+	fn := obj.(*v1.Function)
+	setMeta(&fn.ObjectMeta, "bundled")
+	fn.Spec = v1.FunctionSpec{Runtime: "deno2", Handler: "handle", Image: ref, ImageDigest: digest, Replicas: 1}
+	_, err := inst.client.Apply(ctx, fn)
+	require.NoError(t, err)
+	waitPhase(t, inst, "bundled", v1.PhaseReady)
+	resp, body := post(t, inst.gatewayURL+"/function/bundled", `{"data":{}}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	require.JSONEq(t, want, body)
+
+	run := runJobImage(t, inst, "bundled-job", ref, digest)
+	require.Equal(t, v1.JobRunSucceeded, run.Status.Phase, "%+v", run.Status.Conditions)
+	require.JSONEq(t, want, string(run.Status.Result))
 }
 
 // scenario: dev-addon-worker-bindings — given such a worker that binds a KVStore, owns a Secret and links to pricing,

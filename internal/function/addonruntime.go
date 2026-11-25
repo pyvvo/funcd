@@ -119,6 +119,18 @@ func (r *Reconciler) endpointHost() string {
 	return runtime.LoopbackHost
 }
 
+// workerPlatform is the platform a worker on runtime rt runs on when it is not the node's (ADR-0145 Decision 6): its
+// container engine's, on a server whose worker runtime is a runtime.ImageRunner, as funcdctl dev's Pair is, for a runtime
+// that is none of funcd's own, which such a server runs from an image. ok is false for a worker of the node's own
+// platform; p is "" when no engine runs the worker, and the runtime gate says why.
+func (r *Reconciler) workerPlatform(rt v1.RuntimeName) (p v1.OCIPlatform, ok bool) {
+	ir, ok := r.runtime.(runtime.ImageRunner)
+	if !ok || ownRuntime(rt) {
+		return "", false
+	}
+	return ir.ImagePlatform(), true
+}
+
 // addonImage is the image a process-mode server runs w's worker of revision rev from, when it runs one (ADR-0346
 // Decision 2): the image of the Addon runtime that rev records (ADR-0344 Decision 8), on a worker runtime that runs
 // images. ok is false for any other worker, which the process driver runs.
