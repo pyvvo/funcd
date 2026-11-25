@@ -1,6 +1,6 @@
 name: Docs site
 
-# Publishes the docs site at https://pyvvo.github.io/funcd/ for each release: the site of pyvvo/funcd-frontend
+# Publishes the docs site at https://funcd.dev/ for each release: the site of pyvvo/funcd-frontend
 # (packages/docs), built with this release's docs/guide pages and install script, which it serves as /install.sh.
 on:
   release:

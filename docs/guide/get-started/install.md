@@ -10,7 +10,7 @@ Linux, and `funcd`, the server, runs on Linux.
 ## Install funcdctl
 
 ```sh
-curl -fsSL https://pyvvo.github.io/funcd/install.sh | sh
+curl -fsSL https://funcd.dev/install.sh | sh
 ```
 
 The [install script](https://github.com/pyvvo/funcd/blob/main/scripts/install-funcdctl.sh) downloads the latest
@@ -20,7 +20,7 @@ release of funcdctl for the current system, in the dev build, which also runs Fu
 that needs no sudo, set `FUNCDCTL_INSTALL_DIR`, and put that folder on the `PATH`:
 
 ```sh
-curl -fsSL https://pyvvo.github.io/funcd/install.sh | FUNCDCTL_INSTALL_DIR="$HOME/.local/bin" sh
+curl -fsSL https://funcd.dev/install.sh | FUNCDCTL_INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 Check that it runs:
@@ -33,7 +33,7 @@ To install another release, set `FUNCDCTL_VERSION`:
 
 <!-- x-release-please-start-version -->
 ```sh
-curl -fsSL https://pyvvo.github.io/funcd/install.sh | FUNCDCTL_VERSION=v0.49.0 sh
+curl -fsSL https://funcd.dev/install.sh | FUNCDCTL_VERSION=v0.49.0 sh
 ```
 <!-- x-release-please-end -->
 

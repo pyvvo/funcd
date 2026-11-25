@@ -1,9 +1,9 @@
 #!/bin/sh
 # install-funcdctl.sh: install funcdctl from a funcd release on macOS or Linux, in its dev build, which also runs
 # Functions on this machine with `funcdctl dev`. The download is checked against the release's SHA256SUMS first. The
-# docs site serves this script as https://pyvvo.github.io/funcd/install.sh (.github/workflows/docs-site.yml):
+# docs site serves this script as https://funcd.dev/install.sh (.github/workflows/docs-site.yml):
 #
-#   curl -fsSL https://pyvvo.github.io/funcd/install.sh | sh
+#   curl -fsSL https://funcd.dev/install.sh | sh
 #
 # FUNCDCTL_VERSION installs a given release (v0.41.0) instead of the latest one. FUNCDCTL_INSTALL_DIR is where funcdctl
 # goes, /usr/local/bin by default, through sudo when it is not writable. FUNCDCTL_RELEASES is the base URL of the
