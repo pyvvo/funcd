@@ -15508,5 +15508,20 @@
     "dod_total": 5,
     "report": "docs/reviews/adr-0145-amendment-implementation-claude-opus-5-5.md",
     "notes": "pass (amendment, dev's platform for container workers); every path that places or fetches the bundle uses one decision, workerPlatform, no missed caller, two platforms of one digest share no cache dir, reverted runs fail; Minor 1 (model): ADR-0358's sentence said more than the code; Minor 2 (model): an alternative of ADR-0355 and a comment kept the former rule; Minor 3 (model): the no-engine case of a Job had no test; all fixed"
+  },
+  {
+    "date": "2026-11-25",
+    "adr": "0346",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 4,
+    "dod_total": 4,
+    "report": "docs/reviews/adr-0346-amendment-implementation-claude-opus-5-5.md",
+    "notes": "pass (amendment, a container worker reaches funcd from a VM on containerd); an engine on the host's network is never asked, the address is kept under the lock, the tests fail on the old line; Minor 1 (model): three texts kept the former rule or missed the new test; Minor 2 (model): the helper's failure had no test; both fixed"
   }
 ]
