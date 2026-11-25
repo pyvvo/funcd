@@ -1,6 +1,8 @@
 # ADR-0358: An add-on kind's Function comes from an image, and its contract is the kind's schema
 
-- **Status**: Reviewing (2026-11-25, implemented); Accepted (2026-11-24), by the decider ("funcd should follow the
+- **Status**: Implemented (2026-11-25), review passed in its second round and its lane cases passed on containerd
+  (`addon-rauthy` 113 s, `addon-infrastack` 284 s; [report](../reviews/adr-0358-implementation-claude-opus-5-5-2.md));
+  Reviewing (2026-11-25, implemented); Accepted (2026-11-24), by the decider ("funcd should follow the
   contract. and yes let use image by default"), after three rounds of an independent judge, every Blocker and Major
   folded; that the Function goes once its empty list is applied came after them, on the decider's question, and the model
   checks it
