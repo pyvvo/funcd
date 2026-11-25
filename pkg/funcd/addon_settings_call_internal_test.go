@@ -31,7 +31,7 @@ const identityProvidersPath = "/apis/funcd.io/v1alpha1/namespaces/%s/identitypro
 func TestScenarioSettingsFunctionsRefused(t *testing.T) {
 	t.Parallel()
 	e := startAddons(t)
-	e.apply(t, e.admin, rauthySettingsAddon("rauthy"))
+	e.register(t, rauthySettingsAddon("rauthy"))
 	for name, c := range map[string]struct {
 		fns  []v1.AddonObjectFunction
 		want string

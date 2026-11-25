@@ -35,12 +35,13 @@ type Pair struct{ Owner, Child v1.Kind }
 // AppRevision (ADR-0214). The Function's, Site's and Workflow's root entries follow, lakes before stores (ADR-0248
 // Decision 8), then a standalone Lake's (ADR-0251 Decision 6) and the rest of a Workflow's (ADR-0250 Decision 6). An
 // OIDCProvider owns the Secret of the client it registers (ADR-0336 Decision 2). An Addon owns its revisions, both
-// cluster-scoped, which only a pass over every namespace ("") reaches (ADR-0339 Decision 1).
+// cluster-scoped, which only a pass over every namespace ("") reaches (ADR-0339 Decision 1). An add-on object owns the
+// Functions that come from its kinds' images (ADR-0358 Decision 2).
 func Pairs() []Pair {
 	return []Pair{
 		{Owner: v1.KindWorkflow, Child: v1.KindFunction}, {Owner: v1.KindWorkflow, Child: v1.KindKVStore},
 		{Owner: v1.KindIdentity, Child: v1.KindSecret}, {Owner: v1.KindOIDCProvider, Child: v1.KindSecret},
-		{Owner: v1.KindAddon, Child: v1.KindAddonRevision},
+		{Owner: v1.KindAddon, Child: v1.KindAddonRevision}, {Owner: v1.KindAddonObject, Child: v1.KindFunction},
 		{Owner: v1.KindSite, Child: v1.KindRoute},
 		{Owner: v1.KindApp, Child: v1.KindFunction}, {Owner: v1.KindApp, Child: v1.KindJob},
 		{Owner: v1.KindApp, Child: v1.KindWorkflow},
@@ -595,8 +596,8 @@ func bucketUsers() []v1.Kind {
 // (ADR-0080), a ConfigMap a Function's or Lake's spec.bindings.config or a Site's spec.runtimeConfig.configMap names
 // (ADR-0213 Decision 5, ADR-0239), a SQLDatabase a
 // Function's spec.bindings.sql names (ADR-0236), an add-on object a Function's spec.bindings.addon names (ADR-0338
-// Decision 1). A Job uses what its bindings name, as a Function does (ADR-0347 Decision 1). Nothing uses an object of
-// another kind.
+// Decision 1). A Job uses what its bindings name, as a Function does (ADR-0347 Decision 1). An object that obj itself
+// controls is no user of it: it goes with obj (ADR-0358 Decision 2). Nothing uses an object of another kind.
 func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Object) bool) (v1.ObjectRef, bool, error) {
 	const op = "gc.InUse"
 	var kinds []v1.Kind
@@ -617,8 +618,11 @@ func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Objec
 			return v1.ObjectRef{}, false, fault.Wrapf(err, fault.KindOf(err), op, "list %s in %q", kind, m.Namespace)
 		}
 		for _, u := range res.Items {
+			um := u.GetObjectMeta()
+			if v1.ControlledBy(um.OwnerReferences, obj.GroupVersionKind().Kind, m.UID) {
+				continue
+			}
 			if uses(u, obj) && (skip == nil || !skip(u)) {
-				um := u.GetObjectMeta()
 				return v1.ObjectRef{Kind: kind, Namespace: um.Namespace, Name: um.Name}, true, nil
 			}
 		}

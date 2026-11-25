@@ -64,10 +64,10 @@ func ruleSchemas(schema json.RawMessage) map[string]json.RawMessage {
 	return map[string]json.RawMessage{ruleObject: obj, ruleOldObject: obj, ruleOthers: json.RawMessage(`{"type":"array","items":{"type":"object"}}`)}
 }
 
-// parseRules parses and checks each rule as a condition over the rule documents.
-func parseRules(st *v1.AddonSettings) ([]*expr.Expr, error) {
+// parseRules parses and checks each rule as a condition over the rule documents, which schema types.
+func parseRules(st *v1.AddonSettings, schema json.RawMessage) ([]*expr.Expr, error) {
 	const op = "services.addon.parseRules"
-	resolver := expr.NewSchemaResolver(ruleSchemas(st.Schema), map[string]bool{ruleOldObject: true}, expr.StrictTypes())
+	resolver := expr.NewSchemaResolver(ruleSchemas(schema), map[string]bool{ruleOldObject: true}, expr.StrictTypes())
 	out := make([]*expr.Expr, len(st.Constraints.Rules))
 	for i, r := range st.Constraints.Rules {
 		e, err := expr.Parse(r.Rule, expr.Condition)
@@ -82,15 +82,20 @@ func parseRules(st *v1.AddonSettings) ([]*expr.Expr, error) {
 	return out, nil
 }
 
-// CheckSettings checks a settings kind when its Addon is applied (ADR-0340 Decision 2): its schema is in the contract
-// profile, types its target as a string required at each level, and types each field of unique and immutable; each
-// rule checks against the rule documents.
-func CheckSettings(st *v1.AddonSettings) error {
+// CheckSettings checks a settings kind's constraints against schema, what its image's contract says of an object's
+// config (ADR-0358 Decision 4): it types the target as a string required at each level, and each field of unique and
+// immutable; each rule checks against the rule documents. A contract that says nothing of it types no rule, and judges
+// no field.
+func CheckSettings(st *v1.AddonSettings, schema json.RawMessage) error {
 	const op = "services.addon.CheckSettings"
-	if err := contract.Check(st.Schema); err != nil {
+	if !says(schema) {
+		_, err := parseRules(st, schema)
+		return err
+	}
+	if err := contract.Check(schema); err != nil {
 		return fault.Wrapf(err, fault.Invalid, op, "%s schema", st.Kind)
 	}
-	resolver := expr.NewSchemaResolver(schemas(st.Schema), nil, expr.StrictTypes())
+	resolver := expr.NewSchemaResolver(schemas(schema), nil, expr.StrictTypes())
 	segs, _ := v1.ConfigField(st.Target)
 	f, err := resolver.Resolve(configDoc, segs)
 	if err != nil || f.Type != "string" || !f.Required {
@@ -102,14 +107,21 @@ func CheckSettings(st *v1.AddonSettings) error {
 			return fault.Invalidf(op, "%s constraint field %s is not a field the schema declares with one type", st.Kind, p)
 		}
 	}
-	_, err = parseRules(st)
+	_, err = parseRules(st, schema)
 	return err
+}
+
+// says reports whether a schema says anything: {} takes any value.
+func says(schema json.RawMessage) bool {
+	s := bytes.TrimSpace(schema)
+	return len(s) > 0 && !bytes.Equal(s, []byte(`{}`))
 }
 
 // AdmitSettings checks a write of an object of settings kind st against its constraints (ADR-0340 Decision 4): its
 // immutable fields against old, the counts and unique fields against others, the namespace's other objects of the
-// kind, and each rule. The caller holds the namespace's admission lock.
-func AdmitSettings(st *v1.AddonSettings, o, old *v1.AddonObject, others []*v1.AddonObject) error {
+// kind, and each rule, which schema types; a nil one, of a contract that is not read, lets no rule judge it (ADR-0358
+// Decision 5). The caller holds the namespace's admission lock.
+func AdmitSettings(st *v1.AddonSettings, schema json.RawMessage, o, old *v1.AddonObject, others []*v1.AddonObject) error {
 	const op = "admission.addon-settings"
 	c := st.Constraints
 	if old != nil {
@@ -146,7 +158,10 @@ func AdmitSettings(st *v1.AddonSettings, o, old *v1.AddonObject, others []*v1.Ad
 			}
 		}
 	}
-	rules, err := parseRules(st)
+	if schema == nil {
+		return nil
+	}
+	rules, err := parseRules(st, schema)
 	if err != nil {
 		return err
 	}

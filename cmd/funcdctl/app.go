@@ -1052,7 +1052,8 @@ func addonKinds(app *v1.App) []v1.Kind {
 }
 
 // walk lists each kind of the tree in the namespace, each add-on kind at its plural, notes every object a noted owner
-// controls until no new owner appears, and returns the UID of each object present.
+// controls until no new owner appears, and returns the UID of each object present. An owner is known by the kind its
+// children's references name.
 func (t *appTree) walk(ctx context.Context, c *sdk.Client, ns v1.NamespaceName) (map[v1.ObjectRef]v1.UID, error) {
 	var objs []v1.Object
 	present := map[v1.ObjectRef]v1.UID{}
@@ -1082,7 +1083,11 @@ func (t *appTree) walk(ctx context.Context, c *sdk.Client, ns v1.NamespaceName) 
 				continue
 			}
 			kind := o.GroupVersionKind().Kind
-			t.owners[m.UID] = kind
+			owner := kind
+			if slices.Contains(t.addons, kind) {
+				owner = v1.KindAddonObject // a Function that the object controls names its stored kind (ADR-0358 Decision 2)
+			}
+			t.owners[m.UID] = owner
 			t.noted = append(t.noted, treeKey{kind: kind, name: m.Name, uid: m.UID})
 			grew = true
 		}

@@ -74,9 +74,6 @@ func okAll(c addon.SettingsCall) addon.SettingsReply {
 	return r
 }
 
-const policySchema = `{"type":"object","properties":{"provider":{"type":"string"},"lengthMin":{"type":"integer"}},` +
-	`"required":["provider"],"additionalProperties":false}`
-
 // settingsRig is rauthy's Addon with the settings kind RauthyPasswordPolicy, whose Function is rauthy-settings, in
 // namespace default; its clock moves only when a test moves it.
 type settingsRig struct {
@@ -86,6 +83,7 @@ type settingsRig struct {
 	r      *addon.Reconciler
 	caller *fakeCaller
 	ended  chan controller.Request
+	images *fakeImages // the kinds' images, for a kind whose Function comes from one (ADR-0358)
 	mu     sync.Mutex
 	clock  time.Time
 }
@@ -99,7 +97,7 @@ func newSettingsRig(t *testing.T, timeout time.Duration) *settingsRig {
 	register(t, g.st, &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}, ObjectMeta: v1.ObjectMeta{Name: "rauthy"},
 		Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "identityprovider", Image: "ghcr.io/pyvvo/funcd-rauthy@sha256:7686fef5f0a7e5f5f5c1d7c7cf0f3a9f3d1c2b4a5e6f708192a3b4c5d6e7f809", Workloads: []v1.Workload{v1.WorkloadEngine},
 			Attributes: &v1.AddonAttributes{Kind: "IdentityProvider", Port: 8080, BasePath: "/auth/v1", Readiness: v1.AddonReadiness{Path: "/auth/v1/ping"}, Settings: []v1.AddonSettings{{Kind: "RauthyPasswordPolicy", Target: "spec.config.provider", Resync: v1.Duration(time.Minute),
-				Function: v1.AddonSettingsFunction{Ref: "rauthy-settings"}, Schema: json.RawMessage(policySchema)}}}}}}})
+				Function: v1.AddonFunction{Ref: "rauthy-settings"}}}}}}}})
 	g.r = g.reconciler(timeout)
 	g.target("login")
 	g.function("rauthy-settings", map[string]v1.ObjectName{"idp": "login"})
@@ -108,8 +106,11 @@ func newSettingsRig(t *testing.T, timeout time.Duration) *settingsRig {
 
 // reconciler is a reconciler of the rig's store, as a funcd start builds one: it knows nothing of earlier calls.
 func (g *settingsRig) reconciler(timeout time.Duration) *addon.Reconciler {
-	r, err := addon.NewReconciler(addon.Deps{Store: g.st, Provider: readyRuntime{}, RunsImages: true,
-		SupervisionPeriod: time.Hour, Now: g.now})
+	d := addon.Deps{Store: g.st, Provider: readyRuntime{}, RunsImages: true, SupervisionPeriod: time.Hour, Now: g.now}
+	if g.images != nil {
+		d.Images = g.images
+	}
+	r, err := addon.NewReconciler(d)
 	require.NoError(g.t, err)
 	r.SetSettingsCaller(g.caller, func(req controller.Request) { g.ended <- req }, timeout)
 	return r
@@ -359,6 +360,72 @@ func TestScenarioSettingsDrift(t *testing.T) {
 	require.Len(t, calls, 2)
 	require.Equal(t, "resync", calls[1].call.Cause)
 	require.Equal(t, calls[0].call.Objects, calls[1].call.Objects)
+}
+
+// A new revision of the Function brings a call once its workers take the calls, so the new code answers it, and a
+// Function that sleeps once the revision is stamped, since a call wakes it (ADR-0143).
+func TestSettingsCallFollowsTheRevisionThatAnswers(t *testing.T) {
+	t.Parallel()
+	g := newSettingsRig(t, time.Second)
+	serves := func(serving, current string) {
+		t.Helper()
+		obj, err := g.st.Get(g.ctx, v1.KindFunction.GVK(), "default", "rauthy-settings")
+		require.NoError(t, err)
+		fn := obj.(*v1.Function)
+		fn.Status.ServingRevision, fn.Status.CurrentRevision = serving, current
+		_, err = g.st.Update(g.ctx, fn)
+		require.NoError(t, err)
+		g.pass("login")
+	}
+	noCall := func(why string) {
+		t.Helper()
+		n := len(g.caller.got())
+		require.True(t, poll.Never(func() bool { return len(g.caller.got()) > n }, 50*time.Millisecond, 5*time.Millisecond), why)
+	}
+	g.policy("strict", "login", 16)
+	g.pass("login")
+	g.callEnds("login")
+	serves("rauthy-settings-1", "rauthy-settings-1")
+	noCall("a Function that wakes brings no call")
+	serves("rauthy-settings-1", "rauthy-settings-2")
+	noCall("revision 1 would answer")
+	serves("rauthy-settings-2", "rauthy-settings-2")
+	g.callEnds("login")
+	require.Equal(t, "change", g.caller.got()[1].call.Cause)
+	serves("", "rauthy-settings-2")
+	noCall("nor does one that falls asleep")
+	serves("", "rauthy-settings-3")
+	g.callEnds("login")
+	require.Equal(t, "change", g.caller.got()[2].call.Cause)
+}
+
+// An App's part that is a settings object follows the App's latest applied revision, which its App waits for: its
+// status names it, before and after an answer.
+func TestSettingsPartFollowsItsApp(t *testing.T) {
+	t.Parallel()
+	g := newSettingsRig(t, time.Second)
+	app := v1.OwnerReference{ObjectRef: v1.ObjectRef{Kind: v1.KindApp, Namespace: "default", Name: "web-auth"}, UID: "web-auth-uid",
+		Controller: true, BlockOwnerDeletion: true}
+	g.policy("strict", "login", 16)
+	o := g.object("strict")
+	o.OwnerReferences = []v1.OwnerReference{app}
+	_, err := g.st.Update(g.ctx, o)
+	require.NoError(t, err)
+	g.pass("strict")
+	require.Empty(t, g.object("strict").Status.AppRevision, "no revision of its App is applied yet")
+
+	storeApplied(t, g.st, app, 1)
+	g.pass("strict")
+	require.Equal(t, v1.ObjectName("web-auth-1"), g.object("strict").Status.AppRevision)
+	g.pass("login")
+	g.callEnds("login")
+	g.requireReady("strict", 1)
+	storeApplied(t, g.st, app, 2)
+	g.pass("strict")
+	require.Equal(t, v1.ObjectName("web-auth-2"), g.object("strict").Status.AppRevision, "an upgrade that leaves it as it is moves it too")
+	g.requireReady("strict", 1)
+	require.Contains(t, g.r.MapAppRevision(g.ctx, &v1.AppRevision{ObjectMeta: v1.ObjectMeta{Namespace: "default"},
+		Spec: v1.AppRevisionSpec{App: app.ObjectRef}}), controller.Request{GVK: v1.KindAddonObject.GVK(), Namespace: "default", Name: "strict"})
 }
 
 // scenario: settings-delete — once the policy is deleted, the next call carries an empty list.

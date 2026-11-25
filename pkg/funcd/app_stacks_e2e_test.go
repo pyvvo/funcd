@@ -126,8 +126,7 @@ func stackAddon() *v1.Addon {
 	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddon.GVK().APIVersion(), Kind: v1.KindAddon}, ObjectMeta: v1.ObjectMeta{Name: "infrastack"}}
 	a.Spec.Runtimes = []v1.ShippedRuntime{{Name: "infrastack", Workloads: []v1.Workload{v1.WorkloadEngineless},
 		Attributes: &v1.AddonAttributes{Kind: "InfraStack",
-			Config:   json.RawMessage(`{"type":"object","properties":{"region":{"type":"string"}},"additionalProperties":false}`),
-			Function: &v1.AddonSettingsFunction{Ref: "infrastack-reconciler"}, Resync: v1.Duration(time.Second)}}}
+			Function: &v1.AddonFunction{Ref: "infrastack-reconciler"}, Resync: v1.Duration(time.Second)}}}
 	return a
 }
 

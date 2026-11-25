@@ -11,8 +11,6 @@ import (
 	"bufio"
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2665,22 +2663,9 @@ func (r *Reconciler) getRevision(ctx context.Context, ns v1.NamespaceName, name 
 	return rev, nil
 }
 
-const (
-	maxRevisionName = 63 // a DNS-1123 label, validated by store.Create
-	revisionHashLen = 8  // hex digits of SHA-256(Function name) in a shortened name
-)
-
-// revisionName is the Revision a Function's generation stamps (ADR-0020, ADR-0172): <name>-<generation> while that
-// fits a label, else the name cut to fit, the first hex digits of its SHA-256 and the generation.
+// revisionName is the Revision a Function's generation stamps (ADR-0020, ADR-0172).
 func revisionName(fn *v1.Function) string {
-	gen := strconv.FormatInt(fn.Generation, 10)
-	name := string(fn.Name)
-	if len(name)+1+len(gen) <= maxRevisionName {
-		return name + "-" + gen
-	}
-	sum := sha256.Sum256([]byte(name))
-	suffix := "-" + hex.EncodeToString(sum[:])[:revisionHashLen] + "-" + gen
-	return name[:maxRevisionName-len(suffix)] + suffix
+	return string(v1.FunctionRevisionName(fn.Name, fn.Generation))
 }
 
 // revisionOwner is whose a stored Revision is, judged against the Function that would stamp it (ADR-0172 Decision 5).

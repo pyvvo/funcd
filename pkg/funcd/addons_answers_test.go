@@ -96,9 +96,7 @@ func TestAddonAnswersMatrix(t *testing.T) {
 	twin := row("replaceAddon", "Another Addon registers", ask{what: "a settings kind another Addon registers",
 		method: http.MethodPut, path: addonsPath + "/rauthy", body: edited(func(s *v1.AddonSpec) {
 			s.Runtimes[0].Attributes.Settings = []v1.AddonSettings{{Kind: "TwinService", Target: "spec.config.provider",
-				Function: v1.AddonSettingsFunction{Ref: "settings"},
-				Schema: json.RawMessage(`{"type":"object","additionalProperties":false,` +
-					`"properties":{"provider":{"type":"string"}},"required":["provider"]}`)}}
+				Function: v1.AddonFunction{Ref: "settings"}}}
 		}), detail: `Addon "twin" registers kind "TwinService"`})
 	twin.setup = func(t *testing.T, e *answerEnv) { registerAddons(t, e, addonFixture("twin", "TwinService")) }
 	runMatrix(t, append(shared,
@@ -174,7 +172,7 @@ func TestAddonObjectAnswersMatrix(t *testing.T) {
 		row("createAddonObject", "addons.maxObjectsPerNamespace", capped, ask{what: "an object past the cap",
 			method: http.MethodPost, path: identityPath, body: as("second", func(*v1.AddonObject) {}),
 			detail: "already holds the maximum 1 add-on objects"}),
-		row("createAddonObject", "spec.config breaks the config schema", e, ask{what: "a config that breaks the Addon's schema",
+		row("createAddonObject", "spec.config breaks the schema of its kind", e, ask{what: "a config that breaks the Addon's schema",
 			method: http.MethodPost, path: identityPath, body: as("typed", typed), detail: "body.spec.config.issuer"}),
 
 		row("replaceAddonObject", "No Addon registers the kind whose plural", e, ask{what: "a plural no Addon registers",
@@ -183,7 +181,7 @@ func TestAddonObjectAnswersMatrix(t *testing.T) {
 		row("replaceAddonObject", "The body's kind is not", e, ask{what: "another add-on's kind", method: http.MethodPut,
 			path: identityPath + "/login", body: as("login", echo),
 			detail: `body kind "EchoService" is not "IdentityProvider"`}),
-		row("replaceAddonObject", "spec.config breaks the config schema", e, ask{what: "a config that breaks the Addon's schema",
+		row("replaceAddonObject", "spec.config breaks the schema of its kind", e, ask{what: "a config that breaks the Addon's schema",
 			method: http.MethodPut, path: identityPath + "/login", body: as("login", typed),
 			detail: "body.spec.config.issuer"}),
 		held,
@@ -197,8 +195,7 @@ func markedStack(t *testing.T, e *answerEnv) {
 	a := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddon.GVK().APIVersion(), Kind: v1.KindAddon}}
 	a.Name = "infrastack"
 	a.Spec.Runtimes = []v1.ShippedRuntime{{Name: "infrastack", Workloads: []v1.Workload{v1.WorkloadEngineless},
-		Attributes: &v1.AddonAttributes{Kind: "InfraStack", Config: json.RawMessage(`{"type":"object","properties":{"job":{"type":"string"}},"additionalProperties":false}`),
-			Function: &v1.AddonSettingsFunction{Ref: "infrastack-reconciler"}}}}
+		Attributes: &v1.AddonAttributes{Kind: "InfraStack", Function: &v1.AddonFunction{Ref: "infrastack-reconciler"}}}}
 	registerAddons(t, e, a)
 	const stacks = "/apis/funcd.io/v1alpha1/namespaces/default/infrastacks"
 	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddonObject.GVK().APIVersion(), Kind: "InfraStack"}}

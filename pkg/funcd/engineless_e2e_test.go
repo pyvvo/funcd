@@ -52,9 +52,7 @@ func TestEnginelessKindOnARealFunction(t *testing.T) {
 	addon := &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddon.GVK().APIVersion(), Kind: v1.KindAddon},
 		ObjectMeta: v1.ObjectMeta{Name: "infrastack"}}
 	addon.Spec.Runtimes = []v1.ShippedRuntime{{Name: "infrastack", Workloads: []v1.Workload{v1.WorkloadEngineless},
-		Attributes: &v1.AddonAttributes{Kind: "InfraStack",
-			Config:   json.RawMessage(`{"type":"object","properties":{"job":{"type":"string"}},"additionalProperties":false}`),
-			Function: &v1.AddonSettingsFunction{Ref: "infrastack-reconciler"}}}}
+		Attributes: &v1.AddonAttributes{Kind: "InfraStack", Function: &v1.AddonFunction{Ref: "infrastack-reconciler"}}}}
 	_, err = admin.Apply(ctx, addon)
 	require.NoError(t, err)
 

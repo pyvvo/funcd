@@ -47,15 +47,6 @@ type ContractResolver interface {
 	Contract(ctx context.Context, image string) (contract v1.WorkflowContract, digest string, err error)
 }
 
-// materializedHandler is the exported entrypoint a materialized step Function declares — the funcd
-// convention and the nodejs/python shim's FUNCD_HANDLER default (ADR-0094).
-const materializedHandler = "handle"
-
-// stepIdleTimeout is the idle reclaim delay of a materialized step Function, so minReplicas 0
-// scales it to zero between runs (ADR-0094); the blueprint's example idleTimeout. The workflow
-// spec has no idle-timeout field, and a Function with idleTimeout 0 is never reclaimed (ADR-0016).
-const stepIdleTimeout = 5 * time.Minute
-
 // WorkflowReconciler is the controller.Reconciler for the Workflow kind: it brings a
 // Workflow's owned step Functions and KVStores to the desired state (the Deployment→
 // ReplicaSet analogy, ADR-0094) via the Materializer. Run execution is the RunReconciler's
@@ -524,9 +515,9 @@ func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owne
 			// supplies runtime + handler). funcd's convention (and the shim's FUNCD_HANDLER default)
 			// is the `handle` export; a materialized step function carries it so it passes shape
 			// validation and serves without the author restating it on every step.
-			Handler: materializedHandler,
+			Handler: v1.MaterializedHandler,
 			Image:   st.Function.Image,
-			Scaling: v1.Scaling{MinReplicas: pool.MinReplicas, IdleTimeout: v1.Duration(stepIdleTimeout)},
+			Scaling: v1.Scaling{MinReplicas: pool.MinReplicas, IdleTimeout: v1.MaterializedIdleTimeout},
 			Bindings: v1.FunctionBindings{
 				Blob:   st.Function.Bindings.Blob,
 				Secret: st.Function.Bindings.Secret,

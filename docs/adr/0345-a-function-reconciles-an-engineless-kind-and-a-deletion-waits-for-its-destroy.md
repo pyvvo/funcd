@@ -4,6 +4,7 @@
   2026-11-24, its one wording Minor since fixed ([report](../reviews/adr-0345-implementation-claude-opus-5-5-3.md)); Reviewing
   (2026-11-24, implemented); Accepted (2026-11-23), by the decider, after five rounds of an independent judge, every
   Blocker and Major folded
+- **Superseded in part by**: [ADR-0358](0358-an-add-on-kinds-function-comes-from-an-image-and-its-contract-is-the-kinds-schema.md) (2026-11-24) — Decisions 1 (`config` goes), 2 (an image's group is one object), 3 (an image's Function, an object's bindings) and 5 (two more reasons).
 - **Amended in place**: 2026-11-24, on the decider's delegation ("shouldn't left anything open", then "Accept"), after
   the implementation review routed four rulings: a kind keeps its workload on an Addon created again, an engine
   object's mark (Decision 1); an engineless object takes no engine field (Decision 3); a later event of an ended

@@ -38,6 +38,7 @@ import (
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/runtime"
+	addonsvc "github.com/pyvvo/funcd/internal/services/addon"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/volume"
 	"github.com/pyvvo/funcd/internal/workflow"
@@ -124,6 +125,12 @@ func WithAddonSettingsTimeout(d time.Duration) Option {
 		c.addonSettingsTimeout = d
 		return nil
 	}
+}
+
+// WithAddonImages overrides how funcd reads the images of the add-ons' kinds (ADR-0358 Decision 4): the production reader
+// reads an artifact's runtime and contract from its registry. Tests inject theirs.
+func WithAddonImages(r addonsvc.ImageReader) Option {
+	return func(c *config) error { c.addonImages = r; return nil }
 }
 
 // WithAddonsFollowingCurrent makes every add-on object follow its Addon's current revision, as funcdctl dev does: a

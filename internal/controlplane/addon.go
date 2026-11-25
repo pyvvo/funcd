@@ -27,11 +27,11 @@ import (
 func registerAddon(api huma.API, h Handlers) {
 	writes := []ErrorCase{
 		problem(fault.Invalid, "The Addon's kind or a settings kind is a kind of funcd's, another kind of the Addon or a path "+
-			"that funcd serves, whatever the case; a replace changes or drops the kind; or a runtime's name is one of funcd's "+
-			"runtimes or a key of runtime.containerd.imageOverride.",
-			"Choose another kind or runtime name. A new kind needs a new Addon."),
-		problem(fault.Invalid, "The registry of a runtime's image is not one that addons.registries lists.",
-			"Use an image from a listed registry, or ask the operator to list its registry."),
+			"that funcd serves, whatever the case; a replace changes or drops the kind, or changes a settings kind's target; or a "+
+			"runtime's name is one of funcd's runtimes or a key of runtime.containerd.imageOverride.",
+			"Choose another kind or runtime name. A new kind needs a new Addon, and a new target a new settings kind."),
+		problem(fault.Invalid, "The registry of a runtime's image, or of a kind's function.image, is not one that "+
+			"addons.registries lists.", "Use an image from a listed registry, or ask the operator to list its registry."),
 		problem(fault.Invalid, "The kind entry's config is not a JSON Schema in funcd's contract profile, or an env value is "+
 			"not a literal or a single ${{ }} expression that the schema types.", "Correct the field that the detail names."),
 	}
@@ -105,8 +105,8 @@ type AddonRules struct {
 // Decision 2, ADR-0344 Decision 4). Every write keeps the kind an Addon has, ships no runtime of funcd's own name or of
 // an override's, names its images from a listed registry, passes its kind entry's config schema through the contract
 // profile and has each env value a literal or one ${{ }} expression that the schema types, restore.env's reading
-// restore.file too (ADR-0333 Decision 1); a settings kind's schema, paths and rules pass CheckSettings. A settings
-// object passes its kind's constraints under the namespace's lock.
+// restore.file too (ADR-0333 Decision 1); a settings kind's target never changes, and a kind's image comes from a listed
+// registry too (ADR-0358 Decisions 1 and 5). A settings object passes its kind's constraints under the namespace's lock.
 func NewAddonAdmissions(r AddonRules) []admission.Admission {
 	return []admission.Admission{addonUnique{r}, addonRules{r}, addonObject{r}, addonSettings{r}}
 }
@@ -187,6 +187,9 @@ func (a addonRules) Admit(_ context.Context, req admission.Request) (v1.Object, 
 		case old.Spec.Engineless() != ad.Spec.Engineless():
 			return nil, fault.Invalidf(op, "the kind %q cannot change between Engine and Engineless: its objects keep how they run", ad.Spec.Kind())
 		}
+		if err := keepsTargets(old, ad); err != nil {
+			return nil, err
+		}
 	}
 	for i, rt := range ad.Spec.Runtimes {
 		field := fmt.Sprintf("spec.runtimes[%d]", i)
@@ -198,16 +201,14 @@ func (a addonRules) Admit(_ context.Context, req admission.Request) (v1.Object, 
 		case rt.Image == "":
 			continue // an Engineless entry runs no image (ADR-0345 Decision 1)
 		}
-		registries := a.Registries
-		if host, _ := addonImageHost(rt.Image); a.AnyRegistry {
-			registries = []string{host}
-		}
-		if !AddonImageAllowed(rt.Image, registries) {
-			return nil, fault.Invalidf(op, "%s.image %q does not come from a registry that addons.registries lists (%s)",
-				field, rt.Image, strings.Join(a.Registries, ", "))
+		if err := a.allows(field+".image", rt.Image); err != nil {
+			return nil, err
 		}
 	}
 	at, field := ad.Spec.KindAttributes(), kindField(ad.Spec)
+	if err := a.kindImages(at, field); err != nil {
+		return nil, err
+	}
 	if err := contract.Check(at.Config); err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "%s.config", field)
 	}
@@ -217,12 +218,51 @@ func (a addonRules) Admit(_ context.Context, req admission.Request) (v1.Object, 
 	if err := addonsvc.CheckRestoreEnv(at.Restore, at.Config); err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "%s.restore.env", field)
 	}
-	for i := range at.Settings {
-		if err := addonsvc.CheckSettings(&at.Settings[i]); err != nil {
-			return nil, fault.Wrapf(err, fault.Invalid, op, "%s.settings[%d]", field, i)
+	return req.Object, nil
+}
+
+// keepsTargets refuses a replace that changes a settings kind's target, the field by which its objects name theirs in
+// every revision (ADR-0358 Decision 5).
+func keepsTargets(old, ad *v1.Addon) error {
+	for _, was := range old.Spec.KindAttributes().Settings {
+		if st := ad.Spec.SettingsKind(was.Kind); st != nil && st.Target != was.Target {
+			return fault.Invalidf("admission.addon-rules", "the target of the settings kind %q cannot change from %q to %q: its objects "+
+				"name their target by it", was.Kind, was.Target, st.Target)
 		}
 	}
-	return req.Object, nil
+	return nil
+}
+
+// kindImages refuses an image of the kinds of at, the attributes at field, from a registry that is not listed (ADR-0358
+// Decision 1).
+func (a AddonRules) kindImages(at v1.AddonAttributes, field string) error {
+	if at.Function != nil && at.Function.Image != "" {
+		if err := a.allows(field+".function.image", at.Function.Image); err != nil {
+			return err
+		}
+	}
+	for i, st := range at.Settings {
+		if st.Function.Image == "" {
+			continue
+		}
+		if err := a.allows(fmt.Sprintf("%s.settings[%d].function.image", field, i), st.Function.Image); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// allows refuses the image that field names unless it comes from a listed registry (ADR-0332 Decision 6).
+func (a AddonRules) allows(field, image string) error {
+	registries := a.Registries
+	if host, _ := addonImageHost(image); a.AnyRegistry {
+		registries = []string{host}
+	}
+	if !AddonImageAllowed(image, registries) {
+		return fault.Invalidf("admission.addon-rules", "%s %q does not come from a registry that addons.registries lists (%s)",
+			field, image, strings.Join(a.Registries, ", "))
+	}
+	return nil
 }
 
 // kindField is the path of the kind entry's attributes, spec.runtimes[<i>].attributes, which the kind's refusals name.
@@ -281,7 +321,11 @@ func (a addonObject) Admit(ctx context.Context, req admission.Request) (v1.Objec
 	if err := settingsFunctions(k, o.Spec.Functions); err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "%s", o.Name)
 	}
-	v, err := contract.Compile(k.schema())
+	rules, err := rulesFor(ctx, a.Store, k, o)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "%s", o.Name)
+	}
+	v, err := contract.Compile(rules.schema)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "compile the %s schema of Addon %q", k.name(), k.addon.Name)
 	}
@@ -296,9 +340,9 @@ func (a addonObject) Admit(ctx context.Context, req admission.Request) (v1.Objec
 	return req.Object, nil
 }
 
-// addonSettings checks a write of a settings object against its kind's constraints (ADR-0340 Decision 4): it reads the
-// namespace's other objects of the kind, so it takes the namespace's admission lock (ADR-0147), and two writes cannot
-// both pass a count or a unique field.
+// addonSettings checks a write of a settings object against its kind's constraints (ADR-0340 Decision 4), those of the
+// revision its target pins (ADR-0358 Decision 5): it reads the namespace's other objects of the kind, so it takes the
+// namespace's admission lock (ADR-0147), and two writes cannot both pass a count or a unique field.
 type addonSettings struct{ AddonRules }
 
 func (addonSettings) Name() string           { return "addon-settings" }
@@ -319,15 +363,20 @@ func (a addonSettings) Admit(ctx context.Context, req admission.Request) (v1.Obj
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "list Addons")
 	}
-	var st *v1.AddonSettings
+	var k servedKind
 	for _, obj := range addons {
-		if ad, ok := obj.(*v1.Addon); ok && st == nil {
-			st = ad.Spec.SettingsKind(o.Spec.Kind)
+		if ad, ok := obj.(*v1.Addon); ok && k.settings == nil {
+			k = servedKind{addon: ad, settings: ad.Spec.SettingsKind(o.Spec.Kind)}
 		}
 	}
-	if st == nil {
+	if k.settings == nil {
 		return req.Object, nil
 	}
+	rules, err := rulesFor(ctx, a.Store, k, o)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "%s", o.Name)
+	}
+	st := rules.settings
 	objs, err := a.Store.List(ctx, v1.KindAddonObject.GVK(), o.Namespace)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "list the add-on objects of %s", o.Namespace)
@@ -339,7 +388,7 @@ func (a addonSettings) Admit(ctx context.Context, req admission.Request) (v1.Obj
 		}
 	}
 	old, _ := req.Old.(*v1.AddonObject)
-	if err := addonsvc.AdmitSettings(st, o, old, others); err != nil {
+	if err := addonsvc.AdmitSettings(st, rules.schema, o, old, others); err != nil {
 		return nil, err
 	}
 	return req.Object, nil
@@ -531,8 +580,10 @@ func addonObjectOperations() restOperations {
 	unregistered := problem(fault.NotFound, "No Addon registers the kind whose plural the path names.",
 		"Register the add-on first, or check the plural: the kind in lower case with an s.")
 	writes := []ErrorCase{unregistered,
-		blank(http.StatusUnprocessableEntity, "spec.config breaks the config schema of the Addon's kind entry; the detail "+
-			"names the property.", "Correct spec.config to fit the add-on's schema."),
+		blank(http.StatusUnprocessableEntity, "spec.config breaks the schema of its kind: the Addon's config schema for a kind "+
+			"that runs an engine, else what the contract of the kind's function.image says, in the revision that judges the "+
+			"write. The detail names the property.", "Correct spec.config to fit the schema, or move the object's target to a "+
+			"newer revision of the Addon."),
 		problem(fault.Invalid, "The body's kind is not the kind whose plural the path names.",
 			"Send the object to its own kind's plural."),
 	}
@@ -588,11 +639,103 @@ func (k servedKind) name() string {
 	return k.addon.Spec.Kind()
 }
 
-func (k servedKind) schema() json.RawMessage {
-	if k.settings != nil {
-		return k.settings.Schema
+// objectRules are what a write of an add-on object is checked against: its settings kind, as the revision that judges the
+// write holds it, and the schema that its config fits, nil for none.
+type objectRules struct {
+	settings *v1.AddonSettings
+	schema   json.RawMessage
+}
+
+// rulesFor are the rules of a write of o, of the kind k (ADR-0358 Decisions 3 to 5). An engine kind's schema is its
+// Addon's. A settings kind is read from the revision that o's target pins, or from the current one while the target does
+// not exist, pins none or pins one without the kind, and an engineless kind from the current one: its schema is what its
+// image's contract says, none for a ref, for an object's own Function and for an image not read yet. While no revision
+// has the kind, the Addon's own constraints stand.
+func rulesFor(ctx context.Context, r admission.StoreReader, k servedKind, o *v1.AddonObject) (objectRules, error) {
+	at, current := k.addon.Spec.KindAttributes(), k.addon.Status.CurrentRevision
+	if k.settings == nil && !k.addon.Spec.Engineless() {
+		return objectRules{schema: at.Config}, nil
 	}
-	return k.addon.Spec.KindAttributes().Config
+	revs, err := r.List(ctx, v1.KindAddonRevision.GVK(), "")
+	if err != nil {
+		return objectRules{}, fault.Wrapf(err, fault.KindOf(err), "controlplane.addonObject", "list AddonRevisions")
+	}
+	revision := func(name v1.ObjectName) *v1.AddonRevision {
+		for _, obj := range revs {
+			if rev, ok := obj.(*v1.AddonRevision); ok && name != "" && rev.Name == name {
+				return rev
+			}
+		}
+		return nil
+	}
+	if k.settings == nil {
+		if addonsvc.OwnFunction(o, at.Kind) != "" {
+			return objectRules{}, nil
+		}
+		return objectRules{schema: imageSchema(revision(current), at.Kind)}, nil
+	}
+	target, err := settingsTarget(ctx, r, k, o)
+	if err != nil {
+		return objectRules{}, err
+	}
+	names := []v1.ObjectName{current}
+	if target != nil {
+		names = []v1.ObjectName{target.Status.AddonRevision, current}
+	}
+	for _, name := range names {
+		rev := revision(name)
+		if rev == nil {
+			continue
+		}
+		st := rev.Spec.Spec.SettingsKind(k.settings.Kind)
+		if st == nil {
+			continue
+		}
+		rules := objectRules{settings: st}
+		if target == nil || addonsvc.OwnFunction(target, st.Kind) == "" {
+			rules.schema = imageSchema(rev, st.Kind)
+		}
+		return rules, nil
+	}
+	return objectRules{settings: k.settings}, nil
+}
+
+// settingsTarget is the target that o, a settings object of kind k, names in its namespace; nil when there is none.
+func settingsTarget(ctx context.Context, r admission.StoreReader, k servedKind, o *v1.AddonObject) (*v1.AddonObject, error) {
+	name, ok := addonsvc.TargetOf(k.settings, o)
+	if !ok {
+		return nil, nil
+	}
+	objs, err := r.List(ctx, v1.KindAddonObject.GVK(), o.Namespace)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), "controlplane.addonObject", "list the add-on objects of %s", o.Namespace)
+	}
+	for _, obj := range objs {
+		if t, ok := obj.(*v1.AddonObject); ok && t.Name == name && v1.SameAddonKind(t.Spec.Kind, k.addon.Spec.Kind()) {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
+
+// imageSchema is what rev's image of kind says of one object's config: {} when it says nothing, and nil when it is not
+// read, or says what does not compile, which fails its Function and checks no write.
+func imageSchema(rev *v1.AddonRevision, kind string) json.RawMessage {
+	if rev == nil {
+		return nil
+	}
+	kc := rev.ContractOf(kind)
+	if kc == nil {
+		return nil
+	}
+	schema := addonsvc.KindSchema(kc.Contract, kind)
+	if _, err := contract.Compile(schema); err != nil {
+		return nil
+	}
+	if len(schema) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	return schema
 }
 
 // kindFor is the kind of plural, fault.NotFound when no Addon adds it.
@@ -659,8 +802,9 @@ func shown(obj v1.Object, err error) (v1.AddonObject, error) {
 }
 
 // stored turns a user's object of a's kind into its stored form: its kind is a's, its spec.kind empty or a's, and its
-// config fits a's schema (ADR-0332 Decision 2). A config that breaks the schema is the body's 422, naming each property.
-func stored(k servedKind, o v1.AddonObject) (*v1.AddonObject, error) {
+// config fits the kind's schema (ADR-0332 Decision 2, ADR-0358 Decision 5). A config that breaks the schema is the body's
+// 422, naming each property.
+func stored(ctx context.Context, r admission.StoreReader, ns v1.NamespaceName, k servedKind, o v1.AddonObject) (*v1.AddonObject, error) {
 	const op = "controlplane.addonObject"
 	kind := k.name()
 	if string(o.Kind) != kind {
@@ -675,7 +819,13 @@ func stored(k servedKind, o v1.AddonObject) (*v1.AddonObject, error) {
 	if err := settingsFunctions(k, o.Spec.Functions); err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "%s", o.Name)
 	}
-	v, err := contract.Compile(k.schema())
+	in := o
+	in.Namespace = ns
+	rules, err := rulesFor(ctx, r, k, &in)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "%s", o.Name)
+	}
+	v, err := contract.Compile(rules.schema)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "compile the %s schema of Addon %q", kind, k.addon.Name)
 	}
@@ -701,17 +851,26 @@ func stored(k servedKind, o v1.AddonObject) (*v1.AddonObject, error) {
 }
 
 // engineFields refuses an engine field, and a target's spec.functions, on an object of a settings kind (ADR-0340
-// Decision 3, ADR-0341 Decision 3), and an engine field on an object of an engineless kind, which runs no engine
-// either and keeps spec.deletion and spec.functions (ADR-0345 Decisions 3 and 6).
+// Decision 3, ADR-0341 Decision 3), an engine field on an object of an engineless kind, which runs no engine either and
+// keeps spec.deletion and spec.functions (ADR-0345 Decisions 3 and 6), and its bindings unless its Function comes from an
+// image, which takes them (ADR-0358 Decision 2). An object that runs an engine binds no Job.
 func engineFields(k servedKind, s v1.AddonObjectSpec) error {
-	engine := len(s.Bindings.Secret) > 0 || s.Ingress != nil || s.Resources != (v1.ResourceSpec{})
+	const op = "controlplane.addonObject"
+	engine := s.Ingress != nil || s.Resources != (v1.ResourceSpec{})
+	bound := len(s.Bindings.Secret) > 0 || len(s.Bindings.Job) > 0
+	engineless := k.settings == nil && k.addon.Spec.Engineless()
+	fn := k.addon.Spec.KindAttributes().Function
 	switch {
-	case k.settings != nil && (engine || s.Deletion != "" || len(s.Functions) > 0):
-		return fault.Invalidf("controlplane.addonObject", "a %s object runs no engine: spec.bindings, spec.ingress, "+
-			"spec.resources, spec.deletion and spec.functions are not allowed", k.name())
-	case k.settings == nil && k.addon.Spec.Engineless() && engine:
-		return fault.Invalidf("controlplane.addonObject", "a %s object runs no engine: spec.bindings, spec.ingress and "+
-			"spec.resources are not allowed", k.name())
+	case k.settings != nil && (engine || bound || s.Deletion != "" || len(s.Functions) > 0):
+		return fault.Invalidf(op, "a %s object runs no engine: spec.bindings, spec.ingress, spec.resources, spec.deletion and "+
+			"spec.functions are not allowed", k.name())
+	case engineless && engine:
+		return fault.Invalidf(op, "a %s object runs no engine: spec.ingress and spec.resources are not allowed", k.name())
+	case engineless && bound && (fn == nil || fn.Image == ""):
+		return fault.Invalidf(op, "a %s object runs no engine: spec.bindings is allowed only when the kind's function is an image, "+
+			"whose Functions take it", k.name())
+	case !engineless && len(s.Bindings.Job) > 0:
+		return fault.Invalidf(op, "spec.bindings.job is not allowed: a %s object runs an engine, which starts no Job", k.name())
 	}
 	return nil
 }
@@ -816,7 +975,7 @@ func (h *storeHandlers) CreateAddonObject(ctx context.Context, ns v1.NamespaceNa
 	if err != nil {
 		return v1.AddonObject{}, err
 	}
-	obj, err := stored(k, o)
+	obj, err := stored(ctx, listReader{h.store}, ns, k, o)
 	if err != nil {
 		return v1.AddonObject{}, err
 	}
@@ -831,7 +990,7 @@ func (h *storeHandlers) ReplaceAddonObject(ctx context.Context, ns v1.NamespaceN
 	if err != nil {
 		return v1.AddonObject{}, err
 	}
-	obj, err := stored(k, o)
+	obj, err := stored(ctx, listReader{h.store}, ns, k, o)
 	if err != nil {
 		return v1.AddonObject{}, err
 	}

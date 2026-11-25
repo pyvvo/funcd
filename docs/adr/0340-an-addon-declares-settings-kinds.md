@@ -4,6 +4,7 @@
   ([report](../reviews/adr-0340-implementation-claude-opus-5-5.md)); Reviewing (2026-11-22, implemented); Accepted (2026-11-22), by the decider ("I accept all ADR"), after four rounds of an independent judge, every Blocker and Major
   folded
 - **Superseded in part by**: [ADR-0344](0344-an-add-on-ships-runtimes-and-its-kind-runs-on-one-of-them.md) (2026-11-23) — Decision 1 (an Addon's settings kinds sit in the attributes of its engine's entry).
+- **Superseded in part by**: [ADR-0358](0358-an-add-on-kinds-function-comes-from-an-image-and-its-contract-is-the-kinds-schema.md) (2026-11-24) — Decisions 1 (`schema` goes, `function` gains `image`, `target` is fixed), 2 and 5 (a kind's checks) and 3 and 4 (which revision a write is checked against).
 - **Date**: 2026-11-21
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, admission, kinds, expressions

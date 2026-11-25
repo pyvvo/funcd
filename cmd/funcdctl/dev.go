@@ -59,6 +59,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/stopsignal"
 	fnruntime "github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
+	addonsvc "github.com/pyvvo/funcd/internal/services/addon"
 	sqldevengine "github.com/pyvvo/funcd/internal/sql/devengine"
 	sqlembedengine "github.com/pyvvo/funcd/internal/sql/embedengine"
 	"github.com/pyvvo/funcd/internal/store"
@@ -177,6 +178,8 @@ type devConfig struct {
 	// (ADR-0334 Decision 1); addonDrivers find the engines, replaced by a test.
 	addonsRuntime string
 	addonDrivers  devAddonDrivers
+	// addonImages reads the images of the add-ons' kinds in place of their registries; a test's.
+	addonImages addonsvc.ImageReader
 }
 
 // startDev is the entry seam tests drive (no signal handling, no blocking): it reads dir (ADR-0247 Decision 4), boots
@@ -490,6 +493,41 @@ func (r *devImages) Contract(_ context.Context, image string) (v1.WorkflowContra
 		return c, "", fault.Wrapf(err, fault.Internal, "funcdctl dev", "decode the contract of %s", image)
 	}
 	return c, "", nil
+}
+
+// devMaterializer runs the folder mode's Functions: a build that dev delivered, from its path, and any other image, that
+// of an add-on's kind, pulled as a server pulls it (ADR-0358).
+type devMaterializer struct {
+	builds *function.FileMaterializer
+	pulled *artifact.OrasMaterializer
+}
+
+var (
+	_ function.Materializer     = devMaterializer{}
+	_ function.PlatformResolver = devMaterializer{}
+)
+
+// devBuilt reports whether image is a build that dev delivered.
+func devBuilt(image string) bool { return strings.HasPrefix(image, "file://") }
+
+func (m devMaterializer) Materialize(ctx context.Context, fn *v1.Function) (string, error) {
+	if devBuilt(fn.Spec.Image) {
+		return m.builds.Materialize(ctx, fn)
+	}
+	return m.pulled.Materialize(ctx, fn)
+}
+
+// Platforms names the platforms image runs on, nil for a build, which dev runs as it is.
+func (m devMaterializer) Platforms(ctx context.Context, image, digest string) ([]v1.OCIPlatform, error) {
+	if devBuilt(image) {
+		return nil, nil
+	}
+	return m.pulled.Platforms(ctx, image, digest)
+}
+
+// devArtifacts is where dev keeps the artifacts it pulls, beside its process dir.
+func devArtifacts(processDir string) string {
+	return filepath.Join(filepath.Dir(processDir), "artifacts")
 }
 
 // applyBoot applies desired in dependency order (applyOrdered) and, over a durable metastore, prunes what an earlier
@@ -1082,7 +1120,8 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 	opts := []funcd.Option{
 		funcd.InMemory(),
 		funcd.WithRuntime(workers),
-		funcd.WithMaterializer(function.NewFileMaterializer()),
+		funcd.WithMaterializer(devMaterializer{builds: function.NewFileMaterializer(),
+			pulled: artifact.NewOrasMaterializer(devArtifacts(stateDir), v1.HostPlatform())}),
 		// A step's file:// copy carries no OCI artifact for the production resolvers to inspect: its runtime and its
 		// contract come from its build's contract file (ADR-0247 Decision 7), so the F65 gate checks the Workflow's edges
 		// and when conditions as on a platform (ADR-0098).
@@ -1100,6 +1139,9 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 	// The admin token registers Addons (ADR-0334 Decision 5); the add-on engines run on the developer's container engine.
 	opts = append(opts, funcd.WithDevAdminToken())
 	opts = append(opts, addonOpts...)
+	if cfg.addonImages != nil {
+		opts = append(opts, funcd.WithAddonImages(cfg.addonImages))
+	}
 	// Dev's cadences in both modes (ADR-0254 Decision 4): a saved build, an upload and a log line show within about a
 	// second.
 	opts = append(opts,
@@ -1383,9 +1425,9 @@ type persistPlan struct {
 }
 
 // watchSkips are the dirs the hot-reload watcher never walks, since the session writes them while it runs: the durable
-// state, the isolated bundles and processDir.
+// state, the isolated bundles, processDir and the artifacts dev pulls.
 func (p persistPlan) watchSkips(processDir string) []string {
-	return []string{p.storeDir, p.kvDir, p.blobDir, p.lakeDir, p.sqlDir, p.bundleDir, processDir}
+	return []string{p.storeDir, p.kvDir, p.blobDir, p.lakeDir, p.sqlDir, p.bundleDir, processDir, devArtifacts(processDir)}
 }
 
 // devStateDir is where `funcdctl dev` saves the workers and lake engines it starts (ADR-0167): <persist-to>/process

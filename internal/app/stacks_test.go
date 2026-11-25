@@ -45,7 +45,7 @@ func (h *harness) stacks() {
 	a := h.create(&v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddon.GVK().APIVersion(), Kind: v1.KindAddon},
 		ObjectMeta: v1.ObjectMeta{Name: "infrastack"}, Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "infrastack",
 			Workloads: []v1.Workload{v1.WorkloadEngineless}, Attributes: &v1.AddonAttributes{Kind: "InfraStack",
-				Config: json.RawMessage(`{"type":"object"}`), Function: &v1.AddonSettingsFunction{Ref: "todo-api"}}}}}}).(*v1.Addon)
+				Function: &v1.AddonFunction{Ref: "todo-api"}}}}}}).(*v1.Addon)
 	a.Status.CurrentRevision = v1.AddonRevisionName("infrastack", 1)
 	h.update(a)
 }

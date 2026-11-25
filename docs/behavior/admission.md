@@ -73,6 +73,7 @@ New words: Schema, Refused, DryRun, Store.
 | `MaxAddonResync` | 24h | `api/types/v1alpha1/addon.go` |
 | `MinAddonRestoreTimeout` | 1s | `api/types/v1alpha1/addon.go` |
 | `MinAddonResync` | 1s | `api/types/v1alpha1/addon.go` |
+| `maxImageKind` | 40 | `api/types/v1alpha1/addon.go` |
 | `maxPort` | 65535 | `api/types/v1alpha1/addon.go` |
 | `maxAppConfigMapNameLength` | 52 | `api/types/v1alpha1/app.go` |
 | `maxAppNameLength` | 52 | `api/types/v1alpha1/app.go` |
@@ -107,6 +108,7 @@ New words: Schema, Refused, DryRun, Store.
 | `MinCPU` | `0.01` | `api/types/v1alpha1/resources.go` |
 | `maxRevisionName` | 63 | `api/types/v1alpha1/revision.go` |
 | `SiteRuntimeConfigMaxBytes` | 32KiB | `api/types/v1alpha1/site.go` |
+| `MaterializedIdleTimeout` | 5m | `api/types/v1alpha1/workflow.go` |
 | `maxListedMembers` | 5 | `internal/controlplane/admission/resourcegroup.go` |
 | `ownReadAttempts` | 5 | `internal/controlplane/handlers.go` |
 

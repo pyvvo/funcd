@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
@@ -222,4 +224,140 @@ func TestScenarioEngineLogsDev(t *testing.T) {
 	for _, line := range file {
 		require.NotContains(t, terminal, line, "no engine line reaches dev's terminal")
 	}
+}
+
+// kindImage is the image of a kind in a registry that refuses connections: dev reads its contract from here, and its
+// Function runs from the artifact cache, which holds what a pull left.
+type kindImage struct {
+	name     string
+	contract v1.WorkflowContract
+}
+
+func (k kindImage) Read(_ context.Context, image string) (v1.RuntimeName, v1.WorkflowContract, error) {
+	if image != k.name {
+		return "", v1.WorkflowContract{}, fault.NotFoundf("test", "%s is not %s", image, k.name)
+	}
+	return "nodejs22", k.contract, nil
+}
+
+// pulledKind pushes src as a kind's image, whose objects' config is config, and pulls it into the artifact cache of dev over
+// dir with cfg.
+func pulledKind(t *testing.T, cfg devConfig, dir, src, config string) kindImage {
+	t.Helper()
+	ctx := context.Background()
+	contract := v1.WorkflowContract{Input: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{` +
+		`"kind":{"type":"string"},"cause":{"type":"string"},"target":{"type":"object","additionalProperties":false,` +
+		`"properties":{"kind":{"type":"string"},"name":{"type":"string"},"alias":{"type":"string"}}},` +
+		`"objects":{"type":"array","items":{"type":"object","additionalProperties":false,` +
+		`"properties":{"name":{"type":"string"},"uid":{"type":"string"},"generation":{"type":"integer"},"deleting":{"type":"boolean"},` +
+		`"config":` + config + `}}}}}`)}
+	blob, err := artifact.ContractBlob(contract.Input, []byte(`{}`))
+	require.NoError(t, err)
+	file := filepath.Join(t.TempDir(), "kind.mjs")
+	require.NoError(t, os.WriteFile(file, []byte(src), 0o600))
+	layout := "oci-layout://" + t.TempDir()
+	digest, err := artifact.Push(ctx, layout+":kind", file, blob, "nodejs22", "")
+	require.NoError(t, err)
+	state, err := devStateDir(cfg, dir)
+	require.NoError(t, err)
+	m, fn := artifact.NewOrasMaterializer(devArtifacts(state), v1.HostPlatform()), &v1.Function{}
+	fn.Spec.Image, fn.Spec.ImageDigest = layout+"@"+digest, digest
+	_, err = m.Materialize(ctx, fn)
+	require.NoError(t, err)
+	_, err = m.Platforms(ctx, fn.Spec.Image, digest)
+	require.NoError(t, err)
+	return kindImage{name: "127.0.0.1:1/pyvvo/kind@" + digest, contract: contract}
+}
+
+// echoPolicySrc calls its target's engine through the binding of the call, and answers each object ok.
+const echoPolicySrc = `export async function handle(ctx, event) {
+  const { target, objects } = event.data;
+  const res = await ctx.addon.fetch(target.alias, '/');
+  if (!res.ok) throw new Error('the engine answered ' + res.status);
+  return { results: objects.map((o) => ({ name: o.name, ok: true })) };
+}
+`
+
+// scenario: addon-function-dev — a folder registers an Addon whose settings kind names an image: the image's Function runs
+// there, beside the folder's own, and calls the engine that the object names, so the object turns Ready; with the last one
+// gone, the Function goes.
+func TestScenarioAddonFunctionDev(t *testing.T) {
+	requireRuntime(t)
+	sock := requireDocker(t)
+	ctx := context.Background()
+	dir := devProject(t, nodeFunction("api", "", okBuild))
+	cfg := devConfig{cacheDir: t.TempDir()}
+	key := sessionKey(t, cfg, dir)
+	removeKeyAtCleanup(t, sock, key)
+	image := pulledKind(t, cfg, dir, echoPolicySrc, `{"type":"object","additionalProperties":false,`+
+		`"properties":{"provider":{"type":"string"},"lengthMin":{"type":"integer"}},"required":["provider"]}`)
+	cfg.addonImages = image
+	addon := strings.Replace(echoAddon, "      attributes:\n", "      attributes:\n        settings:\n          - kind: EchoPolicy\n"+
+		"            target: spec.config.provider\n            function:\n              image: "+image.name+"\n", 1)
+	writeProject(t, dir, map[string]string{"addon.yaml": addon, "echo.yaml": echoObject, "strict.yaml": `apiVersion: funcd.io/v1alpha1
+kind: EchoPolicy
+metadata:
+  name: strict
+spec:
+  config:
+    provider: echo
+    lengthMin: 8
+`})
+	inst, _ := startAddonDev(t, dir, cfg)
+	waitObject(t, inst, "EchoPolicy", "strict", "Ready", ready)
+	obj, err := inst.client.Get(ctx, v1.KindFunction, devNamespace, "echo-echopolicy")
+	require.NoError(t, err)
+	fn := obj.(*v1.Function)
+	require.Equal(t, image.name, fn.Spec.Image)
+	require.Equal(t, []v1.FunctionAddon{{Alias: "self", Object: "echo"}}, fn.Spec.Bindings.Addon)
+
+	require.NoError(t, os.Remove(filepath.Join(dir, "strict.yaml")))
+	require.Eventually(t, func() bool {
+		_, err := inst.client.Get(ctx, v1.KindFunction, devNamespace, "echo-echopolicy")
+		return fault.KindOf(err) == fault.NotFound
+	}, time.Minute, 100*time.Millisecond, "its Function goes with the last object")
+}
+
+// An engineless kind's image runs under dev too, and its contract judges the folder's objects.
+func TestEnginelessFunctionDev(t *testing.T) {
+	requireRuntime(t)
+	ctx := context.Background()
+	dir := devProject(t, nodeFunction("api", "", okBuild))
+	cfg := devConfig{cacheDir: t.TempDir(), addonDrivers: noEngine()}
+	image := pulledKind(t, cfg, dir, "export const handle = (ctx, event) => ({ results: event.data.objects.map((o) => ({ name: o.name, ok: true })) });\n",
+		`{"type":"object","additionalProperties":false,"properties":{"region":{"type":"string"}}}`)
+	cfg.addonImages = image
+	writeProject(t, dir, map[string]string{"stacks.yaml": `apiVersion: funcd.io/v1alpha1
+kind: Addon
+metadata:
+  name: infrastack
+spec:
+  runtimes:
+    - name: infrastack
+      workloads:
+        - Engineless
+      attributes:
+        kind: InfraStack
+        function:
+          image: ` + image.name + `
+`, "site.yaml": `apiVersion: funcd.io/v1alpha1
+kind: InfraStack
+metadata:
+  name: site
+spec:
+  config:
+    region: fra
+`})
+	inst, _ := startAddonDev(t, dir, cfg)
+	waitObject(t, inst, "InfraStack", "site", "Ready", ready)
+	obj, err := inst.client.Get(ctx, v1.KindFunction, devNamespace, "site-infrastack")
+	require.NoError(t, err)
+	require.Equal(t, image.name, obj.(*v1.Function).Spec.Image)
+
+	o, err := inst.client.Get(ctx, "InfraStack", devNamespace, "site")
+	require.NoError(t, err)
+	edited := o.(*v1.AddonObject)
+	edited.Spec.Config = json.RawMessage(`{"zone":"fra"}`)
+	_, err = inst.client.Apply(ctx, edited)
+	require.ErrorContains(t, err, "zone")
 }

@@ -70,11 +70,11 @@ func WorkloadOf(k Kind) Workload {
 }
 
 // AddonAttributes hold an entry's fields for its workloads (ADR-0344 Decision 3): an Engine entry's kind, config and
-// settings (ADR-0340) and ADR-0332's engine fields, port and readiness required; an Engineless entry's kind, config,
-// function, required, and resync (ADR-0345 Decision 1).
+// settings (ADR-0340) and ADR-0332's engine fields, port and readiness required; an Engineless entry's kind, function,
+// required, and resync (ADR-0345 Decision 1), whose objects' schema is its Function's contract (ADR-0358 Decision 3).
 type AddonAttributes struct {
 	Kind         string            `json:"kind,omitempty" pattern:"^[A-Z][A-Za-z0-9]{1,62}$" doc:"The namespaced kind that the entry runs: an upper-case letter, then 1 to 62 letters or digits. Its objects are served at /apis/funcd.io/v1alpha1/namespaces/<namespace>/<plural>, where the plural is the kind in lower case with an s. funcd refuses a kind that is its own, or whose plural is a path funcd serves or another Addon's plural, whatever the case. An Addon gains its kind once: it cannot change or go."`
-	Config       json.RawMessage   `json:"config,omitempty" doc:"The JSON Schema of the objects' spec.config, within funcd's contract profile: closed objects, and no $ref. funcd refuses an object whose config breaks it; an object stored before a change that its config breaks waits in Pending with ConfigInvalid, with no engine."`
+	Config       json.RawMessage   `json:"config,omitempty" doc:"An Engine entry's JSON Schema of the objects' spec.config, within funcd's contract profile: closed objects, and no $ref. funcd refuses an object whose config breaks it; an object stored before a change that its config breaks waits in Pending with ConfigInvalid, with no engine. An Engineless entry sets none: its Function's contract describes its objects."`
 	Settings     []AddonSettings   `json:"settings,omitempty" doc:"Kinds of settings objects that the add-on adds beside kind. An object of one runs no engine: the kind's Function applies the objects of each target through the target's engine."`
 	Port         int               `json:"port,omitempty" minimum:"1" maximum:"65535" doc:"The port that the engine serves on, in its own network namespace; an Engine entry requires it. Only funcd reaches it."`
 	BasePath     string            `json:"basePath,omitempty" doc:"The path under which the edge serves an object's engine, which the engine gets as it was called. It begins with /, does not end with / unless it is /, and holds no empty, . or .. segment. Empty is /."`
@@ -86,8 +86,8 @@ type AddonAttributes struct {
 	Snapshot     *AddonSnapshot    `json:"snapshot,omitempty" doc:"Where the engine writes its own consistent copies, which a Backup of an object copies. Unset, a Backup that names an object of the add-on fails with reason NoSnapshot, and a resourceGroup scope leaves the add-on's objects out."`
 	Restore      *AddonRestore     `json:"restore,omitempty" doc:"How the engine loads a copy at its start, which an in-place Restore of an object puts in place. Unset, an object of the add-on cannot be restored."`
 	// Function and Resync are an Engineless entry's (ADR-0345 Decision 1).
-	Function *AddonSettingsFunction `json:"function,omitempty" doc:"An Engineless entry's Function, which reconciles the objects of its kind: a Function of each object's namespace, named as a settings kind's is, which funcd calls with the list of objects it reconciles. An object may name its own in spec.functions."`
-	Resync   Duration               `json:"resync,omitempty" doc:"How often funcd sends an Engineless kind's lists again with no change, from 1s to 24h; unset is 10m."`
+	Function *AddonFunction `json:"function,omitempty" doc:"An Engineless entry's Function, which reconciles the objects of its kind and which funcd calls with their list: an image, from which funcd creates one Function for each object, or an existing Function of each object's namespace. An object may name its own in spec.functions."`
+	Resync   Duration       `json:"resync,omitempty" doc:"How often funcd sends an Engineless kind's lists again with no change, from 1s to 24h; unset is 10m."`
 }
 
 // EffectiveResync is an Engineless entry's resync, DefaultAddonResync when unset (ADR-0345 Decision 1).
@@ -144,19 +144,62 @@ func (s AddonSpec) Shipped(name RuntimeName) (ShippedRuntime, bool) {
 }
 
 // AddonSettings is a kind of settings objects (ADR-0340): each object runs no engine and names its target, an object of
-// the Addon's kind in its namespace, whose settings the kind's Function applies (ADR-0341).
+// the Addon's kind in its namespace, whose settings the kind's Function applies (ADR-0341). The Function's contract is
+// the schema of the objects' spec.config (ADR-0358 Decision 3).
 type AddonSettings struct {
-	Kind        string                `json:"kind" doc:"The settings kind, a kind name as the Addon's kind is, served at its plural."`
-	Target      string                `json:"target" doc:"The string field under spec.config that names the object's target, such as spec.config.provider."`
-	Resync      Duration              `json:"resync,omitempty" doc:"How often funcd sends a target's objects again with no change, from 1s to 24h; unset is 10m."`
-	Function    AddonSettingsFunction `json:"function" doc:"The Function that applies a target's objects, named as a Workflow step names its Function. A target may name its own in its spec.functions."`
-	Schema      json.RawMessage       `json:"schema" doc:"The JSON Schema of the objects' spec.config, within funcd's contract profile. It must require the target field at each level."`
-	Constraints AddonConstraints      `json:"constraints,omitzero" doc:"What an object must keep at admission, beside its schema."`
+	Kind        string           `json:"kind" doc:"The settings kind, a kind name as the Addon's kind is, served at its plural."`
+	Target      string           `json:"target" doc:"The string field under spec.config that names the object's target, such as spec.config.provider. A replace of the Addon cannot change it."`
+	Resync      Duration         `json:"resync,omitempty" doc:"How often funcd sends a target's objects again with no change, from 1s to 24h; unset is 10m."`
+	Function    AddonFunction    `json:"function" doc:"The Function that applies a target's objects: an image, from which funcd creates one Function for each target that an object of the kind names, or an existing Function of the target's namespace. A target may name its own in its spec.functions."`
+	Constraints AddonConstraints `json:"constraints,omitzero" doc:"What an object must keep at admission, beside its schema, which is its Function's contract."`
 }
 
-// AddonSettingsFunction names a settings kind's Function, as a Workflow step's function.ref names one (ADR-0094).
-type AddonSettingsFunction struct {
-	Ref ObjectName `json:"ref" doc:"The name of an existing Function in the target's namespace, which funcd calls with each target's objects. funcd does not create or change it, and the objects wait while it is missing."`
+// AddonFunction is the Function of a settings or an engineless kind, as a Workflow step's is (ADR-0096): an image, from
+// which funcd creates it, or an existing one (ADR-0358 Decision 1).
+type AddonFunction struct {
+	Image string     `json:"image,omitempty" doc:"A Function's artifact, pinned by digest, from a registry that addons.registries lists. funcd creates the Function from it and puts back what differs: it runs the export handle, has no address of its own, and binds the object that runs an engine, the object's Secrets and an engineless object's Jobs. The artifact's contract describes the objects, and funcd refuses one whose config breaks it. Set either image or ref."`
+	Ref   ObjectName `json:"ref,omitempty" doc:"The name of an existing Function in the object's namespace. funcd does not create or change it, and the objects wait while it is missing. Their config has no schema, and the kind takes no rules. Set either image or ref."`
+}
+
+// maxImageKind is the longest kind whose Function may come from an image: the name <object>-<kind> then fits a DNS label
+// with a hash and at least 13 characters of the object's name (ADR-0358 Decision 1).
+const maxImageKind = 40
+
+// validate checks the Function of kind under field: exactly one of image and ref, an image pinned by digest and a kind
+// whose Function's name fits, or a ref that is a name.
+func (f AddonFunction) validate(op, field, kind string) error {
+	switch {
+	case (f.Image == "") == (f.Ref == ""):
+		return fault.Invalidf(op, "%s must name exactly one of image and ref", field)
+	case f.Ref != "" && !dnsLabel.MatchString(string(f.Ref)):
+		return fault.Invalidf(op, "%s.ref %q is not a valid DNS-1123 name", field, f.Ref)
+	case f.Image != "" && !addonImage.MatchString(f.Image):
+		return fault.Invalidf(op, "%s.image %q is not pinned by digest: <repository>@sha256:<64 hex digits>", field, f.Image)
+	case f.Image != "" && len(kind) > maxImageKind:
+		return fault.Invalidf(op, "%s.image: the kind %q has more than %d characters, and its Function's name ends with it", field, kind, maxImageKind)
+	}
+	return nil
+}
+
+// AddonFunctionName is the name of the Function that funcd creates from the image of kind for object: <object>-<kind in
+// lower case>, the object's name shortened with a hash of it when that would pass 63 characters (ADR-0358 Decision 2).
+func AddonFunctionName(object ObjectName, kind string) ObjectName {
+	return revisionLabel(string(object), strings.ToLower(kind))
+}
+
+// KindImages are the images of the Addon's kinds whose Function comes from one, by kind: a settings kind's, and an
+// Engineless entry's own kind's.
+func (s AddonSpec) KindImages() map[string]string {
+	at, out := s.KindAttributes(), map[string]string{}
+	if at.Function != nil && at.Function.Image != "" {
+		out[at.Kind] = at.Function.Image
+	}
+	for _, st := range at.Settings {
+		if st.Function.Image != "" {
+			out[st.Kind] = st.Function.Image
+		}
+	}
+	return out
 }
 
 // AddonConstraints are a settings kind's admission rules, each checked under the namespace's admission lock.
@@ -232,8 +275,8 @@ func ConfigField(p string) ([]string, bool) {
 }
 
 // validateSettings checks each settings kind under field, an entry's attributes: its name, distinct from every other
-// kind of the Addon, its target and constraint paths under spec.config, its Function's name, its resync and its
-// required schema.
+// kind of the Addon, its Function, its target and constraint paths under spec.config and its resync. A rule needs a
+// schema to type it, which a ref's Function gives none (ADR-0358 Decision 4).
 func (at *AddonAttributes) validateSettings(op, field string) error {
 	for i, st := range at.Settings {
 		field := fmt.Sprintf("%s.settings[%d]", field, i)
@@ -244,10 +287,13 @@ func (at *AddonAttributes) validateSettings(op, field string) error {
 			return fault.Invalidf(op, "%s.kind %q is a kind of funcd's own", field, st.Kind)
 		case slices.ContainsFunc(at.kinds()[:i+1], func(k string) bool { return SameAddonKind(k, st.Kind) }):
 			return fault.Invalidf(op, "%s.kind %q is another kind of the Addon, whatever the case", field, st.Kind)
-		case !dnsLabel.MatchString(string(st.Function.Ref)):
-			return fault.Invalidf(op, "%s.function.ref %q is not a valid DNS-1123 name", field, st.Function.Ref)
-		case len(bytes.TrimSpace(st.Schema)) == 0:
-			return fault.Invalidf(op, "%s.schema is required", field)
+		}
+		if err := st.Function.validate(op, field+".function", st.Kind); err != nil {
+			return err
+		}
+		switch {
+		case st.Function.Ref != "" && len(st.Constraints.Rules) > 0:
+			return fault.Invalidf(op, "%s.constraints.rules need function.image: its contract types what they read, and a ref's Function has no schema", field)
 		case st.Resync != 0 && (st.Resync < MinAddonResync || st.Resync > MaxAddonResync):
 			return fault.Invalidf(op, "%s.resync %s is not from %s to %s", field, st.Resync, MinAddonResync, MaxAddonResync)
 		case st.Constraints.Count.PerTarget < 0 || st.Constraints.Count.PerNamespace < 0:
@@ -265,9 +311,6 @@ func (at *AddonAttributes) validateSettings(op, field string) error {
 			if r.Rule == "" || r.Message == "" {
 				return fault.Invalidf(op, "%s.constraints.rules[%d] needs a rule and a message", field, j)
 			}
-		}
-		if c := bytes.TrimSpace(st.Schema); len(c) > 0 && c[0] != '{' {
-			return fault.Invalidf(op, "%s.schema must be a JSON Schema object", field)
 		}
 	}
 	return nil
@@ -480,12 +523,12 @@ func (rt ShippedRuntime) kindWorkload() Workload {
 }
 
 // takes reports whether the entry's workloads take the attribute named key (ADR-0344 Decision 3, ADR-0345 Decision 1):
-// an Engine entry its kind, config, settings and engine fields; an Engineless entry its kind, config, function and
-// resync; a Function or Job entry none yet.
+// an Engine entry its kind, config, settings and engine fields; an Engineless entry its kind, function and resync; a
+// Function or Job entry none yet.
 func (rt ShippedRuntime) takes(key string) bool {
 	if rt.Serves(WorkloadEngineless) {
 		switch key {
-		case "kind", "config", "function", "resync":
+		case "kind", "function", "resync":
 			return true
 		}
 		return false
@@ -518,23 +561,18 @@ func (at *AddonAttributes) set() ([]string, error) {
 }
 
 // validateEngineless checks an Engineless entry's attributes under field (ADR-0345 Decision 1): the kind and the
-// function it requires, the function's name, the resync's bounds and the config's form.
+// function it requires, and the resync's bounds.
 func (at *AddonAttributes) validateEngineless(op, field string) error {
 	if err := at.validateKind(op, field, WorkloadEngineless); err != nil {
 		return err
 	}
 	switch {
-	case at.Function == nil || at.Function.Ref == "":
-		return fault.Invalidf(op, "%s.function.ref is required: an Engineless entry names the Function that reconciles its objects", field)
-	case !dnsLabel.MatchString(string(at.Function.Ref)):
-		return fault.Invalidf(op, "%s.function.ref %q is not a valid DNS-1123 name", field, at.Function.Ref)
+	case at.Function == nil:
+		return fault.Invalidf(op, "%s.function is required: an Engineless entry names the Function that reconciles its objects", field)
 	case at.Resync != 0 && (at.Resync < MinAddonResync || at.Resync > MaxAddonResync):
 		return fault.Invalidf(op, "%s.resync %s is not from %s to %s", field, at.Resync, MinAddonResync, MaxAddonResync)
 	}
-	if c := bytes.TrimSpace(at.Config); len(c) > 0 && c[0] != '{' {
-		return fault.Invalidf(op, "%s.config must be a JSON Schema object", field)
-	}
-	return nil
+	return at.Function.validate(op, field+".function", at.Kind)
 }
 
 // validateKind checks the kind an entry runs, as workload: required, a kind name, and none of funcd's.
@@ -677,12 +715,12 @@ type AddonObject struct {
 // AddonObjectSpec is what a user declares in an object of an add-on's kind.
 type AddonObjectSpec struct {
 	Kind      string                `json:"kind,omitempty" doc:"The add-on's kind, which funcd sets from the path the object is written at."`
-	Config    json.RawMessage       `json:"config,omitempty" doc:"The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object."`
-	Bindings  AddonObjectBindings   `json:"bindings,omitempty" doc:"What the object's engine uses. An object of a settings or an engineless kind, which runs no engine, takes none."`
+	Config    json.RawMessage       `json:"config,omitempty" doc:"The object's settings, which its kind's schema checks: the config schema of its Addon's kind entry when the object runs an engine, else the contract of the kind's Function. Unset is an empty object."`
+	Bindings  AddonObjectBindings   `json:"bindings,omitempty" doc:"What the object's engine uses, and what the Functions that funcd creates for the object from its kinds' images use. An object of a settings kind takes none, nor does one of an engineless kind whose Function is a ref."`
 	Ingress   *Ingress              `json:"ingress,omitempty" doc:"Exposes the engine at the edge, on ingress.host under its Addon's basePath, while the object is Ready. Its own ingress.auth alone decides the stance, open when unset; ingress.path and the authenticated mode are refused. An object of a settings or an engineless kind takes none."`
 	Resources ResourceSpec          `json:"resources,omitempty" doc:"The cpu and memory of the object's engine. An empty cpu or memory sets no limit, and a change replaces the running engine. An object of a settings or an engineless kind takes none."`
 	Deletion  DeletionPolicy        `json:"deletion,omitempty" doc:"What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it."`
-	Functions []AddonObjectFunction `json:"functions,omitempty" doc:"The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none."`
+	Functions []AddonObjectFunction `json:"functions,omitempty" doc:"The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function, so each copy of an App template applies its own objects. The objects it applies have no schema. A settings object names none."`
 }
 
 // AddonObjectFunction names a target's own Function for one settings kind (ADR-0341 Decision 3).
@@ -691,9 +729,11 @@ type AddonObjectFunction struct {
 	Ref  ObjectName `json:"ref" doc:"A Function of the object's namespace that binds the object in its bindings.addon, which funcd calls with the object's settings objects of the kind. In an App, a Function the App declares."`
 }
 
-// AddonObjectBindings are what an add-on object's engine uses (ADR-0332 Decision 4).
+// AddonObjectBindings are what an add-on object's engine uses (ADR-0332 Decision 4), and what the Functions that funcd
+// creates for it from its kinds' images use (ADR-0358 Decision 2).
 type AddonObjectBindings struct {
-	Secret []ObjectName `json:"secret,omitempty" doc:"Secrets of the namespace whose keys, those that its Addon's kind entry lists in secretKeys, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine."`
+	Secret []ObjectName  `json:"secret,omitempty" doc:"Secrets of the namespace whose keys, those that its Addon's kind entry lists in secretKeys, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine. The Functions that funcd creates for the object read every key of them."`
+	Job    []FunctionJob `json:"job,omitempty" doc:"The Jobs whose runs the Function that funcd creates for an engineless object starts and reads, by their alias. Only an object of an engineless kind whose function is an image takes them."`
 }
 
 // AddonObjectStatus is the observed state of an add-on object.
@@ -782,6 +822,13 @@ func (o *AddonObject) Validate() error {
 		if !dnsLabel.MatchString(string(s)) {
 			return fault.Invalidf(op, "spec.bindings.secret entry %q is not a valid DNS-1123 name", s)
 		}
+	}
+	jobs := make([][2]string, 0, len(o.Spec.Bindings.Job))
+	for _, b := range o.Spec.Bindings.Job {
+		jobs = append(jobs, [2]string{b.Alias, string(b.Job)})
+	}
+	if err := checkAliasTargets(op, "spec.bindings", "job", "job", "Job", jobs); err != nil {
+		return err
 	}
 	for i, f := range o.Spec.Functions {
 		switch {

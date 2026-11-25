@@ -21,6 +21,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth/rbac"
 	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
+	"github.com/pyvvo/funcd/internal/ownedstore"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/internal/testkit/poll"
@@ -350,7 +351,8 @@ func TestScenarioAddonYAMLAsWritten(t *testing.T) {
 	require.False(t, ok, "a refused Addon applies no App")
 }
 
-// seedLoginPart stores web-auth's part web-auth-login, as the App reconciler writes it.
+// seedLoginPart stores web-auth's part web-auth-login, as the App reconciler writes it, and the Function that funcd
+// creates for it from its kind's image (ADR-0358 Decision 2).
 func seedLoginPart(t *testing.T, st store.Store, app *v1.App) {
 	t.Helper()
 	o := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAddonObject.GVK().APIVersion(), Kind: v1.KindAddonObject}}
@@ -358,12 +360,19 @@ func seedLoginPart(t *testing.T, st store.Store, app *v1.App) {
 	o.Spec.Kind, o.Spec.Config = "IdentityProvider", json.RawMessage(`{"issuer":"https://login.example.com/auth/v1"}`)
 	o.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindApp, Namespace: "team-a", Name: app.Name},
 		UID: app.UID, Controller: true, BlockOwnerDeletion: true}}
-	_, err := st.Create(context.Background(), o)
+	part, err := st.Create(context.Background(), o)
+	require.NoError(t, err)
+	fn := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
+	fn.Name, fn.Namespace, fn.ResourceGroup = "web-auth-login-rauthypasswordpolicy", "team-a", app.ResourceGroup
+	fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "handle", "ghcr.io/pyvvo/rauthy-settings:1"
+	fn.OwnerReferences = ownedstore.Refs(part, v1.DeletionDelete)
+	_, err = st.Create(context.Background(), fn)
 	require.NoError(t, err)
 }
 
 // scenario: addon-app-delete — app delete walks the App's add-on part at its kind's plural and prints it once it is
-// gone; with the Addon removed first, the kind's 404 reads as no object and delete ends with exit 0.
+// gone, and the Function that the part controls; with the Addon removed first, the kind's 404 reads as no object and
+// delete ends with exit 0.
 func TestScenarioAddonAppDelete(t *testing.T) {
 	t.Parallel()
 	for _, addonFirst := range []bool{false, true} {
@@ -392,8 +401,21 @@ func TestScenarioAddonAppDelete(t *testing.T) {
 			return !ok
 		}, cliWithin, 10*time.Millisecond, "the App is deleted")
 		storeDelete(t, e.st, v1.KindAddonObject, "web-auth-login")
+		if !addonFirst {
+			require.Eventually(t, func() bool { return strings.Contains(run.out.String(), "deleted IdentityProvider/web-auth-login\n") },
+				cliWithin, 10*time.Millisecond)
+			select {
+			case <-run.done:
+				require.Fail(t, "app delete ended before the part's Function went")
+			default:
+			}
+		}
+		storeDelete(t, e.st, v1.KindFunction, "web-auth-login-rauthypasswordpolicy")
 		require.NoError(t, run.wait(t), "addon first: %v", addonFirst)
 		require.Contains(t, run.out.String(), "deleted IdentityProvider/web-auth-login\n", "addon first: %v", addonFirst)
+		if !addonFirst {
+			require.Contains(t, run.out.String(), "deleted Function/web-auth-login-rauthypasswordpolicy\n")
+		}
 	}
 }
 

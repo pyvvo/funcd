@@ -90,6 +90,8 @@ type Deps struct {
 	// Egress is server.network.egress: on, an engine has no output fence and its egress passes the egress gateway, as a
 	// Function worker's does (ADR-0352 Decision 2); off, it is fenced with no endpoint.
 	Egress bool
+	// Images reads the images of the kinds whose Function comes from one (ADR-0358 Decision 4); nil reads none.
+	Images ImageReader
 }
 
 // Reconciler is the controller.Reconciler for AddonObject.
@@ -111,6 +113,7 @@ type Reconciler struct {
 	followCurrent bool
 	collect       func(ctx context.Context, ns v1.NamespaceName) error
 	egress        bool
+	images        ImageReader
 
 	mu       sync.Mutex
 	seen     map[provider.ProviderRef]seenObject // each object's UID and deletion policy at its last pass
@@ -168,6 +171,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		followCurrent:   d.FollowCurrent,
 		collect:         d.Collect,
 		egress:          d.Egress,
+		images:          d.Images,
 		seen:            map[provider.ProviderRef]seenObject{},
 		parts:           map[provider.ProviderRef]v1.UID{},
 		answered:        map[v1.UID]bool{},

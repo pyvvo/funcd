@@ -12,35 +12,8 @@ spec:
         kind: InfraStack
         resync: 30m
         function:
-          ref: infrastack-reconciler
-        config:
-          type: object
-          additionalProperties: false
-          properties:
-            job:
-              type: string
-            variables:
-              type: object
-              additionalProperties: false
-              properties:
-                zone:
-                  type: string
-          required:
-            - job
+          image: ghcr.io/example/infrastack-reconciler@sha256:73b6ae022fd1e39cc9a4c710911a7f6a1dfe85886193a7b0234ee3381652d9da
 # endregion addon
----
-# region function
-apiVersion: funcd.io/v1alpha1
-kind: Function
-metadata:
-  name: infrastack-reconciler
-  namespace: default
-  resourceGroup: default
-spec:
-  runtime: nodejs22
-  handler: handle
-  image: registry.example.com/infrastack-reconciler:1.0.0
-# endregion function
 ---
 # region stack
 apiVersion: funcd.io/v1alpha1
@@ -51,8 +24,11 @@ metadata:
   resourceGroup: default
 spec:
   deletion: delete
+  bindings:
+    job:
+      - alias: stack
+        job: bunny-edge
   config:
-    job: bunny-edge
     variables:
       zone: funcd-tunnel
 # endregion stack

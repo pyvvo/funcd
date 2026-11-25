@@ -420,9 +420,11 @@ func appPairs() []gc.Pair {
 
 // rootEntryPairs is the pairs ownedstore.Refs stamps under deletion: delete for what a Function, Job, Site or Workflow
 // declares at its root (ADR-0248 Decision 8, ADR-0347 Decision 1), a standalone Lake (ADR-0251 Decision 6), the rest of
-// a Workflow's (ADR-0250 Decision 6), and an OIDCProvider's client Secret (ADR-0336 Decision 2).
+// a Workflow's (ADR-0250 Decision 6), an OIDCProvider's client Secret (ADR-0336 Decision 2), and the Functions of an
+// add-on object's kinds' images (ADR-0358 Decision 2).
 func rootEntryPairs() []gc.Pair {
 	return []gc.Pair{
+		{Owner: v1.KindAddonObject, Child: v1.KindFunction},
 		{Owner: v1.KindOIDCProvider, Child: v1.KindSecret},
 		{Owner: v1.KindFunction, Child: v1.KindLake}, {Owner: v1.KindFunction, Child: v1.KindKVStore},
 		{Owner: v1.KindFunction, Child: v1.KindSQLDatabase}, {Owner: v1.KindFunction, Child: v1.KindBucket},

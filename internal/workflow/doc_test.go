@@ -17,6 +17,6 @@ func TestDocNamesTheConstant(t *testing.T) {
 	step := reflect.TypeFor[v1.RunStepStatus]()
 	doctag.Names(t, step, "Error", strconv.Itoa(observability.MaxStatusError)+" bytes")
 	doctag.Names(t, step, "Attempts", attemptHeader)
-	doctag.Names(t, reflect.TypeFor[v1.FunctionStep](), "Image", materializedHandler+" export")
-	doctag.Names(t, reflect.TypeFor[v1.WorkflowPooling](), "MinReplicas", strconv.Itoa(int(stepIdleTimeout/time.Minute))+" minutes")
+	doctag.Names(t, reflect.TypeFor[v1.FunctionStep](), "Image", v1.MaterializedHandler+" export")
+	doctag.Names(t, reflect.TypeFor[v1.WorkflowPooling](), "MinReplicas", strconv.Itoa(int(time.Duration(v1.MaterializedIdleTimeout)/time.Minute))+" minutes")
 }

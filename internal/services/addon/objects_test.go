@@ -66,8 +66,6 @@ func answerAll(call addon.ObjectsCall, ok bool, reason string) addon.SettingsRep
 	return r
 }
 
-const stackSchema = `{"type":"object","properties":{"job":{"type":"string"}},"additionalProperties":false}`
-
 // enginelessRig is the Addon infrastack, whose engineless kind InfraStack its Function infrastack-reconciler of
 // namespace default reconciles; its clock moves only when a test moves it.
 type enginelessRig struct {
@@ -82,6 +80,7 @@ type enginelessRig struct {
 	collected []v1.NamespaceName
 	// follow builds the reconciler as funcdctl dev does: every object follows its Addon's current revision.
 	follow bool
+	images *fakeImages // the kind's image, when its Function comes from one (ADR-0358)
 }
 
 func newEnginelessRig(t *testing.T) *enginelessRig {
@@ -99,19 +98,23 @@ func newEnginelessRig(t *testing.T) *enginelessRig {
 func infraStackAddon() *v1.Addon {
 	return &v1.Addon{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddon}, ObjectMeta: v1.ObjectMeta{Name: "infrastack"},
 		Spec: v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "infrastack", Workloads: []v1.Workload{v1.WorkloadEngineless},
-			Attributes: &v1.AddonAttributes{Kind: "InfraStack", Config: json.RawMessage(stackSchema),
-				Function: &v1.AddonSettingsFunction{Ref: "infrastack-reconciler"}, Resync: v1.Duration(time.Minute)}}}}}
+			Attributes: &v1.AddonAttributes{Kind: "InfraStack",
+				Function: &v1.AddonFunction{Ref: "infrastack-reconciler"}, Resync: v1.Duration(time.Minute)}}}}}
 }
 
 // reconciler is a reconciler of the rig's store, as a funcd start builds one: it knows nothing of earlier calls.
 func (g *enginelessRig) reconciler() *addon.Reconciler {
-	r, err := addon.NewReconciler(addon.Deps{Store: g.st, Provider: readyRuntime{}, RunsImages: true, SupervisionPeriod: time.Hour,
+	d := addon.Deps{Store: g.st, Provider: readyRuntime{}, RunsImages: true, SupervisionPeriod: time.Hour,
 		Now: g.now, FollowCurrent: g.follow, Collect: func(_ context.Context, ns v1.NamespaceName) error {
 			g.mu.Lock()
 			defer g.mu.Unlock()
 			g.collected = append(g.collected, ns)
 			return nil
-		}})
+		}}
+	if g.images != nil {
+		d.Images = g.images
+	}
+	r, err := addon.NewReconciler(d)
 	require.NoError(g.t, err)
 	r.SetSettingsCaller(nil, func(req controller.Request) { g.ended <- req }, time.Second)
 	r.SetObjectsCaller(g.caller)
@@ -579,12 +582,26 @@ func TestEnginelessFunctionChangeRequeuesByPinnedRevision(t *testing.T) {
 	cur, err := g.st.Get(g.ctx, v1.KindAddon.GVK(), "", "infrastack")
 	require.NoError(t, err)
 	a := cur.(*v1.Addon)
-	a.Spec.Runtimes[0].Attributes.Function = &v1.AddonSettingsFunction{Ref: "next-reconciler"}
+	a.Spec.Runtimes[0].Attributes.Function = &v1.AddonFunction{Ref: "next-reconciler"}
 	_, err = g.st.Update(g.ctx, a)
 	require.NoError(t, err)
 	fn := &v1.Function{ObjectMeta: v1.ObjectMeta{Name: "infrastack-reconciler", Namespace: "default"}}
 	require.Equal(t, []controller.Request{{GVK: v1.KindAddonObject.GVK(), Namespace: "default", Name: "site"}},
 		g.r.MapEnginelessFunction(g.ctx, fn), "site pins revision 1, whose Function this is")
+}
+
+// storeApplied stores the revision n of app, Applied.
+func storeApplied(t *testing.T, st store.Store, app v1.OwnerReference, n int64) {
+	t.Helper()
+	r := &v1.AppRevision{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAppRevision}}
+	r.Name, r.Namespace, r.ResourceGroup = v1.AppRevisionName(app.Name, n), app.Namespace, "rg1"
+	r.OwnerReferences, r.Spec = []v1.OwnerReference{app}, v1.AppRevisionSpec{App: app.ObjectRef, Number: n}
+	created, err := st.Create(context.Background(), r)
+	require.NoError(t, err)
+	r = created.(*v1.AppRevision)
+	r.Status.Conditions.Set(v1.Condition{Type: "Applied", Status: v1.ConditionTrue})
+	_, err = st.Update(context.Background(), r)
+	require.NoError(t, err)
 }
 
 // ADR-0339 Decision 3, as ADR-0345 Decision 1 applies it to an engineless object: an App's part whose spec an upgrade
@@ -601,19 +618,7 @@ func TestEnginelessPartPinFollowsItsApp(t *testing.T) {
 	o.Spec.Config, o.OwnerReferences = json.RawMessage(`{"job":"bunny"}`), []v1.OwnerReference{app}
 	_, err := g.st.Create(g.ctx, o)
 	require.NoError(t, err)
-	applied := func(n int64) {
-		t.Helper()
-		r := &v1.AppRevision{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAppRevision}}
-		r.Name, r.Namespace, r.ResourceGroup, r.OwnerReferences = v1.AppRevisionName("edge", n), "default", "rg1", []v1.OwnerReference{app}
-		r.Spec = v1.AppRevisionSpec{App: app.ObjectRef, Number: n}
-		created, err := g.st.Create(g.ctx, r)
-		require.NoError(t, err)
-		r = created.(*v1.AppRevision)
-		r.Status.Conditions.Set(v1.Condition{Type: "Applied", Status: v1.ConditionTrue})
-		_, err = g.st.Update(g.ctx, r)
-		require.NoError(t, err)
-	}
-	applied(1)
+	storeApplied(t, g.st, app, 1)
 	g.caller.set(func(_ context.Context, c addon.ObjectsCall) (addon.SettingsReply, error) {
 		return answerAll(c, true, ""), nil
 	})
@@ -623,7 +628,7 @@ func TestEnginelessPartPinFollowsItsApp(t *testing.T) {
 	require.Equal(t, v1.PhaseReady, g.object("bunny").Status.Phase)
 	require.Equal(t, v1.ObjectName("edge-1"), g.object("bunny").Status.AppRevision)
 
-	applied(2)
+	storeApplied(t, g.st, app, 2)
 	g.pass("bunny")
 	got := g.object("bunny")
 	require.Equal(t, v1.ObjectName("edge-2"), got.Status.AppRevision, "the part follows its App's applied revision")

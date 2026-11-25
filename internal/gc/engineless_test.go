@@ -2,7 +2,6 @@ package gc_test
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,8 +22,7 @@ func infraStack(t *testing.T, st store.Store, app v1.Object, deletion v1.Deletio
 	ctx := context.Background()
 	a := object(t, v1.KindAddon, "infrastack").(*v1.Addon)
 	a.Spec = v1.AddonSpec{Runtimes: []v1.ShippedRuntime{{Name: "infrastack", Workloads: []v1.Workload{v1.WorkloadEngineless},
-		Attributes: &v1.AddonAttributes{Kind: "InfraStack", Config: json.RawMessage(`{"type":"object"}`),
-			Function: &v1.AddonSettingsFunction{Ref: "infrastack-reconciler"}}}}}
+		Attributes: &v1.AddonAttributes{Kind: "InfraStack", Function: &v1.AddonFunction{Ref: "infrastack-reconciler"}}}}}
 	_, err := st.Create(ctx, a)
 	require.NoError(t, err)
 	stack := create(t, st, v1.KindAddonObject, "bunny-edge", app).(*v1.AddonObject)

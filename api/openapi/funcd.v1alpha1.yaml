@@ -62,15 +62,15 @@ components:
           description: The path under which the edge serves an object's engine, which the engine gets as it was called. It begins with /, does not end with / unless it is /, and holds no empty, . or .. segment. Empty is /.
           type: string
         config:
-          description: "The JSON Schema of the objects' spec.config, within funcd's contract profile: closed objects, and no $ref. funcd refuses an object whose config breaks it; an object stored before a change that its config breaks waits in Pending with ConfigInvalid, with no engine."
+          description: "An Engine entry's JSON Schema of the objects' spec.config, within funcd's contract profile: closed objects, and no $ref. funcd refuses an object whose config breaks it; an object stored before a change that its config breaks waits in Pending with ConfigInvalid, with no engine. An Engineless entry sets none: its Function's contract describes its objects."
         env:
           additionalProperties:
             type: string
           description: The engine's environment. Each value is a literal, or a single ${{ }} expression over config, such as ${{ config.issuer }}, which funcd checks against the config schema when the Addon is applied. A value that is not a string reaches the engine as its JSON; one that fails holds the object in Pending with EnvInvalid.
           type: object
         function:
-          $ref: "#/components/schemas/AddonSettingsFunction"
-          description: "An Engineless entry's Function, which reconciles the objects of its kind: a Function of each object's namespace, named as a settings kind's is, which funcd calls with the list of objects it reconciles. An object may name its own in spec.functions."
+          $ref: "#/components/schemas/AddonFunction"
+          description: "An Engineless entry's Function, which reconciles the objects of its kind and which funcd calls with their list: an image, from which funcd creates one Function for each object, or an existing Function of each object's namespace. An object may name its own in spec.functions."
         kind:
           description: "The namespaced kind that the entry runs: an upper-case letter, then 1 to 62 letters or digits. Its objects are served at /apis/funcd.io/v1alpha1/namespaces/<namespace>/<plural>, where the plural is the kind in lower case with an s. funcd refuses a kind that is its own, or whose plural is a path funcd serves or another Addon's plural, whatever the case. An Addon gains its kind once: it cannot change or go."
           pattern: ^[A-Z][A-Za-z0-9]{1,62}$
@@ -162,6 +162,39 @@ components:
           minimum: 0
           type: integer
       type: object
+    AddonFunction:
+      additionalProperties: false
+      properties:
+        image:
+          description: "A Function's artifact, pinned by digest, from a registry that addons.registries lists. funcd creates the Function from it and puts back what differs: it runs the export handle, has no address of its own, and binds the object that runs an engine, the object's Secrets and an engineless object's Jobs. The artifact's contract describes the objects, and funcd refuses one whose config breaks it. Set either image or ref."
+          type: string
+        ref:
+          description: The name of an existing Function in the object's namespace. funcd does not create or change it, and the objects wait while it is missing. Their config has no schema, and the kind takes no rules. Set either image or ref.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      type: object
+    AddonKindContract:
+      additionalProperties: false
+      properties:
+        contract:
+          $ref: "#/components/schemas/WorkflowContract"
+          description: The image's contract. What it says of one object's config is the kind's schema.
+        kind:
+          description: The kind whose function is the image.
+          type: string
+        runtime:
+          description: The runtime that the image declares, on which the kind's Functions run.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - kind
+        - runtime
+        - contract
+      type: object
     AddonObject:
       additionalProperties: false
       properties:
@@ -184,8 +217,15 @@ components:
     AddonObjectBindings:
       additionalProperties: false
       properties:
+        job:
+          description: The Jobs whose runs the Function that funcd creates for an engineless object starts and reads, by their alias. Only an object of an engineless kind whose function is an image takes them.
+          items:
+            $ref: "#/components/schemas/FunctionJob"
+          type:
+            - array
+            - "null"
         secret:
-          description: "Secrets of the namespace whose keys, those that its Addon's kind entry lists in secretKeys, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine."
+          description: "Secrets of the namespace whose keys, those that its Addon's kind entry lists in secretKeys, reach the engine's environment. funcd asks Cedar, as the object, for secret::read on each: a missing Secret holds the object in Pending with SecretNotFound, and a forbidden one with BindingResolveFailed. A changed value replaces the engine. The Functions that funcd creates for the object read every key of them."
           items:
             maxLength: 63
             minLength: 1
@@ -216,9 +256,9 @@ components:
       properties:
         bindings:
           $ref: "#/components/schemas/AddonObjectBindings"
-          description: What the object's engine uses. An object of a settings or an engineless kind, which runs no engine, takes none.
+          description: What the object's engine uses, and what the Functions that funcd creates for the object from its kinds' images use. An object of a settings kind takes none, nor does one of an engineless kind whose Function is a ref.
         config:
-          description: The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object.
+          description: "The object's settings, which its kind's schema checks: the config schema of its Addon's kind entry when the object runs an engine, else the contract of the kind's Function. Unset is an empty object."
         deletion:
           description: "What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it."
           enum:
@@ -226,7 +266,7 @@ components:
             - delete
           type: string
         functions:
-          description: The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none.
+          description: The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function, so each copy of an App template applies its own objects. The objects it applies have no schema. A settings object names none.
           items:
             $ref: "#/components/schemas/AddonObjectFunction"
           type:
@@ -356,6 +396,8 @@ components:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
           $ref: "#/components/schemas/AddonRevisionSpec"
+        status:
+          $ref: "#/components/schemas/AddonRevisionStatus"
       required:
         - metadata
         - spec
@@ -384,6 +426,17 @@ components:
         - number
         - spec
       type: object
+    AddonRevisionStatus:
+      additionalProperties: false
+      properties:
+        contracts:
+          description: The contract and the runtime of each kind whose function is an image, once funcd has read them from the registry.
+          items:
+            $ref: "#/components/schemas/AddonKindContract"
+          type:
+            - array
+            - "null"
+      type: object
     AddonRule:
       additionalProperties: false
       properties:
@@ -402,10 +455,10 @@ components:
       properties:
         constraints:
           $ref: "#/components/schemas/AddonConstraints"
-          description: What an object must keep at admission, beside its schema.
+          description: What an object must keep at admission, beside its schema, which is its Function's contract.
         function:
-          $ref: "#/components/schemas/AddonSettingsFunction"
-          description: The Function that applies a target's objects, named as a Workflow step names its Function. A target may name its own in its spec.functions.
+          $ref: "#/components/schemas/AddonFunction"
+          description: "The Function that applies a target's objects: an image, from which funcd creates one Function for each target that an object of the kind names, or an existing Function of the target's namespace. A target may name its own in its spec.functions."
         kind:
           description: The settings kind, a kind name as the Addon's kind is, served at its plural.
           type: string
@@ -414,28 +467,13 @@ components:
           pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
           patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
           type: string
-        schema:
-          description: The JSON Schema of the objects' spec.config, within funcd's contract profile. It must require the target field at each level.
         target:
-          description: The string field under spec.config that names the object's target, such as spec.config.provider.
+          description: The string field under spec.config that names the object's target, such as spec.config.provider. A replace of the Addon cannot change it.
           type: string
       required:
         - kind
         - target
         - function
-        - schema
-      type: object
-    AddonSettingsFunction:
-      additionalProperties: false
-      properties:
-        ref:
-          description: The name of an existing Function in the target's namespace, which funcd calls with each target's objects. funcd does not create or change it, and the objects wait while it is missing.
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
-      required:
-        - ref
       type: object
     AddonSnapshot:
       additionalProperties: false
@@ -904,9 +942,9 @@ components:
             properties:
               bindings:
                 $ref: "#/components/schemas/AddonObjectBindings"
-                description: What the object's engine uses. An object of a settings or an engineless kind, which runs no engine, takes none.
+                description: What the object's engine uses, and what the Functions that funcd creates for the object from its kinds' images use. An object of a settings kind takes none, nor does one of an engineless kind whose Function is a ref.
               config:
-                description: The object's settings, which the config schema of its Addon's kind entry checks. Unset is an empty object.
+                description: "The object's settings, which its kind's schema checks: the config schema of its Addon's kind entry when the object runs an engine, else the contract of the kind's Function. Unset is an empty object."
               deletion:
                 description: "What becomes of the engine's storage once the object is deleted and its engine is gone: retain, the default, moves it into the quarantine for storage.quarantineRetention, from which it comes back by hand with funcd stopped; delete removes it. A new object of the same name starts empty either way. For an object of an Engineless kind, delete holds the object at its deletion, with metadata.deletionTimestamp set, until its Function answers ok to a call that carried it as deleting; retain lets it go at once, and the Function forgets it."
                 enum:
@@ -914,7 +952,7 @@ components:
                   - delete
                 type: string
               functions:
-                description: The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function.ref, so each copy of an App template applies its own objects. A settings object names none.
+                description: The object's own Function for a settings kind of its Addon, or for its own kind when that kind is Engineless, in place of the kind's function, so each copy of an App template applies its own objects. The objects it applies have no schema. A settings object names none.
                 items:
                   $ref: "#/components/schemas/AddonObjectFunction"
                 type:
@@ -8307,8 +8345,8 @@ paths:
           description: |-
             - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
             - `about:blank`: The body is missing or is not JSON. Send a JSON body.
-            - `urn:funcd:problem:invalid`: The Addon's kind or a settings kind is a kind of funcd's, another kind of the Addon or a path that funcd serves, whatever the case; a replace changes or drops the kind; or a runtime's name is one of funcd's runtimes or a key of runtime.containerd.imageOverride. Choose another kind or runtime name. A new kind needs a new Addon.
-            - `urn:funcd:problem:invalid`: The registry of a runtime's image is not one that addons.registries lists. Use an image from a listed registry, or ask the operator to list its registry.
+            - `urn:funcd:problem:invalid`: The Addon's kind or a settings kind is a kind of funcd's, another kind of the Addon or a path that funcd serves, whatever the case; a replace changes or drops the kind, or changes a settings kind's target; or a runtime's name is one of funcd's runtimes or a key of runtime.containerd.imageOverride. Choose another kind or runtime name. A new kind needs a new Addon, and a new target a new settings kind.
+            - `urn:funcd:problem:invalid`: The registry of a runtime's image, or of a kind's function.image, is not one that addons.registries lists. Use an image from a listed registry, or ask the operator to list its registry.
             - `urn:funcd:problem:invalid`: The kind entry's config is not a JSON Schema in funcd's contract profile, or an env value is not a literal or a single ${{ }} expression that the schema types. Correct the field that the detail names.
           x-funcd-cases:
             - type: urn:funcd:problem:invalid
@@ -8318,10 +8356,10 @@ paths:
               when: The body is missing or is not JSON.
               fix: Send a JSON body.
             - type: urn:funcd:problem:invalid
-              when: The Addon's kind or a settings kind is a kind of funcd's, another kind of the Addon or a path that funcd serves, whatever the case; a replace changes or drops the kind; or a runtime's name is one of funcd's runtimes or a key of runtime.containerd.imageOverride.
-              fix: Choose another kind or runtime name. A new kind needs a new Addon.
+              when: The Addon's kind or a settings kind is a kind of funcd's, another kind of the Addon or a path that funcd serves, whatever the case; a replace changes or drops the kind, or changes a settings kind's target; or a runtime's name is one of funcd's runtimes or a key of runtime.containerd.imageOverride.
+              fix: Choose another kind or runtime name. A new kind needs a new Addon, and a new target a new settings kind.
             - type: urn:funcd:problem:invalid
-              when: The registry of a runtime's image is not one that addons.registries lists.
+              when: The registry of a runtime's image, or of a kind's function.image, is not one that addons.registries lists.
               fix: Use an image from a listed registry, or ask the operator to list its registry.
             - type: urn:funcd:problem:invalid
               when: The kind entry's config is not a JSON Schema in funcd's contract profile, or an env value is not a literal or a single ${{ }} expression that the schema types.
@@ -8615,8 +8653,8 @@ paths:
             - `urn:funcd:problem:invalid`: A field breaks a rule that the schema cannot hold, which the detail names. Correct the field that the detail names.
             - `urn:funcd:problem:invalid`: The body sets metadata.namespace, which the detail compares with the path's empty namespace, or its metadata.name is not the path's, or If-Match and metadata.resourceVersion name two versions. Leave metadata.namespace empty, and send the object to its own path, with at most one version.
             - `about:blank`: The body is missing or is not JSON. Send a JSON body.
-            - `urn:funcd:problem:invalid`: The Addon's kind or a settings kind is a kind of funcd's, another kind of the Addon or a path that funcd serves, whatever the case; a replace changes or drops the kind; or a runtime's name is one of funcd's runtimes or a key of runtime.containerd.imageOverride. Choose another kind or runtime name. A new kind needs a new Addon.
-            - `urn:funcd:problem:invalid`: The registry of a runtime's image is not one that addons.registries lists. Use an image from a listed registry, or ask the operator to list its registry.
+            - `urn:funcd:problem:invalid`: The Addon's kind or a settings kind is a kind of funcd's, another kind of the Addon or a path that funcd serves, whatever the case; a replace changes or drops the kind, or changes a settings kind's target; or a runtime's name is one of funcd's runtimes or a key of runtime.containerd.imageOverride. Choose another kind or runtime name. A new kind needs a new Addon, and a new target a new settings kind.
+            - `urn:funcd:problem:invalid`: The registry of a runtime's image, or of a kind's function.image, is not one that addons.registries lists. Use an image from a listed registry, or ask the operator to list its registry.
             - `urn:funcd:problem:invalid`: The kind entry's config is not a JSON Schema in funcd's contract profile, or an env value is not a literal or a single ${{ }} expression that the schema types. Correct the field that the detail names.
           x-funcd-cases:
             - type: urn:funcd:problem:invalid
@@ -8632,10 +8670,10 @@ paths:
               when: The body is missing or is not JSON.
               fix: Send a JSON body.
             - type: urn:funcd:problem:invalid
-              when: The Addon's kind or a settings kind is a kind of funcd's, another kind of the Addon or a path that funcd serves, whatever the case; a replace changes or drops the kind; or a runtime's name is one of funcd's runtimes or a key of runtime.containerd.imageOverride.
-              fix: Choose another kind or runtime name. A new kind needs a new Addon.
+              when: The Addon's kind or a settings kind is a kind of funcd's, another kind of the Addon or a path that funcd serves, whatever the case; a replace changes or drops the kind, or changes a settings kind's target; or a runtime's name is one of funcd's runtimes or a key of runtime.containerd.imageOverride.
+              fix: Choose another kind or runtime name. A new kind needs a new Addon, and a new target a new settings kind.
             - type: urn:funcd:problem:invalid
-              when: The registry of a runtime's image is not one that addons.registries lists.
+              when: The registry of a runtime's image, or of a kind's function.image, is not one that addons.registries lists.
               fix: Use an image from a listed registry, or ask the operator to list its registry.
             - type: urn:funcd:problem:invalid
               when: The kind entry's config is not a JSON Schema in funcd's contract profile, or an env value is not a literal or a single ${{ }} expression that the schema types.
@@ -26152,7 +26190,7 @@ paths:
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
             - `about:blank`: The namespace in the path is not a DNS-1123 label. Use at most 63 lowercase letters, digits and hyphens, starting and ending with a letter or a digit.
             - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
-            - `about:blank`: spec.config breaks the config schema of the Addon's kind entry; the detail names the property. Correct spec.config to fit the add-on's schema.
+            - `about:blank`: spec.config breaks the schema of its kind: the Addon's config schema for a kind that runs an engine, else what the contract of the kind's function.image says, in the revision that judges the write. The detail names the property. Correct spec.config to fit the schema, or move the object's target to a newer revision of the Addon.
           x-funcd-cases:
             - type: about:blank
               when: The query holds a parameter that the operation does not take.
@@ -26167,8 +26205,8 @@ paths:
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
               fix: Correct the field at the location that the detail gives.
             - type: about:blank
-              when: spec.config breaks the config schema of the Addon's kind entry; the detail names the property.
-              fix: Correct spec.config to fit the add-on's schema.
+              when: "spec.config breaks the schema of its kind: the Addon's config schema for a kind that runs an engine, else what the contract of the kind's function.image says, in the revision that judges the write. The detail names the property."
+              fix: Correct spec.config to fit the schema, or move the object's target to a newer revision of the Addon.
       security:
         - bearer: []
         - apiKey: []
@@ -26533,7 +26571,7 @@ paths:
             - `about:blank`: The query holds a parameter that the operation does not take. Send only the parameters that the operation lists.
             - `about:blank`: The dryRun parameter is neither true nor false. Send dryRun=true, or leave it out.
             - `about:blank`: The body breaks the schema: a field that it does not know, of the wrong type or past its limits. Correct the field at the location that the detail gives.
-            - `about:blank`: spec.config breaks the config schema of the Addon's kind entry; the detail names the property. Correct spec.config to fit the add-on's schema.
+            - `about:blank`: spec.config breaks the schema of its kind: the Addon's config schema for a kind that runs an engine, else what the contract of the kind's function.image says, in the revision that judges the write. The detail names the property. Correct spec.config to fit the schema, or move the object's target to a newer revision of the Addon.
           x-funcd-cases:
             - type: about:blank
               when: The namespace or the name in the path is not a DNS-1123 label.
@@ -26548,8 +26586,8 @@ paths:
               when: "The body breaks the schema: a field that it does not know, of the wrong type or past its limits."
               fix: Correct the field at the location that the detail gives.
             - type: about:blank
-              when: spec.config breaks the config schema of the Addon's kind entry; the detail names the property.
-              fix: Correct spec.config to fit the add-on's schema.
+              when: "spec.config breaks the schema of its kind: the Addon's config schema for a kind that runs an engine, else what the contract of the kind's function.image says, in the revision that judges the write. The detail names the property."
+              fix: Correct spec.config to fit the schema, or move the object's target to a newer revision of the Addon.
       security:
         - bearer: []
         - apiKey: []

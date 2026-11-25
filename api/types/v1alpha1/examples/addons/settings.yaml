@@ -18,19 +18,7 @@ spec:
           - kind: RauthyPasswordPolicy
             target: spec.config.provider
             function:
-              ref: rauthy-settings
-            schema:
-              type: object
-              additionalProperties: false
-              properties:
-                provider:
-                  type: string
-                lengthMin:
-                  type: integer
-                  minimum: 8
-              required:
-                - provider
-                - lengthMin
+              image: ghcr.io/example/rauthy-settings@sha256:b8390e254d5f99832bdcfa0567d144725d1d96907c9da01dc5917f71c3989cba
             constraints:
               count:
                 perTarget: 1
@@ -43,23 +31,6 @@ metadata:
   resourceGroup: default
 spec: {}
 ---
-# region function
-apiVersion: funcd.io/v1alpha1
-kind: Function
-metadata:
-  name: rauthy-settings
-  namespace: default
-  resourceGroup: default
-spec:
-  runtime: nodejs22
-  handler: reconcile
-  image: registry.example.com/rauthy-settings:0.2.0
-  bindings:
-    addon:
-      - alias: idp
-        object: login
-# endregion function
----
 # region policy
 apiVersion: funcd.io/v1alpha1
 kind: RauthyPasswordPolicy
@@ -71,4 +42,5 @@ spec:
   config:
     provider: login
     lengthMin: 16
+    lengthMax: 64
 # endregion policy
