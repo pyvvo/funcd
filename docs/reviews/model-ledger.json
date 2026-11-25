@@ -15493,5 +15493,20 @@
     "dod_total": 18,
     "report": "docs/reviews/adr-0358-implementation-claude-opus-5-5-2.md",
     "notes": "pass (round 2, dcc4f48c); round 1's 4 Majors and 7 Minors closed by reruns, 49 of 54 mutants die, the flake 1560 of 1560; the two departures from round 1's fixes are right (checked holds the sleeping Function, a Conflict on the revision is retried); Minor 1 (model): forgetTarget drops a running group's state, so a stack re-created during its call can have two calls with an own Function of funcd's name (ADR-0345); Minor 2 (model): settings.fizz lacks the stamp, with which NoObjectNoCall fails; Minor 3 (model): three lines unpinned; routed: the same in ADR-0341's target state, ADR-0303's accepted window, round 1's list"
+  },
+  {
+    "date": "2026-11-25",
+    "adr": "0145",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 3,
+    "dod_passed": 5,
+    "dod_total": 5,
+    "report": "docs/reviews/adr-0145-amendment-implementation-claude-opus-5-5.md",
+    "notes": "pass (amendment, dev's platform for container workers); every path that places or fetches the bundle uses one decision, workerPlatform, no missed caller, two platforms of one digest share no cache dir, reverted runs fail; Minor 1 (model): ADR-0358's sentence said more than the code; Minor 2 (model): an alternative of ADR-0355 and a comment kept the former rule; Minor 3 (model): the no-engine case of a Job had no test; all fixed"
   }
 ]
