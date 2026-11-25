@@ -7,7 +7,9 @@
   an independent judge, every Blocker and Major folded
 - **Amended in place**: 2026-11-25, by the decider on [#1581](https://github.com/pyvvo/funcd/pull/1581): the image side
   also names its platform, for its workers' bundles (Decision 2 and Contracts;
-  [ADR-0145](0145-multi-arch-function-bundles-and-arch-aware-placement.md) Decision 6)
+  [ADR-0145](0145-multi-arch-function-bundles-and-arch-aware-placement.md) Decision 6); and on
+  [#1583](https://github.com/pyvvo/funcd/pull/1583): in a Lima VM a worker reaches funcd at the address the VM gives its
+  host, since nerdctl's host gateway is the VM (Decision 5)
 - **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md) (2026-11-23) — the Contracts' ListenerFor takes the caller's ref
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
@@ -61,8 +63,8 @@ unchanged: there such a worker runs on containerd.
 ## Scope
 
 **In**: Decisions 1 to 8. **Out**: Function volumes under dev, still refused outside containerd (ADR-0262); pull
-credentials, as ADR-0334 has them; funcd's own runtimes on the engine; a server, unchanged. **Measured**: colima's
-host gateway (below). Linux host networking is the engine's documented behavior, which CI's real-engine test checks on
+credentials, as ADR-0334 has them; funcd's own runtimes on the engine; a server, unchanged. **Measured**: the
+host gateway of colima's Docker, and of its containerd (amended 2026-11-25; both below). Linux host networking is the engine's documented behavior, which CI's real-engine test checks on
 Docker; colima's Docker runs the lane case; nerdctl runs the tests wherever it answers; no test here checks Docker
 Desktop's gateway.
 
@@ -72,9 +74,11 @@ Desktop's gateway.
   (`function.go:3305-3316`); the process driver, the worker port (ADR-0011) and a server do not change.
 - funcd's listeners stay on `127.0.0.1` everywhere: the decider chose option A on 2026-11-23, over binding them on the
   bridge's gateway (B) or running such workers on macOS only (C).
-- Measured on 2026-11-23 on colima: a bind mount from outside `$HOME` came up empty in the container; `--add-host
-  funcd.host:host-gateway` resolved to `192.168.5.2`, and a fetch from the container reached host listeners bound to
-  `127.0.0.1` and to `0.0.0.0`.
+- Measured on 2026-11-23 on colima's Docker: a bind mount from outside `$HOME` came up empty in the container;
+  `--add-host funcd.host:host-gateway` resolved to `192.168.5.2`, and a fetch from the container reached host listeners
+  bound to `127.0.0.1` and to `0.0.0.0`. On its containerd, with nerdctl 2.3.1, it resolved to the VM, `192.168.5.3`,
+  where nothing of funcd's listens, and the VM's `/etc/hosts` gave `host.lima.internal` `192.168.5.2` (amended
+  2026-11-25).
 
 ## Alternatives considered
 
@@ -121,9 +125,10 @@ Desktop's gateway.
      host's network: the worker runs with it, its endpoints stay `127.0.0.1`, and `RunSpec.Port` is unused. A rootless
      engine has no host network, so `RunsImages` is false, naming it.
    - An engine in a VM, always on macOS and also Docker Desktop, colima or Lima on Linux: the worker binds 8080 in its
-     own network, published on `127.0.0.1` at a free port, and resolves `funcd.host` to the engine's host gateway. The
-     reconciler writes `funcd.host` for `127.0.0.1` in exactly the env keys its workload hooks mark as funcd's
-     endpoints, in their shared or own part (`s3Hook`, `lakeHook`, `addonHook`; ADR-0306 Decision 1), and in
+     own network, published on `127.0.0.1` at a free port, and resolves `funcd.host` to the address that the VM's
+     `/etc/hosts` gives `host.lima.internal`, as a Lima VM's, colima's among them, does, else to the engine's host
+     gateway, which nerdctl takes for the VM itself (amended 2026-11-25). The reconciler writes `funcd.host` for
+     `127.0.0.1` in exactly the env keys its workload hooks mark as funcd's endpoints, in their shared or own part (`s3Hook`, `lakeHook`, `addonHook`; ADR-0306 Decision 1), and in
      `FUNCD_INVOKE_URL`, so the driver's spec stays as the worker port has it. Dev sets no other endpoint: egress is off
      under dev (ADR-0117).
 6. **The local API.** Each such worker gets a listener of its own on the host's `127.0.0.1`, named in
@@ -193,7 +198,7 @@ type RunSpec struct {
 	// … today's fields but Volume and Target, which Mounts replaces (an engine passes one); Port is unused with HostNetwork
 	Mounts      []Mount  // a worker's bundle, read-only, and /run/funcd
 	HostNetwork bool
-	ExtraHosts  []string // "funcd.host:host-gateway"
+	ExtraHosts  []string // "funcd.host:host-gateway", or the address of Decision 5 (amended 2026-11-25)
 	NanoCPUs    int64
 	MemoryBytes int64
 }

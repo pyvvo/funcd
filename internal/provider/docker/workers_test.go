@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,10 +34,14 @@ import (
 
 // procEngine is an Engine that runs each container's Cmd as a process of this host, on its network, and keeps each
 // volume as a folder: a mount's target that begins an env value or an argument names its volume's folder instead.
-// published is what Inspect reports a running container publishes.
+// published is what Inspect reports a running container publishes, and hosts its VM's /etc/hosts, which hostReads counts
+// the reads of on the host's network; the first hostFails of them fail.
 type procEngine struct {
 	root      string
 	published map[string]string
+	hosts     string
+	hostReads int
+	hostFails int
 
 	mu   sync.Mutex
 	ctrs map[string]*procCtr
@@ -250,6 +255,12 @@ func (e *procEngine) RemoveVolume(_ context.Context, name string) error {
 }
 
 func (e *procEngine) Exec(ctx context.Context, h Helper, argv ...string) ([]byte, error) {
+	if h.HostNetwork && slices.Equal(argv, []string{"cat", "/etc/hosts"}) {
+		if e.hostReads++; e.hostReads <= e.hostFails {
+			return nil, fault.Unavailablef("procEngine", "no helper runs")
+		}
+		return []byte(e.hosts), nil
+	}
 	local := make([]string, len(argv))
 	for i, a := range argv {
 		local[i] = e.local(h.Mounts, a)
@@ -408,6 +419,46 @@ func TestWorkersRunTheSpecOnTheEngine(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, vols, "Remove takes the worker's volumes")
 	}
+}
+
+// ADR-0346 Decision 5: in a Lima VM, as colima's, a worker reaches funcd at the address that the VM's /etc/hosts gives its
+// host, read once, since nerdctl's own host-gateway is the VM; elsewhere at the engine's host-gateway.
+func TestWorkersReachTheHostOfTheirVM(t *testing.T) {
+	t.Parallel()
+	for hosts, want := range map[string]string{
+		"127.0.0.1 localhost\n192.168.5.2\thost.lima.internal\n":              "funcd.host:192.168.5.2",
+		"192.168.5.2 vm host.lima.internal # the host\n":                      "funcd.host:192.168.5.2",
+		"#192.168.5.2 host.lima.internal\n127.0.0.1 x # host.lima.internal\n": "funcd.host:host-gateway",
+		"gone host.lima.internal\n192.168.5.2 xhost.lima.internal\n":          "funcd.host:host-gateway",
+		"": "funcd.host:host-gateway",
+	} {
+		e := newProcEngine(t)
+		e.hosts = hosts
+		w := newTestWorkers(t, e, inVM)
+		for range 2 {
+			inst, err := w.Create(context.Background(), workerSpec(t, nil, "sleep", "30"))
+			require.NoError(t, err)
+			require.NoError(t, w.Start(context.Background(), inst.ID))
+			require.NoError(t, w.Stop(context.Background(), inst.ID))
+		}
+		require.Len(t, e.runs, 2)
+		for _, run := range e.runs {
+			require.Equal(t, []string{want}, run.ExtraHosts, hosts)
+		}
+		require.Equal(t, 1, e.hostReads, "read once")
+	}
+
+	e := newProcEngine(t)
+	e.hosts, e.hostFails = "192.168.5.2 host.lima.internal\n", 1
+	w := newTestWorkers(t, e, inVM)
+	inst, err := w.Create(context.Background(), workerSpec(t, nil, "sleep", "30"))
+	require.NoError(t, err)
+	err = w.Start(context.Background(), inst.ID)
+	require.Equal(t, fault.Unavailable, fault.KindOf(err))
+	require.ErrorContains(t, err, "reaches funcd")
+	require.Empty(t, e.runs, "no worker starts that cannot reach funcd")
+	require.NoError(t, w.Start(context.Background(), inst.ID), "the next Start reads it again")
+	require.Equal(t, []string{"funcd.host:192.168.5.2"}, e.runs[0].ExtraHosts)
 }
 
 // ADR-0346 Decision 4: from an engine in a VM, which gives no port file, a worker listens once its readiness path

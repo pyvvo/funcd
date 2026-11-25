@@ -169,7 +169,7 @@ type RunSpec struct {
 	Mounts      []Mount
 	StopGrace   time.Duration
 	HostNetwork bool
-	ExtraHosts  []string // "funcd.host:host-gateway"
+	ExtraHosts  []string // "funcd.host:192.168.5.2"
 	NanoCPUs    int64
 	MemoryBytes int64
 }
