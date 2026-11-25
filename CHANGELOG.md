@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.49.1](https://github.com/pyvvo/funcd/compare/v0.49.0...v0.49.1) (2026-11-25)
+
+
+### Bug Fixes
+
+* **funcdctl:** under funcdctl dev a container worker runs the bundle of its engine's platform ([#1581](https://github.com/pyvvo/funcd/issues/1581)) ([42f909b](https://github.com/pyvvo/funcd/commit/42f909b79957e97b525b366c301d95b2b68991dd))
+
 ## [0.49.0](https://github.com/pyvvo/funcd/compare/v0.48.0...v0.49.0) (2026-11-25)
 
 
