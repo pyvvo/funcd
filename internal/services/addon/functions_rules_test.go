@@ -380,21 +380,122 @@ func TestEnginelessCallFollowsTheRevisionThatAnswers(t *testing.T) {
 	require.Equal(t, "change", g.lastCall().call.Cause)
 }
 
-// What this process knows of a removed engineless object's calls goes with it: one created again under its name starts
-// anew.
+// removed removes the stack name and its Function, as the owner collector does, and runs the pass of its deletion's event.
+func (g *enginelessRig) removed(name v1.ObjectName) {
+	g.t.Helper()
+	require.False(g.t, g.del(name))
+	require.NoError(g.t, g.st.Delete(g.ctx, v1.KindFunction.GVK(), "default", name+"-infrastack", ""))
+	g.pass(name)
+}
+
+// What this process knows of a removed engineless object's calls goes with it, and of no other's: one created again under
+// its name starts anew, while another of its namespace and one of its name in another namespace are still known.
 func TestEnginelessCallsAreForgottenWithTheirObject(t *testing.T) {
 	t.Parallel()
 	g := newImageStacks(t)
+	other := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject}}
+	other.Name, other.Namespace, other.ResourceGroup, other.Spec.Kind = "site", "team", "rg1", "InfraStack"
+	_, err := g.st.Create(g.ctx, other)
+	require.NoError(t, err)
+	team := func() {
+		t.Helper()
+		_, err := g.r.Reconcile(g.ctx, controller.Request{GVK: v1.KindAddonObject.GVK(), Namespace: "team", Name: "site"})
+		require.NoError(t, err)
+	}
+	g.stack("bunny-edge", v1.DeletionRetain, "")
+	g.marked("bunny-edge")
+	g.converge("bunny-edge")
+	g.callEnds("bunny-edge")
+	team()
+	team()
+	stampFunctions(t, g.st)
+	team()
+	g.callEnds("site")
 	for range 2 {
 		g.stack("site", v1.DeletionRetain, "")
 		g.marked("site")
 		g.converge("site")
 		g.callEnds("site")
 		require.Equal(t, "start", g.lastCall().call.Cause)
-		require.False(t, g.del("site"))
-		require.NoError(t, g.st.Delete(g.ctx, v1.KindFunction.GVK(), "default", "site-infrastack", ""), "the collector removes it")
-		g.pass("site") // the deletion's event
+		g.removed("site")
 	}
+	g.advance(time.Minute)
+	g.pass("bunny-edge")
+	g.callEnds("bunny-edge")
+	require.Equal(t, "resync", g.lastCall().call.Cause, "another stack's calls are known")
+	team()
+	g.callEnds("site")
+	require.Equal(t, "resync", g.lastCall().call.Cause, "so are those of another namespace's stack of that name")
+}
+
+// One call at most runs for an object's name: one created again while its call runs waits for that call's end, and then
+// starts anew (ADR-0341 Decision 1, ADR-0345 Decision 2).
+func TestAnObjectCreatedAgainWaitsForItsCall(t *testing.T) {
+	t.Parallel()
+	s := newImageStacks(t)
+	release := make(chan struct{})
+	s.caller.set(func(_ context.Context, c addon.ObjectsCall) (addon.SettingsReply, error) {
+		<-release
+		return answerAll(c, true, ""), nil
+	})
+	s.stack("site", v1.DeletionRetain, "")
+	s.marked("site")
+	s.converge("site")
+	require.Eventually(t, func() bool { return len(s.caller.got()) == 1 }, 5*time.Second, 5*time.Millisecond)
+	s.removed("site")
+	s.stack("site", v1.DeletionRetain, "")
+	s.marked("site")
+	s.converge("site")
+	require.True(t, poll.Never(func() bool { return len(s.caller.got()) > 1 }, 50*time.Millisecond, 5*time.Millisecond), "the former one's call runs")
+	s.caller.set(nil)
+	close(release)
+	s.callEnds("site")
+	s.pass("site")
+	s.callEnds("site")
+	require.Equal(t, "start", s.lastCall().call.Cause)
+
+	g := newSettingsRig(t, 5*time.Second)
+	release = make(chan struct{})
+	g.caller.set(func(_ context.Context, c addon.SettingsCall) (addon.SettingsReply, error) {
+		<-release
+		return okAll(c), nil
+	})
+	g.policy("strict", "login", 16)
+	g.pass("login")
+	require.Eventually(t, func() bool { return len(g.caller.got()) == 1 }, 5*time.Second, 5*time.Millisecond)
+	g.remove(v1.KindAddonObject, "login")
+	g.pass("login")
+	g.target("login")
+	g.pass("login")
+	g.noCall("the former login's call runs")
+	g.caller.set(nil)
+	close(release)
+	g.callEnds("login")
+	g.pass("login")
+	g.callEnds("login")
+	require.Equal(t, "start", g.lastCall().call.Cause, "the new login holds nothing yet")
+}
+
+// A kind whose created Function waits for its stamp keeps no other kind of the target waiting.
+func TestOneWaitingKindOfTwo(t *testing.T) {
+	t.Parallel()
+	g := newImageRig(t)
+	g.images.set(settings2, callContract("RauthyClient", policyProperties))
+	g.editAddon(func(at *v1.AddonAttributes) {
+		at.Settings = append(at.Settings, v1.AddonSettings{Kind: "RauthyClient", Target: "spec.config.provider", Function: v1.AddonFunction{Image: settings2}})
+	})
+	g.policy("strict", "login", 16)
+	web := &v1.AddonObject{TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindAddonObject}}
+	web.Name, web.Namespace, web.ResourceGroup, web.Spec.Kind = "web", "default", "rg1", "RauthyClient"
+	web.Spec.Config = json.RawMessage(`{"provider":"login"}`)
+	_, err := g.st.Create(g.ctx, web)
+	require.NoError(t, err)
+	g.pass("login")
+	g.revise("login-rauthyclient", "login-rauthyclient-1")
+	g.pass("login")
+	g.callEnds("login")
+	require.Equal(t, v1.ObjectName("login-rauthyclient"), g.lastCall().fn)
+	g.noCall("the policies' Function is not stamped")
 }
 
 // A contract says a kind by enum or by const, in a union that kind discriminates alone.

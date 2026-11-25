@@ -124,6 +124,7 @@ type settingsState struct {
 	failures int
 	retryAt  time.Time
 	run      bool
+	gone     bool // its object went while its call ran
 }
 
 // due names the cause of a call that is due now for s, which this process knew (known), the first of start, change,
@@ -165,6 +166,32 @@ func (s *settingsState) done(now time.Time, digest string, resync time.Duration,
 	s.retryAt = s.ended.Add(min(time.Second<<min(s.failures-1, 20), maxSettingsBackoff, resync))
 }
 
+// forget drops each state that match names, under settingsMu. One whose call runs stays until that call ends, so that an
+// object created again under the name waits for it: one call at most runs for a key.
+func forget[K comparable](states map[K]*settingsState, match func(K) bool) {
+	for k, s := range states {
+		switch {
+		case !match(k):
+		case s.inflight:
+			s.gone = true
+		default:
+			delete(states, k)
+		}
+	}
+}
+
+// endLocked records the end of key's call, under settingsMu, or drops the state that forget left for it.
+func endLocked[K comparable](states map[K]*settingsState, key K, now time.Time, digest string, resync time.Duration, err error) {
+	s, ok := states[key]
+	switch {
+	case !ok:
+	case s.gone:
+		delete(states, key)
+	default:
+		s.done(now, digest, resync, err)
+	}
+}
+
 // targetSeen is whether a target was Ready at its last pass, and how many times it turned Ready.
 type targetSeen struct {
 	ready bool
@@ -192,16 +219,8 @@ func (r *Reconciler) forgetTarget(ns v1.NamespaceName, name v1.ObjectName) {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
 	delete(r.targets, provider.ProviderRef{Namespace: ns, Name: name})
-	for k := range r.settings {
-		if k.ns == ns && k.target == name {
-			delete(r.settings, k)
-		}
-	}
-	for k := range r.groups {
-		if k.ns == ns && k.fn == v1.AddonFunctionName(name, k.kind) {
-			delete(r.groups, k)
-		}
-	}
+	forget(r.settings, func(k settingsKey) bool { return k.ns == ns && k.target == name })
+	forget(r.groups, func(k groupKey) bool { return k.ns == ns && k.fn == v1.AddonFunctionName(name, k.kind) })
 }
 
 // aliasOf is the alias under which fn binds the add-on object target, the call's grant (Decision 3).
@@ -495,9 +514,7 @@ func (r *Reconciler) writeResult(ctx context.Context, ns v1.NamespaceName, sent 
 func (r *Reconciler) settingsDone(key settingsKey, digest string, resync time.Duration, err error) {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	if s, ok := r.settings[key]; ok {
-		s.done(r.now(), digest, resync, err)
-	}
+	endLocked(r.settings, key, r.now(), digest, resync, err)
 }
 
 // settingsObject is the pass of a settings object, which runs no engine (Decision 4). While its calls miss something it

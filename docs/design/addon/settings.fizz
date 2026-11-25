@@ -10,7 +10,9 @@
 # knows of the calls in memory only, and its stop cuts the call in flight, which never answers.
 # The kind's Function comes from an image (ADR-0358 Decision 2): the pass creates it once an object names the target, and
 # deletes it once the last object is gone and a call that ended well sent the empty list, which puts the engine's default
-# back. With no Function nothing is called, so an engine that no object names keeps what its own API sets.
+# back. With no Function nothing is called, so an engine that no object names keeps what its own API sets. A created one is
+# called once the Function controller stamped the revision of its spec (Decision 5): an object that goes before that leaves
+# the Function its empty list.
 # Environment: the controller runs one worker, so a pass is one step; the call runs beside it, on its own goroutine.
 # The engine keeps what was applied across funcd's stop, as rauthy keeps its policy in its storage. Left out: several
 # targets, kinds and objects, the resync's period, the backoff's length, a restarted engine's lost settings (its
@@ -66,6 +68,7 @@ action Init:
     stops = 0
     fails = 0
     fn = False
+    stamped = False
     put = 0
     asked = False
     unasked = False
@@ -115,9 +118,8 @@ atomic fair action Pass:
         require len(calls) == 0
     require len(calls) < 2
     want = uid * 10 + gen
-    if gen > 0 or MUTANT == "create-always":
-        fn = True
     require fn
+    require stamped
     changed = want != sent
     if MUTANT == "no-uid":
         changed = sent == -1 or gen != sent % 10
@@ -134,6 +136,21 @@ atomic fair action Pass:
         if gen > 0:
             ready = want
 
+# The pass that creates the Function, once an object names the target, or puts back one that went.
+atomic fair action Create:
+    require not fn
+    require gen > 0 or MUTANT == "create-always"
+    fn = True
+    stamped = False
+    if gen > 0:
+        asked = True
+
+# The Function controller stamps the revision of the Function's spec, whose event brings the target's pass.
+atomic fair action Stamp:
+    require fn
+    require not stamped
+    stamped = True
+
 # The pass after the last object's end: the last call that ended sent the empty list and ended well, so the Function goes.
 atomic fair action Retire:
     require fn
@@ -146,6 +163,7 @@ atomic fair action Retire:
     if put != 0:
         left_behind = True
     fn = False
+    stamped = False
     sent = -1
     failed = False
     resync = False

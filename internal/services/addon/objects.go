@@ -320,9 +320,7 @@ func (r *Reconciler) startObjectsCall(ctx context.Context, key groupKey, call Ob
 func (r *Reconciler) groupDone(key groupKey, digest string, resync time.Duration, err error) {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	if s, ok := r.groups[key]; ok {
-		s.done(r.now(), digest, resync, err)
-	}
+	endLocked(r.groups, key, r.now(), digest, resync, err)
 }
 
 // writeObjectResults applies a call's answer to each object it sent (Decisions 5 and 6). An object sent as deleting

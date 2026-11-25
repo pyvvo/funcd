@@ -144,7 +144,7 @@ func (g *settingsRig) created(name v1.ObjectName) *v1.Function {
 // spec, which a call waits for.
 func stampFunctions(t *testing.T, st store.Store) {
 	t.Helper()
-	list, err := st.List(context.Background(), v1.KindFunction.GVK(), store.ListOptions{Namespace: "default"})
+	list, err := st.List(context.Background(), v1.KindFunction.GVK(), store.ListOptions{})
 	require.NoError(t, err)
 	for _, item := range list.Items {
 		fn := item.(*v1.Function)
