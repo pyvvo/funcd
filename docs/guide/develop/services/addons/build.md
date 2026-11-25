@@ -265,6 +265,10 @@ admin URLs. Each funcd-addons release builds the plugins for Linux and macOS and
 ## Publish it
 
 An add-on of funcd's lives in its own folder of funcd-addons: `app/`, its App template, which holds `addon.yaml`,
-`app.yaml` and `resources/`; `settings/`, the code of its settings kinds' Function; `examples/`, `README.md` and
-`plugin/funcdctl-<addon>/`. Its CI checks every manifest (block style, an image pinned by digest, known kinds), tests
-the plugin and runs the e2e; release-please tags each release, which attaches `<addon>.yaml`.
+`app.yaml`, `app.lock` and `resources/`; `settings/`, the code and the contract of its settings kinds' Function;
+`examples/`, `README.md` and `plugin/funcdctl-<addon>/`. Its CI checks every manifest (block style, an image pinned by
+digest, known kinds), tests the plugin and runs the e2e; release-please tags each release, which attaches `<addon>.yaml`
+and pushes the images.
+
+`addon.yaml` pins a Function's image before its release publishes it: `funcdctl push` gives the same files the same
+digest wherever it pushes them, and funcd-addons' `just kind-images` writes that digest into `addon.yaml`.
