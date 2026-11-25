@@ -6,6 +6,8 @@
   contract. and yes let use image by default"), after three rounds of an independent judge, every Blocker and Major
   folded; that the Function goes once its empty list is applied came after them, on the decider's question, and the model
   checks it
+- **Amended in place**: 2026-11-25, by the decider on [#1581](https://github.com/pyvvo/funcd/pull/1581): which field finds
+  the target of a kind that one replace drops and a later one adds again (Decision 5)
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: addons, functions, contracts, admission
@@ -154,7 +156,10 @@ kind that needs KV, a Bucket or SQL names a `ref`); publishing an add-on's image
 5. **One revision per target.** A settings kind that the Addon declares is read whole, its Function, contract,
    constraints and resync, from the revision its target pins, or from the current one while the target does not exist or
    pins none, no longer from the Addon as it is now (ADR-0341 Decision 1). A replace of the Addon may not change a
-   kind's `target` (400), so one field finds an object's target in every revision. A write of an object, alone or as an
+   kind's `target` (400), so one field finds an object's target in every revision. A kind that one replace drops and a
+   later one adds again may name another field, by which a write and an object's status find the target from then on; a
+   target that pins the former revision is sent the objects that the former field names until it moves (amended
+   2026-11-25). A write of an object, alone or as an
    App's part, is checked against that contract, 422, or an App's 400, naming the property, and against those
    constraints; a target that is a part of the same App counts as pinning none, and an engineless object's write is
    checked against the current revision. While the pinned revision lacks the kind, an object has no Function and no

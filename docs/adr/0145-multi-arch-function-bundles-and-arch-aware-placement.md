@@ -1,6 +1,8 @@
 # ADR-0145: Multi-arch function bundles — an OCI image index per function, chosen per node, and arch-aware placement
 
 - **Status**: Implemented (2026-10-02)
+- **Amended in place**: 2026-11-25, by the decider on [#1581](https://github.com/pyvvo/funcd/pull/1581): under
+  `funcdctl dev` a worker that runs in a container takes its container engine's platform (Decisions 3 to 6)
 - **Superseded in part by**: [ADR-0161](0161-truthful-function-ready.md) (2026-10-05) — Decision 5: Ready kept with serving revision; errors not written to status.
 - **Date**: 2026-10-02 (revised the same day after the judge: ADR-0017's totality is superseded in part, not refined;
   the gate has a fixed position and literal outcome; pooled members are gated and excluded from their pool; the act
@@ -70,6 +72,9 @@ the placement port).
   False with reason `NoMatchingPlatform`.
 - **scenario: pooled-member-no-matching-platform** — Given two pooled Functions sharing a pool key, one of whose index
   lacks the node's platform, Then that one is `Failed` with `NoMatchingPlatform` and the pool serves the other.
+- **scenario: dev-addon-worker-platform** — Given `funcdctl dev` on Docker and an index of `linux/amd64` and
+  `linux/arm64` bundles, When a Function and a Job on an Addon's runtime name it, Then each runs the bundle of Docker's
+  platform, on a Mac too, whose own platform the index lacks (amended 2026-11-25).
 - **scenario: inspect-index** — Given an index, When `funcdctl inspect <ref>@<digest>`, Then it prints the contract, read
   without a pull.
 - **scenario: multiarch-workflow-builds-index** *(e2e, local act)* — Given `just act-bundle`, Then the
@@ -131,7 +136,9 @@ source refs for `index` (tags only).
    - **Selection**: when the pinned digest names an index, they select the descriptor whose `os` and `architecture`
      equal the node's (a `variant` is ignored; `unknown/unknown` entries never match) and continue exactly as for a
      manifest. No match is `fault.NotFound` listing the index's platforms.
-   - **Cache**: the materializer's cache directory is keyed by the pinned digest and the node platform.
+   - **Another platform** (amended 2026-11-25): a materializer that is a `PlatformMaterializer`, as the OCI one is, also
+     fetches the bundle of a platform other than the node's, for a worker that runs on it (Decision 6).
+   - **Cache**: the materializer's cache directory is keyed by the pinned digest and the platform.
    - **Inspect**: `Inspect`, `InspectContract` and `InspectRuntime` read an index through its first descriptor
      (identical in contract and runtime by Decision 2), and `InspectContract` returns the index digest, the pinned
      authority.
@@ -142,6 +149,8 @@ source refs for `index` (tags only).
      `fault.Invalid` wrapping `ErrNoMatchingPlatform`. The message is `artifact provides [<list>]; node <name> runs
      <platform>`. The single-node driver takes its node's platform as a constructor argument. The contract suite
      asserts the rule for every driver.
+   - **A worker's own platform** (amended 2026-11-25): a request may name the platform its worker runs on,
+     `WorkerPlatform`, which the driver then compares and names instead of the node's.
    - **Lookup**: the Function reconciler asks an optional `PlatformResolver` for the platforms of a digest. The OCI
      materializer implements it, caching per digest; an annotated manifest returns its one platform, an unannotated
      manifest none.
@@ -155,7 +164,10 @@ source refs for `index` (tags only).
      goes False with the reason.
    - **Resolver error**: an error from `Platforms` (a registry outage) is returned as a reconcile error and retried with
      backoff, not a status.
-   - **Later calls**: every `Schedule` call for a solo replica carries the same list.
+   - **Later calls**: every `Schedule` call for a solo replica carries the same list, and the same `WorkerPlatform`
+     (amended 2026-11-25).
+   - **No engine** (amended 2026-11-25): when no container engine runs the worker, the gate asks nothing, and the runtime
+     gate (ADR-0346 Decision 1) says why.
    - **Pools**: `sameKeyFunctions`, which feeds both pooling's cap (`assign`) and the pool manifest
      (`admittedMembers`), skips a member whose artifact lacks the node platform. The lookup uses the cached resolver on
      the digest the pool materializes (`m.Spec.ImageDigest`). So the member is neither counted, ranked nor
@@ -163,7 +175,10 @@ source refs for `index` (tags only).
      list, because every admitted member runs on the node.
 6. **The node platform is configured once.** The composition root (`pkg/funcd`) passes one `v1.OCIPlatform` to the
    scheduler and the materializer: the option `WithNodePlatform`, defaulting to the daemon's `GOOS/GOARCH` (so a macOS
-   process-mode dev daemon is `darwin/arm64` and refuses Linux-only indexes, which could not load there).
+   process-mode dev daemon is `darwin/arm64` and refuses Linux-only indexes for its process workers, which could not
+   load them there). A worker that a process-mode server runs from an image, as `funcdctl dev` runs one on an Addon's
+   runtime (ADR-0346), takes its container engine's platform instead, as Docker or nerdctl names it, for its placement
+   and its bundle; `funcdctl push`, a server and a process worker are as before (amended 2026-11-25).
 7. **Multi-arch build, local only.** `.github/workflows/bundle-multiarch.yml` (`workflow_dispatch` only) is run by
    `just act-bundle`, which passes `act` the Docker VM's socket (`--container-daemon-socket
    unix:///var/run/docker.sock`, overriding `.actrc` for this workflow only).
@@ -233,6 +248,9 @@ func NewOrasMaterializer(artifactDir string, node v1.OCIPlatform) *OrasMateriali
 
 // Platforms implements function.PlatformResolver (cached per digest).
 func (m *OrasMaterializer) Platforms(ctx context.Context, uri, digest string) ([]v1.OCIPlatform, error)
+
+// MaterializeFor implements function.PlatformMaterializer (amended 2026-11-25).
+func (m *OrasMaterializer) MaterializeFor(ctx context.Context, fn *v1.Function, p v1.OCIPlatform) (string, error)
 ```
 
 ### `internal/scheduler`
@@ -244,9 +262,12 @@ type Request struct {
 	Replica   int
 	// Platforms the artifact provides (ADR-0145); empty means any.
 	Platforms []v1.OCIPlatform
+	// WorkerPlatform is the platform the replica's worker runs on, "" for its node's own (amended 2026-11-25).
+	WorkerPlatform v1.OCIPlatform
 }
 
-// ErrNoMatchingPlatform is wrapped (fault.Invalid) by Schedule when the node's platform is not in Request.Platforms.
+// ErrNoMatchingPlatform is wrapped (fault.Invalid) by Schedule when the worker's platform, else the node's, is not in
+// Request.Platforms.
 var ErrNoMatchingPlatform = errors.New("no worker node matches the artifact's platforms")
 
 // singlenode: node is the platform of the local worker node.
@@ -254,7 +275,8 @@ func New(local v1.ObjectName, node v1.OCIPlatform) (scheduler.Scheduler, error) 
 ```
 
 `schedulercontract.Run(t, s, node v1.OCIPlatform)` adds: `Platforms: nil` places; `Platforms: [node]` places;
-`Platforms: ["plan9/mips"]` returns an error matching `ErrNoMatchingPlatform` with `fault.KindOf` = `Invalid`.
+`Platforms: ["plan9/mips"]` returns an error matching `ErrNoMatchingPlatform` with `fault.KindOf` = `Invalid`. With
+`WorkerPlatform: "plan9/mips"` it places the latter and refuses `Platforms: [node]` (amended 2026-11-25).
 
 ### `internal/function`
 
@@ -262,6 +284,12 @@ func New(local v1.ObjectName, node v1.OCIPlatform) (scheduler.Scheduler, error) 
 // PlatformResolver lists the platforms an artifact digest provides (ADR-0145); nil means any.
 type PlatformResolver interface {
 	Platforms(ctx context.Context, uri, digest string) ([]v1.OCIPlatform, error)
+}
+
+// PlatformMaterializer is a Materializer that also fetches an artifact's bundle for a platform other than the node's
+// (amended 2026-11-25); the OCI materializer and funcdctl dev's are one, the file driver is not.
+type PlatformMaterializer interface {
+	MaterializeFor(ctx context.Context, fn *v1.Function, p v1.OCIPlatform) (localPath string, err error)
 }
 
 // Deps gains:
@@ -348,7 +376,8 @@ index; the existing lanes still pass (single-manifest path); no identity or path
 - [ ] Every solo `Schedule` call carries `Platforms`; `sameKeyFunctions` skips mismatched members (a full pool keeps
       its healthy members).
 - [ ] The single-node driver honors `Platforms`; the contract suite covers it.
-- [ ] One node-platform value feeds both the scheduler and the materializer.
+- [ ] One node-platform value feeds both the scheduler and the materializer, and one worker-platform value feeds both for
+      a worker that dev runs in a container (amended 2026-11-25).
 - [ ] `bundle-multiarch.yml` is `workflow_dispatch` only and no release workflow references it.
 - [ ] ADR-0017 and ADR-0031 carry the back-link.
 - [ ] No new dependency; `api/fault` errors; no `any` in signatures; no package-level mutable state.
@@ -363,6 +392,8 @@ index; the existing lanes still pass (single-manifest path); no identity or path
   avoids it for bundles without build-time code.
 - `Push`, `PushBundle`, `Pull`, `NewOrasMaterializer` and `singlenode.New` gain a parameter: a one-time change at
   every call site.
+- Under `funcdctl dev` a container worker's bundle is for the engine's own platform, even when its runtime's image has
+  only another one, which the engine emulates (amended 2026-11-25).
 - Risk: the node platform is a configured value. A misconfigured `WithNodePlatform` selects the wrong bundle; the
   default (the daemon's own `GOOS/GOARCH`) is right whenever funcd runs on the node it schedules.
 

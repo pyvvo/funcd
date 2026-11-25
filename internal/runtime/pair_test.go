@@ -99,6 +99,7 @@ type capRuntime struct {
 	output, logs  bool
 	ok            bool
 	why, endpoint string
+	platform      v1.OCIPlatform
 }
 
 func (c *capRuntime) StopGrace() time.Duration                      { return c.grace }
@@ -107,13 +108,15 @@ func (c *capRuntime) SetOutputCapture(fn runtime.OutputCaptureFunc) { c.output =
 func (c *capRuntime) SetLogCapture(fn runtime.LogCaptureFunc)       { c.logs = fn != nil }
 func (c *capRuntime) RunsImages() (bool, string)                    { return c.ok, c.why }
 func (c *capRuntime) EndpointHost() string                          { return c.endpoint }
+func (c *capRuntime) ImagePlatform() v1.OCIPlatform                 { return c.platform }
 
 // ADR-0346 Decision 3: Pair runs images as its image side does, hands raw output capture to both drivers and
 // structured logs to the process side alone, stops with the longer grace, and enforces limits only when both do.
 func TestPairForwardsCapabilities(t *testing.T) {
 	t.Parallel()
 	procs := &capRuntime{Runtime: process.New(nil), grace: 5 * time.Second, enforces: false}
-	imgs := &capRuntime{Runtime: process.New(nil), grace: 10 * time.Second, enforces: true, ok: true, endpoint: "funcd.host"}
+	imgs := &capRuntime{Runtime: process.New(nil), grace: 10 * time.Second, enforces: true, ok: true, endpoint: "funcd.host",
+		platform: "linux/arm64"}
 	p := runtime.Pair(procs, imgs)
 	t.Cleanup(func() { _ = p.Close() })
 
@@ -131,6 +134,7 @@ func TestPairForwardsCapabilities(t *testing.T) {
 	ok, _ := p.(runtime.ImageRunner).RunsImages()
 	require.True(t, ok)
 	require.Equal(t, "funcd.host", p.(runtime.ImageRunner).EndpointHost())
+	require.Equal(t, v1.OCIPlatform("linux/arm64"), p.(runtime.ImageRunner).ImagePlatform())
 }
 
 // ADR-0346 Decision 1: NoImages runs no image and says why; a Pair over it says so too, and still runs a worker with no
@@ -143,6 +147,7 @@ func TestNoImages(t *testing.T) {
 	ok, got := none.(runtime.ImageRunner).RunsImages()
 	require.False(t, ok)
 	require.Equal(t, why, got)
+	require.Empty(t, none.(runtime.ImageRunner).ImagePlatform(), "no engine has a platform")
 	_, err := none.Create(ctx, sleeper("deno", "registry.example.com/deno@sha256:aa"))
 	require.True(t, errors.Is(err, runtime.ErrImageUnavailable))
 	require.Equal(t, fault.NotFound, fault.KindOf(err))

@@ -7,7 +7,8 @@
 - **Amended in place**: 2026-11-24, by the decider, recorded on [#1021](https://github.com/pyvvo/funcd/issues/1021): a
   module with no plain variable takes void `variables`, as [ADR-0090](0090-mandatory-single-io-schema.md) has a
   Function's side that takes nothing, and `variables` is required only when a plain variable has no default
-  (Decision 3)
+  (Decision 3); 2026-11-25, on [#1581](https://github.com/pyvvo/funcd/pull/1581): a pushed module runs under `funcdctl
+  dev` on a Mac (Consequences)
 - **Date**: 2026-11-24
 - **Deciders**: green-0-rabbit
 - **Tags**: infrastack, artifacts, contracts, funcdctl, addons
@@ -94,7 +95,8 @@ where the runtime installs providers from.
 - **Providers in the runtime image only** (today): a module gets the image's three, at their versions, and a new one
   waits for an add-on release. Rejected by F143.
 - **One bundle with both platforms' providers**: every node would pull the other platform's packages too, though
-  `funcdctl dev` on a Mac could pull it (Consequences). Rejected: ADR-0145's index gives each node its own.
+  `funcdctl dev` on a Mac could pull it, as it now pulls its engine's bundle of the index (Consequences, amended
+  2026-11-25). Rejected: ADR-0145's index gives each node its own.
 - **`tofu init` against a mirror that funcd serves**: a run would depend on a new service. Rejected: a run downloads
   nothing.
 - **An HCL parser in the plugin**: a new dependency for what `tofu show -json -module=<dir>` prints (checked with the
@@ -322,8 +324,9 @@ F141's work adds to funcd's `e2e/` (`addon-infrastack.venom.yml`), on a module t
   pushed without the plugin.
 - A bundle grows by its platform's provider packages; a node pulls only its own.
 - A provider with no build for one of the two platforms fails the push at its lock step.
-- Under `funcdctl dev` on a Mac, which pulls for its own platform (ADR-0145 Decision 6), the index has no darwin entry,
-  so a pushed module does not materialize there.
+- Under `funcdctl dev`, on a Mac too, the Job's worker runs on the container engine and gets the bundle of the engine's
+  platform (ADR-0145 Decision 6), where the Mac's own, which the index lacks, kept it from materializing (amended
+  2026-11-25).
 - A typo in a stack's variables fails at its run's creation, naming the path, and nothing reaches the cloud.
 - A module's own `terraform.tfvars`, `*.auto.tfvars` and local state never reach a run: a stack sets each variable
   through its config, or through a `TF_VAR_<name>` key of a ConfigMap or Secret that its Job binds.

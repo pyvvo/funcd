@@ -633,7 +633,7 @@ func NewOrasMaterializer(artifactDir string, node v1.OCIPlatform) *OrasMateriali
 // over or read the dir the other just moved into place (#1538). A call waits for that fill on its own context. It then
 // takes the fill's error when the fill pulled from its ref and did not end with its caller's context, so concurrent
 // first uses share one registry wait (#697); otherwise it checks the cache again and fills it itself.
-func (m *OrasMaterializer) fillOnce(ctx context.Context, op, ref, digest, cacheDir string) error {
+func (m *OrasMaterializer) fillOnce(ctx context.Context, op, ref, digest string, p v1.OCIPlatform, cacheDir string) error {
 	for {
 		if _, ok, _ := cachedArtifact(op, cacheDir); ok {
 			return nil
@@ -646,7 +646,7 @@ func (m *OrasMaterializer) fillOnce(ctx context.Context, op, ref, digest, cacheD
 		}
 		m.mu.Unlock()
 		if !waits {
-			return m.lead(ctx, f, op, ref, digest, cacheDir)
+			return m.lead(ctx, f, op, ref, digest, p, cacheDir)
 		}
 		select {
 		case <-f.done:
@@ -661,14 +661,14 @@ func (m *OrasMaterializer) fillOnce(ctx context.Context, op, ref, digest, cacheD
 
 // lead runs the fill f records, then removes the record and wakes the calls that wait for it however the fill ends, a
 // panic included: f.err is then still nil, so a waiting call checks the cache and fills it itself.
-func (m *OrasMaterializer) lead(ctx context.Context, f *fill, op, ref, digest, cacheDir string) error {
+func (m *OrasMaterializer) lead(ctx context.Context, f *fill, op, ref, digest string, p v1.OCIPlatform, cacheDir string) error {
 	defer func() {
 		m.mu.Lock()
 		delete(m.fills, cacheDir)
 		m.mu.Unlock()
 		close(f.done)
 	}()
-	f.err = m.fillCache(ctx, op, ref, digest, cacheDir)
+	f.err = m.fillCache(ctx, op, ref, digest, p, cacheDir)
 	if _, ok, _ := cachedArtifact(op, cacheDir); f.err == nil && !ok {
 		f.err = fault.Internalf(op, "artifact cache %q holds no handler after a pull", cacheDir)
 	}
@@ -709,6 +709,12 @@ func (m *OrasMaterializer) Platforms(ctx context.Context, uri, digest string) ([
 // Materialize resolves fn.spec.image → target, pulls by fn.spec.imageDigest
 // (the authority; empty → fault.Invalid), and returns the cached local path.
 func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (string, error) {
+	return m.MaterializeFor(ctx, fn, m.node)
+}
+
+// MaterializeFor implements function.PlatformMaterializer (ADR-0145 Decision 3): Materialize for the platform p instead
+// of the node's.
+func (m *OrasMaterializer) MaterializeFor(ctx context.Context, fn *v1.Function, p v1.OCIPlatform) (string, error) {
 	const op = "artifact.OrasMaterializer.Materialize"
 	ref := fn.Spec.Image
 	digest := fn.Spec.ImageDigest
@@ -718,12 +724,12 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 	if digest == "" {
 		return "", fault.Invalidf(op, "function %s/%s has no spec.imageDigest (the digest is the authority)", fn.Namespace, fn.Name)
 	}
-	// keyed by the node platform too: an index materializes a different bundle per platform (ADR-0145)
-	cacheDir := filepath.Join(m.artifactDir, sanitizeDigest(digest)+"-"+m.node.OS()+"-"+m.node.Arch())
+	// keyed by the platform too: an index materializes a different bundle per platform (ADR-0145)
+	cacheDir := filepath.Join(m.artifactDir, sanitizeDigest(digest)+"-"+p.OS()+"-"+p.Arch())
 	if path, ok, err := cachedArtifact(op, cacheDir); ok {
 		return path, err
 	}
-	if err := m.fillOnce(ctx, op, ref, digest, cacheDir); err != nil {
+	if err := m.fillOnce(ctx, op, ref, digest, p, cacheDir); err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", fn.Namespace, fn.Name)
 	}
 	path, ok, err := cachedArtifact(op, cacheDir)
@@ -776,7 +782,7 @@ func cachedArtifact(op, cacheDir string) (path string, ok bool, err error) {
 // verified the digest and delivered the contract, then marks it pulled. A failed or corrupted pull therefore leaves
 // nothing a later call serves, and a dir no completed pull marked (one an older daemon left) is replaced. The tree is
 // synced before the move, the move before the marker, so a power loss leaves no marker beside lost files (#1244).
-func (m *OrasMaterializer) fillCache(ctx context.Context, op, ref, digest, cacheDir string) error {
+func (m *OrasMaterializer) fillCache(ctx context.Context, op, ref, digest string, p v1.OCIPlatform, cacheDir string) error {
 	parent := filepath.Dir(cacheDir)
 	if err := m.disk.MkdirAll(parent, 0o755); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "create artifact cache")
@@ -790,7 +796,7 @@ func (m *OrasMaterializer) fillCache(ctx context.Context, op, ref, digest, cache
 	if err := os.Chmod(tmp, 0o755); err != nil { //nolint:gosec // non-secret RO code; the container user must traverse it
 		return fault.Wrapf(err, fault.Internal, op, "open pull dir")
 	}
-	if _, err := Pull(ctx, ref, digest, tmp, m.node); err != nil {
+	if _, err := Pull(ctx, ref, digest, tmp, p); err != nil {
 		return err
 	}
 	if err := m.disk.SyncTree(tmp); err != nil {
@@ -830,4 +836,8 @@ func sanitizeDigest(digest string) string {
 
 var _ function.Materializer = (*OrasMaterializer)(nil) // implements the ADR-0030 seam
 
-var _ function.PlatformResolver = (*OrasMaterializer)(nil) // implements the ADR-0145 platform seam
+// the ADR-0145 platform seams
+var (
+	_ function.PlatformResolver     = (*OrasMaterializer)(nil)
+	_ function.PlatformMaterializer = (*OrasMaterializer)(nil)
+)

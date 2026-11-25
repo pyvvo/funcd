@@ -103,6 +103,8 @@ var sessionKey = regexp.MustCompile(`^[0-9a-f]{16}$`)
 // Engine is the container engine a Runtime drives. Labels select by equality, and a missing container or volume is no
 // error where a method says so. An error is a fault error: Unavailable when the engine does not answer.
 type Engine interface {
+	// Platform is the platform the engine runs its containers on (ADR-0145 Decision 6).
+	Platform(ctx context.Context) (v1.OCIPlatform, error)
 	// Containers names the containers, running or not, that carry every label.
 	Containers(ctx context.Context, labels map[string]string) ([]string, error)
 	// Inspect reads the container name; ok is false when there is none.
@@ -1219,6 +1221,22 @@ func labelFilter(labels map[string]string) string {
 	}
 	b, _ := json.Marshal(map[string][]string{"label": pairs})
 	return string(b)
+}
+
+func (e *engineAPI) Platform(ctx context.Context) (v1.OCIPlatform, error) {
+	_, b, err := e.send(ctx, http.MethodGet, "/version", nil, nil)
+	if err != nil {
+		return "", err
+	}
+	var v struct{ Os, Arch string }
+	if err := json.Unmarshal(b, &v); err != nil {
+		return "", fault.Wrapf(err, fault.Internal, "docker", "decode the engine's version")
+	}
+	p := v1.OCIPlatform(v.Os + "/" + v.Arch)
+	if err := p.Validate(); err != nil {
+		return "", fault.Wrapf(err, fault.Internal, "docker", "the platform of the engine's version")
+	}
+	return p, nil
 }
 
 func (e *engineAPI) Containers(ctx context.Context, labels map[string]string) ([]string, error) {

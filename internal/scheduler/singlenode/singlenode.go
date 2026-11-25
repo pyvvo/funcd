@@ -6,6 +6,7 @@
 package singlenode
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"strings"
@@ -34,15 +35,16 @@ func New(local v1.ObjectName, node v1.OCIPlatform) (scheduler.Scheduler, error) 
 }
 
 // Schedule places every request on the single local worker, unless the request lists the
-// artifact's platforms and the node's is not among them (ADR-0145).
+// artifact's platforms and the worker's, else the node's, is not among them (ADR-0145).
 func (d *driver) Schedule(_ context.Context, req scheduler.Request) (scheduler.Placement, error) {
-	if len(req.Platforms) > 0 && !slices.Contains(req.Platforms, d.node) {
+	runs := cmp.Or(req.WorkerPlatform, d.node)
+	if len(req.Platforms) > 0 && !slices.Contains(req.Platforms, runs) {
 		names := make([]string, len(req.Platforms))
 		for i, p := range req.Platforms {
 			names[i] = string(p)
 		}
 		return scheduler.Placement{}, fault.Wrapf(scheduler.ErrNoMatchingPlatform, fault.Invalid, "scheduler.singlenode.Schedule",
-			"artifact provides [%s]; node %s runs %s", strings.Join(names, ", "), d.local, d.node)
+			"artifact provides [%s]; node %s runs %s", strings.Join(names, ", "), d.local, runs)
 	}
 	return scheduler.Placement{WorkerNode: d.local}, nil
 }

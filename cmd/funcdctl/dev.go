@@ -503,8 +503,8 @@ type devMaterializer struct {
 }
 
 var (
-	_ function.Materializer     = devMaterializer{}
-	_ function.PlatformResolver = devMaterializer{}
+	_ function.PlatformMaterializer = devMaterializer{}
+	_ function.PlatformResolver     = devMaterializer{}
 )
 
 // devBuilt reports whether image is a build that dev delivered.
@@ -515,6 +515,14 @@ func (m devMaterializer) Materialize(ctx context.Context, fn *v1.Function) (stri
 		return m.builds.Materialize(ctx, fn)
 	}
 	return m.pulled.Materialize(ctx, fn)
+}
+
+// MaterializeFor is a build, which has one bundle, or the bundle of a pulled image for p.
+func (m devMaterializer) MaterializeFor(ctx context.Context, fn *v1.Function, p v1.OCIPlatform) (string, error) {
+	if devBuilt(fn.Spec.Image) {
+		return m.builds.Materialize(ctx, fn)
+	}
+	return m.pulled.MaterializeFor(ctx, fn, p)
 }
 
 // Platforms names the platforms image runs on, nil for a build, which dev runs as it is.

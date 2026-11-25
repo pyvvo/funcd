@@ -100,11 +100,12 @@ func netOf(boot, netns string, out []byte) workerNet {
 
 // workers is funcdctl dev's worker driver on its container engine (ADR-0346 Decision 4).
 type workers struct {
-	eng    Engine
-	key    string
-	net    workerNet
-	logger *slog.Logger
-	probe  *http.Client
+	eng      Engine
+	key      string
+	net      workerNet
+	platform v1.OCIPlatform
+	logger   *slog.Logger
+	probe    *http.Client
 	// follows ends every follow of a worker's output at Close.
 	follows  context.Context //nolint:containedctx // the driver's own: a follow outlives the Start that began it
 	unfollow context.CancelFunc
@@ -141,7 +142,8 @@ var (
 // NewWorkers runs the Function and Job workers of funcdctl dev's session key on eng (ADR-0346 Decision 4), nerdctl's
 // through the same Engine: each one a container from its spec's image, its bundle copied into a volume of its own
 // through the helper and mounted read-only, its output read through the engine's log follow. It removes the key's
-// leftover workers, their containers and volumes, and finds how a worker reaches funcd (Decision 5) before it returns.
+// leftover workers, their containers and volumes, and finds how a worker reaches funcd (Decision 5) and the engine's
+// platform before it returns.
 func NewWorkers(ctx context.Context, eng Engine, key string, logger *slog.Logger) (containerrt.Runtime, error) {
 	return newWorkers(ctx, eng, key, logger, findNet)
 }
@@ -161,6 +163,11 @@ func newWorkers(ctx context.Context, eng Engine, key string, logger *slog.Logger
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "find how a worker reaches funcd")
 	}
 	w.net = n
+	if n.refused == "" {
+		if w.platform, err = eng.Platform(ctx); err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "read the container engine's platform")
+		}
+	}
 	w.follows, w.unfollow = context.WithCancel(context.Background())
 	return w, nil
 }
@@ -175,6 +182,9 @@ func (w *workers) EndpointHost() string {
 	}
 	return funcdHost
 }
+
+// ImagePlatform is the engine's platform, which its workers run on, "" when it runs none (ADR-0145 Decision 6).
+func (w *workers) ImagePlatform() v1.OCIPlatform { return w.platform }
 
 // SetOutputCapture installs the per-run raw-output hook (ADR-0168), which Start calls before the worker runs.
 func (w *workers) SetOutputCapture(fn containerrt.OutputCaptureFunc) {

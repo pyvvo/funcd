@@ -16,6 +16,13 @@ type Materializer interface {
 	Materialize(ctx context.Context, fn *v1.Function) (localPath string, err error)
 }
 
+// PlatformMaterializer is a Materializer that also fetches an artifact's bundle for a platform other than the node's, a
+// container worker's under funcdctl dev (ADR-0145 Decision 3): the oras driver. The file driver is not one: it has one
+// bundle, whatever the platform.
+type PlatformMaterializer interface {
+	MaterializeFor(ctx context.Context, fn *v1.Function, p v1.OCIPlatform) (localPath string, err error)
+}
+
 // ContractRequirer is a Materializer whose artifacts carry their I/O contract (ADR-0090): the oras driver, whose
 // artifacts funcdctl push builds. The file driver is not one: funcdctl dev delivers each contract itself, and a test
 // runs a handler with none.

@@ -22,9 +22,12 @@ type Request struct {
 	Replica   int
 	// Platforms the artifact provides (ADR-0145); empty means any.
 	Platforms []v1.OCIPlatform
+	// WorkerPlatform is the platform the replica's worker runs on, "" for its node's own: a container worker under
+	// funcdctl dev names its container engine's (ADR-0145 Decision 4).
+	WorkerPlatform v1.OCIPlatform
 }
 
-// ErrNoMatchingPlatform is wrapped (fault.Invalid) by Schedule when no worker node's platform is in
+// ErrNoMatchingPlatform is wrapped (fault.Invalid) by Schedule when the worker's platform, else no worker node's, is in
 // Request.Platforms (ADR-0145).
 var ErrNoMatchingPlatform = errors.New("no worker node matches the artifact's platforms")
 

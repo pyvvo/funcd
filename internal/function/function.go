@@ -710,7 +710,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		drainAfter = earliest(drainAfter, again)
 	}
 
-	// 2b. platform gate (ADR-0145): an artifact built for no platform the node runs fails here, before any
+	// 2b. platform gate (ADR-0145): an artifact built for no platform its worker runs on fails here, before any
 	// worker starts, rather than as a handler that cannot load. Before pooling's assign, so pooled members are
 	// gated too; a resolver error (a registry outage) is retried, never a status.
 	if perr := r.placeable(ctx, fn, fn.Spec.Image, pinned); perr != nil {
@@ -1978,8 +1978,10 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 	if err != nil {
 		return revisionPass{}, err
 	}
+	worker, _ := r.workerPlatform(tmpl.Spec.Runtime)
 	for _, i := range launch {
-		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i, Platforms: platforms}); perr != nil {
+		req := scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i, Platforms: platforms, WorkerPlatform: worker}
+		if _, perr := r.scheduler.Schedule(ctx, req); perr != nil {
 			return revisionPass{}, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
 		}
 		spec, serr := r.workerSpec(ctx, functionWorkload(tmpl), rev, functionWorker(tmpl, i), artifactPath, we)
@@ -3290,11 +3292,22 @@ func (e httpContractError) Error() string {
 	return "artifact " + e.digest + " carries an I/O contract; a Function with spec.protocol: http has none (ADR-0243)"
 }
 
+// fetch materializes fn's artifact for the platform its worker runs on (ADR-0145 Decision 6): the node's, unless
+// workerPlatform names another and the materializer is a PlatformMaterializer.
+func (r *Reconciler) fetch(ctx context.Context, fn *v1.Function) (string, error) {
+	if p, _ := r.workerPlatform(fn.Spec.Runtime); p != "" {
+		if pm, ok := r.materializer.(PlatformMaterializer); ok {
+			return pm.MaterializeFor(ctx, fn, p)
+		}
+	}
+	return r.materializer.Materialize(ctx, fn)
+}
+
 // materialize materializes fn's artifact and refuses it when fn is a cloudevent Function and the bundle root holds no
 // delivered contract while the materializer is a ContractRequirer (issue #1084), or one funcd cannot compile (ADR-0303),
 // and when fn is an http Function, which carries none (ADR-0243), and the bundle root holds one (ADR-0304).
 func (r *Reconciler) materialize(ctx context.Context, fn *v1.Function) (string, error) {
-	path, err := r.materializer.Materialize(ctx, fn)
+	path, err := r.fetch(ctx, fn)
 	if err != nil {
 		return "", err
 	}
@@ -3470,13 +3483,19 @@ func (r *Reconciler) artifactPlatforms(ctx context.Context, uri, digest string) 
 }
 
 // placeable asks the scheduler whether fn's artifact at digest can run on a node (ADR-0145): an error matching
-// scheduler.ErrNoMatchingPlatform when none of the artifact's platforms is a node's.
+// scheduler.ErrNoMatchingPlatform when none of the artifact's platforms is its worker's, a node's or its container
+// engine's. With no engine to run the worker it asks nothing: the runtime gate says why none runs.
 func (r *Reconciler) placeable(ctx context.Context, fn *v1.Function, uri, digest string) error {
+	worker, inContainer := r.workerPlatform(fn.Spec.Runtime)
+	if inContainer && worker == "" {
+		return nil
+	}
 	platforms, err := r.artifactPlatforms(ctx, uri, digest)
 	if err != nil || len(platforms) == 0 {
 		return err
 	}
-	_, err = r.scheduler.Schedule(ctx, scheduler.Request{Namespace: fn.Namespace, Name: fn.Name, Replica: 0, Platforms: platforms})
+	_, err = r.scheduler.Schedule(ctx, scheduler.Request{Namespace: fn.Namespace, Name: fn.Name, Replica: 0, Platforms: platforms,
+		WorkerPlatform: worker})
 	return err
 }
 
