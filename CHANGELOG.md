@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.49.2](https://github.com/pyvvo/funcd/compare/v0.49.1...v0.49.2) (2026-11-25)
+
+
+### Bug Fixes
+
+* **funcdctl:** under funcdctl dev on containerd in a VM, a container worker reaches funcd ([#1583](https://github.com/pyvvo/funcd/issues/1583)) ([9f971a0](https://github.com/pyvvo/funcd/commit/9f971a02ccb0f88439f1165a300e6f04d9dc01eb))
+
 ## [0.49.1](https://github.com/pyvvo/funcd/compare/v0.49.0...v0.49.1) (2026-11-25)
 
 
