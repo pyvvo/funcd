@@ -2,8 +2,8 @@
 // it keeps the containers and volumes it was told of in $FUNCD_FAKE_NERDCTL_DIR/state.json, appends each command and
 // what it read on its standard input to calls.jsonl there, and answers as nerdctl does. One command at a time holds
 // state.lock there while it reads, answers and writes, since a worker's log follower runs beside its inspect. An engine's published port is
-// the one in the file port; a helper prints the next listing-<n> file for a find with stat, and the file tar for a
-// tar -c.
+// the one in the file port; a helper prints the next listing-<n> file for a find with stat, the file tar for a tar -c,
+// and the file hosts, the VM's /etc/hosts, for a cat of it.
 package main
 
 import (
@@ -247,7 +247,8 @@ func (f *fake) runEngine() {
 	f.st.Containers[f.values("--name")[0]] = c
 }
 
-// helper answers a helper's run: the next listing-<n> file for a find with stat, the file tar for a tar -c.
+// helper answers a helper's run: the next listing-<n> file for a find with stat, the file tar for a tar -c, the file hosts
+// for a cat of /etc/hosts.
 func (f *fake) helper() {
 	line := strings.Join(f.args, " ")
 	switch {
@@ -264,6 +265,9 @@ func (f *fake) helper() {
 		_, _ = f.stdout.Write(b)
 	case slices.Contains(f.args, "tar") && slices.Contains(f.args, "-c"):
 		b, _ := os.ReadFile(filepath.Join(f.dir, "tar"))
+		_, _ = f.stdout.Write(b)
+	case strings.HasSuffix(line, " cat /etc/hosts"):
+		b, _ := os.ReadFile(filepath.Join(f.dir, "hosts"))
 		_, _ = f.stdout.Write(b)
 	}
 }

@@ -14,8 +14,10 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,9 +35,13 @@ const (
 	// runSuffix names a worker's second volume, mounted at workerRunDir on the host's network (ADR-0346 Decision 2).
 	runSuffix    = "-run"
 	workerRunDir = "/run/funcd"
-	// funcdHost is the name a worker on an engine in a VM reaches funcd's listeners by: the engine's host gateway
-	// (ADR-0346 Decision 5).
-	funcdHost = "funcd.host"
+	// funcdHost is the name a worker on an engine in a VM reaches funcd's listeners by (ADR-0346 Decision 5). It resolves
+	// to the address that the VM's hostsPath gives limaHost, the VM's host in a Lima VM, as colima's; else to the engine's
+	// own hostGateway, which nerdctl takes for the VM itself.
+	funcdHost   = "funcd.host"
+	hostsPath   = "/etc/hosts"
+	limaHost    = "host.lima.internal"
+	hostGateway = "host-gateway"
 	// workerOutputWait bounds how long an ended run waits for its last output before it reads as ended (ADR-0168), as
 	// the process driver's does.
 	workerOutputWait = time.Second
@@ -113,6 +119,7 @@ type workers struct {
 	mu        sync.Mutex
 	instances map[containerrt.InstanceID]*worker
 	outputs   containerrt.OutputCaptureFunc
+	hostAddr  string // what funcdHost resolves to, once read
 }
 
 // worker is one instance: its spec, its container's name, and what its runs showed.
@@ -349,7 +356,7 @@ func tarTree(dir string, out io.Writer) error {
 
 // Start runs the worker's container from its spec: the image's entrypoint, or its Command, with FUNCD_LOG_STDOUT, so the
 // shim prints each record to stdout (ADR-0346 Decision 4); on the host's network with its port file in its run volume,
-// else with FUNCD_PORT published on 127.0.0.1 and funcdHost resolving to the engine's host gateway (Decision 5).
+// else with FUNCD_PORT published on 127.0.0.1 and funcdHost resolving to this host (Decision 5).
 // What it writes is followed from its start (ADR-0168).
 func (w *workers) Start(ctx context.Context, id containerrt.InstanceID) error {
 	const op = "docker.workers.Start"
@@ -379,6 +386,12 @@ func (w *workers) Start(ctx context.Context, id containerrt.InstanceID) error {
 			`rm -f "$1/port" && chmod 777 "$1"`, "sh", helperRoot); err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "prepare the run volume of worker %s", id)
 		}
+	} else {
+		addr, err := w.hostAddress(ctx, name)
+		if err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "find how worker %s reaches funcd", id)
+		}
+		run.ExtraHosts = []string{funcdHost + ":" + addr}
 	}
 	out := workerpipe.New(workerpipe.Options{Logger: w.logger.With(
 		"namespace", spec.Namespace, "name", spec.Name, "revision", spec.Revision, "replica", spec.Replica)})
@@ -420,8 +433,44 @@ func (w *workers) runSpec(spec containerrt.WorkerSpec, name string) RunSpec {
 		return run
 	}
 	run.Port, _ = strconv.Atoi(spec.Env["FUNCD_PORT"])
-	run.ExtraHosts = []string{funcdHost + ":host-gateway"}
 	return run
+}
+
+// hostAddress is what funcdHost resolves to in a worker on an engine in a VM: limaAddress of the VM's hostsPath, which a
+// helper of the worker name on the VM's network reads and the driver keeps, else hostGateway.
+func (w *workers) hostAddress(ctx context.Context, name string) (string, error) {
+	w.mu.Lock()
+	addr := w.hostAddr
+	w.mu.Unlock()
+	if addr != "" {
+		return addr, nil
+	}
+	h := w.helper(name)
+	h.HostNetwork = true
+	hosts, err := w.exec(ctx, h, "cat", hostsPath)
+	if err != nil {
+		return "", err
+	}
+	addr = cmp.Or(limaAddress(string(hosts)), hostGateway)
+	w.mu.Lock()
+	w.hostAddr = addr
+	w.mu.Unlock()
+	return addr, nil
+}
+
+// limaAddress is the address that hosts, an /etc/hosts file, gives limaHost, "" when it gives none.
+func limaAddress(hosts string) string {
+	for line := range strings.Lines(hosts) {
+		line, _, _ = strings.Cut(line, "#")
+		f := strings.Fields(line)
+		if len(f) < 2 || !slices.Contains(f[1:], limaHost) {
+			continue
+		}
+		if addr, err := netip.ParseAddr(f[0]); err == nil {
+			return addr.String()
+		}
+	}
+	return ""
 }
 
 // follow drains what the container name writes into out, until it stops, then closes out.

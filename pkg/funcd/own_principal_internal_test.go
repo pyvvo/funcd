@@ -149,6 +149,24 @@ func TestScenarioJobEgressNamed(t *testing.T) {
 	}
 }
 
+// freeDNSPort is a port of 127.0.0.1 that is free for TCP and for UDP, as a forwarder needs it.
+func freeDNSPort(t *testing.T) int {
+	t.Helper()
+	for range 20 {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		port := l.Addr().(*net.TCPAddr).Port
+		pc, err := net.ListenPacket("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		require.NoError(t, l.Close())
+		if err == nil {
+			require.NoError(t, pc.Close())
+			return port
+		}
+	}
+	t.Fatal("no port is free for TCP and for UDP")
+	return 0
+}
+
 // The forwarder listens on the bridge address, or on loopback with none, and on no other (ADR-0315): from another of the
 // host's addresses its port is closed, where a bind to all addresses would answer.
 func TestBuildEgressBindsTheBridgeAddress(t *testing.T) {
@@ -168,11 +186,7 @@ func TestBuildEgressBindsTheBridgeAddress(t *testing.T) {
 	for name, bridge := range map[string]string{"a bridge address": "127.0.0.1", "none": ""} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			probe, err := net.Listen("tcp", "127.0.0.1:0")
-			require.NoError(t, err)
-			port := probe.Addr().(*net.TCPAddr).Port
-			require.NoError(t, probe.Close())
-
+			port := freeDNSPort(t)
 			e := &executor{cfg: &config{
 				store: store.New(memory.New()), logger: slog.New(slog.DiscardHandler), bridgeAddress: bridge, dnsForwarderPort: uint16(port),
 				dnsUpstream: netip.MustParseAddrPort("127.0.0.1:53"),
@@ -191,7 +205,7 @@ func TestBuildEgressBindsTheBridgeAddress(t *testing.T) {
 				}
 				return c.Close() == nil
 			}, 3*time.Second, 10*time.Millisecond, "it serves on that address")
-			_, err = net.DialTimeout("tcp", net.JoinHostPort(other, strconv.Itoa(port)), time.Second)
+			_, err := net.DialTimeout("tcp", net.JoinHostPort(other, strconv.Itoa(port)), time.Second)
 			require.Error(t, err, "it does not serve on the host's other addresses")
 		})
 	}

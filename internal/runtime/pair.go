@@ -16,7 +16,7 @@ const LoopbackHost = "127.0.0.1"
 
 // ImageRunner is a worker runtime that may run a worker from an image (ADR-0346 Decision 1). RunsImages says whether it
 // runs one now and, when not, why; EndpointHost names the host such a worker reaches funcd's listeners by: LoopbackHost
-// on the host's network, or a name that resolves to the host's gateway on an engine in a VM; ImagePlatform is the
+// on the host's network, or a name that resolves to that host on an engine in a VM; ImagePlatform is the
 // platform such a worker runs on, its container engine's, "" when none runs (ADR-0145 Decision 6).
 type ImageRunner interface {
 	RunsImages() (ok bool, why string)

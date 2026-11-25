@@ -272,7 +272,7 @@ func TestLastWords(t *testing.T) {
 
 // ADR-0346 Decisions 4, 5 and 7 through nerdctl: a worker's bundle volume of the role worker, filled through the
 // helper's tar and mounted read-only as the volume's own directory; its run with the key, FUNCD_PORT published on
-// 127.0.0.1, funcd.host at the host gateway, its limits and FUNCD_LOG_STDOUT; it listens once its readiness path
+// 127.0.0.1, funcd.host at the VM's host, its limits and FUNCD_LOG_STDOUT; it listens once its readiness path
 // answers; Remove takes its container and volume.
 func TestWorkersThroughNerdctl(t *testing.T) {
 	t.Parallel()
@@ -284,6 +284,7 @@ func TestWorkersThroughNerdctl(t *testing.T) {
 	_, port, err := net.SplitHostPort(ready.Listener.Addr().String())
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "port"), []byte(port), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "hosts"), []byte("192.168.5.2 host.lima.internal\n"), 0o600))
 	ctx := context.Background()
 	w, err := docker.NewWorkers(ctx, cli{bin: bin}, key, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -307,7 +308,7 @@ func TestWorkersThroughNerdctl(t *testing.T) {
 	require.Regexp(t, "^funcd-dev-worker-"+key+"-[0-9a-f]{16}$", name)
 	fill := find(t, cs, []string{"run", "--rm"}, "-i", "-v", name+":/d", docker.HelperImage)
 	require.Contains(t, fill.Stdin, "handler.mjs", "the helper extracts the bundle's tar")
-	run := find(t, cs, []string{"run", "-d"}, "--name", name, "-p", "127.0.0.1::8080", "--add-host", "funcd.host:host-gateway",
+	run := find(t, cs, []string{"run", "-d"}, "--name", name, "-p", "127.0.0.1::8080", "--add-host", "funcd.host:192.168.5.2",
 		"--cpus", "0.5", "--memory", "67108864", "funcd/role=worker", "--mount",
 		"type=bind,source=/var/lib/nerdctl/volumes/"+name+"/_data,target=/var/funcd/artifact,readonly", spec.Image)
 	require.Contains(t, run.Stdin, "FUNCD_LOG_STDOUT=1\n")
