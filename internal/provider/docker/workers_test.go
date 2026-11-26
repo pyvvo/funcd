@@ -897,6 +897,44 @@ func TestTarTreeBindsTheDirectoriesTheEngineSees(t *testing.T) {
 	require.Empty(t, binds, "in a VM with no home directory to read, nothing is bound")
 }
 
+// ADR-0359 Decision 5, amended 2026-11-26: a linked directory the engine sees is copied whole instead of bound when a
+// link among its entries, or those of an @scope directory in it, resolves outside it, as a workspace link does; the
+// workspace package it links to is then in the copy. Links that resolve inside it, as .bin's, keep the bind.
+func TestTarTreeCopiesADirectoryWhoseLinksLeaveIt(t *testing.T) {
+	t.Parallel()
+	proj, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	modules := filepath.Join(proj, "node_modules")
+	for p, body := range map[string]string{"packages/x/index.mjs": "export const x = 1;\n",
+		"node_modules/greet/index.mjs": "export const greet = 1;\n"} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(proj, p)), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(proj, p), []byte(body), 0o600))
+	}
+	require.NoError(t, os.MkdirAll(filepath.Join(modules, ".bin"), 0o700))
+	require.NoError(t, os.Symlink("../greet/index.mjs", filepath.Join(modules, ".bin", "greet")))
+	require.NoError(t, os.Symlink("greet", filepath.Join(modules, "alias")))
+	bundle := t.TempDir()
+	require.NoError(t, os.Symlink(modules, filepath.Join(bundle, "node_modules")))
+	sees := (&workers{net: workerNet{host: true}}).sees
+
+	_, binds := tarEntries(t, bundle, sees)
+	require.Equal(t, []Mount{{Bind: modules, Target: "node_modules", ReadOnly: true}}, binds,
+		"links that resolve inside the directory keep the bind")
+
+	require.NoError(t, os.Symlink("../packages/x", filepath.Join(modules, "x")))
+	got, binds := tarEntries(t, bundle, sees)
+	require.Empty(t, binds, "a workspace link leaves the directory, so it is copied")
+	require.Equal(t, "file export const x = 1;\n", got["node_modules/x/index.mjs"], "the workspace package is in the copy")
+	require.Equal(t, "file export const greet = 1;\n", got["node_modules/greet/index.mjs"])
+
+	require.NoError(t, os.Remove(filepath.Join(modules, "x")))
+	require.NoError(t, os.MkdirAll(filepath.Join(modules, "@team"), 0o700))
+	require.NoError(t, os.Symlink("../../packages/x", filepath.Join(modules, "@team", "x")))
+	got, binds = tarEntries(t, bundle, sees)
+	require.Empty(t, binds, "a scoped workspace link leaves it too")
+	require.Equal(t, "file export const x = 1;\n", got["node_modules/@team/x/index.mjs"])
+}
+
 // ADR-0359 Decision 5, amended 2026-11-26: a worker's bundle that links to a directory the engine sees takes it as a
 // read-only bind at the link's path, after the bundle's volume, which holds its empty mount point; the worker reads the
 // directory's files through it.

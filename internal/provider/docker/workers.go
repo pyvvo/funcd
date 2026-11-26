@@ -342,15 +342,16 @@ func (w *workers) createVolume(ctx context.Context, name string, spec containerr
 // tarTree writes the files under dir to out as a tar, owned by root and readable by any user, so the image's user reads
 // them in the read-only bundle. A link is resolved as the OS resolves it (ADR-0359 Decision 5), as dev's folder builds
 // and a folder's node_modules are links to the host's files: one that resolves inside dir stays a link, relative to its
-// own directory; one that resolves outside to a directory that sees reports is written as an empty directory, the mount
-// point of the read-only bind it returns at the link's path in dir; any other is replaced by a copy of what it names, a
-// file or a directory. A loop of links fails, naming the link. Other kinds of file are left out.
+// own directory; one that resolves outside to a directory that sees reports, whose links stay in it, is written as an
+// empty directory, the mount point of the read-only bind it returns at the link's path in dir; any other is replaced by
+// a copy of what it names, a file or a directory, in which no link is bound. A loop of links fails, naming the link.
+// Other kinds of file are left out.
 func tarTree(dir string, out io.Writer, sees func(dir string) bool) ([]Mount, error) {
 	root, err := filepath.EvalSymlinks(dir)
 	if err == nil {
 		tw := tar.NewWriter(out)
 		t := &treeTar{tw: tw, root: root, sees: sees}
-		if err = t.dir(dir, "", map[string]bool{root: true}); err == nil {
+		if err = t.dir(dir, "", map[string]bool{root: true}, true); err == nil {
 			return t.binds, tw.Close()
 		}
 	}
@@ -369,21 +370,22 @@ type treeTar struct {
 }
 
 // dir writes the entries of the directory src under the tar's directory name ("" for the bundle's root); open holds
-// the resolved directories being written, so a link back to one of them is a loop.
-func (t *treeTar) dir(src, name string, open map[string]bool) error {
+// the resolved directories being written, so a link back to one of them is a loop, and bind is false within the copy of
+// a directory a link names.
+func (t *treeTar) dir(src, name string, open map[string]bool, bind bool) error {
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
-		if err := t.entry(filepath.Join(src, e.Name()), path.Join(name, e.Name()), open); err != nil {
+		if err := t.entry(filepath.Join(src, e.Name()), path.Join(name, e.Name()), open, bind); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (t *treeTar) entry(p, name string, open map[string]bool) error {
+func (t *treeTar) entry(p, name string, open map[string]bool, bind bool) error {
 	info, err := os.Lstat(p)
 	if err != nil {
 		return err
@@ -404,11 +406,11 @@ func (t *treeTar) entry(p, name string, open map[string]bool) error {
 		if info, err = os.Stat(real); err != nil {
 			return err
 		}
-		if info.IsDir() && t.sees(real) {
+		if info.IsDir() && bind && t.sees(real) && linksStayIn(real) {
 			t.binds = append(t.binds, Mount{Bind: real, Target: name, ReadOnly: true})
 			return t.tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: name + "/", ModTime: info.ModTime(), Mode: 0o755})
 		}
-		p = real
+		p, bind = real, false
 	}
 	h := &tar.Header{Name: name, ModTime: info.ModTime(), Mode: 0o644}
 	switch {
@@ -426,7 +428,7 @@ func (t *treeTar) entry(p, name string, open map[string]bool) error {
 		}
 		open[real] = true
 		defer delete(open, real)
-		return t.dir(p, name, open)
+		return t.dir(p, name, open, bind)
 	case info.Mode().IsRegular():
 		h.Typeflag, h.Size = tar.TypeReg, info.Size()
 		if info.Mode()&0o111 != 0 {
@@ -444,6 +446,35 @@ func (t *treeTar) entry(p, name string, open map[string]bool) error {
 		return err
 	}
 	return nil
+}
+
+// linksStayIn reports whether no link among the entries of dir, a directory with its links resolved, or among those of
+// an @scope directory in it, resolves outside dir: the two levels where npm and yarn workspaces and npm link put theirs,
+// which a bind would leave naming nothing in the container (ADR-0359 Decision 5). A link that names nothing names
+// nothing on the host either.
+func linksStayIn(dir string) bool {
+	return linksIn(dir, dir, true)
+}
+
+func linksIn(root, dir string, scopes bool) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		p := filepath.Join(dir, e.Name())
+		switch {
+		case e.Type()&fs.ModeSymlink != 0:
+			if real, err := filepath.EvalSymlinks(p); err == nil {
+				if _, ok := under(root, real); !ok {
+					return false
+				}
+			}
+		case scopes && e.IsDir() && strings.HasPrefix(e.Name(), "@") && !linksIn(root, p, false):
+			return false
+		}
+	}
+	return true
 }
 
 // under is p's path relative to root, slash-separated, when p lies under root; both have their links resolved.

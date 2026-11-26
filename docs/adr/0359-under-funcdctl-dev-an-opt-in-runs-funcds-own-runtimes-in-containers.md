@@ -3,7 +3,8 @@
 - **Status**: Implemented (2026-11-26), review passed (docs/reviews/adr-0359-implementation-claude-opus-5-5.md); Reviewing (2026-11-26, implemented); Accepted (2026-11-26), by the decider ("accept"), after three rounds of an independent judge at medium
   effort, every Major and Minor folded
 - **Amended in place**: 2026-11-26, by the decider ("A, we should just amend and build it quickly"): a link to a
-  directory the engine can see is bind-mounted read-only, not copied (Decision 5)
+  directory the engine can see is bind-mounted read-only, not copied, unless the directory holds a link that leaves it
+  (Decision 5)
 - **Date**: 2026-11-26
 - **Deciders**: green-0-rabbit
 - **Tags**: dev, runtime, functions, jobs, cli
@@ -114,7 +115,9 @@ an Addon's runtime, and the engine workers of Lake and SQL, which keep their own
    One that resolves outside it to a directory the engine can see is bind-mounted read-only at the link's path, and the
    copy writes an empty directory there as its mount point (amended 2026-11-26): an engine on the host's network sees
    every path, and one in a VM the user's home directory, which colima and Lima share at the same path (ADR-0346
-   Decision 5's classification). Any other link that resolves outside the bundle is replaced by a copy of what it names,
+   Decision 5's classification). Such a directory is copied whole instead, as before, when a link among its entries, or
+   those of an `@scope` directory in it, resolves outside it, as the links of npm and yarn workspaces and of `npm link`
+   do. Any other link that resolves outside the bundle is replaced by a copy of what it names,
    a file or a directory; a link cycle fails the copy, naming the link. This holds for every container worker of dev,
    one on an Addon's runtime too. Dev's folder mode delivers a Python build and a folder's `node_modules` as absolute
    links (`cmd/funcdctl/dev.go:787`, `:1607`), which name nothing inside a container.
@@ -210,8 +213,9 @@ type Mount struct {
       pooled Function runs solo; engine workers do not change.
 - [ ] Dev loads an image only when the engine lacks its dev reference, and a worker names that reference.
 - [ ] The fat funcdctl carries the two images and no DuckDB or rqlite image; the thin funcdctl carries none.
-- [ ] A link that resolves outside the bundle to a directory the engine can see is bind-mounted read-only, another one
-      outside is copied as what it names, one inside stays a link, and a cycle fails the copy (amended 2026-11-26).
+- [ ] A link that resolves outside the bundle to a directory the engine can see, whose links do not leave it, is
+      bind-mounted read-only, another one outside is copied as what it names, one inside stays a link, and a cycle fails
+      the copy (amended 2026-11-26).
 - [ ] With neither engine, an engine on another platform or the placeholders, `--containers` refuses to start and says
       why.
 
@@ -227,8 +231,7 @@ type Mount struct {
 - **(+)** A save binds a folder's `node_modules` instead of copying it: 0.89 s against 1.13 s with 23 MiB of modules
   (Context; amended 2026-11-26).
 - **(−)** A bound directory is read-only and live, as a process worker's links are: every revision's worker reads its
-  files as they are now, a link inside it that leaves it names nothing in the container, as an npm workspace's does,
-  and its files keep their host owners and modes (amended 2026-11-26).
+  files as they are now, and its files keep their host owners and modes (amended 2026-11-26).
 - **(−)** On an engine in a VM, as on macOS, a folder outside the home directory is still copied at each save, its
   `node_modules` included (amended 2026-11-26).
 - **(−)** A load also moves the engine's `funcd/runtime-<runtime>:latest`, and each funcdctl version leaves its two

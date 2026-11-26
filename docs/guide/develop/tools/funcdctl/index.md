@@ -22,6 +22,6 @@ funcdctl comes in two builds. The dev build, which the [install script](../../..
 With `--containers`, or `dev.containers: true` in `funcdctl.config.yaml`, `funcdctl dev` runs the Node and Python
 Functions and Jobs in containers on Docker or nerdctl, from images that the dev build carries, so the machine needs no
 Node or Python. A folder's `node_modules`, and any other directory a build links to, is bound read-only into the
-container instead of copied at each save when the engine sees it: an engine on a Linux host sees any directory, and one
-in a VM, as on macOS, those under the home directory.
+container instead of copied at each save when the engine sees it and no link in it leads out of it: an engine on a
+Linux host sees any directory, and one in a VM, as on macOS, those under the home directory.
 The [Spec](spec.md) tab lists every command with its flags, and marks the ones that only the dev build has.
