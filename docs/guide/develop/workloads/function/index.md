@@ -1,6 +1,6 @@
 ---
 title: Function
-description: Run a Function, call it, read its status and its logs, call one Function from another, serve HTTP, and scale to zero.
+description: Run a Function, call it, read its status and its logs, call one Function from another, serve HTTP, stream a response, and scale to zero.
 ---
 
 ## Usage
@@ -224,6 +224,28 @@ $ curl -s http://127.0.0.1:8080/function/devices-api/devices
 The folder's [Route](../../security-and-networking/networking/spec.md#route) `api` serves the same app at
 `/api/devices`. Press Ctrl-C in the first terminal to stop.
 
+## Stream a response
+
+A Function that serves HTTP can answer a call through the edge with a stream, such as server-sent events (SSE): the
+edge passes each chunk to the client as the app writes it. The Function's [`timeout`](spec.md#functionspec) bounds only
+the wait for the response to start. Once it has started, funcd sets no limit on its length, and a stream that sends
+nothing stays open. funcd cuts a stream only when funcd or the stream's worker stops, or when its client accepts no data
+for 60 seconds while the app has data to send. Over a link, `ctx.fetch` returns the response whole, at most 1 MiB, so
+it does not stream.
+
+In TypeScript, Hono's [`streamSSE`](https://hono.dev/docs/helpers/streaming#streamsse) writes one: a route returns
+`streamSSE(c, async (stream) => { … })`, whose `stream.writeSSE({ id, data })` sends an event, and `stream.aborted` turns
+true once the client goes away.
+
+- A proxy in front of funcd, such as a load balancer, a CDN or a tunnel, may close a stream that sends nothing for a
+  while. Send an SSE comment line about every 30 seconds, `await stream.write(': ping\n\n')`, which a browser ignores.
+- An open stream is a call in flight until it ends: it keeps its worker from going idle, and at a change of the
+  Function it stays on the old worker, which funcd stops after `runtime.drainGrace`, 30 seconds by default. The client
+  then sees the connection cut.
+- A browser's `EventSource` reconnects by itself and reaches the new revision, with the `id` of the last event it got
+  in the `Last-Event-ID` header, so the app can resume from there. A client that reads the stream with `fetch` must
+  reconnect itself.
+
 ## Scale a Function to zero
 
 A Function that sets neither [`replicas`](spec.md#functionspec) nor
@@ -234,7 +256,8 @@ long without a call, and the Function is `Idle` until the next one. This Functio
 ::include[../../../../../api/types/v1alpha1/examples/function/function.yaml#function]
 
 - funcd looks for idle Functions every [`invoke.reclaimInterval`](../../running-funcd/spec.md#funcdconfigyaml), 30
-  seconds by default, so workers can outlive `idleTimeout` by that much. A call in flight keeps the Function awake.
+  seconds by default, so workers can outlive `idleTimeout` by that much. A call in flight, an open stream too, keeps
+  the Function awake.
 - A call waiting for a worker gets 503 after `invoke.activationTimeout`, 30 seconds by default; the calls that arrive
   during a start share that wait.
 - `minReplicas` above 0 keeps that many workers, and the Function never goes `Idle`. `replicas` above 0 with
@@ -266,7 +289,8 @@ permit(principal, action == Action::"link::invoke", resource)
 - A call through the edge carries at most 1 MiB, or gets 413, and must start its response within the Function's
   [`timeout`](spec.md#functionspec), or [`invoke.defaultTimeout`](../../running-funcd/spec.md#funcdconfigyaml), 60
   seconds by default, a cold start included. Past it, the caller gets 504 while the handler goes on, so a retry can
-  repeat its effects; a Python handler gets an exception a second later. [`ctx.remainingMs`](spec.md#handler-api)
+  repeat its effects; a Python handler gets an exception a second later. A response that has started has no time
+  limit: [Stream a response](#stream-a-response). [`ctx.remainingMs`](spec.md#handler-api)
   (`remaining_ms`) returns the time left, or `null` with no deadline.
 - A handler that blocks its worker, such as a loop that never awaits or a `time.sleep`, fails its liveness check, and
   funcd replaces the worker after `runtime.livenessTimeout`, 30 seconds by default.
@@ -310,8 +334,8 @@ funcd refuses the calls of a `Failed` Function at once with 503. `status.current
 - funcd runs each version of a Function's spec as a **revision**, named after the Function and a growing number, such
   as `log-burst-2`; `funcdctl get revisions -n <namespace>` lists them.
 - A new revision's workers start beside the serving ones and take the calls once all are ready. An old worker stops
-  once idle, and is cut off after `runtime.drainGrace`, 30 seconds by default. A revision that cannot load its handler
-  takes no call.
+  once idle, and is cut off after `runtime.drainGrace`, 30 seconds by default, with its open streams. A revision that
+  cannot load its handler takes no call.
 - A revision keeps the image digest of its creation, so push new code under a new tag, or set
   [`imageDigest`](spec.md#functionspec).
 - A delete stops the workers at once, cutting their calls, and removes the revisions, with a Lake or a
