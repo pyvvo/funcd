@@ -3,8 +3,8 @@
 - **Status**: Implemented (2026-11-26), review passed (docs/reviews/adr-0359-implementation-claude-opus-5-5.md); Reviewing (2026-11-26, implemented); Accepted (2026-11-26), by the decider ("accept"), after three rounds of an independent judge at medium
   effort, every Major and Minor folded
 - **Amended in place**: 2026-11-26, by the decider ("A, we should just amend and build it quickly"): a link to a
-  directory the engine can see is bind-mounted read-only, not copied, unless the directory holds a link that leaves it
-  (Decision 5)
+  directory the engine can see is bind-mounted read-only, not copied (Decision 5); 2026-11-27, settled under that rule:
+  unless the directory holds a link that leaves it (Decision 5), and its behavior rows sit in `workers.md`
 - **Date**: 2026-11-26
 - **Deciders**: green-0-rabbit
 - **Tags**: dev, runtime, functions, jobs, cli
@@ -117,7 +117,7 @@ an Addon's runtime, and the engine workers of Lake and SQL, which keep their own
    every path, and one in a VM the user's home directory, which colima and Lima share at the same path (ADR-0346
    Decision 5's classification). Such a directory is copied whole instead, as before, when a link among its entries, or
    those of an `@scope` directory in it, resolves outside it, as the links of npm and yarn workspaces and of `npm link`
-   do. Any other link that resolves outside the bundle is replaced by a copy of what it names,
+   do (amended 2026-11-27). Any other link that resolves outside the bundle is replaced by a copy of what it names,
    a file or a directory; a link cycle fails the copy, naming the link. This holds for every container worker of dev,
    one on an Addon's runtime too. Dev's folder mode delivers a Python build and a folder's `node_modules` as absolute
    links (`cmd/funcdctl/dev.go:787`, `:1607`), which name nothing inside a container.
@@ -137,8 +137,10 @@ path.
 
 ## Behavior rows
 
-- **funcdctl-dev.md**: a new row "funcd's runtimes in containers" (Decisions 1 to 4); "Leftover dev workers" covers
-  them as it covers ADR-0346's.
+- **workers.md**: "Under `funcdctl dev --containers`" (Decisions 1 to 4) and "A dev container worker's linked
+  directory" (Decision 5); **funcdctl-dev.md**, whose written part is at the registry's 16 KiB cap, says "unless
+  `--containers`" in its worker row, and "Leftover dev workers" covers them as it covers ADR-0346's (amended
+  2026-11-27).
 
 ## Temporary workarounds
 
@@ -215,7 +217,7 @@ type Mount struct {
 - [ ] The fat funcdctl carries the two images and no DuckDB or rqlite image; the thin funcdctl carries none.
 - [ ] A link that resolves outside the bundle to a directory the engine can see, whose links do not leave it, is
       bind-mounted read-only, another one outside is copied as what it names, one inside stays a link, and a cycle fails
-      the copy (amended 2026-11-26).
+      the copy (amended 2026-11-26; the links that leave it, 2026-11-27).
 - [ ] With neither engine, an engine on another platform or the placeholders, `--containers` refuses to start and says
       why.
 
