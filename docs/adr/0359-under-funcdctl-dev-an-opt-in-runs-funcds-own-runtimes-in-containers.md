@@ -109,10 +109,10 @@ an Addon's runtime, and the engine workers of Lake and SQL, which keep their own
 6. **Platform and logs.** Such a worker runs on the engine's platform (ADR-0346 Decision 2, ADR-0145 Decision 6). Native
    code built for the host's OS does not load there, and dev neither checks it nor rebuilds it. Its records arrive as
    stdout lines, without their level or fields (ADR-0346 Decision 4).
-7. **The release.** `release.yml` runs `just build-worker-images` on a runner of each architecture, `ubuntu-latest`
-   and `ubuntu-24.04-arm`, as its SQL engine job does, and each target's fat build embeds the images of its
-   architecture. `just build-runtime-images` runs `build-worker-images`, then builds the DuckDB and rqlite images as
-   today.
+7. **The release.** `release.yml` runs `scripts/build-worker-images.sh` on a runner of each architecture,
+   `ubuntu-latest` and `ubuntu-24.04-arm`, as its SQL engine job runs `scripts/build-sql-engine.sh`, and each
+   target's fat build embeds the images of its architecture. `just build-worker-images` runs the same script, and
+   `just build-runtime-images` runs it, then builds the DuckDB and rqlite images as today.
 
 ## Design model
 
@@ -159,19 +159,23 @@ func WithOwnRuntimeImages(images map[v1.RuntimeName]string) Option
 ## Implementation plan
 
 1. `internal/runtime/embedimg`: one `go:embed` per image, and a reference file beside each worker image's tar; `Tar`
-   reads all four, `WorkerTar` the two. The committed placeholders carry an empty reference.
-2. `justfile`: `build-worker-images ARCH` builds `nodejs22` and `python314`, tags each with its dev reference, saves
-   both references and writes the reference file; `build-runtime-images` runs it first.
+   reads all four, `WorkerTar` the two. The committed placeholders carry an empty reference. The server's containerd
+   import takes the imported record named the reference it looked up, since a worker image's tar now names it twice
+   (`internal/runtime/containerd/containerd_linux.go:1313-1330`).
+2. `scripts/build-worker-images.sh ARCH` builds `nodejs22` and `python314`, tags each with its dev reference, saves
+   both references and writes the reference file. In the `justfile`, `build-worker-images` runs it and
+   `build-runtime-images` runs it first, and `embedimg-pin` and `embedimg-unpin` also cover the reference files.
 3. `internal/provider/docker`: `HasImage` and `Load` on the Engine API (`/images/{name}/json`, `/images/load`);
    `internal/provider/nerdctl`: `image inspect` and `load`.
 4. `internal/function`: `Deps.OwnImages`; the gate, `addonImage` and `workerPlatform` take an own runtime that has an
-   image; `NewReconciler` needs no shim command when every own runtime has an image (`function.go:453`). `pkg/funcd`:
-   `WithOwnRuntimeImages`.
+   image, and under the opt-in the gate fails one that has none `RuntimeUnavailable` (`function.go:1377`, where own
+   runtimes skip it today); `NewReconciler` needs no shim command when every own runtime has an image
+   (`function.go:453`). `pkg/funcd`: `WithOwnRuntimeImages`.
 5. `internal/provider/docker/workers.go`: the bundle copy resolves links as Decision 5 says.
 6. `cmd/funcdctl`: `--containers` and `dev.containers` through ADR-0254's loader; under them, no interpreter lookup and
    no shim, Decision 4's load before the platform starts, and Decisions 2 and 3's refusals.
-7. `.github/workflows/release.yml`: a job per architecture runs `just build-worker-images` and uploads the tars and
-   their references; each fat build downloads its architecture's.
+7. `.github/workflows/release.yml`: a job per architecture runs `scripts/build-worker-images.sh` and uploads the tars
+   and their references; each fat build downloads its architecture's.
 8. Docs: the guide's dev page and the behavior row. Tests: one `TestScenario…` per scenario; the real-engine ones need
    the images that `just build-worker-images` writes and skip without them or without an engine, as ADR-0346's skip
    with no engine.
@@ -216,5 +220,5 @@ None.
 - `cmd/funcdctl/dev.go` (`devShimOptions`, `linkSources`), `internal/function/function.go` (`NewReconciler`,
   `workerSpec`), `internal/function/addonruntime.go` (`addonImage`, `workerPlatform`),
   `internal/function/poolaccess.go` (`pooled`), `internal/provider/docker/workers.go` (`tarTree`),
-  `internal/runtime/embedimg/embedimg.go`, `justfile` (`build-runtime-images`), `.github/workflows/release.yml`
-  (`build-sql-engine`)
+  `internal/runtime/embedimg/embedimg.go`, `internal/runtime/containerd/containerd_linux.go` (the embedded import),
+  `justfile` (`build-runtime-images`, `embedimg-pin`), `.github/workflows/release.yml` (`build-sql-engine`)
