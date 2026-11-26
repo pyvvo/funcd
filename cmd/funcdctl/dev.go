@@ -789,8 +789,15 @@ func deliverBuild(op string, b devBuild, bundleDir, folderDir string) error {
 		if werr := os.WriteFile(dst, data, 0o600); werr != nil {
 			return fault.Wrapf(werr, fault.Internal, op, "copy the build into its bundle")
 		}
-		if nm := filepath.Join(folderDir, "node_modules"); dirExists(nm) {
-			_ = os.Symlink(nm, filepath.Join(bundleDir, "node_modules"))
+		// The link names the folder's node_modules by its absolute path: dev may hold the folder as ".", and a relative
+		// link would name itself in the bundle; a kept bundle's earlier link is replaced (ADR-0125: deps come from the
+		// author's local node_modules).
+		if nm, aerr := filepath.Abs(filepath.Join(folderDir, "node_modules")); aerr == nil && dirExists(nm) {
+			link := filepath.Join(bundleDir, "node_modules")
+			if fi, lerr := os.Lstat(link); lerr == nil && fi.Mode()&fs.ModeSymlink != 0 {
+				_ = os.Remove(link)
+			}
+			_ = os.Symlink(nm, link)
 		}
 	}
 	contractPath := filepath.Join(bundleDir, devContractFile)

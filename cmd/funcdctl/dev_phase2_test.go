@@ -329,6 +329,24 @@ func TestIssue1053_FailedSecondSessionKeepsTheBundle(t *testing.T) {
 	}, 30*time.Second, 200*time.Millisecond)
 }
 
+// ADR-0125: a Function's deps come from the author's local node_modules, also when dev is given its folder as a
+// relative path, such as ".": the bundle's link names the folder's node_modules absolutely, not itself, and replaces
+// a link that a kept bundle (--persist) holds from an earlier run.
+func TestDeliverBuildLinksNodeModulesOfARelativeFolder(t *testing.T) {
+	folder := devProject(t, map[string]string{
+		"api.mjs":                      "export function handle() { return { n: 1 }; }\n",
+		"node_modules/greet/index.mjs": "export const greet = () => 'hi';\n",
+	})
+	t.Chdir(folder)
+	bundle := t.TempDir()
+	require.NoError(t, os.Symlink("node_modules", filepath.Join(bundle, "node_modules")), "a kept bundle's stale link")
+	b := devBuild{name: "api", contract: &sdk.ContractFile{}, srcDir: ".", entry: "api.mjs"}
+	require.NoError(t, deliverBuild("op", b, bundle, "."))
+	got, err := os.ReadFile(filepath.Join(bundle, "node_modules", "greet", "index.mjs"))
+	require.NoError(t, err, "the bundle reads the folder's node_modules")
+	require.Equal(t, "export const greet = () => 'hi';\n", string(got))
+}
+
 // Issue #1053: a kept bundle (--persist) changes between a copied build and links to its source dir from one run to
 // the next: the links replace the copied file, and the copy replaces the link rather than write through it into the
 // source.
