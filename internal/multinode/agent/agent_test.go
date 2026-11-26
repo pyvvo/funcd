@@ -473,15 +473,17 @@ func TestANodeChecksTheAPITokensOfTheControlPlaneItself(t *testing.T) {
 	secret, _, err := apitoken.NewMinter(r.cp, nil).MintAPIToken(ctx, "ci", time.Hour)
 	require.NoError(t, err)
 	onNode := apitoken.NewCredentials(r.node, nil)
-	eventually(t, "the node checks the token itself", func() bool {
+	cursor := filepath.Join(dir, "cursor")
+	// The token can reach the node before its first snapshot ends, and a snapshot cut short saves no revision.
+	eventually(t, "the node checks the token itself and saved its revision", func() bool {
 		id, err := onNode.Lookup(ctx, secret)
-		return err == nil && id.Role == "developer"
+		_, saved := os.Stat(cursor)
+		return err == nil && id.Role == "developer" && saved == nil
 	})
 	stop()
 
 	// A token revoked while the node was behind goes at the node's next snapshot.
 	require.NoError(t, r.cp.Delete(store.WithoutChangeLog(ctx), v1.KindAPIToken.GVK(), "", "ci", ""))
-	cursor := filepath.Join(dir, "cursor")
 	b, err := os.ReadFile(cursor)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cursor, []byte("an-older-timeline "+strings.Fields(string(b))[1]+"\n"), 0o600))
