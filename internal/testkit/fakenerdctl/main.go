@@ -7,6 +7,7 @@
 package main
 
 import (
+	"archive/tar"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,6 +28,8 @@ const DirEnv = "FUNCD_FAKE_NERDCTL_DIR"
 type state struct {
 	Containers map[string]container         `json:"containers"`
 	Volumes    map[string]map[string]string `json:"volumes"`
+	// Images are the references of the images a load brought in.
+	Images []string `json:"images"`
 }
 
 type container struct {
@@ -79,6 +82,7 @@ type fake struct {
 	st     state
 	stdout io.Writer
 	stderr io.Writer
+	in     string // what the command read on its standard input
 }
 
 func run(dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -98,7 +102,7 @@ func run(dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		_ = json.Unmarshal(b, &f.st)
 	}
 	in := ""
-	if slices.Contains(args, "-i") || slices.Contains(args, "/dev/stdin") {
+	if slices.Contains(args, "-i") || slices.Contains(args, "/dev/stdin") || args[0] == "load" {
 		b, _ := io.ReadAll(stdin)
 		in = string(b)
 	}
@@ -106,6 +110,7 @@ func run(dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		_, _ = fmt.Fprintln(stderr, "fakenerdctl:", err)
 		return 2
 	}
+	f.in = in
 	code := f.answer()
 	b, _ := json.Marshal(f.st)
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), b, 0o600); err != nil {
@@ -203,10 +208,44 @@ func (f *fake) answer() int {
 		delete(f.st.Containers, last)
 	case len(a) > 1 && a[0] == "volume":
 		return f.volume(a[1], last)
+	case len(a) > 2 && a[0] == "image" && a[1] == "inspect":
+		if !slices.Contains(f.st.Images, last) {
+			return f.fail("1 errors:\nno such image: " + last)
+		}
+		_, _ = fmt.Fprintln(f.stdout, "[{}]")
+	case a[0] == "load":
+		return f.load()
 	default:
 		return f.fail("unknown command " + strings.Join(a, " "))
 	}
 	return 0
+}
+
+// load reads the image tar on its standard input, as docker save writes it, and keeps the references its manifest.json
+// names.
+func (f *fake) load() int {
+	tr := tar.NewReader(strings.NewReader(f.in))
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			return f.fail("unrecognized image format")
+		}
+		if h.Name != "manifest.json" {
+			continue
+		}
+		var manifest []struct{ RepoTags []string }
+		if err := json.NewDecoder(tr).Decode(&manifest); err != nil {
+			return f.fail("unrecognized image format")
+		}
+		for _, m := range manifest {
+			for _, ref := range m.RepoTags {
+				if !slices.Contains(f.st.Images, ref) {
+					f.st.Images = append(f.st.Images, ref)
+				}
+			}
+		}
+		return 0
+	}
 }
 
 func (f *fake) inspect(name string) int {

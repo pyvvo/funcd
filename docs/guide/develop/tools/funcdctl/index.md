@@ -19,4 +19,7 @@ keys](../../running-funcd/spec.md#funcdconfigyaml) set other credentials.
 
 funcdctl comes in two builds. The dev build, which the [install script](../../../get-started/install.md) installs, adds
 `funcdctl dev`, which runs Functions on the local machine with no server; the smaller build, for a server, does not.
+With `--containers`, or `dev.containers: true` in `funcdctl.config.yaml`, `funcdctl dev` runs the Node and Python
+Functions and Jobs in containers on Docker or nerdctl, from images that the dev build carries, so the machine needs no
+Node or Python.
 The [Spec](spec.md) tab lists every command with its flags, and marks the ones that only the dev build has.

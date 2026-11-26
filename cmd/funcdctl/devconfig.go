@@ -39,19 +39,21 @@ const (
 
 // devFileKeys are the keys under dev (ADR-0254 Contracts), dev's flags in camelCase.
 type devFileKeys struct {
-	Dir       string            `yaml:"dir"`
-	Values    []string          `yaml:"values"`
-	Build     []string          `yaml:"build"`
-	Hooks     bool              `yaml:"hooks"`
-	Apply     []string          `yaml:"apply"`
-	Persist   bool              `yaml:"persist"`
-	PersistTo string            `yaml:"persistTo"`
-	Gport     int               `yaml:"gport"`
-	S3port    int               `yaml:"s3port"`
-	Cport     int               `yaml:"cport"`
-	Env       map[string]string `yaml:"env"`
-	EnvFile   string            `yaml:"envFile"`
-	Platform  devFilePlatform   `yaml:"platform"`
+	Dir       string   `yaml:"dir"`
+	Values    []string `yaml:"values"`
+	Build     []string `yaml:"build"`
+	Hooks     bool     `yaml:"hooks"`
+	Apply     []string `yaml:"apply"`
+	Persist   bool     `yaml:"persist"`
+	PersistTo string   `yaml:"persistTo"`
+	Gport     int      `yaml:"gport"`
+	S3port    int      `yaml:"s3port"`
+	Cport     int      `yaml:"cport"`
+	// Containers is --containers (ADR-0359 Decision 1).
+	Containers bool              `yaml:"containers"`
+	Env        map[string]string `yaml:"env"`
+	EnvFile    string            `yaml:"envFile"`
+	Platform   devFilePlatform   `yaml:"platform"`
 	// Watch and LiveReload are App-only keys of the file alone (ADR-0255 Decision 1).
 	Watch      []devWatchEntry `yaml:"watch"`
 	LiveReload bool            `yaml:"liveReload"`
@@ -96,8 +98,8 @@ var watchNameFormat = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // devFileKeyNames are the keys dev takes.
 func devFileKeyNames() []string {
-	return []string{"dir", "values", "build", "hooks", "apply", "persist", "persistTo", "gport", "s3port", "cport", "env", "envFile",
-		"platform", "watch", "liveReload", "addons"}
+	return []string{"dir", "values", "build", "hooks", "apply", "persist", "persistTo", "gport", "s3port", "cport", "containers", "env",
+		"envFile", "platform", "watch", "liveReload", "addons"}
 }
 
 // devPlatformKeys are the FuncdConfig keys platform takes (Decision 4).
@@ -461,6 +463,9 @@ func resolveDevRun(op, start string, args []string, flags *pflag.FlagSet, cfg *d
 	if !changed("persist") {
 		cfg.persist = k.Persist
 	}
+	if !changed("containers") {
+		cfg.containers = k.Containers
+	}
 	cfg.addonsRuntime = k.Addons.Runtime
 	if !changed("persist-to") {
 		// The default .funcd-dev is a path of the file too, so it lands beside the file wherever dev runs from.
@@ -594,7 +599,7 @@ func changedDevKeys(a, b devFileKeys) []string {
 		{"dir", a.Dir == b.Dir}, {"values", slices.Equal(a.Values, b.Values)}, {"build", slices.Equal(a.Build, b.Build)},
 		{"hooks", a.Hooks == b.Hooks}, {"apply", slices.Equal(a.Apply, b.Apply)}, {"persist", a.Persist == b.Persist},
 		{"persistTo", a.PersistTo == b.PersistTo}, {"gport", a.Gport == b.Gport}, {"s3port", a.S3port == b.S3port},
-		{"cport", a.Cport == b.Cport}, {"env", maps.Equal(a.Env, b.Env)}, {"envFile", a.EnvFile == b.EnvFile},
+		{"cport", a.Cport == b.Cport}, {"containers", a.Containers == b.Containers}, {"env", maps.Equal(a.Env, b.Env)}, {"envFile", a.EnvFile == b.EnvFile},
 		{"platform.runtime.handOutSettle", a.Platform.Runtime.HandOutSettle == b.Platform.Runtime.HandOutSettle},
 		{"platform.eventing.blobPollInterval", a.Platform.Eventing.BlobPollInterval == b.Platform.Eventing.BlobPollInterval},
 		{"platform.funclog.segmentMaxAge", a.Platform.Funclog.SegmentMaxAge == b.Platform.Funclog.SegmentMaxAge},

@@ -7,7 +7,8 @@ description: Serve a static web app with settings for each deployment.
 
 A Site serves a static web app from a Bucket. This example runs a built app locally and gives it a `config.json` for the staging environment. See [how Sites work](../../../platform/workloads/site.md) for the concept.
 
-Install the [dev build of funcdctl](../../../get-started/install.md), Git, curl, and either Node.js or Python 3.12 or later. Put Node.js or `python3` on the `PATH`. The example needs no build step.
+Install the [dev build of funcdctl](../../../get-started/install.md), Git, curl, and either Node.js or Python 3.12 or later. Put Node.js or `python3` on the `PATH`, or, with Docker or nerdctl, run `funcdctl dev --containers`, which needs
+neither. The example needs no build step.
 
 Clone the example and start it:
 
@@ -136,7 +137,7 @@ A browser checks the index and `config.json` again at each load, as it does `rob
 
 | Error | Action |
 | --- | --- |
-| `no runtime found on PATH` | Add Node.js or Python 3.12 or later as `python3` to the `PATH`, or set `FUNCD_NODE` or `FUNCD_PYTHON`. |
+| `no runtime found on PATH` | Add Node.js or Python 3.12 or later as `python3` to the `PATH`, or set `FUNCD_NODE` or `FUNCD_PYTHON`. With Docker or nerdctl, `funcdctl dev --containers` needs neither. |
 | The folder `holds no Function or Workflow image step to run`. | Use an App template with `--build` for a Site-only example. |
 
 ## Run it locally

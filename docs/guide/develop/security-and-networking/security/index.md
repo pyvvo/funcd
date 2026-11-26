@@ -270,7 +270,7 @@ its message starts with `manifest is invalid (<kind> "<name>")`:
 
 | Error | Action |
 | --- | --- |
-| `no node interpreter found for the node handler` | `funcdctl dev` found no Node.js for the example's Function. Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
+| `no node interpreter found for the node handler` | `funcdctl dev` found no Node.js for the example's Function. Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. With Docker or nerdctl, `funcdctl dev --containers` needs no Node.js. |
 | `<folder> holds no Function or Workflow image step to run` | `funcdctl dev` does not start on a folder of Identities and grants alone. Start an example that holds a Function, and apply them to it, as the first example does. |
 | `<file>: <kind> "<name>" is in namespace "<namespace>"; funcdctl dev runs namespace default only` | Remove `metadata.namespace` from the object, set it to `default`, or apply the file to a funcd server. |
 | `spec.type must be "external" (got "<type>")` | Set the Identity's `type` to `external`. |

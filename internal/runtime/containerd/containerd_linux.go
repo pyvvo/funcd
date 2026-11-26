@@ -1311,10 +1311,10 @@ func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.
 	}
 
 	if tar, ok := embedimg.TarForImageRef(ref); ok {
-		// Import brings the curated tar into nctx's namespace. Our curated tars carry exactly ONE
-		// image (built --provenance=false --sbom=false), so use the returned image directly — the
-		// tar names it "docker.io/funcd/runtime-<rt>:latest", the normalized name the lookup above
-		// finds on the next Create.
+		// Import brings the curated tar into nctx's namespace. Our curated tars carry ONE image (built
+		// --provenance=false --sbom=false), named "docker.io/funcd/runtime-<rt>:latest", the normalized name the
+		// lookup above finds on the next Create, and a worker runtime's also by its dev reference (ADR-0359
+		// Decision 4): use the record of the name looked up.
 		imported, ierr := d.client.Import(nctx, tar)
 		if ierr != nil {
 			return nil, mapErr(ierr, op, "import embedded image for %q", ref)
@@ -1322,7 +1322,11 @@ func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.
 		if len(imported) == 0 {
 			return nil, fault.Internalf(op, "embedded tar for %q produced no image", ref)
 		}
-		image = containerd.NewImage(d.client, imported[0])
+		names := make([]string, len(imported))
+		for i, im := range imported {
+			names[i] = im.Name
+		}
+		image = containerd.NewImage(d.client, imported[importedFor(names, name)])
 		// Import does NOT unpack into the snapshotter (Pull did, via WithPullUnpack); do it now so
 		// NewContainer's snapshot has a parent.
 		if uerr := image.Unpack(nctx, d.snapshotter()); uerr != nil {

@@ -10,7 +10,8 @@ answers each call. This example runs log-burst, which takes events and returns `
 [Serve HTTP requests](#serve-http-requests) shows a Function that takes HTTP requests.
 
 Install the [dev build of funcdctl](../../../get-started/install.md), Git, curl, and Node.js, or Python 3.12 or later
-as `python3`. `funcdctl dev` runs each Function from the code in the folder, not from the manifest's `image`, the
+as `python3`; with Docker or nerdctl instead, `funcdctl dev --containers` runs the Functions in containers and needs
+neither. `funcdctl dev` runs each Function from the code in the folder, not from the manifest's `image`, the
 [artifact](../../../platform/workloads/artifacts.md) that [`funcdctl push`](../../tools/funcdctl/spec.md#funcdctl-push)
 packs for a platform. `--gport` sets the port of the Function URLs, and `--cport` that of the control plane, which
 `funcdctl` reaches with `--server` and the token `funcd-dev-token`.
@@ -324,9 +325,9 @@ funcd refuses the calls of a `Failed` Function at once with 503. `status.current
 
 | Error | Action |
 | --- | --- |
-| `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
-| `no python interpreter found for the python handler` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
-| `cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON)` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
+| `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. With Docker or nerdctl, `funcdctl dev --containers` needs no Node.js. |
+| `no python interpreter found for the python handler` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. With Docker or nerdctl, `funcdctl dev --containers` needs no Python. |
+| `cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON)` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. With Docker or nerdctl, `funcdctl dev --containers` needs no Python. |
 | `no build of "<name>"` or `no contract file for "<name>"` | Build the Function, or name its build and its contract file after it, where [Run it locally](#run-it-locally) says that `funcdctl dev` looks. The message names the paths that it looked at. |
 | A Function's manifest and contract file `disagree on the runtime or protocol`. | Name the same `runtime` and `protocol` in both files. |
 | A resource is in another namespace: `funcdctl dev runs namespace default only`. | Set the resource's namespace to `default`. |

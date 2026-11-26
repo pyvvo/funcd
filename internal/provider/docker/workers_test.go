@@ -128,6 +128,10 @@ func (*procEngine) Platform(context.Context) (v1.OCIPlatform, error) { return "p
 
 func (*procEngine) Pull(context.Context, string) error { return nil }
 
+func (*procEngine) HasImage(context.Context, string) (bool, error) { return true, nil }
+
+func (*procEngine) Load(context.Context, io.Reader) error { return nil }
+
 func (e *procEngine) Run(_ context.Context, spec RunSpec) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -763,4 +767,76 @@ func TestRunSpecAtTheEngineAPI(t *testing.T) {
 	require.Equal(t, []string{"funcd.host:host-gateway"}, vm.HostConfig.ExtraHosts)
 	require.Empty(t, vm.Entrypoint, "the image's own entrypoint")
 	require.Equal(t, "host", helper.HostConfig.NetworkMode)
+}
+
+// ADR-0359 Decision 5: a link that resolves inside the bundle stays a link, relative to its own directory; one that
+// resolves outside is copied as what it names, a file or a directory, whose own links follow the same rule; a loop of
+// links, or a link to nothing, fails naming the link.
+func TestTarTreeLinks(t *testing.T) {
+	t.Parallel()
+	write := func(p, body string) {
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o700))
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o600))
+	}
+	link := func(target, p string) { require.NoError(t, os.Symlink(target, p)) }
+	outside := t.TempDir()
+	write(filepath.Join(outside, "src", "main.py"), "def handle(ctx, event): ...\n")
+	write(filepath.Join(outside, "node_modules", "greet", "index.mjs"), "export const greet = () => 'hi';\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(outside, "node_modules", ".bin"), 0o700))
+	link("../greet/index.mjs", filepath.Join(outside, "node_modules", ".bin", "greet"))
+
+	bundle := t.TempDir()
+	write(filepath.Join(bundle, "lib", "util.py"), "X = 1\n")
+	link(filepath.Join(outside, "src", "main.py"), filepath.Join(bundle, "main.py"))
+	link(filepath.Join(outside, "node_modules"), filepath.Join(bundle, "node_modules"))
+	link(filepath.Join(bundle, "lib", "util.py"), filepath.Join(bundle, "util.py"))
+	link("lib", filepath.Join(bundle, "libs"))
+
+	var out bytes.Buffer
+	require.NoError(t, tarTree(bundle, &out))
+	got := map[string]string{}
+	tr := tar.NewReader(&out)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		switch h.Typeflag {
+		case tar.TypeDir:
+			got[h.Name] = "dir"
+		case tar.TypeSymlink:
+			got[h.Name] = "link " + h.Linkname
+		case tar.TypeReg:
+			b, err := io.ReadAll(tr)
+			require.NoError(t, err)
+			got[h.Name] = "file " + string(b)
+		}
+	}
+	require.Equal(t, map[string]string{
+		"lib/":                         "dir",
+		"lib/util.py":                  "file X = 1\n",
+		"libs":                         "link lib",
+		"main.py":                      "file def handle(ctx, event): ...\n",
+		"node_modules/":                "dir",
+		"node_modules/.bin/":           "dir",
+		"node_modules/.bin/greet":      "file export const greet = () => 'hi';\n",
+		"node_modules/greet/":          "dir",
+		"node_modules/greet/index.mjs": "file export const greet = () => 'hi';\n",
+		"util.py":                      "link lib/util.py",
+	}, got)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(outside, "deps", "pkg"), 0o700))
+	link("..", filepath.Join(outside, "deps", "pkg", "up"))
+	loop := t.TempDir()
+	link(filepath.Join(outside, "deps"), filepath.Join(loop, "deps"))
+	err := tarTree(loop, io.Discard)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, "deps/pkg/up")
+
+	dangling := t.TempDir()
+	link(filepath.Join(outside, "gone"), filepath.Join(dangling, "gone"))
+	err = tarTree(dangling, io.Discard)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, "gone")
 }

@@ -364,6 +364,8 @@ type config struct {
 	addonSettingsTimeout time.Duration
 	// addonImages reads the images of the add-ons' kinds (WithAddonImages, ADR-0358 Decision 4); nil ⇒ the registries.
 	addonImages addonsvc.ImageReader
+	// ownRuntimeImages are the images of funcd's own runtimes under dev's opt-in (WithOwnRuntimeImages, ADR-0359).
+	ownRuntimeImages map[v1.RuntimeName]string
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
 	sqlCallTimeout time.Duration
 	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075 with a
@@ -929,6 +931,7 @@ func (p *Platform) buildControlPlane() error {
 		ImageFor:             c.imageFor,
 		Resolver:             resolver,
 		Platforms:            platforms,
+		OwnImages:            c.ownRuntimeImages,
 		Inspector:            jobContracts(c.workflowContracts),
 		BootBackoffInitial:   c.bootBackoffInitial,
 		BootBackoffMax:       c.bootBackoffMax,

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -305,53 +306,112 @@ func (w *workers) createVolume(ctx context.Context, name string, spec containerr
 }
 
 // tarTree writes the files under dir to out as a tar, owned by root and readable by any user, so the image's user reads
-// them in the read-only bundle.
+// them in the read-only bundle. A link is resolved as the OS resolves it (ADR-0359 Decision 5): one that resolves
+// inside dir stays a link, relative to its own directory, and one that resolves outside is replaced by a copy of what
+// it names, a file or a directory, as dev's folder builds and a folder's node_modules are links to the host's files; a
+// loop of links fails, naming the link. Other kinds of file are left out.
 func tarTree(dir string, out io.Writer) error {
-	tw := tar.NewWriter(out)
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || p == dir {
+	root, err := filepath.EvalSymlinks(dir)
+	if err == nil {
+		tw := tar.NewWriter(out)
+		t := treeTar{tw: tw, root: root}
+		if err = t.dir(dir, "", map[string]bool{root: true}); err == nil {
+			return tw.Close()
+		}
+	}
+	if fault.KindOf(err) == fault.Invalid {
+		return err
+	}
+	return fault.Wrapf(err, fault.Internal, "docker.tarTree", "archive the bundle %s", dir)
+}
+
+// treeTar writes one bundle's tar; root is the bundle's directory with its links resolved.
+type treeTar struct {
+	tw   *tar.Writer
+	root string
+}
+
+// dir writes the entries of the directory src under the tar's directory name ("" for the bundle's root); open holds
+// the resolved directories being written, so a link back to one of them is a loop.
+func (t treeTar) dir(src, name string, open map[string]bool) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := t.entry(filepath.Join(src, e.Name()), path.Join(name, e.Name()), open); err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil {
-			return err
+	}
+	return nil
+}
+
+func (t treeTar) entry(p, name string, open map[string]bool) error {
+	info, err := os.Lstat(p)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		real, rerr := filepath.EvalSymlinks(p)
+		if rerr != nil {
+			return fault.Invalidf("docker.tarTree", "the build's link %s names nothing it can read: %v", name, rerr)
 		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		h := &tar.Header{Name: filepath.ToSlash(rel), ModTime: info.ModTime(), Mode: 0o644}
-		switch {
-		case d.IsDir():
-			h.Typeflag, h.Name, h.Mode = tar.TypeDir, h.Name+"/", 0o755
-		case d.Type()&fs.ModeSymlink != 0:
-			if h.Linkname, err = os.Readlink(p); err != nil {
-				return err
+		if in, ok := t.inBundle(real); ok {
+			link, lerr := filepath.Rel(filepath.Dir(filepath.FromSlash(name)), filepath.FromSlash(in))
+			if lerr != nil {
+				return lerr
 			}
-			h.Typeflag = tar.TypeSymlink
-		case d.Type().IsRegular():
-			h.Typeflag, h.Size = tar.TypeReg, info.Size()
-			if info.Mode()&0o111 != 0 {
-				h.Mode = 0o755
-			}
-		default:
-			return nil
+			return t.tw.WriteHeader(&tar.Header{Typeflag: tar.TypeSymlink, Name: name, Linkname: filepath.ToSlash(link),
+				ModTime: info.ModTime(), Mode: 0o777})
 		}
-		if err := tw.WriteHeader(h); err != nil || h.Typeflag != tar.TypeReg {
+		if info, err = os.Stat(real); err != nil {
 			return err
 		}
-		f, err := os.Open(p) //nolint:gosec // a file of the worker's own bundle
+		p = real
+	}
+	h := &tar.Header{Name: name, ModTime: info.ModTime(), Mode: 0o644}
+	switch {
+	case info.IsDir():
+		real, rerr := filepath.EvalSymlinks(p)
+		if rerr != nil {
+			return rerr
+		}
+		if open[real] {
+			return fault.Invalidf("docker.tarTree", "the build's link %s loops back to a directory that holds it", name)
+		}
+		h.Typeflag, h.Name, h.Mode = tar.TypeDir, name+"/", 0o755
+		if err := t.tw.WriteHeader(h); err != nil {
+			return err
+		}
+		open[real] = true
+		defer delete(open, real)
+		return t.dir(p, name, open)
+	case info.Mode().IsRegular():
+		h.Typeflag, h.Size = tar.TypeReg, info.Size()
+		if info.Mode()&0o111 != 0 {
+			h.Mode = 0o755
+		}
+		if err := t.tw.WriteHeader(h); err != nil {
+			return err
+		}
+		f, err := os.Open(p) //nolint:gosec // a file of the worker's own bundle, or one its build links to
 		if err != nil {
 			return err
 		}
 		defer func() { _ = f.Close() }()
-		_, err = io.Copy(tw, f)
+		_, err = io.Copy(t.tw, f)
 		return err
-	})
-	if err != nil {
-		return fault.Wrapf(err, fault.Internal, "docker.tarTree", "archive the bundle %s", dir)
 	}
-	return tw.Close()
+	return nil
+}
+
+// inBundle is real's path in the bundle, slash-separated, when real lies under the bundle's root.
+func (t treeTar) inBundle(real string) (string, bool) {
+	rel, err := filepath.Rel(t.root, real)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 // Start runs the worker's container from its spec: the image's entrypoint, or its Command, with FUNCD_LOG_STDOUT, so the

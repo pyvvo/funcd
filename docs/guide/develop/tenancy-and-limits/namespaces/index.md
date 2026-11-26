@@ -199,7 +199,7 @@ These errors stop a command before any server answers:
 
 | Error | Action |
 | --- | --- |
-| `no node interpreter found for the node handler` | `funcdctl dev` found no Node.js for the example's Function. Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
+| `no node interpreter found for the node handler` | `funcdctl dev` found no Node.js for the example's Function. Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. With Docker or nerdctl, `funcdctl dev --containers` needs no Node.js. |
 | `<file>: <kind> "<name>" is in namespace "<namespace>"; funcdctl dev runs namespace default only` | Remove `metadata.namespace` from the object, set it to `default`, or apply the file to a funcd server. |
 | `manifest is invalid (<kind> "<name>")`, followed by `resourceGroup is required for kind "<kind>"` | `funcdctl apply` checks each document before it sends it. Set `metadata.resourceGroup` on every object of a namespace. |
 | `manifest is invalid (Namespace "<name>")`, followed by a value that `must be implicit or explicit` or `must be authenticated or open` | Set `defaultExposure` or `edgeDefaults.auth.mode` to a value that the [Spec](spec.md#namespacespec) tab lists. |

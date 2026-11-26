@@ -217,23 +217,23 @@ func waitPhase(t *testing.T, inst *devInstance, name string, phase v1.Phase) *v1
 	return fn
 }
 
-// runJob applies Job name on deno2 from build, written under the folder's jobs/, and returns its run name-1 once it has
+// runJob applies Job name on rt from build, written under the folder's jobs/, and returns its run name-1 once it has
 // ended.
-func runJob(t *testing.T, inst *devInstance, dir, name, build string) *v1.JobRun {
+func runJob(t *testing.T, inst *devInstance, dir, name string, rt v1.RuntimeName, build string) *v1.JobRun {
 	t.Helper()
 	writeProject(t, dir, map[string]string{"jobs/" + name + "/handler.mjs": build})
-	return runJobImage(t, inst, name, "file://"+filepath.Join(dir, "jobs", name, "handler.mjs"), "")
+	return runJobImage(t, inst, name, rt, "file://"+filepath.Join(dir, "jobs", name, "handler.mjs"), "")
 }
 
-// runJobImage applies Job name on deno2 from image at digest, whose runs need no approval (ADR-0348), and its run
+// runJobImage applies Job name on rt from image at digest, whose runs need no approval (ADR-0348), and its run
 // name-1, and returns the run once it has ended.
-func runJobImage(t *testing.T, inst *devInstance, name, image, digest string) *v1.JobRun {
+func runJobImage(t *testing.T, inst *devInstance, name string, rt v1.RuntimeName, image, digest string) *v1.JobRun {
 	t.Helper()
 	ctx := context.Background()
 	obj, _ := v1.NewObject(v1.KindJob)
 	job := obj.(*v1.Job)
 	setMeta(&job.ObjectMeta, v1.ObjectName(name))
-	job.Spec = v1.JobSpec{Runtime: "deno2", Handler: "handle", Image: image, ImageDigest: digest, Approval: v1.JobApproval{Bypass: true}}
+	job.Spec = v1.JobSpec{Runtime: rt, Handler: "handle", Image: image, ImageDigest: digest, Approval: v1.JobApproval{Bypass: true}}
 	_, err := inst.client.Apply(ctx, job)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
@@ -281,7 +281,7 @@ func TestScenarioDevAddonWorker(t *testing.T) {
 	waitPhase(t, inst, "api", v1.PhaseReady)
 	require.Len(t, d.workers(key), 1, "greeter's worker is a container; api's is a process")
 
-	run := runJob(t, inst, dir, "hello", "export function handle() { return { done: true }; }\n")
+	run := runJob(t, inst, dir, "hello", "deno2", "export function handle() { return { done: true }; }\n")
 	require.Equal(t, v1.JobRunSucceeded, run.Status.Phase, "%+v", run.Status.Conditions)
 	require.JSONEq(t, `{"done":true}`, string(run.Status.Result))
 	require.Eventually(t, func() bool { return len(d.workers(key)) == 1 }, time.Minute, 100*time.Millisecond,
@@ -346,7 +346,7 @@ func TestScenarioDevAddonWorkerPlatform(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 	require.JSONEq(t, want, body)
 
-	run := runJobImage(t, inst, "bundled-job", ref, digest)
+	run := runJobImage(t, inst, "bundled-job", "deno2", ref, digest)
 	require.Equal(t, v1.JobRunSucceeded, run.Status.Phase, "%+v", run.Status.Conditions)
 	require.JSONEq(t, want, string(run.Status.Result))
 }
@@ -453,7 +453,7 @@ func TestScenarioDevAddonWorkerOutput(t *testing.T) {
 	removeKeyAtCleanup(t, sock, sessionKey(t, cfg, dir))
 	inst, _ := startAddonDev(t, dir, cfg)
 
-	run := runJob(t, inst, dir, "loud", "console.log('loud-line');\nprocess.exit(3);\nexport function handle() { return {}; }\n")
+	run := runJob(t, inst, dir, "loud", "deno2", "console.log('loud-line');\nprocess.exit(3);\nexport function handle() { return {}; }\n")
 	require.NotEqual(t, v1.JobRunSucceeded, run.Status.Phase)
 	var ended string
 	for _, c := range run.Status.Conditions {

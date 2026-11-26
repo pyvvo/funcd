@@ -82,7 +82,8 @@ func cliError(ctx context.Context, args []string, stderr string, err error) erro
 	switch low := strings.ToLower(stderr); {
 	case ctx.Err() != nil:
 		return fault.Wrapf(err, fault.Unavailable, op, "%s did not end: %s", call, msg)
-	case strings.Contains(low, "no such container"), strings.Contains(low, "no such object"), strings.Contains(low, "not found"):
+	case strings.Contains(low, "no such container"), strings.Contains(low, "no such object"), strings.Contains(low, "no such image"),
+		strings.Contains(low, "not found"):
 		return fault.Wrapf(err, fault.NotFound, op, "%s: %s", call, msg)
 	case strings.Contains(low, "is in use"):
 		return fault.Wrapf(err, fault.Conflict, op, "%s: %s", call, msg)
@@ -146,6 +147,24 @@ func lines(b []byte) []string {
 		}
 	}
 	return out
+}
+
+// HasImage runs nerdctl image inspect: false when nerdctl names no such image (ADR-0359 Decision 4).
+func (c cli) HasImage(ctx context.Context, ref string) (bool, error) {
+	_, err := c.run(ctx, nil, "image", "inspect", ref)
+	switch {
+	case err == nil:
+		return true, nil
+	case fault.KindOf(err) == fault.NotFound:
+		return false, nil
+	}
+	return false, err
+}
+
+// Load runs nerdctl load with tar on its standard input (ADR-0359 Decision 4).
+func (c cli) Load(ctx context.Context, tar io.Reader) error {
+	_, err := c.run(ctx, tar, "load")
+	return err
 }
 
 // Platform is nerdctl's own platform: it runs beside containerd, in the VM when the engine is in one.

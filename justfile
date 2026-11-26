@@ -138,34 +138,17 @@ act-bundle:
 # store refuses rewrite-timestamp on an image it unpacks, hence unpack=false: docker save needs no unpacked image.
 ARCH := `go env GOARCH`
 [group('runtime')]
-build-runtime-images: embedimg-pin
-    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} --build-arg SOURCE_DATE_EPOCH=315532800 --build-context shim="$(scripts/moddir.sh github.com/pyvvo/funcd-typescript)/shim" -f images/runtime/nodejs22/Dockerfile --output type=image,name=funcd/runtime-nodejs22:latest,rewrite-timestamp=true,unpack=false .
-    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} --build-arg SOURCE_DATE_EPOCH=315532800 --build-context shim="$(scripts/moddir.sh github.com/pyvvo/funcd-python)/shim" -f images/runtime/python314/Dockerfile --output type=image,name=funcd/runtime-python314:latest,rewrite-timestamp=true,unpack=false .
-    just _check-python-image {{ARCH}}
+build-runtime-images: build-worker-images
     docker build --provenance=false --sbom=false --platform linux/{{ARCH}} --build-arg SOURCE_DATE_EPOCH=315532800 -f images/runtime/duckdb/Dockerfile --output type=image,name=funcd/runtime-duckdb:latest,rewrite-timestamp=true,unpack=false .
-    docker save funcd/runtime-nodejs22:latest | gzip -9n > internal/runtime/embedimg/nodejs22.tar
-    docker save funcd/runtime-python314:latest | gzip -9n > internal/runtime/embedimg/python314.tar
     just _build-rqlite-image {{ARCH}}
     docker save funcd/runtime-duckdb:latest | gzip -9n > internal/runtime/embedimg/duckdb.tar
     docker save funcd/runtime-rqlite:latest | gzip -9n > internal/runtime/embedimg/rqlite.tar
     @echo "embedded OCI tars written to internal/runtime/embedimg/ for {{ARCH}} (replaces the placeholders)"
 
-# The python314 image loads its shim with the stdlib and its library closure alone: no fastjsonschema (ADR-0304).
-# An image for an arch the docker host does not run is not started, so its check is skipped.
-_check-python-image arch:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    host=$(docker version --format '{{{{.Server.Arch}}')
-    if [ "$host" != "{{arch}}" ]; then
-        echo "SKIP the python314 load check: a {{arch}} image on a $host docker host"
-        exit 0
-    fi
-    out=$(docker run --rm --entrypoint /usr/local/bin/python3.14 funcd/runtime-python314:latest \
-        -c "import funcd_shim.shim, ssl; print('shim loads', flush=True); import fastjsonschema" 2>&1 || true)
-    case "$out" in
-        *"shim loads"*"No module named 'fastjsonschema'"*) ;;
-        *) printf 'the python314 image must load its shim and ship no fastjsonschema (ADR-0304):\n%s\n' "$out" >&2; exit 1 ;;
-    esac
+# The nodejs22 and python314 images with their dev references, which funcdctl dev --containers loads (ADR-0359).
+[group('runtime')]
+build-worker-images: embedimg-pin
+    scripts/build-worker-images.sh {{ARCH}}
 
 # Run the duckdb shim's real-engine tests (images/runtime/duckdb/engine_test.py) in funcd/runtime-duckdb, as uid 1000:
 # the shim's main() against real DuckDB, DuckLake and Quack (ADR-0271). Needs docker and the image (just
@@ -268,12 +251,12 @@ sql-engine-unpin:
 # committing a >4 KB blob even if the bit is off.
 [group('runtime')]
 embedimg-pin:
-    git update-index --skip-worktree internal/runtime/embedimg/*.tar
+    git update-index --skip-worktree internal/runtime/embedimg/*.tar internal/runtime/embedimg/*.ref
     @echo "embedimg placeholders pinned (skip-worktree) — local image builds won't dirty the tree"
 
 [group('runtime')]
 embedimg-unpin:
-    -git update-index --no-skip-worktree internal/runtime/embedimg/*.tar 2>/dev/null || true
+    -git update-index --no-skip-worktree internal/runtime/embedimg/*.tar internal/runtime/embedimg/*.ref 2>/dev/null || true
 
 # run the benchmark & sustainability harness (ADR-0040): drive the data plane + sample memory
 # across the memory and file substrate → the RAW report docs/reports/report.{md,json}, plus the

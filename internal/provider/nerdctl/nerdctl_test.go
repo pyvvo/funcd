@@ -325,3 +325,28 @@ func TestWorkersThroughNerdctl(t *testing.T) {
 	find(t, cs, []string{"rm", "-f", name})
 	find(t, cs, []string{"volume", "rm", name})
 }
+
+// ADR-0359 Decision 4: HasImage runs nerdctl image inspect, an image nerdctl does not hold is no error, and a load keeps
+// the references the tar names.
+func TestHasImageAndLoad(t *testing.T) {
+	t.Parallel()
+	bin, _ := fake(t)
+	c := cli{bin: bin}
+	ctx := context.Background()
+	const ref = "funcd/runtime-nodejs22:dev-0123456789ab"
+	has, err := c.HasImage(ctx, ref)
+	require.NoError(t, err)
+	require.False(t, has, "no such image is no error")
+
+	var b bytes.Buffer
+	tw := tar.NewWriter(&b)
+	manifest := `[{"RepoTags":["funcd/runtime-nodejs22:latest","` + ref + `"]}]`
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len(manifest))}))
+	_, err = io.WriteString(tw, manifest)
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, c.Load(ctx, &b))
+	has, err = c.HasImage(ctx, ref)
+	require.NoError(t, err)
+	require.True(t, has)
+}

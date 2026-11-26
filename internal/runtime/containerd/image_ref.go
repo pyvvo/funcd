@@ -2,6 +2,7 @@ package containerd
 
 import (
 	"errors"
+	"slices"
 
 	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/errdefs"
@@ -25,4 +26,13 @@ func normalizedRef(ref string) string {
 // network failure, a 5xx or a token endpoint's 403, is not absence.
 func imageAbsent(err error) bool {
 	return errdefs.IsNotFound(err) || errors.Is(err, docker.ErrInvalidAuthorization)
+}
+
+// importedFor is the index of the imported image named name, else 0: a worker runtime's tar names its image twice, as
+// :latest and as its dev reference (ADR-0359 Decision 4), and the driver uses the one it looked up.
+func importedFor(names []string, name string) int {
+	if i := slices.Index(names, name); i >= 0 {
+		return i
+	}
+	return 0
 }

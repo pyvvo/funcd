@@ -111,6 +111,11 @@ type Engine interface {
 	Inspect(ctx context.Context, name string) (c Container, ok bool, err error)
 	// Pull makes image present, pulling it with no credentials when it is not.
 	Pull(ctx context.Context, image string) error
+	// HasImage reports whether the engine holds the image ref (ADR-0359 Decision 4).
+	HasImage(ctx context.Context, ref string) (bool, error)
+	// Load loads the images of tar, an image tar as docker save writes it, under the references it names (ADR-0359
+	// Decision 4).
+	Load(ctx context.Context, tar io.Reader) error
 	// Run creates and starts a container from spec.
 	Run(ctx context.Context, spec RunSpec) error
 	// Stop sends the container its stop signal and kills it after grace; nil when it is stopped or gone.
@@ -1223,6 +1228,38 @@ func labelFilter(labels map[string]string) string {
 	return string(b)
 }
 
+func (e *engineAPI) HasImage(ctx context.Context, ref string) (bool, error) {
+	code, _, err := e.send(ctx, http.MethodGet, "/images/"+ref+"/json", nil, nil)
+	switch code {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	}
+	return false, err
+}
+
+func (e *engineAPI) Load(ctx context.Context, tar io.Reader) error {
+	const op = "docker.Load"
+	resp, err := e.do(ctx, http.MethodPost, "/images/load", url.Values{"quiet": {"1"}}, tar, "application/x-tar")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes))
+		return engineError("POST /images/load", resp.StatusCode, b)
+	}
+	msg, err := streamError(resp.Body)
+	if err != nil {
+		return fault.Wrapf(err, fault.Unavailable, op, "read the load's answer")
+	}
+	if msg != "" {
+		return fault.Invalidf(op, "load an image: %s", msg)
+	}
+	return nil
+}
+
 func (e *engineAPI) Platform(ctx context.Context) (v1.OCIPlatform, error) {
 	_, b, err := e.send(ctx, http.MethodGet, "/version", nil, nil)
 	if err != nil {
@@ -1298,11 +1335,7 @@ func (e *engineAPI) Inspect(ctx context.Context, name string) (Container, bool, 
 
 func (e *engineAPI) Pull(ctx context.Context, image string) error {
 	const op = "docker.Pull"
-	code, _, err := e.send(ctx, http.MethodGet, "/images/"+image+"/json", nil, nil)
-	switch {
-	case code == http.StatusOK:
-		return nil
-	case code != http.StatusNotFound:
+	if has, err := e.HasImage(ctx, image); has || err != nil {
 		return err
 	}
 	resp, err := e.do(ctx, http.MethodPost, "/images/create", url.Values{"fromImage": {image}}, nil, "")
@@ -1318,18 +1351,30 @@ func (e *engineAPI) Pull(ctx context.Context, image string) error {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes))
 		return pullErr(engineError("POST /images/create", resp.StatusCode, b).Error())
 	}
-	dec := json.NewDecoder(resp.Body)
+	msg, err := streamError(resp.Body)
+	if err != nil {
+		return fault.Wrapf(err, fault.Unavailable, op, "read the pull of %s", image)
+	}
+	if msg != "" {
+		return pullErr(msg)
+	}
+	return nil
+}
+
+// streamError reads an engine's stream of JSON messages to its end and returns the first error one holds, "" for none.
+func streamError(r io.Reader) (string, error) {
+	dec := json.NewDecoder(r)
 	for {
 		var m struct {
 			Error string `json:"error"`
 		}
 		if err := dec.Decode(&m); errors.Is(err, io.EOF) {
-			return nil
+			return "", nil
 		} else if err != nil {
-			return fault.Wrapf(err, fault.Unavailable, op, "read the pull of %s", image)
+			return "", err
 		}
 		if m.Error != "" {
-			return pullErr(m.Error)
+			return m.Error, nil
 		}
 	}
 }

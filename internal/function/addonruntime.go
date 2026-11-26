@@ -87,10 +87,13 @@ func (r *Reconciler) runtimeGate(w workload, sh shipped, recorded string) (gateF
 	case recorded != "":
 		cause = "the Addon that shipped it is gone"
 	case r.endpointMode == EndpointLoopback:
-		if r.shimFor(rt) != nil || r.pooled(w.fn()) {
+		if r.shimFor(rt) != nil || r.pooled(w.fn()) || r.ownImage(rt) != "" {
 			return gateFailure{}, false
 		}
 		cause = "no shim is registered for it"
+		if len(r.ownImages) > 0 {
+			cause = "no image is set for it, and its workers run in containers (ADR-0359 Decision 1)"
+		}
 	case r.endpointMode == EndpointNetnsFixedPort && rt == lakesvc.DuckDBRuntime:
 		cause = "it is the Lake engine image, not a function runtime"
 	default:
@@ -125,10 +128,19 @@ func (r *Reconciler) endpointHost() string {
 // platform; p is "" when no engine runs the worker, and the runtime gate says why.
 func (r *Reconciler) workerPlatform(rt v1.RuntimeName) (p v1.OCIPlatform, ok bool) {
 	ir, ok := r.runtime.(runtime.ImageRunner)
-	if !ok || ownRuntime(rt) {
+	if !ok || ownRuntime(rt) && r.ownImages[rt] == "" {
 		return "", false
 	}
 	return ir.ImagePlatform(), true
+}
+
+// ownImage is the image that funcd's own runtime rt runs from on a worker runtime that runs images, under dev's
+// opt-in; "" for the process driver.
+func (r *Reconciler) ownImage(rt v1.RuntimeName) string {
+	if runs, _ := r.runsImages(); !runs {
+		return ""
+	}
+	return r.ownImages[rt]
 }
 
 // addonImage is the image a process-mode server runs w's worker of revision rev from, when it runs one (ADR-0346
@@ -136,7 +148,8 @@ func (r *Reconciler) workerPlatform(rt v1.RuntimeName) (p v1.OCIPlatform, ok boo
 // images. ok is false for any other worker, which the process driver runs.
 func (r *Reconciler) addonImage(ctx context.Context, w workload, rev v1.ObjectName) (string, bool, error) {
 	if ownRuntime(w.spec.Runtime) {
-		return "", false, nil
+		img := r.ownImage(w.spec.Runtime)
+		return img, img != "", nil
 	}
 	if ok, _ := r.runsImages(); !ok {
 		return "", false, nil

@@ -133,6 +133,12 @@ func WithAddonImages(r addonsvc.ImageReader) Option {
 	return func(c *config) error { c.addonImages = r; return nil }
 }
 
+// WithOwnRuntimeImages runs the workers of funcd's own runtimes from images, each runtime's of images, on the worker
+// runtime that runs images: funcdctl dev's --containers (ADR-0359 Decision 1).
+func WithOwnRuntimeImages(images map[v1.RuntimeName]string) Option {
+	return func(c *config) error { c.ownRuntimeImages = images; return nil }
+}
+
 // WithAddonsFollowingCurrent makes every add-on object follow its Addon's current revision, as funcdctl dev does: a
 // changed Addon runs at once, with no App revision to move it (ADR-0339 Decision 7).
 func WithAddonsFollowingCurrent() Option {

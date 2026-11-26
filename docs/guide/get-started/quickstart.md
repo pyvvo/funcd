@@ -8,7 +8,8 @@ This page runs the hello-world example of [funcd-typescript](https://github.com/
 machine. It needs no funcd server. It needs only two things:
 
 - `funcdctl` in its dev build (see [Install](install.md));
-- Node.js on the `PATH`, because funcd starts the Function with `node`.
+- Node.js on the `PATH`, because funcd starts the Function with `node`, or else Docker or nerdctl, to run it in a
+  container (see step 2).
 
 ## 1. Get the example
 
@@ -51,6 +52,9 @@ export const handle: Handler<FuncInput, FuncOutput> = (context, event) => {
 ```sh
 funcdctl dev --gport 8081 --cport 8080
 ```
+
+With Docker or nerdctl and no Node.js, add `--containers`: the Function then runs in a container, from an image that
+funcdctl carries.
 
 `funcdctl dev` starts an embedded platform, runs the folder's Functions and prints where they answer:
 

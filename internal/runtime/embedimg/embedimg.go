@@ -16,10 +16,8 @@ package embedimg
 import (
 	"bytes"
 	"compress/gzip"
-	"embed"
+	_ "embed" // the images below
 	"io"
-	"maps"
-	"slices"
 	"strings"
 
 	"github.com/distribution/reference"
@@ -31,28 +29,28 @@ import (
 // build-runtime-images` tags funcd/runtime-<rt>:latest), the name client.Import stores it under.
 const curatedRepoPrefix = "docker.io/" + config.DefaultImagePrefix
 
-// curated holds the embedded per-arch OCI image tars. The build wires the arch-matching
-// tars in (a per-arch release build embeds its own matching-arch image — ADR-0054).
-//
-//go:embed nodejs22.tar
-//go:embed python314.tar
-//go:embed duckdb.tar
-//go:embed rqlite.tar
-var curated embed.FS
-
-// tarFile maps a runtime name to its embedded OCI tar filename.
-//
-//nolint:gochecknoglobals // sanctioned static lookup table (read-only), same form as api/fault/problem.go — ADR-0002 §5.
-var tarFile = map[string]string{
-	"nodejs22":  "nodejs22.tar",
-	"python314": "python314.tar",
-	"duckdb":    "duckdb.tar",
-	"rqlite":    "rqlite.tar",
-}
+// The embedded per-arch OCI image tars, each in a go:embed of its own, so that a binary embeds only the images it
+// reads: the build wires the arch-matching tars in (a per-arch release build embeds its own matching-arch image —
+// ADR-0054). Each worker runtime's tar has a reference file beside it, the dev reference that `just
+// build-worker-images` gives its image (ADR-0359 Decision 4), empty in the committed placeholder.
+var (
+	//go:embed nodejs22.tar
+	nodejs22Tar []byte
+	//go:embed nodejs22.ref
+	nodejs22Ref string
+	//go:embed python314.tar
+	python314Tar []byte
+	//go:embed python314.ref
+	python314Ref string
+	//go:embed duckdb.tar
+	duckdbTar []byte
+	//go:embed rqlite.tar
+	rqliteTar []byte
+)
 
 // Runtimes are the names of funcd's own runtimes, those whose images it embeds, sorted: no Addon may ship a runtime of
 // one of these names (ADR-0344 Decision 4). It reads no image, so a binary that calls only it embeds none.
-func Runtimes() []string { return slices.Sorted(maps.Keys(tarFile)) }
+func Runtimes() []string { return []string{"duckdb", "nodejs22", "python314", "rqlite"} }
 
 // Tar returns the embedded OCI image tar for a runtime ("nodejs22"/"python314") as a fresh,
 // UNCOMPRESSED reader ready for containerd's client.Import (which reads a raw tar stream, not a
@@ -63,17 +61,40 @@ func Runtimes() []string { return slices.Sorted(maps.Keys(tarFile)) }
 // imagePrefix); any other ref, and a pull that finds no image, is the driver's NotFound wrapping
 // runtime.ErrImageUnavailable (ADR-0149), never a silent miss. The returned reader is independent per call.
 func Tar(runtime string) (r io.Reader, ok bool) {
-	name, known := tarFile[runtime]
-	if !known {
-		return nil, false
-	}
-	data, err := curated.ReadFile(name)
-	if err != nil {
-		// The file is embedded at compile time, so a read error here is impossible in a
-		// built binary; treat a (theoretical) miss as "no embedded tar" rather than panic.
+	var data []byte
+	switch runtime {
+	case "nodejs22":
+		data = nodejs22Tar
+	case "python314":
+		data = python314Tar
+	case "duckdb":
+		data = duckdbTar
+	case "rqlite":
+		data = rqliteTar
+	default:
 		return nil, false
 	}
 	return tarReader(data), true
+}
+
+// WorkerTar returns the embedded tar of a worker runtime's image, "nodejs22" or "python314", as Tar does, and the dev
+// reference the image carries (ADR-0359 Decisions 3 and 4); ok is false for another runtime, or for the committed
+// placeholder, whose reference is empty. It reads no other image, so funcdctl, which calls it and not Tar, embeds
+// these two alone.
+func WorkerTar(runtime string) (r io.Reader, ref string, ok bool) {
+	var data []byte
+	switch runtime {
+	case "nodejs22":
+		data, ref = nodejs22Tar, nodejs22Ref
+	case "python314":
+		data, ref = python314Tar, python314Ref
+	default:
+		return nil, "", false
+	}
+	if ref = strings.TrimSpace(ref); ref == "" {
+		return nil, "", false
+	}
+	return tarReader(data), ref, true
 }
 
 // tarReader returns a plain-tar reader over data, transparently gunzipping it when it carries the

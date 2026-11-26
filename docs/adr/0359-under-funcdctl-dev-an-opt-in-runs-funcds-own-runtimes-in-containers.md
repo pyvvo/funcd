@@ -1,6 +1,6 @@
 # ADR-0359: Under funcdctl dev, an opt-in runs funcd's own runtimes in containers, from images funcdctl carries (amends ADR-0346)
 
-- **Status**: Accepted (2026-11-26), by the decider ("accept"), after three rounds of an independent judge at medium
+- **Status**: Reviewing (2026-11-26, implemented); Accepted (2026-11-26), by the decider ("accept"), after three rounds of an independent judge at medium
   effort, every Major and Minor folded
 - **Date**: 2026-11-26
 - **Deciders**: green-0-rabbit

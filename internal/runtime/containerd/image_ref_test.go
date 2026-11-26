@@ -95,3 +95,13 @@ func ghcrTokenDenied(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("WWW-Authenticate", `Bearer realm="http://`+r.Host+`/token",service="registry.test",scope="repository:acme/runtime-ruby3:pull"`)
 	w.WriteHeader(http.StatusUnauthorized)
 }
+
+// ADR-0359 Decision 4: a worker runtime's tar names its image twice, and the import uses the name it looked up.
+func TestImportedFor(t *testing.T) {
+	t.Parallel()
+	latest := "docker.io/funcd/runtime-nodejs22:latest"
+	dev := "docker.io/funcd/runtime-nodejs22:dev-0123456789ab"
+	require.Equal(t, 1, importedFor([]string{dev, latest}, latest))
+	require.Equal(t, 0, importedFor([]string{latest, dev}, latest))
+	require.Equal(t, 0, importedFor([]string{"docker.io/funcd/runtime-duckdb:latest"}, latest), "one image: its record")
+}

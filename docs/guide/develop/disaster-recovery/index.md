@@ -266,7 +266,7 @@ These local errors stop a command before any server answers:
 
 | Error | Action |
 | --- | --- |
-| `no node interpreter found for the node handler` | `funcdctl dev` found no Node.js. Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
+| `no node interpreter found for the node handler` | `funcdctl dev` found no Node.js. Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. With Docker or nerdctl, `funcdctl dev --containers` needs no Node.js. |
 | `--rpo <duration>: a cron fires at most once a minute, so want at least 2m` | Give `funcdctl backup plan schedule` an RPO of 2 minutes or more. |
 | `-f <file> holds <n> BackupSchedule documents: want one` | Give `funcdctl backup plan schedule` a file that holds one BackupSchedule. |
 
