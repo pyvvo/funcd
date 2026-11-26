@@ -9,6 +9,7 @@ package nats
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -269,21 +270,23 @@ func (s *server) Call(ctx context.Context, node v1.ObjectName, c nodeapi.Call) (
 }
 
 // request serves one request of a joined node, the one its subject names, as the node its subject names: only that node's
-// certificate may publish there (auth).
+// certificate may publish there (auth). The control plane answers on its own connection, which may publish anywhere, so
+// it answers only into the inbox of the node that asked, and drops a request that names another reply subject.
 func (s *server) request(h nodeapi.Handler, m *nats.Msg) {
+	parts := strings.Split(m.Subject, ".")
+	if len(parts) != 5 || !strings.HasPrefix(m.Reply, inbox(v1.ObjectName(parts[2]), parts[3])+".") {
+		s.cfg.Logger.Warn("node API: a request whose answer would leave its node's inbox is dropped", "subject", m.Subject,
+			"reply", m.Reply)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), handlerTimeout)
 	defer cancel()
-	out, err := s.serve(ctx, h, m)
+	out, err := s.serve(ctx, h, m, v1.ObjectName(parts[2]), parts[3], parts[4])
 	s.reply(m, out, err)
 }
 
-func (s *server) serve(ctx context.Context, h nodeapi.Handler, m *nats.Msg) (json.RawMessage, error) {
+func (s *server) serve(ctx context.Context, h nodeapi.Handler, m *nats.Msg, node v1.ObjectName, serial, name string) (json.RawMessage, error) {
 	const op = "nats.request"
-	parts := strings.Split(m.Subject, ".")
-	if len(parts) != 5 {
-		return nil, fault.NotFoundf(op, "no request %q", m.Subject)
-	}
-	node, serial, name := v1.ObjectName(parts[2]), parts[3], parts[4]
 	version, err := strconv.Atoi(m.Header.Get(headerAPIVersion))
 	if err != nil || !nodeapi.Supported(version) {
 		return nil, fault.Conflictf(op, "this control plane serves node API versions %s; upgrade or downgrade the node", versions())
@@ -370,6 +373,10 @@ func (s *server) dispatch(ctx context.Context, h nodeapi.Handler, node v1.Object
 
 // join swaps a one-time token for a node certificate: the one request of a connection with no certificate.
 func (s *server) join(h nodeapi.Handler, m *nats.Msg) {
+	if !strings.HasPrefix(m.Reply, joinInbox+".") {
+		s.cfg.Logger.Warn("node API: a join whose answer would leave the joins' inbox is dropped", "reply", m.Reply)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), handlerTimeout)
 	defer cancel()
 	var in nodeapi.JoinRequest
@@ -465,7 +472,7 @@ func (a auth) Check(c natsserver.ClientAuthentication) bool {
 		return false
 	}
 	if o := c.GetOpts(); o != nil && o.Token != "" {
-		if o.Token != a.secret {
+		if subtle.ConstantTimeCompare([]byte(o.Token), []byte(a.secret)) != 1 {
 			return false
 		}
 		c.RegisterUser(&natsserver.User{Username: "funcd"})

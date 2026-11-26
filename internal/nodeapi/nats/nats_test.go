@@ -63,15 +63,24 @@ func TestScenarioNATSPassesTheNodeAPIContract(t *testing.T) {
 	})
 }
 
-// stub is a Handler that lets every node in and records the statuses it gets; it answers a snapshot of big objects.
+// stub is a Handler that lets every node in and records the statuses and joins it gets; it answers a snapshot of big
+// objects, and refuses every join.
 type stub struct {
 	nodeapi.Handler
 	mu       sync.Mutex
 	statuses []string
+	joins    int
 	big      int
 }
 
 func (*stub) Admit(context.Context, nodeapi.Peer) error { return nil }
+
+func (s *stub) Join(context.Context, nodeapi.JoinRequest) (nodeapi.JoinResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.joins++
+	return nodeapi.JoinResponse{}, fault.Forbiddenf("stub.join", "no join here")
+}
 
 func (s *stub) Status(_ context.Context, node v1.ObjectName, in nodeapi.StatusWrite) error {
 	s.mu.Lock()
@@ -143,6 +152,48 @@ func TestANodePublishesUnderItsOwnNameOnly(t *testing.T) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	require.Equal(t, []string{"vm1 mine", "vm1 again"}, h.statuses)
+}
+
+// The control plane answers on a connection that may publish anywhere, so it answers only into the inbox of whoever
+// asked: a request or a join that names another reply subject is dropped, and no node hears another's answers.
+func TestAnAnswerGoesOnlyIntoTheInboxOfTheNodeThatAsked(t *testing.T) {
+	srv, ca := listen(t)
+	h := &stub{}
+	serve(t, srv, h)
+	vm1, serial1 := raw(t, srv, identity(t, ca, "nats://"+srv.Addr(), "vm1"))
+	vm2, serial2 := raw(t, srv, identity(t, ca, "nats://"+srv.Addr(), "vm2"))
+	heard, err := vm2.SubscribeSync("_INBOX_vm2_" + serial2 + ".>")
+	require.NoError(t, err)
+	called, err := vm2.SubscribeSync("funcd.call.vm2." + serial2)
+	require.NoError(t, err)
+	require.NoError(t, vm2.Flush())
+	joiner, err := nats.Connect("tls://"+srv.Addr(), nats.Secure(&tls.Config{RootCAs: ca.Pool(), MinVersion: tls.VersionTLS13}),
+		nats.CustomInboxPrefix("_INBOX_join"))
+	require.NoError(t, err)
+	t.Cleanup(joiner.Close)
+	status := func(reply string) *nats.Msg {
+		msg := nats.NewMsg("funcd.node.vm1." + serial1 + ".status")
+		msg.Reply = reply
+		msg.Header.Set("Funcd-Node-Api", "1")
+		msg.Data = []byte(`{"name":"x","status":{}}`)
+		return msg
+	}
+	require.NoError(t, vm1.PublishMsg(status("_INBOX_vm2_"+serial2+".a")))
+	require.NoError(t, vm1.PublishMsg(status("funcd.call.vm2."+serial2)))
+	require.NoError(t, joiner.PublishMsg(&nats.Msg{Subject: "funcd.join", Reply: "_INBOX_vm2_" + serial2 + ".b", Data: []byte(`{}`)}))
+	_, err = heard.NextMsg(300 * time.Millisecond)
+	require.ErrorIs(t, err, nats.ErrTimeout, "no answer reaches another node's inbox")
+	_, err = called.NextMsg(10 * time.Millisecond)
+	require.ErrorIs(t, err, nats.ErrTimeout, "nor its call subject")
+	h.mu.Lock()
+	require.Empty(t, h.statuses, "a dropped request reaches no Handler")
+	require.Zero(t, h.joins, "nor a dropped join")
+	h.mu.Unlock()
+
+	_, err = vm1.RequestMsg(status(""), 5*time.Second)
+	require.NoError(t, err, "the same request with the node's own inbox is answered")
+	_, err = joiner.Request("funcd.join", []byte(`{}`), 5*time.Second)
+	require.NoError(t, err, "and so is a join with the joins' inbox, here with its refusal")
 }
 
 // A node that speaks a node API version this control plane does not serve is refused, whatever it sends (decision 12).
