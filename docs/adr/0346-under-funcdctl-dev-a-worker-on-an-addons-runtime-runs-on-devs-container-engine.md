@@ -10,6 +10,10 @@
   [ADR-0145](0145-multi-arch-function-bundles-and-arch-aware-placement.md) Decision 6); and on
   [#1583](https://github.com/pyvvo/funcd/pull/1583): in a Lima VM a worker reaches funcd at the address the VM gives its
   host, since nerdctl's host gateway is the VM (Decision 5)
+- **Amended in place**: 2026-11-26, by the decider ("A, we should just amend and build it quickly"): a directory the
+  bundle links to that the engine can see, as a folder's `node_modules`, is bind-mounted read-only
+  ([ADR-0359](0359-under-funcdctl-dev-an-opt-in-runs-funcds-own-runtimes-in-containers.md) Decision 5; Decision 4 and
+  the Review checklist)
 - **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md) (2026-11-23) — the Contracts' ListenerFor takes the caller's ref
 - **Superseded in part by**: [ADR-0359](0359-under-funcdctl-dev-an-opt-in-runs-funcds-own-runtimes-in-containers.md)
   (2026-11-26) — its Scope's Out item "funcd's own runtimes on the engine", Decision 2's sentence that no other
@@ -117,12 +121,14 @@ Desktop's gateway.
    both enforce them. Dev passes it in both of its option lists (`dev.go:1080`, `:1092`).
 4. **The worker driver.** `docker.NewWorkers` runs workers on the engine dev found for its add-on engines (ADR-0334
    Decision 1, nerdctl through the same `Engine`). It copies the bundle into the worker's volume through ADR-0334's
-   helper and mounts it read-only, never a bind mount; takes the worker as listening once its `/health/readiness`
-   answers with any status, checked within `Status` with no timer of its own; reads stdout and stderr through the
-   engine's log follow, as the containerd driver reads a task's FIFOs (ADR-0168); records the exit code, and the
-   signal when the code is above 128; and sets `resources` as the engine's CPU and memory limits. A container worker
-   has no structured-log channel, so the driver sets `FUNCD_LOG_STDOUT`, which no other worker gets, and the shims
-   then print each record to stdout (plan step 5), and its records reach funcd as lines. It pulls as ADR-0334 does.
+   helper and mounts it read-only, never a bind mount but for the directories the bundle links to that the engine can
+   see, which ADR-0359 Decision 5 binds read-only (amended 2026-11-26); takes the worker as listening once its
+   `/health/readiness` answers with any status, checked within `Status` with no timer of its own; reads stdout and
+   stderr through the engine's log follow, as the containerd driver reads a task's FIFOs (ADR-0168); records the exit
+   code, and the signal when the code is above 128; and sets `resources` as the engine's CPU and memory limits. A
+   container worker has no structured-log channel, so the driver sets `FUNCD_LOG_STDOUT`, which no other worker gets,
+   and the shims then print each record to stdout (plan step 5), and its records reach funcd as lines. It pulls as
+   ADR-0334 does.
 5. **The network.** funcd's listeners stay on the host's `127.0.0.1`, and `ImageRunner.EndpointHost` names the host a
    container worker reaches them by.
    - An engine whose host-network helper reads the host's own boot ID (`/proc/sys/kernel/random/boot_id`) shares the
@@ -243,7 +249,8 @@ ReleaseListener(id runtime.InstanceID)
 - [ ] Under dev, a worker on an Addon's runtime runs on the engine and one on funcd's runtimes on the process driver;
       with no engine or a rootless one, the cause says so.
 - [ ] No process-mode Function or Job spec sets `Image`; `Pair` routes by it and forwards each capability as Decision 3.
-- [ ] Nothing a worker needs is bind-mounted; on Linux it uses the host's network, on macOS `funcd.host`.
+- [ ] Nothing a worker needs is bind-mounted, but ADR-0359 Decision 5's linked directories (amended 2026-11-26); on Linux
+      it uses the host's network, on macOS `funcd.host`.
 - [ ] Each worker's listener checks its token in constant time, strips it before any pass-through, and goes at
       `Remove`; another token or none gets 403.
 - [ ] Worker containers carry the key and the role `worker`; the reap clears a crashed session's, and `--persist`

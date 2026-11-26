@@ -2,6 +2,8 @@
 
 - **Status**: Implemented (2026-11-26), review passed (docs/reviews/adr-0359-implementation-claude-opus-5-5.md); Reviewing (2026-11-26, implemented); Accepted (2026-11-26), by the decider ("accept"), after three rounds of an independent judge at medium
   effort, every Major and Minor folded
+- **Amended in place**: 2026-11-26, by the decider ("A, we should just amend and build it quickly"): a link to a
+  directory the engine can see is bind-mounted read-only, not copied (Decision 5)
 - **Date**: 2026-11-26
 - **Deciders**: green-0-rabbit
 - **Tags**: dev, runtime, functions, jobs, cli
@@ -32,6 +34,11 @@ Experiment 0028 ran this with a patch on funcd 91b294e3, on colima's Docker: a F
 process driver, and 0.53 s of it reloaded images that the engine already held. A save was served in 0.85 s on Node and
 1.07 s on Python, against 0.62 s and 0.61 s. The two image tars are 74.3 MiB. Callers: a developer who runs dev, and
 dev itself.
+
+Measured on 2026-11-26 on colima's Docker, five saves each, with a folder under the home directory whose `node_modules`
+holds express and `@aws-sdk/client-s3`, 23 MiB in 3,968 files: a save was served in a median 1.13 s (0.96 to 1.24 s)
+when each revision's volume took a copy of it, and in 0.89 s (0.82 to 0.92 s) when the worker bound it (amended
+2026-11-26).
 
 ## Scenarios
 
@@ -103,10 +110,14 @@ an Addon's runtime, and the engine workers of Lake and SQL, which keep their own
    worker's spec names it. A start with the images present loads nothing, and two funcdctl versions on one engine never
    run each other's image.
 5. **Builds in a container.** A worker's bundle is copied into its volume (ADR-0346 Decision 4) with each symbolic link
-   resolved as the OS resolves it, from the link's own directory. A link that resolves outside the bundle is replaced by
-   a copy of what it names, a file or a directory; one that resolves inside the bundle stays a link; a link cycle fails
-   the copy, naming the link. Dev's folder mode delivers a Python build and a folder's `node_modules` as absolute links
-   (`cmd/funcdctl/dev.go:787`, `:1607`), which name nothing inside a container.
+   resolved as the OS resolves it, from the link's own directory. A link that resolves inside the bundle stays a link.
+   One that resolves outside it to a directory the engine can see is bind-mounted read-only at the link's path, and the
+   copy writes an empty directory there as its mount point (amended 2026-11-26): an engine on the host's network sees
+   every path, and one in a VM the user's home directory, which colima and Lima share at the same path (ADR-0346
+   Decision 5's classification). Any other link that resolves outside the bundle is replaced by a copy of what it names,
+   a file or a directory; a link cycle fails the copy, naming the link. This holds for every container worker of dev,
+   one on an Addon's runtime too. Dev's folder mode delivers a Python build and a folder's `node_modules` as absolute
+   links (`cmd/funcdctl/dev.go:787`, `:1607`), which name nothing inside a container.
 6. **Platform and logs.** Such a worker runs on the engine's platform (ADR-0346 Decision 2, ADR-0145 Decision 6). Native
    code built for the host's OS does not load there, and dev neither checks it nor rebuilds it. Its records arrive as
    stdout lines, without their level or fields (ADR-0346 Decision 4).
@@ -147,6 +158,14 @@ OwnImages map[v1.RuntimeName]string
 
 // pkg/funcd
 func WithOwnRuntimeImages(images map[v1.RuntimeName]string) Option
+
+// Mount gains, in internal/provider/docker, a host directory mounted at Target in place of a volume; a worker's
+// RunSpec.Mounts carries each bind, read-only, after its bundle's volume (Decision 5, amended 2026-11-26).
+type Mount struct {
+	Volume, Target string
+	ReadOnly       bool
+	Bind           string // new
+}
 ```
 
 | Key | Type | Default |
@@ -172,7 +191,9 @@ func WithOwnRuntimeImages(images map[v1.RuntimeName]string) Option
    image, and under the opt-in the gate fails one that has none `RuntimeUnavailable` (`function.go:1377`, where own
    runtimes skip it today); `NewReconciler` needs no shim command when every own runtime has an image
    (`function.go:453`). `pkg/funcd`: `WithOwnRuntimeImages`.
-5. `internal/provider/docker/workers.go`: the bundle copy resolves links as Decision 5 says.
+5. `internal/provider/docker/workers.go`: the bundle copy resolves links as Decision 5 says and returns its binds, which
+   `Start` mounts; the Engine API takes a `Bind` as a bind, and nerdctl as `--mount type=bind,…,readonly` (amended
+   2026-11-26).
 6. `cmd/funcdctl`: `--containers` and `dev.containers` through ADR-0254's loader; under them, no interpreter lookup and
    no shim, Decision 4's load before the platform starts, and Decisions 2 and 3's refusals.
 7. `.github/workflows/release.yml`: a job per architecture runs `scripts/build-worker-images.sh` and uploads the tars
@@ -189,8 +210,8 @@ func WithOwnRuntimeImages(images map[v1.RuntimeName]string) Option
       pooled Function runs solo; engine workers do not change.
 - [ ] Dev loads an image only when the engine lacks its dev reference, and a worker names that reference.
 - [ ] The fat funcdctl carries the two images and no DuckDB or rqlite image; the thin funcdctl carries none.
-- [ ] A link that resolves outside the bundle is copied as what it names, one inside stays a link, and a cycle fails
-      the copy.
+- [ ] A link that resolves outside the bundle to a directory the engine can see is bind-mounted read-only, another one
+      outside is copied as what it names, one inside stays a link, and a cycle fails the copy (amended 2026-11-26).
 - [ ] With neither engine, an engine on another platform or the placeholders, `--containers` refuses to start and says
       why.
 
@@ -203,8 +224,13 @@ func WithOwnRuntimeImages(images map[v1.RuntimeName]string) Option
   (experiment 0028); the first start on an engine also loads the images.
 - **(−)** Records lose their level and fields (ADR-0346's cost), a pooled Function takes a container of its own, and a
   build with native code for the host's OS fails in the container.
-- **(−)** Each save copies the build, a large `node_modules` included, into the new revision's volume; that cost was
-  not measured.
+- **(+)** A save binds a folder's `node_modules` instead of copying it: 0.89 s against 1.13 s with 23 MiB of modules
+  (Context; amended 2026-11-26).
+- **(−)** A bound directory is read-only and live, as a process worker's links are: every revision's worker reads its
+  files as they are now, a link inside it that leaves it names nothing in the container, as an npm workspace's does,
+  and its files keep their host owners and modes (amended 2026-11-26).
+- **(−)** On an engine in a VM, as on macOS, a folder outside the home directory is still copied at each save, its
+  `node_modules` included (amended 2026-11-26).
 - **(−)** A load also moves the engine's `funcd/runtime-<runtime>:latest`, and each funcdctl version leaves its two
   images on the engine until the developer removes them.
 
