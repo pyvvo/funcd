@@ -15,9 +15,25 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/gc"
+	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
+
+// newTestCluster is a control plane of st over the HTTPS long poll on loopback.
+func newTestCluster(t *testing.T, st store.Store) *Cluster {
+	t.Helper()
+	ca, err := LoadOrCreateCA(t.TempDir(), time.Now())
+	require.NoError(t, err)
+	tlsCfg, err := ca.ServerTLS(nil, time.Now)
+	require.NoError(t, err)
+	api, err := longpoll.Listen(longpoll.Config{Addr: "127.0.0.1:0", TLS: tlsCfg})
+	require.NoError(t, err)
+	c, err := New(Config{Store: st, CA: ca, API: api, LocalNode: "local", LocalRuns: true})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
 
 func tm(k v1.Kind) v1.TypeMeta { return v1.TypeMeta{APIVersion: k.GVK().APIVersion(), Kind: k} }
 
@@ -116,9 +132,7 @@ func TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects(t *testing.T)
 func TestABackupSchedulesTargetStaysOutsideItsNodesBlobStore(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(memory.New(), store.WithChangeLog(0))
-	c, err := New(Config{Store: st, Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalNode: "local", LocalRuns: true})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
+	c := newTestCluster(t, st)
 	reported := workerNode("vm1")
 	reported.Status.BlobStore = "s3://node-blobs?region=eu-west-3"
 	for _, obj := range []v1.Object{reported, workerNode("vm2"), namespace("e1", "vm1"), namespace("e2", "vm2"), namespace("here", "")} {
@@ -186,10 +200,8 @@ func TestAWorkerNodeANamespaceNamesCannotBeDeleted(t *testing.T) {
 func TestAJoinTokenNeedsADeclaredNodeAndABoundedLife(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(memory.New(), store.WithChangeLog(0))
-	c, err := New(Config{Store: st, Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalNode: "local", LocalRuns: true})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
-	_, _, err = c.MintJoinToken(ctx, "vm1", 0)
+	c := newTestCluster(t, st)
+	_, _, err := c.MintJoinToken(ctx, "vm1", 0)
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 	_, err = st.Create(ctx, workerNode("vm1"))
 	require.NoError(t, err)
@@ -204,24 +216,6 @@ func TestAJoinTokenNeedsADeclaredNodeAndABoundedLife(t *testing.T) {
 	obj, err := st.Get(ctx, v1.KindWorkerNode.GVK(), "", "vm1")
 	require.NoError(t, err)
 	require.Equal(t, HashSecret(parsed.Secret), obj.(*v1.WorkerNode).Status.PendingJoin.TokenHash, "only the hash is kept")
-}
-
-func TestCallsFailAtOnceForAnOfflineNode(t *testing.T) {
-	calls := NewCalls(time.Now)
-	_, err := calls.Do(context.Background(), "vm1", Call{Kind: CallLogs})
-	require.Equal(t, fault.Unavailable, fault.KindOf(err))
-	go func() {
-		for {
-			for _, c := range calls.Poll(context.Background(), "vm1", time.Second) {
-				_ = calls.Answer("vm2", c.ID, Answer{Error: "wrong sender"})
-				_ = calls.Answer("vm1", c.ID, Answer{})
-				return
-			}
-		}
-	}()
-	require.Eventually(t, func() bool { return calls.Online("vm1") }, 2*time.Second, 10*time.Millisecond)
-	_, err = calls.Do(context.Background(), "vm1", Call{Kind: CallLogs})
-	require.NoError(t, err, "only the node the call went to may answer it")
 }
 
 func TestAHostBelongsToOneNode(t *testing.T) {

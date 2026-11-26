@@ -1,15 +1,10 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,6 +17,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/multinode"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -32,21 +28,20 @@ const (
 	resyncEvery = 30 * time.Second
 	// selfEvery paces the node's report of itself, which lists its backup target.
 	selfEvery = 5 * time.Minute
-	// requestTimeout bounds one call of the node API, above pollWait, so a connection that died unseen is dialed again.
-	requestTimeout = time.Minute
 )
 
 // Config configures a node's agent.
 type Config struct {
-	Dir      string      // the node's cluster directory, which holds its identity
-	Store    store.Store // the node's local store
-	Logger   *slog.Logger
-	Logs     multinode.LogReader    // the node's local log reads, which answer the log calls
-	RunLogs  multinode.RunLogReader // the node's local run-log reads
-	Commands multinode.Commands     // the node's local parts that answer the other node commands
-	Version  string
-	Platform string
-	Now      func() time.Time // nil ⇒ time.Now
+	Dir       string      // the node's cluster directory, which holds its identity
+	Store     store.Store // the node's local store
+	Logger    *slog.Logger
+	Connector nodeapi.Connector      // the node side of the node API's driver
+	Logs      multinode.LogReader    // the node's local log reads, which answer the log calls
+	RunLogs   multinode.RunLogReader // the node's local run-log reads
+	Commands  multinode.Commands     // the node's local parts that answer the other node commands
+	Version   string
+	Platform  string
+	Now       func() time.Time // nil ⇒ time.Now
 }
 
 // Agent keeps a node's local store a copy of the namespaces placed on it (FEAT-0002 F243), writes their status and the
@@ -63,22 +58,26 @@ type Agent struct {
 	restored bool        // the cursor is of before the control plane's restore, and the store holds what the node ran since
 	resync   atomic.Bool // a namespace's snapshot failed: the next poll starts from a whole snapshot
 	mine     map[v1.NamespaceName]bool
-	keys     map[v1.NamespaceName]multinode.NamespaceKey
+	keys     map[v1.NamespaceName]nodeapi.NamespaceKey
 	pushed   map[string]string
 	// reported is what the control plane holds of the node's report of itself, as last sent
 	reported string
 	// unsent are the deletes the control plane did not take yet
-	unsent map[string]url.Values
+	unsent map[string]nodeapi.ObjectRef
 	// resynced asks the report for every status and child again, after a snapshot
 	resynced chan struct{}
 }
 
 // New loads the node's identity from cfg.Dir.
 func New(cfg Config) (*Agent, error) {
-	if cfg.Store == nil {
-		return nil, fault.Invalidf("agent.New", "the node's store is required")
+	if cfg.Store == nil || cfg.Connector == nil {
+		return nil, fault.Invalidf("agent.New", "the node's store and the node side of the node API's driver are required")
 	}
-	id, err := loadIdentity(cfg.Dir)
+	base, pair, err := loadIdentity(cfg.Dir)
+	if err != nil {
+		return nil, err
+	}
+	id, err := base.with(cfg.Connector, pair, cfg.Version, cfg.Platform)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +92,7 @@ func New(cfg Config) (*Agent, error) {
 		cfg.Now = time.Now
 	}
 	a := &Agent{cfg: cfg, log: cfg.Logger.With("component", "node-agent", "node", id.name),
-		mine: map[v1.NamespaceName]bool{}, keys: keys, pushed: map[string]string{}, unsent: map[string]url.Values{},
+		mine: map[v1.NamespaceName]bool{}, keys: keys, pushed: map[string]string{}, unsent: map[string]nodeapi.ObjectRef{},
 		resynced: make(chan struct{}, 1)}
 	a.id.Store(&id)
 	if cl, ok := cfg.Store.(store.ChangeLog); ok {
@@ -186,60 +185,8 @@ var ErrRestored = fault.Conflictf("agent.follow", "the control plane was restore
 // restoredMark is the timeline a cursor carries from ErrRestored to the node's next start.
 const restoredMark = "restored"
 
-// errGone is a feed revision older than the change log: the node starts again from a snapshot.
-var errGone = fault.PreconditionFailedf("agent.feed", "the change log no longer holds the node's revision")
-
-//nolint:forbidigo // a JSON round trip of the node API: body and out are its typed requests and answers
-func (a *Agent) do(ctx context.Context, method, path string, body, out any) (int, error) {
-	var rd io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return 0, err
-		}
-		rd = bytes.NewReader(b)
-	}
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
-	id := a.id.Load()
-	req, err := http.NewRequestWithContext(ctx, method, id.server+path, rd)
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set(multinode.HeaderAPIVersion, strconv.Itoa(multinode.APIVersion))
-	req.Header.Set(multinode.HeaderVersion, a.cfg.Version)
-	req.Header.Set(multinode.HeaderPlatform, a.cfg.Platform)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := id.client.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, err
-	}
-	switch {
-	case resp.StatusCode == http.StatusGone:
-		return resp.StatusCode, errGone
-	case resp.StatusCode >= 300:
-		return resp.StatusCode, fmt.Errorf("%s %s: %d %s", method, path, resp.StatusCode, detail(data))
-	case out != nil && len(data) > 0:
-		return resp.StatusCode, json.Unmarshal(data, out)
-	}
-	return resp.StatusCode, nil
-}
-
-// detail is what an answer's problem says went wrong, or the whole answer of another kind.
-func detail(answer []byte) string {
-	var p fault.Problem
-	if json.Unmarshal(answer, &p) == nil && p.Detail != "" {
-		return p.Detail
-	}
-	return strings.TrimSpace(string(answer))
-}
+// client is the node API client of the node's current certificate.
+func (a *Agent) client() nodeapi.Client { return a.id.Load().client }
 
 // follow keeps the local copy with the feed, from the saved revision; one the change log no longer holds starts again
 // from a snapshot.
@@ -264,14 +211,12 @@ func (a *Agent) follow(ctx context.Context) error {
 			}
 			resync = false
 		}
-		var feed multinode.Feed
-		path := multinode.PathFeed + "?since=" + strconv.FormatUint(a.cursor, 10) + "&timeline=" + url.QueryEscape(a.timeline) +
-			"&wait=" + pollWait.String()
-		if _, err := a.do(ctx, http.MethodGet, path, nil, &feed); err != nil {
+		feed, err := a.client().Feed(ctx, a.cursor, a.timeline, pollWait)
+		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if errors.Is(err, errGone) {
+			if fault.KindOf(err) == fault.PreconditionFailed { // a revision the change log no longer holds: a snapshot
 				resync = true
 				continue
 			}
@@ -310,8 +255,8 @@ func (a *Agent) syncAll(ctx context.Context) error {
 	if a.timeline != "" || a.restored {
 		a.pushMade(ctx)
 	}
-	var snap multinode.Snapshot
-	if _, err := a.do(ctx, http.MethodGet, multinode.PathSnapshot, nil, &snap); err != nil {
+	snap, err := a.client().Snapshot(ctx, "")
+	if err != nil {
 		return err
 	}
 	if a.timeline != "" && snap.Timeline != a.timeline {
@@ -374,9 +319,8 @@ func (a *Agent) syncAll(ctx context.Context) error {
 
 // syncNamespace adds one newly placed namespace from its snapshot.
 func (a *Agent) syncNamespace(ctx context.Context, ns v1.NamespaceName) {
-	var snap multinode.Snapshot
-	path := multinode.PathSnapshot + "?namespace=" + url.QueryEscape(string(ns))
-	if _, err := a.do(ctx, http.MethodGet, path, nil, &snap); err != nil {
+	snap, err := a.client().Snapshot(ctx, ns)
+	if err != nil {
 		a.log.WarnContext(ctx, "node agent: snapshot of a newly placed namespace", "namespace", ns, "error", err)
 		a.resync.Store(true)
 		return

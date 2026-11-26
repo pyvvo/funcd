@@ -207,3 +207,23 @@ func TestCallerFaultDetailKeepsItsText(t *testing.T) {
 		}
 	}
 }
+
+// A client reads each kind back from the problem the server wrote for it, and a problem that names no funcd type by its
+// status alone.
+func TestAProblemNamesTheKindItWasWrittenFor(t *testing.T) {
+	for k := range kindProblem {
+		if got := KindOfProblem(ToProblem(&Error{Kind: k, Op: "op", Msg: "msg"})); got != k {
+			t.Errorf("KindOfProblem(ToProblem(%s)) = %s", k, got)
+		}
+	}
+	for status, want := range map[int]Kind{
+		http.StatusConflict:            Conflict,
+		http.StatusUnprocessableEntity: Invalid,
+		http.StatusServiceUnavailable:  Unavailable,
+		http.StatusTeapot:              Internal,
+	} {
+		if got := KindOfProblem(Problem{Type: "about:blank", Status: status}); got != want {
+			t.Errorf("KindOfProblem(about:blank, %d) = %s, want %s", status, got, want)
+		}
+	}
+}

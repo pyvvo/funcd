@@ -11,6 +11,7 @@ import (
 	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -68,7 +69,7 @@ func (r DeadLetterRouter) List(ctx context.Context, ns v1.NamespaceName) ([]dead
 	case node == "":
 		return r.Store.List(ctx, ns)
 	}
-	a, err := r.calls.Do(ctx, node, Call{Kind: CallDeadLetters, Namespace: ns})
+	a, err := r.calls.Call(ctx, node, nodeapi.Call{Kind: nodeapi.CallDeadLetters, Namespace: ns})
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +90,7 @@ func (r DeadLetterRouter) Get(ctx context.Context, ns v1.NamespaceName, id strin
 	case node == "":
 		return r.Store.Get(ctx, ns, id)
 	}
-	a, err := r.calls.Do(ctx, node, Call{Kind: CallDeadLetter, Namespace: ns, Name: id})
+	a, err := r.calls.Call(ctx, node, nodeapi.Call{Kind: nodeapi.CallDeadLetter, Namespace: ns, Name: id})
 	if err != nil {
 		return deadletter.DeadLetter{}, err
 	}
@@ -110,7 +111,7 @@ func (r DeadLetterRouter) Delete(ctx context.Context, ns v1.NamespaceName, id st
 	case node == "":
 		return r.Store.Delete(ctx, ns, id)
 	}
-	_, err = r.calls.Do(ctx, node, Call{Kind: CallDiscardDeadLetter, Namespace: ns, Name: id})
+	_, err = r.calls.Call(ctx, node, nodeapi.Call{Kind: nodeapi.CallDiscardDeadLetter, Namespace: ns, Name: id})
 	return err
 }
 
@@ -132,7 +133,7 @@ func (r ReplayRouter) Replay(ctx context.Context, ns v1.NamespaceName, id string
 	case node == "":
 		return r.local.Replay(ctx, ns, id)
 	}
-	_, err = r.calls.Do(ctx, node, Call{Kind: CallReplayDeadLetter, Namespace: ns, Name: id})
+	_, err = r.calls.Call(ctx, node, nodeapi.Call{Kind: nodeapi.CallReplayDeadLetter, Namespace: ns, Name: id})
 	return err
 }
 
@@ -152,7 +153,7 @@ func (r AppRetryRouter) Retry(ctx context.Context, ns v1.NamespaceName, app v1.O
 	case node == "":
 		return r.local.Retry(ctx, ns, app)
 	}
-	_, err = r.calls.Do(ctx, node, Call{Kind: CallAppRetry, Namespace: ns, Name: string(app)})
+	_, err = r.calls.Call(ctx, node, nodeapi.Call{Kind: nodeapi.CallAppRetry, Namespace: ns, Name: string(app)})
 	return err
 }
 
@@ -172,7 +173,7 @@ func (r VolumeRouter) DeleteVolume(ctx context.Context, ns v1.NamespaceName, fn,
 	case node == "":
 		return r.local.DeleteVolume(ctx, ns, fn, name)
 	}
-	_, err = r.calls.Do(ctx, node, Call{Kind: CallVolumeDelete, Namespace: ns, Name: string(fn), Volume: name})
+	_, err = r.calls.Call(ctx, node, nodeapi.Call{Kind: nodeapi.CallVolumeDelete, Namespace: ns, Name: string(fn), Volume: name})
 	return err
 }
 
@@ -215,7 +216,7 @@ func (r HoldRouter) ReleaseNamespaces(ctx context.Context, nss []v1.NamespaceNam
 		if err != nil {
 			return fault.Wrapf(err, fault.Internal, "multinode.ReleaseNamespaces", "marshal")
 		}
-		if _, err := r.calls.Do(ctx, node, Call{Kind: CallReleaseNamespaces, Namespace: remote[node][0], Body: body}); err != nil {
+		if _, err := r.calls.Call(ctx, node, nodeapi.Call{Kind: nodeapi.CallReleaseNamespaces, Namespace: remote[node][0], Body: body}); err != nil {
 			return err
 		}
 	}
@@ -234,14 +235,14 @@ func (r HoldRouter) ReturnQuarantined(ctx context.Context, q hold.QuarantineRetu
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, "multinode.ReturnQuarantined", "marshal")
 	}
-	_, err = r.calls.Do(ctx, node, Call{Kind: CallReturnQuarantined, Namespace: q.Namespace, Body: body})
+	_, err = r.calls.Call(ctx, node, nodeapi.Call{Kind: nodeapi.CallReturnQuarantined, Namespace: q.Namespace, Body: body})
 	return err
 }
 
 // Nodes reads and releases a worker node's own hold and reads its platform backup, by the node's name (F250): each side
 // has its own hold and its own backup (decision 10). The control plane's own node is this process.
 type Nodes struct {
-	calls  *Calls
+	calls  caller
 	st     store.Store
 	local  v1.ObjectName
 	hold   Holder
@@ -254,7 +255,7 @@ func (n Nodes) HoldStatus(ctx context.Context, node v1.ObjectName) (hold.Evidenc
 		return n.hold.Status(ctx)
 	}
 	var out hold.Evidence
-	err := n.ask(ctx, node, Call{Kind: CallHoldStatus}, &out)
+	err := n.ask(ctx, node, nodeapi.Call{Kind: nodeapi.CallHoldStatus}, &out)
 	return out, err
 }
 
@@ -267,7 +268,7 @@ func (n Nodes) ReleaseHold(ctx context.Context, node v1.ObjectName, advance []st
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, "multinode.ReleaseHold", "marshal")
 	}
-	return n.ask(ctx, node, Call{Kind: CallReleaseHold, Body: body}, nil)
+	return n.ask(ctx, node, nodeapi.Call{Kind: nodeapi.CallReleaseHold, Body: body}, nil)
 }
 
 // BackupStatus is the status of node's platform backup; the zero Status is a node that runs none.
@@ -279,14 +280,14 @@ func (n Nodes) BackupStatus(ctx context.Context, node v1.ObjectName) (runner.Sta
 		}
 		return n.backup.Status(ctx)
 	}
-	err := n.ask(ctx, node, Call{Kind: CallBackupStatus}, &out)
+	err := n.ask(ctx, node, nodeapi.Call{Kind: nodeapi.CallBackupStatus}, &out)
 	return out, err
 }
 
 // ask sends c to node, a declared WorkerNode, and decodes its answer into out, unless nil.
 //
 //nolint:forbidigo // out is one of the node commands' typed answers
-func (n Nodes) ask(ctx context.Context, node v1.ObjectName, c Call, out any) error {
+func (n Nodes) ask(ctx context.Context, node v1.ObjectName, c nodeapi.Call, out any) error {
 	const op = "multinode.Nodes"
 	_, err := n.st.Get(ctx, v1.KindWorkerNode.GVK(), "", node)
 	if fault.KindOf(err) == fault.NotFound {
@@ -295,7 +296,7 @@ func (n Nodes) ask(ctx context.Context, node v1.ObjectName, c Call, out any) err
 	if err != nil {
 		return err
 	}
-	a, err := n.calls.Do(ctx, node, c)
+	a, err := n.calls.Call(ctx, node, c)
 	if err != nil || out == nil {
 		return err
 	}

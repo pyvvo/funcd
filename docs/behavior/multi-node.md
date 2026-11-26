@@ -74,36 +74,36 @@ recovery](disaster-recovery.md).
 | `cluster.hosts` | [], loopback only | config |
 | `cluster.listenAddr` | "", no node joins | config |
 | `pollWait` | 25s | `internal/multinode/agent/agent.go` |
-| `requestTimeout` | 1m | `internal/multinode/agent/agent.go` |
 | `resyncEvery` | 30s | `internal/multinode/agent/agent.go` |
 | `retryMax` | 5s | `internal/multinode/agent/agent.go` |
 | `retryMin` | 100ms | `internal/multinode/agent/agent.go` |
 | `selfEvery` | 5m | `internal/multinode/agent/agent.go` |
 | `writeAttempts` | 5 | `internal/multinode/agent/copies.go` |
-| `idleConnTimeout` | 1m30s | `internal/multinode/agent/join.go` |
-| `joinRequestTimeout` | 30s | `internal/multinode/agent/join.go` |
-| `maxJoinAnswer` | 1MiB | `internal/multinode/agent/join.go` |
 | `renewEvery` | 1h | `internal/multinode/agent/renew.go` |
 | `secretEcho` | 2s | `internal/multinode/agent/secrets.go` |
 | `secretEchoPoll` | 5ms | `internal/multinode/agent/secrets.go` |
 | `caLifetime` | 87600h | `internal/multinode/ca.go` |
 | `certBackdate` | 1h | `internal/multinode/ca.go` |
 | `certLifetime` | 8760h | `internal/multinode/ca.go` |
-| `callOffline` | 3s | `internal/multinode/calls.go` |
-| `callTimeout` | 10s | `internal/multinode/calls.go` |
 | `defaultTokenTTL` | 1h | `internal/multinode/cluster.go` |
 | `maxTokenTTL` | 24h | `internal/multinode/cluster.go` |
+| `feedLimit` | 500 | `internal/multinode/handler.go` |
 | `defaultReadyFor` | 40s | `internal/multinode/liveness.go` |
 | `defaultSeenEvery` | 30s | `internal/multinode/liveness.go` |
 | `livenessTick` | 5s | `internal/multinode/liveness.go` |
-| `bodyReadTimeout` | 30s | `internal/multinode/server.go` |
-| `defaultWait` | 25s | `internal/multinode/server.go` |
-| `feedLimit` | 500 | `internal/multinode/server.go` |
-| `maxJoinBody` | 64KiB | `internal/multinode/server.go` |
-| `maxObjectBody` | 4MiB | `internal/multinode/server.go` |
-| `maxStatusBody` | 1MiB | `internal/multinode/server.go` |
-| `maxWait` | 1m | `internal/multinode/server.go` |
-| `readHeaderTimeout` | 10s | `internal/multinode/server.go` |
+| `callOffline` | 3s | `internal/nodeapi/longpoll/calls.go` |
+| `callTimeout` | 10s | `internal/nodeapi/longpoll/calls.go` |
+| `idleConnTimeout` | 1m30s | `internal/nodeapi/longpoll/client.go` |
+| `joinRequestTimeout` | 30s | `internal/nodeapi/longpoll/client.go` |
+| `maxJoinAnswer` | 1MiB | `internal/nodeapi/longpoll/client.go` |
+| `requestTimeout` | 1m | `internal/nodeapi/longpoll/client.go` |
+| `bodyReadTimeout` | 30s | `internal/nodeapi/longpoll/longpoll.go` |
+| `defaultWait` | 25s | `internal/nodeapi/longpoll/longpoll.go` |
+| `maxJoinBody` | 64KiB | `internal/nodeapi/longpoll/longpoll.go` |
+| `maxObjectBody` | 4MiB | `internal/nodeapi/longpoll/longpoll.go` |
+| `maxStatusBody` | 1MiB | `internal/nodeapi/longpoll/longpoll.go` |
+| `maxWait` | 1m | `internal/nodeapi/longpoll/longpoll.go` |
+| `readHeaderTimeout` | 10s | `internal/nodeapi/longpoll/longpoll.go` |
 
 </details>
 <!-- end of generated values -->

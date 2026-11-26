@@ -76,6 +76,7 @@ import (
 	"github.com/pyvvo/funcd/internal/multinode/agent"
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/network/egress"
+	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
@@ -715,7 +716,7 @@ func (p *Platform) buildControlPlane() error {
 	// FEAT-0002: a worker node schedules under its own name, the one it joined under.
 	if c.nodeAgent != nil {
 		a, aerr := agent.New(agent.Config{Dir: c.nodeAgent.Dir, Store: c.store, Logger: p.logger,
-			Version: c.nodeAgent.Version, Platform: string(c.nodePlatform)})
+			Connector: longpoll.NewConnector(), Version: c.nodeAgent.Version, Platform: string(c.nodePlatform)})
 		if aerr != nil {
 			return fault.Wrapf(aerr, fault.KindOf(aerr), op, "load the worker node's identity")
 		}
@@ -836,9 +837,7 @@ func (p *Platform) buildControlPlane() error {
 		masters = p.agent.NamespaceMaster
 	}
 	if c.cluster != nil {
-		cl, cerr := multinode.New(multinode.Config{Store: c.store, Logger: p.logger, Dir: c.cluster.Dir,
-			ListenAddr: c.cluster.ListenAddr, Hosts: c.cluster.Hosts, LocalNode: c.localNode, LocalRuns: c.cluster.LocalRuns,
-			Master: master, Secrets: p.secrets.facade, Held: p.heldByRestore})
+		cl, cerr := p.newCluster(c.cluster, c.store, c.localNode, master)
 		if cerr != nil {
 			return fault.Wrapf(cerr, fault.KindOf(cerr), op, "build the node API")
 		}

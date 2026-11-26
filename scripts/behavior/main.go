@@ -71,7 +71,7 @@ func chapters() []chapter {
 		{"Apps", []string{"internal/app"}, []string{"app"}},
 		{"Disaster recovery", []string{"internal/backup", "internal/restore", "internal/services/backup", "internal/platform/hold", "internal/snapshot"}, []string{"backup", "workloadBackup"}},
 		{"Health", []string{"internal/health"}, []string{"health"}},
-		{"Multi-node", []string{"internal/multinode"}, []string{"cluster"}},
+		{"Multi-node", []string{"internal/multinode", "internal/nodeapi"}, []string{"cluster"}},
 		{"Limits", []string{"internal/quota"}, []string{"job"}},
 		{"funcdctl dev", []string{"cmd/funcdctl", "pkg/sdk", "internal/provider/docker", "internal/provider/nerdctl"}, nil},
 		{"funcdctl", nil, nil},

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
-	"net/http"
-	"net/url"
 	"slices"
 	"time"
 
@@ -15,6 +13,7 @@ import (
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/multinode"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -143,8 +142,7 @@ func (a *Agent) push(ctx context.Context, typ store.EventType, obj v1.Object) {
 	if typ == store.Deleted {
 		a.forget(k)
 		if whole || m.DeletionTime != nil { // the node ended the deletion the control plane holds
-			a.sendDelete(ctx, k, url.Values{"kind": {string(kind)}, "namespace": {string(m.Namespace)}, "name": {string(m.Name)},
-				"uid": {string(m.UID)}})
+			a.sendDelete(ctx, k, nodeapi.ObjectRef{Kind: kind, Namespace: m.Namespace, Name: m.Name, UID: m.UID})
 		}
 		return
 	}
@@ -161,7 +159,7 @@ func (a *Agent) push(ctx context.Context, typ store.EventType, obj v1.Object) {
 		if a.wasPushed(k, fp) {
 			return
 		}
-		if _, err := a.do(ctx, http.MethodPut, multinode.PathObjects, multinode.ObjectWrite{Kind: kind, Object: raw}, nil); err != nil {
+		if err := a.client().PutObject(ctx, nodeapi.ObjectWrite{Kind: kind, Object: raw}); err != nil {
 			a.log.WarnContext(ctx, "node agent: write a child back", "kind", kind, "name", m.Name, "error", err)
 			return
 		}
@@ -172,26 +170,26 @@ func (a *Agent) push(ctx context.Context, typ store.EventType, obj v1.Object) {
 	if len(status) == 0 || string(status) == "{}" || a.wasPushed(k, string(status)) {
 		return
 	}
-	w := multinode.StatusWrite{Kind: kind, Namespace: m.Namespace, Name: m.Name, UID: m.UID, Status: status}
-	if _, err := a.do(ctx, http.MethodPut, multinode.PathStatus, w, nil); err != nil {
+	w := nodeapi.StatusWrite{Kind: kind, Namespace: m.Namespace, Name: m.Name, UID: m.UID, Status: status}
+	if err := a.client().Status(ctx, w); err != nil {
 		a.log.WarnContext(ctx, "node agent: write a status back", "kind", kind, "name", m.Name, "error", err)
 		return
 	}
 	a.remember(k, string(status))
 }
 
-// sendDelete deletes on the control plane the object q names, which the node deleted; one it did not take is sent again
+// sendDelete deletes on the control plane the object ref names, which the node deleted; one it did not take is sent again
 // at the next pass.
-func (a *Agent) sendDelete(ctx context.Context, k string, q url.Values) {
-	if _, err := a.do(ctx, http.MethodDelete, multinode.PathObjects+"?"+q.Encode(), nil, nil); err != nil {
-		a.unsent[k+"/"+q.Get("uid")] = q
-		a.log.WarnContext(ctx, "node agent: delete a child", "kind", q.Get("kind"), "name", q.Get("name"), "error", err)
+func (a *Agent) sendDelete(ctx context.Context, k string, ref nodeapi.ObjectRef) {
+	if err := a.client().DeleteObject(ctx, ref); err != nil {
+		a.unsent[k+"/"+string(ref.UID)] = ref
+		a.log.WarnContext(ctx, "node agent: delete a child", "kind", ref.Kind, "name", ref.Name, "error", err)
 	}
 }
 
 func (a *Agent) resendDeletes(ctx context.Context) {
-	for k, q := range a.unsent {
-		if _, err := a.do(ctx, http.MethodDelete, multinode.PathObjects+"?"+q.Encode(), nil, nil); err == nil {
+	for k, ref := range a.unsent {
+		if err := a.client().DeleteObject(ctx, ref); err == nil {
 			delete(a.unsent, k)
 		}
 	}
@@ -232,8 +230,8 @@ func (a *Agent) forget(k string) {
 func (a *Agent) serveCalls(ctx context.Context) {
 	backoff := retryMin
 	for ctx.Err() == nil {
-		var calls []multinode.Call
-		if _, err := a.do(ctx, http.MethodGet, multinode.PathCalls+"?wait="+pollWait.String(), nil, &calls); err != nil {
+		calls, err := a.client().Calls(ctx, pollWait)
+		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
@@ -248,10 +246,10 @@ func (a *Agent) serveCalls(ctx context.Context) {
 	}
 }
 
-func (a *Agent) answer(ctx context.Context, c multinode.Call) {
-	var ans multinode.Answer
+func (a *Agent) answer(ctx context.Context, c nodeapi.Call) {
+	var ans nodeapi.Answer
 	var err error
-	if !multinode.OfTheNode(c.Kind) && !a.isMine(c.Namespace) {
+	if !nodeapi.OfTheNode(c.Kind) && !a.isMine(c.Namespace) {
 		err = fault.Forbiddenf("agent.answer", "namespace %s does not run on this node", c.Namespace)
 	} else {
 		ans, err = a.run(ctx, c)
@@ -262,14 +260,14 @@ func (a *Agent) answer(ctx context.Context, c multinode.Call) {
 	if err != nil {
 		ans.Error, ans.Fault = err.Error(), fault.KindOf(err)
 	}
-	if _, perr := a.do(ctx, http.MethodPost, multinode.PathCalls+"/"+url.PathEscape(c.ID), ans, nil); perr != nil {
+	if perr := a.client().Answer(ctx, c.ID, ans); perr != nil {
 		a.log.WarnContext(ctx, "node agent: answer a call", "call", c.ID, "error", perr)
 	}
 }
 
 // run runs call c on the node's local parts.
-func (a *Agent) run(ctx context.Context, c multinode.Call) (multinode.Answer, error) {
-	var ans multinode.Answer
+func (a *Agent) run(ctx context.Context, c nodeapi.Call) (nodeapi.Answer, error) {
+	var ans nodeapi.Answer
 	var err error
 	cmd := a.cfg.Commands
 	body := func(v any) { //nolint:forbidigo // the JSON body of a command's answer
@@ -278,32 +276,32 @@ func (a *Agent) run(ctx context.Context, c multinode.Call) (multinode.Answer, er
 		}
 	}
 	switch {
-	case c.Kind == multinode.CallLogs && a.cfg.Logs != nil:
+	case c.Kind == nodeapi.CallLogs && a.cfg.Logs != nil:
 		ans.Lines, err = a.cfg.Logs.Read(ctx, c.Query)
-	case c.Kind == multinode.CallRunLogs && a.cfg.RunLogs != nil:
+	case c.Kind == nodeapi.CallRunLogs && a.cfg.RunLogs != nil:
 		ans.Lines, err = a.cfg.RunLogs.RunLogs(ctx, c.Namespace, c.Run, c.Query)
-	case c.Kind == multinode.CallDeadLetters && cmd.DeadLetters != nil:
+	case c.Kind == nodeapi.CallDeadLetters && cmd.DeadLetters != nil:
 		var dls []deadletter.DeadLetter
 		dls, err = cmd.DeadLetters.List(ctx, c.Namespace)
 		body(dls)
-	case c.Kind == multinode.CallDeadLetter && cmd.DeadLetters != nil:
+	case c.Kind == nodeapi.CallDeadLetter && cmd.DeadLetters != nil:
 		var dl deadletter.DeadLetter
 		dl, err = cmd.DeadLetters.Get(ctx, c.Namespace, c.Name)
 		body(dl)
-	case c.Kind == multinode.CallDiscardDeadLetter && cmd.DeadLetters != nil:
+	case c.Kind == nodeapi.CallDiscardDeadLetter && cmd.DeadLetters != nil:
 		err = cmd.DeadLetters.Delete(ctx, c.Namespace, c.Name)
-	case c.Kind == multinode.CallReplayDeadLetter && cmd.Replayer != nil:
+	case c.Kind == nodeapi.CallReplayDeadLetter && cmd.Replayer != nil:
 		err = cmd.Replayer.Replay(ctx, c.Namespace, c.Name)
-	case c.Kind == multinode.CallAppRetry && cmd.Apps != nil:
+	case c.Kind == nodeapi.CallAppRetry && cmd.Apps != nil:
 		err = cmd.Apps.Retry(ctx, c.Namespace, v1.ObjectName(c.Name))
-	case c.Kind == multinode.CallVolumeDelete && cmd.Volumes != nil:
+	case c.Kind == nodeapi.CallVolumeDelete && cmd.Volumes != nil:
 		err = cmd.Volumes.DeleteVolume(ctx, c.Namespace, v1.ObjectName(c.Name), c.Volume)
-	case c.Kind == multinode.CallReleaseNamespaces && cmd.Hold != nil:
+	case c.Kind == nodeapi.CallReleaseNamespaces && cmd.Hold != nil:
 		var nss []v1.NamespaceName
 		if err = json.Unmarshal(c.Body, &nss); err == nil {
 			err = a.releaseNamespaces(ctx, nss)
 		}
-	case c.Kind == multinode.CallReturnQuarantined && cmd.Hold != nil:
+	case c.Kind == nodeapi.CallReturnQuarantined && cmd.Hold != nil:
 		var q hold.QuarantineReturn
 		if err = json.Unmarshal(c.Body, &q); err == nil {
 			if !a.isMine(q.Namespace) {
@@ -312,22 +310,22 @@ func (a *Agent) run(ctx context.Context, c multinode.Call) (multinode.Answer, er
 				err = cmd.Hold.ReturnQuarantined(ctx, q)
 			}
 		}
-	case c.Kind == multinode.CallHoldStatus && cmd.Hold != nil:
+	case c.Kind == nodeapi.CallHoldStatus && cmd.Hold != nil:
 		var ev hold.Evidence
 		ev, err = cmd.Hold.Status(ctx)
 		body(ev)
-	case c.Kind == multinode.CallReleaseHold && cmd.Hold != nil:
+	case c.Kind == nodeapi.CallReleaseHold && cmd.Hold != nil:
 		var advance []string
 		if err = json.Unmarshal(c.Body, &advance); err == nil {
 			err = cmd.Hold.Release(ctx, advance)
 		}
-	case c.Kind == multinode.CallBackupStatus:
+	case c.Kind == nodeapi.CallBackupStatus:
 		var st runner.Status
 		if cmd.Backup != nil {
 			st, err = cmd.Backup.Status(ctx)
 		}
 		body(st)
-	case c.Kind == multinode.CallAdmit:
+	case c.Kind == nodeapi.CallAdmit:
 		var obj v1.Object
 		if obj, err = a.admit(ctx, c); err == nil && obj != nil {
 			body(obj)
@@ -339,7 +337,7 @@ func (a *Agent) run(ctx context.Context, c multinode.Call) (multinode.Answer, er
 }
 
 // admit runs the node's own node-state check that call c names (F250).
-func (a *Agent) admit(ctx context.Context, c multinode.Call) (v1.Object, error) {
+func (a *Agent) admit(ctx context.Context, c nodeapi.Call) (v1.Object, error) {
 	var in multinode.AdmitRequest
 	if err := json.Unmarshal(c.Body, &in); err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, "agent.admit", "decode the request")
@@ -362,7 +360,7 @@ func (a *Agent) admit(ctx context.Context, c multinode.Call) (v1.Object, error) 
 // reportSelf sends what the node reports of itself when it changed, so the control plane's WorkerNode shows it: the address
 // of its blob store and its platform backup's status (F251).
 func (a *Agent) reportSelf(ctx context.Context) {
-	report := multinode.NodeReport{BlobStore: a.cfg.Commands.BlobStore}
+	report := nodeapi.NodeReport{BlobStore: a.cfg.Commands.BlobStore}
 	if b := a.cfg.Commands.Backup; b != nil {
 		st, err := b.Status(ctx)
 		if err != nil {
@@ -376,7 +374,7 @@ func (a *Agent) reportSelf(ctx context.Context) {
 	if err != nil || string(b) == a.reported {
 		return
 	}
-	if _, err := a.do(ctx, http.MethodPut, multinode.PathReport, report, nil); err != nil {
+	if err := a.client().Report(ctx, report); err != nil {
 		a.log.WarnContext(ctx, "node agent: report the node", "error", err)
 		return
 	}

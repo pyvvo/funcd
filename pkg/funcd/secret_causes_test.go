@@ -14,6 +14,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
@@ -109,7 +110,7 @@ func awaySecretEnv(t *testing.T) *causeEnv {
 	tok, err := admin.MintJoinToken(ctx, "vm1", "")
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
+	_, err = agent.Join(ctx, longpoll.NewConnector(), "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
 	require.NoError(t, err)
 	node := answersPlatform(t, funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: dir, Version: "test"}))
 	for _, path := range []string{"secrets/s", "functions/writer"} {

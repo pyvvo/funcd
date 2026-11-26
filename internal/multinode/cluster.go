@@ -1,3 +1,8 @@
+// Package multinode is funcd's multi-node control plane (FEAT-0002): the rules of the node API that worker nodes call
+// (Handler), the cluster CA and the join tokens, the placement of namespaces on nodes, the nodes' liveness, and the routers
+// that send a node call to the node that runs its namespace. The control plane never dials a node: a node joins with a
+// one-time token, then follows the change log of the namespaces placed on it, writes their status back and answers the
+// node calls, over the node API port (internal/nodeapi) and its driver.
 package multinode
 
 import (
@@ -9,6 +14,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/platform/version"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -23,35 +29,33 @@ const (
 type Config struct {
 	Store      store.Store
 	Logger     *slog.Logger
-	Dir        string        // the cluster directory, which holds the CA
-	ListenAddr string        // the node API's address
-	Hosts      []string      // the names and addresses the node API's certificate covers
-	LocalNode  v1.ObjectName // the control plane's own node
-	LocalRuns  bool          // false on a control plane alone (funcd server), which runs no namespace
-	Master     []byte        // the control plane's master secret, the root of the namespace keys; nil ⇒ none
-	Secrets    SecretWriter  // makes the Secret writes of the nodes' workloads; nil ⇒ none
-	Held       func() bool   // the control plane is held after its restore, so no node follows it; nil ⇒ never
-	Version    string        // the control plane's release, which no node may be newer than; "" ⇒ this binary's
-	NodeFields FieldVersions // the spec fields a newer node API brings; nil ⇒ this release's
+	CA         *CA            // the cluster CA (LoadOrCreateCA), which signs the node API's certificate and the nodes'
+	API        nodeapi.Server // the node API's driver, which carries the nodes' requests and the node calls
+	LocalNode  v1.ObjectName  // the control plane's own node
+	LocalRuns  bool           // false on a control plane alone (funcd server), which runs no namespace
+	Master     []byte         // the control plane's master secret, the root of the namespace keys; nil ⇒ none
+	Secrets    SecretWriter   // makes the Secret writes of the nodes' workloads; nil ⇒ none
+	Held       func() bool    // the control plane is held after its restore, so no node follows it; nil ⇒ never
+	Version    string         // the control plane's release, which no node may be newer than; "" ⇒ this binary's
+	NodeFields FieldVersions  // the spec fields a newer node API brings; nil ⇒ this release's
 	Now        func() time.Time
 }
 
-// Cluster is the control plane's side of multi-node: the node API, the CA, the placement and the liveness of nodes,
-// and the node-call queues.
+// Cluster is the control plane's side of multi-node: the node API's rules and its driver, the CA, and the placement and
+// the liveness of nodes.
 type Cluster struct {
 	cfg       Config
 	ca        *CA
 	placement *Placement
 	liveness  *Liveness
-	calls     *Calls
-	server    *Server
+	handler   *Handler
 }
 
-// New loads or makes the CA and binds the node API.
+// New serves the node API's rules through cfg.API.
 func New(cfg Config) (*Cluster, error) {
 	const op = "multinode.New"
-	if cfg.Store == nil || cfg.Dir == "" || cfg.ListenAddr == "" {
-		return nil, fault.Invalidf(op, "a store, a cluster directory and a listen address are required")
+	if cfg.Store == nil || cfg.CA == nil || cfg.API == nil {
+		return nil, fault.Invalidf(op, "a store, the cluster CA and the node API's driver are required")
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -66,18 +70,15 @@ func New(cfg Config) (*Cluster, error) {
 	if cfg.NodeFields == nil {
 		cfg.NodeFields = nodeFields()
 	}
-	ca, err := LoadOrCreateCA(cfg.Dir, cfg.Now())
-	if err != nil {
-		return nil, err
-	}
-	c := &Cluster{cfg: cfg, ca: ca, placement: NewPlacement(cfg.Store, cfg.LocalNode, cfg.LocalRuns),
-		liveness: NewLiveness(cfg.Store, cfg.Logger, cfg.Now, 0, 0), calls: NewCalls(cfg.Now)}
+	c := &Cluster{cfg: cfg, ca: cfg.CA, placement: NewPlacement(cfg.Store, cfg.LocalNode, cfg.LocalRuns),
+		liveness: NewLiveness(cfg.Store, cfg.Logger, cfg.Now, 0, 0)}
 	var keys *NamespaceKeys
 	if len(cfg.Master) > 0 {
 		keys = NewNamespaceKeys(cfg.Store, cfg.Master)
 	}
-	c.server, err = NewServer(ServerConfig{Store: cfg.Store, CA: ca, Placement: c.placement, Liveness: c.liveness,
-		Calls: c.calls, Keys: keys, Secrets: cfg.Secrets, Held: cfg.Held, Logger: cfg.Logger, Version: cfg.Version, Now: cfg.Now}, cfg.ListenAddr, cfg.Hosts)
+	var err error
+	c.handler, err = NewHandler(HandlerConfig{Store: cfg.Store, CA: cfg.CA, Placement: c.placement, Liveness: c.liveness,
+		Keys: keys, Secrets: cfg.Secrets, Held: cfg.Held, Logger: cfg.Logger, Version: cfg.Version, Now: cfg.Now})
 	if err != nil {
 		return nil, err
 	}
@@ -87,15 +88,15 @@ func New(cfg Config) (*Cluster, error) {
 // Run serves the node API and keeps the WorkerNodes' statuses until ctx ends.
 func (c *Cluster) Run(ctx context.Context) error {
 	go c.liveness.Run(ctx)
-	c.cfg.Logger.InfoContext(ctx, "node API listening", "addr", c.server.Addr(), "caHash", c.ca.Hash())
-	return c.server.Serve(ctx)
+	c.cfg.Logger.InfoContext(ctx, "node API listening", "addr", c.cfg.API.Addr(), "caHash", c.ca.Hash())
+	return c.cfg.API.Serve(ctx, c.handler)
 }
 
 // Close stops the node API.
-func (c *Cluster) Close() error { return c.server.Close() }
+func (c *Cluster) Close() error { return c.cfg.API.Close() }
 
 // Addr is the node API's bound address.
-func (c *Cluster) Addr() string { return c.server.Addr() }
+func (c *Cluster) Addr() string { return c.cfg.API.Addr() }
 
 // CA is the cluster CA.
 func (c *Cluster) CA() *CA { return c.ca }
@@ -105,12 +106,12 @@ func (c *Cluster) Skip(ns v1.NamespaceName) bool { return c.placement.Skip(ns) }
 
 // Logs routes a Function log read to the node that runs its namespace.
 func (c *Cluster) Logs(local LogReader) LogReader {
-	return LogRouter{router: router{placement: c.placement, calls: c.calls}, local: local}
+	return LogRouter{router: c.router(), local: local}
 }
 
 // RunLogs routes a WorkflowRun log read to the node that runs its namespace.
 func (c *Cluster) RunLogs(local RunLogReader) RunLogReader {
-	return RunLogRouter{router: router{placement: c.placement, calls: c.calls}, local: local}
+	return RunLogRouter{router: c.router(), local: local}
 }
 
 // DeadLetters routes the API's dead-letter reads and discards to the node that runs their namespace.
@@ -138,10 +139,10 @@ func (c *Cluster) Hold(local Holder) Holder { return HoldRouter{router: c.router
 
 // Nodes reaches the worker nodes' own holds and platform backups; hold and backup are this process's, backup nil ⇒ none.
 func (c *Cluster) Nodes(hold Holder, backup Backups) Nodes {
-	return Nodes{calls: c.calls, st: c.cfg.Store, local: c.cfg.LocalNode, hold: hold, backup: backup}
+	return Nodes{calls: c.cfg.API, st: c.cfg.Store, local: c.cfg.LocalNode, hold: hold, backup: backup}
 }
 
-func (c *Cluster) router() router { return router{placement: c.placement, calls: c.calls} }
+func (c *Cluster) router() router { return router{placement: c.placement, calls: c.cfg.API} }
 
 // Admissions are the multi-node checks of the control plane's write path.
 func (c *Cluster) Admissions() []admission.Admission {

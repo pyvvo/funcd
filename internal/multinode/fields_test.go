@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 )
 
 var update = flag.Bool("update", false, "write the spec fields of this tree to testdata") //nolint:gochecknoglobals // a test flag
@@ -92,14 +93,14 @@ func TestANewSpecFieldNamesTheNodeAPIVersionItNeeds(t *testing.T) {
 		for kind, paths := range kinds {
 			for _, p := range paths {
 				require.Greater(t, named[kind][p], 1, "%s is new, at %s of %s: a node on an older release would drop it. "+
-					"Raise APIVersion and name it in nodeFields, or, when an older node may ignore it, run this test with "+
+					"Raise nodeapi.APIVersion and name it in nodeFields, or, when an older node may ignore it, run this test with "+
 					"-update", field, p, kind)
 			}
 		}
 	}
 	for kind, paths := range named {
 		for p, v := range paths {
-			require.LessOrEqual(t, v, APIVersion, "%s %s", kind, p)
+			require.LessOrEqual(t, v, nodeapi.APIVersion, "%s %s", kind, p)
 			require.True(t, slices.ContainsFunc(slices.Collect(maps.Values(fields)), func(at map[v1.Kind][]string) bool {
 				return slices.Contains(at[kind], p)
 			}), "%s has no field %s", kind, p)

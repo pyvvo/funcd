@@ -17,6 +17,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -74,7 +75,7 @@ func TestAWorkerNodeRunsTheNamespacePlacedOnIt(t *testing.T) {
 	tok, err := admin.MintJoinToken(ctx, "vm1", "")
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
+	_, err = agent.Join(ctx, longpoll.NewConnector(), "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
 	require.NoError(t, err)
 	node := runPlatform(t, funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: dir, Version: "test"}))
 	local, err := sdk.New("http://"+node.Addr(), sdk.WithToken(clusterAdmin))
@@ -199,7 +200,7 @@ func TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
 	tok, err := admin.MintJoinToken(ctx, "vm1", "")
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
+	_, err = agent.Join(ctx, longpoll.NewConnector(), "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
 	require.NoError(t, err)
 	nodeWorkers.serve(t, "echo", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("from vm1")) })
 	node := runPlatform(t, funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: dir, Version: "test"}),
@@ -302,7 +303,7 @@ func TestAJobRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
 	tok, err := admin.MintJoinToken(ctx, "vm1", "")
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
+	_, err = agent.Join(ctx, longpoll.NewConnector(), "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
 	require.NoError(t, err)
 	for _, name := range []v1.ObjectName{"before", "after"} {
 		nodeWorkers.serve(t, name, func(w http.ResponseWriter, _ *http.Request) {

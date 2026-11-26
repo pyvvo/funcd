@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	"github.com/pyvvo/funcd/internal/multinode"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/platform/durable"
 )
 
@@ -33,9 +31,9 @@ func (a *Agent) NamespaceMaster(ns v1.NamespaceName) ([]byte, error) {
 }
 
 // loadKeys reads back the masters the node kept.
-func loadKeys(dir string) (map[v1.NamespaceName]multinode.NamespaceKey, error) {
+func loadKeys(dir string) (map[v1.NamespaceName]nodeapi.NamespaceKey, error) {
 	const op = "agent.loadKeys"
-	out := map[v1.NamespaceName]multinode.NamespaceKey{}
+	out := map[v1.NamespaceName]nodeapi.NamespaceKey{}
 	entries, err := os.ReadDir(filepath.Join(dir, keysDir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return out, nil
@@ -51,7 +49,7 @@ func loadKeys(dir string) (map[v1.NamespaceName]multinode.NamespaceKey, error) {
 		if err != nil {
 			return nil, fault.Wrapf(err, fault.Internal, op, "read %s/%s", keysDir, e.Name())
 		}
-		var k multinode.NamespaceKey
+		var k nodeapi.NamespaceKey
 		if err := json.Unmarshal(b, &k); err != nil || k.Namespace == "" || len(k.Key) == 0 {
 			return nil, fault.Invalidf(op, "%s/%s holds no namespace master", keysDir, e.Name())
 		}
@@ -63,8 +61,8 @@ func loadKeys(dir string) (map[v1.NamespaceName]multinode.NamespaceKey, error) {
 // fetchKey takes namespace ns's master from the control plane and keeps it.
 func (a *Agent) fetchKey(ctx context.Context, ns v1.NamespaceName) error {
 	const op = "agent.fetchKey"
-	var k multinode.NamespaceKey
-	if _, err := a.do(ctx, http.MethodGet, multinode.PathKeys+"?namespace="+url.QueryEscape(string(ns)), nil, &k); err != nil {
+	k, err := a.client().Key(ctx, ns)
+	if err != nil {
 		return err
 	}
 	if k.Namespace != ns || len(k.Key) == 0 {

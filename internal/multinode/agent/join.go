@@ -1,7 +1,7 @@
 // Package agent is a worker node's side of multi-node (FEAT-0002): the join that swaps a one-time token for the node's
 // certificate, and the agent that keeps the node's local store a copy of the namespaces placed on it, writes their
-// status and the children the node owns back, and answers the node calls. Every connection is the node's own: it dials
-// the control plane, which never dials it.
+// status and the children the node owns back, and answers the node calls. It speaks to the control plane through the
+// node API port (internal/nodeapi): every connection is the node's own, and the control plane never dials it.
 package agent
 
 import (
@@ -13,12 +13,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
 	"encoding/pem"
-	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +22,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/multinode"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 )
 
 // The node's identity files, in its cluster directory.
@@ -38,69 +34,23 @@ const (
 	cursorFile   = "cursor"
 )
 
-// The join's and the node API client's bounds.
-const (
-	joinRequestTimeout = 30 * time.Second
-	maxJoinAnswer      = 1 << 20
-	idleConnTimeout    = 90 * time.Second
-)
-
-// Join swaps a one-time join token for this node's certificate (FEAT-0002 decision 2), and writes the node's identity to
-// dir. Before it sends the token, it checks that the control plane at server presents a certificate chain whose CA has
-// the hash the token carries, so a token never reaches an impostor.
-func Join(ctx context.Context, server, token, dir, version, platform string) (v1.ObjectName, error) {
+// Join swaps a one-time join token for this node's certificate (FEAT-0002 decision 2), through conn, the node side of the
+// node API's driver, and writes the node's identity to dir. Before it sends the token, conn checks that the control plane
+// at server presents a certificate chain whose CA has the hash the token carries, so a token never reaches an impostor.
+func Join(ctx context.Context, conn nodeapi.Connector, server, token, dir, version, platform string) (v1.ObjectName, error) {
 	const op = "agent.Join"
 	tok, err := multinode.ParseToken(token)
 	if err != nil {
 		return "", err
 	}
-	u, err := url.Parse(server)
-	if err != nil || u.Scheme != "https" || u.Host == "" {
-		return "", fault.Invalidf(op, "the control plane's node API is an https:// URL, not %q", server)
-	}
-	var caDER []byte
-	pin := &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: true, //nolint:gosec // VerifyPeerCertificate pins the CA the token names, below
-		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
-			for _, der := range raw {
-				if multinode.CertHash(der) == tok.CAHash {
-					caDER = der
-					return verifyChain(raw, der, u.Hostname())
-				}
-			}
-			return fmt.Errorf("the control plane at %s does not present the CA the join token names", server)
-		},
-	}
 	key, csr, err := newKey(tok.Node)
 	if err != nil {
 		return "", err
 	}
-	body, err := json.Marshal(multinode.JoinRequest{Token: tok.String(), Version: version, Platform: platform, CSR: csr})
+	trusted := func(caDER []byte) bool { return multinode.CertHash(caDER) == tok.CAHash }
+	out, caDER, err := conn.Join(ctx, server, trusted, nodeapi.JoinRequest{Token: tok.String(), Version: version, Platform: platform, CSR: csr})
 	if err != nil {
-		return "", fault.Wrapf(err, fault.Internal, op, "marshal the join")
-	}
-	hc := &http.Client{Timeout: joinRequestTimeout, Transport: &http.Transport{TLSClientConfig: pin}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+multinode.PathJoin, bytes.NewReader(body))
-	if err != nil {
-		return "", fault.Wrapf(err, fault.Invalid, op, "build the join request")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := hc.Do(req)
-	if err != nil {
-		return "", fault.Wrapf(err, fault.Unavailable, op, "reach the control plane at %s", server)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxJoinAnswer))
-	if err != nil {
-		return "", fault.Wrapf(err, fault.Unavailable, op, "read the join answer")
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fault.Forbiddenf(op, "the control plane refused the join (%d): %s", resp.StatusCode, detail(data))
-	}
-	var out multinode.JoinResponse
-	if err := json.Unmarshal(data, &out); err != nil {
-		return "", fault.Wrapf(err, fault.Internal, op, "decode the join answer")
+		return "", err
 	}
 	id, err := identityPEM(out.Certificate, key)
 	if err != nil {
@@ -163,22 +113,6 @@ func joinedAgain(dir string) {
 	_ = os.Remove(cursor)
 }
 
-// verifyChain checks the presented leaf against the pinned CA, for host.
-func verifyChain(raw [][]byte, caDER []byte, host string) error {
-	ca, err := x509.ParseCertificate(caDER)
-	if err != nil {
-		return err
-	}
-	leaf, err := x509.ParseCertificate(raw[0])
-	if err != nil {
-		return err
-	}
-	roots := x509.NewCertPool()
-	roots.AddCert(ca)
-	_, err = leaf.Verify(x509.VerifyOptions{Roots: roots, DNSName: host, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
-	return err
-}
-
 // JoinedName is the name this node joined under, from its cluster directory dir.
 func JoinedName(dir string) (v1.ObjectName, error) {
 	b, err := os.ReadFile(filepath.Join(dir, nameFile)) //nolint:gosec // the node's own cluster directory
@@ -194,10 +128,11 @@ type identity struct {
 	server   string
 	roots    *x509.CertPool
 	notAfter time.Time
-	client   *http.Client
+	client   nodeapi.Client
 }
 
-func loadIdentity(dir string) (identity, error) {
+// loadIdentity reads back the identity of the node that joined under dir, and its certificate with its key.
+func loadIdentity(dir string) (identity, []byte, error) {
 	const op = "agent.loadIdentity"
 	read := func(name string) ([]byte, error) {
 		b, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // the node's own cluster directory
@@ -208,30 +143,29 @@ func loadIdentity(dir string) (identity, error) {
 	}
 	name, err := read(nameFile)
 	if err != nil {
-		return identity{}, err
+		return identity{}, nil, err
 	}
 	server, err := read(serverFile)
 	if err != nil {
-		return identity{}, err
+		return identity{}, nil, err
 	}
 	caPEM, err := read(caFile)
 	if err != nil {
-		return identity{}, err
+		return identity{}, nil, err
 	}
 	pair, err := read(identityFile)
 	if err != nil {
-		return identity{}, err
+		return identity{}, nil, err
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(caPEM) {
-		return identity{}, fault.Invalidf(op, "%s holds no certificate", caFile)
+		return identity{}, nil, fault.Invalidf(op, "%s holds no certificate", caFile)
 	}
-	id := identity{name: v1.ObjectName(strings.TrimSpace(string(name))), server: strings.TrimSpace(string(server)), roots: roots}
-	return id.with(pair)
+	return identity{name: v1.ObjectName(strings.TrimSpace(string(name))), server: strings.TrimSpace(string(server)), roots: roots}, pair, nil
 }
 
-// with is id under the certificate and key of pair, with a client of its own.
-func (id identity) with(pair []byte) (identity, error) {
+// with is id under the certificate and key of pair, with a client of its own that conn dials.
+func (id identity) with(conn nodeapi.Connector, pair []byte, version, platform string) (identity, error) {
 	const op = "agent.identity"
 	cert, err := tls.X509KeyPair(pair, pair)
 	if err != nil {
@@ -242,10 +176,9 @@ func (id identity) with(pair []byte) (identity, error) {
 		return identity{}, fault.Wrapf(err, fault.Invalid, op, "parse the node certificate")
 	}
 	id.notAfter = leaf.NotAfter
-	id.client = &http.Client{Transport: &http.Transport{
-		TLSClientConfig:     &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: id.roots, MinVersion: tls.VersionTLS13},
-		MaxIdleConnsPerHost: 8,
-		IdleConnTimeout:     idleConnTimeout,
-	}}
+	if id.client, err = conn.Dial(nodeapi.Identity{Server: id.server, Certificate: cert, Roots: id.roots, Version: version,
+		Platform: platform}); err != nil {
+		return identity{}, err
+	}
 	return id, nil
 }

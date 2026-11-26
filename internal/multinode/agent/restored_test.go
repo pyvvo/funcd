@@ -10,6 +10,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/snapshot/snapshotcontract"
 	"github.com/pyvvo/funcd/internal/store"
@@ -41,7 +42,7 @@ func (n *joinedNode) replaceStore(t *testing.T, recs []snapshot.Record) {
 // prepare is the node's first step at a start, before its platform runs anything.
 func (n *joinedNode) prepare(t *testing.T) {
 	t.Helper()
-	a, err := agent.New(agent.Config{Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

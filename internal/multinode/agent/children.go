@@ -3,12 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/url"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	"github.com/pyvvo/funcd/internal/multinode"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -47,8 +45,8 @@ func (a *Agent) Prepare(ctx context.Context) error {
 
 // children calls f with each child of the node's namespaces that the control plane holds and the node's store does not.
 func (a *Agent) children(ctx context.Context, f func(v1.Object) error) error {
-	var held []store.Change
-	if _, err := a.do(ctx, http.MethodGet, multinode.PathChildren, nil, &held); err != nil {
+	held, err := a.client().Children(ctx)
+	if err != nil {
 		return err
 	}
 	for _, c := range held {
@@ -88,8 +86,7 @@ func (a *Agent) adoptChildren(ctx context.Context) error {
 func (a *Agent) dropChildren(ctx context.Context) bool {
 	err := a.children(ctx, func(obj v1.Object) error {
 		m, kind := obj.GetObjectMeta(), obj.GroupVersionKind().Kind
-		a.sendDelete(ctx, key(kind, m.Namespace, m.Name), url.Values{"kind": {string(kind)},
-			"namespace": {string(m.Namespace)}, "name": {string(m.Name)}, "uid": {string(m.UID)}})
+		a.sendDelete(ctx, key(kind, m.Namespace, m.Name), nodeapi.ObjectRef{Kind: kind, Namespace: m.Namespace, Name: m.Name, UID: m.UID})
 		return nil
 	})
 	if err != nil && ctx.Err() == nil {

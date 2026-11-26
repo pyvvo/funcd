@@ -11,6 +11,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -32,7 +33,7 @@ func TestAnAddonObjectRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
 	tok, err := cp.admin.MintJoinToken(ctx, "vm1", "")
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, "https://"+cp.p.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
+	_, err = agent.Join(ctx, longpoll.NewConnector(), "https://"+cp.p.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
 	require.NoError(t, err)
 	rt := newAddonRuntime(t)
 	node := startAddonPlatform(t, rt, WithNodeAgent(NodeAgentOptions{Dir: dir, Version: "test"}), WithAddonRuntime(rt))

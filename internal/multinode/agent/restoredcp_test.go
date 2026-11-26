@@ -13,6 +13,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/multinode"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/snapshot/snapshotcontract"
 	"github.com/pyvvo/funcd/internal/store"
@@ -42,8 +43,7 @@ func anyKVStore(*v1.KVStore) bool { return true }
 // control plane is held, then starts again on the restored state, with the runs it made since.
 func TestANodeOutlivesTheRestoreOfItsControlPlane(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	n := joinNode(t, func(c *multinode.Config) { c.Dir = dir })
+	n := joinNode(t)
 	_, err := n.cp.Create(ctx, kvStore("kept"))
 	require.NoError(t, err)
 	stop := n.start(t)
@@ -69,14 +69,13 @@ func TestANodeOutlivesTheRestoreOfItsControlPlane(t *testing.T) {
 	n.cp = store.New(eng, store.WithChangeLog(0))
 	var held atomic.Bool
 	held.Store(true)
-	restored, err := multinode.New(multinode.Config{Store: n.cp, Dir: dir, ListenAddr: addr, LocalNode: "local", LocalRuns: true,
-		Master: []byte(cpMaster), Held: held.Load})
-	require.NoError(t, err)
+	restored := newCluster(t, multinode.Config{Store: n.cp, LocalNode: "local", LocalRuns: true, Master: []byte(cpMaster),
+		Held: held.Load}, n.caDir, addr)
 	cpctx, stopCP := context.WithCancel(ctx)
 	defer stopCP()
 	go func() { _ = restored.Run(cpctx) }()
 
-	a, err := agent.New(agent.Config{Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
 	require.NoError(t, err)
 	require.NoError(t, a.Prepare(ctx), "a node that holds its namespaces starts without the control plane")
 	done := make(chan error, 1)
@@ -135,8 +134,7 @@ func TestARunTheNodeMadeOutlivesASnapshot(t *testing.T) {
 // runs it made, and follows from a whole snapshot.
 func TestANodeThatJoinsAgainKeepsTheRunsItMade(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	n := joinNode(t, func(c *multinode.Config) { c.Dir = dir })
+	n := joinNode(t)
 	stop := n.start(t)
 	_, err := n.cp.Create(ctx, kvStore("kv1"))
 	require.NoError(t, err)
@@ -147,9 +145,8 @@ func TestANodeThatJoinsAgainKeepsTheRunsItMade(t *testing.T) {
 	stop()
 	require.NoError(t, n.node.Delete(ctx, v1.KindConfigMap.GVK(), "e1", "dropped", ""))
 	n.cancelCP() // a new control plane process knows no node that polled a moment ago
-	n.cluster, err = multinode.New(multinode.Config{Store: n.cp, Dir: dir, ListenAddr: "127.0.0.1:0", LocalNode: "local",
-		LocalRuns: true, Master: []byte(cpMaster)})
-	require.NoError(t, err)
+	n.cluster = newCluster(t, multinode.Config{Store: n.cp, LocalNode: "local", LocalRuns: true, Master: []byte(cpMaster)},
+		n.caDir, "127.0.0.1:0")
 	cpctx, stopCP := context.WithCancel(ctx)
 	defer stopCP()
 	go func() { _ = n.cluster.Run(cpctx) }()
@@ -158,7 +155,7 @@ func TestANodeThatJoinsAgainKeepsTheRunsItMade(t *testing.T) {
 	require.NoError(t, n.cp.Delete(store.WithoutChangeLog(ctx), v1.KindKVStore.GVK(), "e1", "kv1", ""))
 	token, _, err := n.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
-	_, err = agent.Join(ctx, n.server(), token, n.dir, "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), n.server(), token, n.dir, "test", "linux/arm64")
 	require.NoError(t, err)
 	n.prepare(t)
 	gone(t, n.node, v1.KindKVStore, "kv1", "a whole snapshot shows what went meanwhile")

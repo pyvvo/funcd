@@ -199,6 +199,17 @@ func (c *CA) SignNode(csrPEM []byte, node v1.ObjectName, now time.Time) ([]byte,
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), serial.Text(16), notAfter, nil
 }
 
+// ServerTLS is the node API's TLS (FEAT-0002 decision 2): a certificate for hosts that the CA signs, signed again before
+// it ends, and the certificates of the nodes the CA signed, verified when a node gives one: the join comes with none.
+func (c *CA) ServerTLS(hosts []string, now func() time.Time) (*tls.Config, error) {
+	cert := &serverCertificate{ca: c, hosts: hosts, now: now}
+	if _, err := cert.get(nil); err != nil {
+		return nil, err
+	}
+	return &tls.Config{GetCertificate: cert.get, ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: c.Pool(),
+		MinVersion: tls.VersionTLS13}, nil
+}
+
 // serverCertificate is the node API's certificate, signed again before it ends.
 type serverCertificate struct {
 	ca    *CA

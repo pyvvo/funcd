@@ -3,12 +3,11 @@ package agent
 import (
 	"context"
 	"errors"
-	"net/http"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	"github.com/pyvvo/funcd/internal/multinode"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/secrets"
 )
 
@@ -23,9 +22,9 @@ const (
 // write is made by then, and the feed brings it.
 func (a *Agent) WriteSecret(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string, value *string) error {
 	const op = "agent.WriteSecret"
-	var out multinode.SecretAnswer
-	in := multinode.SecretWrite{Namespace: ns, Workload: fn, Secret: v1.ObjectName(binding), Key: key, Value: value}
-	if _, err := a.do(ctx, http.MethodPost, multinode.PathSecrets, in, &out); err != nil {
+	in := nodeapi.SecretWrite{Namespace: ns, Workload: fn, Secret: v1.ObjectName(binding), Key: key, Value: value}
+	out, err := a.client().Secret(ctx, in)
+	if err != nil {
 		return secrets.ErrControlPlaneAway.Wrapf(err, op, "write secret %q", binding)
 	}
 	if out.Error != "" {

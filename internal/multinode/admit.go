@@ -9,6 +9,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -183,7 +184,7 @@ func (f forwarded) Admit(ctx context.Context, req admission.Request) (v1.Object,
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "marshal")
 	}
-	a, err := f.calls.Do(ctx, node, Call{Kind: CallAdmit, Namespace: ns, Name: f.inner.Name(), Body: body})
+	a, err := f.calls.Call(ctx, node, nodeapi.Call{Kind: nodeapi.CallAdmit, Namespace: ns, Name: f.inner.Name(), Body: body})
 	if err != nil {
 		return nil, err
 	}

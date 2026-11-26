@@ -3,7 +3,6 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +16,8 @@ import (
 	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/multinode"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi"
+	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -33,7 +34,7 @@ func joinNode(t *testing.T, opts ...func(*multinode.Config)) *joinedNode {
 	n := &joinedNode{rig: startCP(t, opts...), dir: t.TempDir()}
 	token, _, err := n.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
-	_, err = agent.Join(ctx, n.server(), token, n.dir, "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), n.server(), token, n.dir, "test", "linux/arm64")
 	require.NoError(t, err)
 	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
 	ns.Name, ns.Spec.Node = "e1", "vm1"
@@ -45,7 +46,7 @@ func joinNode(t *testing.T, opts ...func(*multinode.Config)) *joinedNode {
 // start runs the node's agent until the func it returns is called, and waits until the node follows e1.
 func (n *joinedNode) start(t *testing.T) func() {
 	t.Helper()
-	a, err := agent.New(agent.Config{Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
 	require.NoError(t, err)
 	n.agent = a
 	actx, cancel := context.WithCancel(context.Background())
@@ -343,11 +344,7 @@ func TestARunThatANodeStartsReachesTheControlPlane(t *testing.T) {
 func TestANodesLateWriteChangesNothingOfAnotherObject(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)
-	send := nodeCaller(t, n.rig, n.dir)
-	call := func(method, path string, body any) int { //nolint:forbidigo // a typed request of the node API
-		status, _ := send(method, path, body)
-		return status
-	}
+	client := nodeClient(t, n.rig, n.dir)
 	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	run := jobRun("deploy-1", "deploy")
 	run.Spec.Approve, run.Status.Phase = digest, v1.JobRunAwaitingApproval
@@ -360,30 +357,31 @@ func TestANodesLateWriteChangesNothingOfAnotherObject(t *testing.T) {
 		require.NoError(t, err)
 		return obj.(*v1.JobRun)
 	}
-	status := func(uid v1.UID, s string) int {
-		return call(http.MethodPut, multinode.PathStatus, multinode.StatusWrite{Kind: v1.KindJobRun, Namespace: "e1", Name: "deploy-1",
-			UID: uid, Status: []byte(s)})
+	status := func(uid v1.UID, s string) error {
+		return client.Status(ctx, nodeapi.StatusWrite{Kind: v1.KindJobRun, Namespace: "e1", Name: "deploy-1", UID: uid, Status: []byte(s)})
 	}
 	mine := get().UID
-	require.Equal(t, http.StatusNoContent, status(mine, `{"phase":"AwaitingApproval","preview":{"digest":"`+digest+`","document":{},"previewedAt":"2026-11-24T00:00:00.000Z"}}`))
+	require.NoError(t, status(mine, `{"phase":"AwaitingApproval","preview":{"digest":"`+digest+`","document":{},"previewedAt":"2026-11-24T00:00:00.000Z"}}`))
 	require.True(t, get().Approved(), "a status reported before the node saw the approval keeps it")
 	require.Equal(t, []string{"ada", "ada"}, []string{get().Status.ApprovedBy, get().Status.StartedBy})
-	require.Equal(t, http.StatusConflict, status("of-another-run", `{"phase":"Failed"}`))
+	require.Equal(t, fault.Conflict, fault.KindOf(status("of-another-run", `{"phase":"Failed"}`)))
 	require.Equal(t, v1.JobRunAwaitingApproval, get().Status.Phase, "a status of another run of the name")
-	require.Equal(t, http.StatusNoContent, status(mine, `{"phase":"AwaitingApproval","preview":{"digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","document":{},"previewedAt":"2026-11-24T00:00:00.000Z"}}`))
+	require.NoError(t, status(mine, `{"phase":"AwaitingApproval","preview":{"digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","document":{},"previewedAt":"2026-11-24T00:00:00.000Z"}}`))
 	require.Empty(t, get().Status.ApprovedBy, "an approval is of one preview")
 
 	other := jobRun("deploy-1", "deploy")
 	other.UID, other.Status.Phase = "of-another-run", v1.JobRunRunning
 	raw, err := json.Marshal(other)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusConflict, call(http.MethodPut, multinode.PathObjects, multinode.ObjectWrite{Kind: v1.KindJobRun, Object: raw}))
+	require.Equal(t, fault.Conflict, fault.KindOf(client.PutObject(ctx, nodeapi.ObjectWrite{Kind: v1.KindJobRun, Object: raw})))
 	require.Equal(t, v1.JobRunAwaitingApproval, get().Status.Phase, "a run the node made under a taken name")
-	path := multinode.PathObjects + "?kind=JobRun&namespace=e1&name=deploy-1"
-	require.Equal(t, http.StatusUnprocessableEntity, call(http.MethodDelete, path, nil), "a delete names the object's uid")
-	require.Equal(t, http.StatusNoContent, call(http.MethodDelete, path+"&uid=of-another-run", nil))
+	ref := nodeapi.ObjectRef{Kind: v1.KindJobRun, Namespace: "e1", Name: "deploy-1"}
+	require.Equal(t, fault.Invalid, fault.KindOf(client.DeleteObject(ctx, ref)), "a delete names the object's uid")
+	ref.UID = "of-another-run"
+	require.NoError(t, client.DeleteObject(ctx, ref))
 	require.Equal(t, mine, get().UID, "the object a delete named was another one")
-	require.Equal(t, http.StatusNoContent, call(http.MethodDelete, path+"&uid="+string(mine), nil))
+	ref.UID = mine
+	require.NoError(t, client.DeleteObject(ctx, ref))
 	_, err = n.cp.Get(ctx, v1.KindJobRun.GVK(), "e1", "deploy-1")
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 
@@ -391,8 +389,8 @@ func TestANodesLateWriteChangesNothingOfAnotherObject(t *testing.T) {
 	require.NoError(t, err)
 	obj, err := n.cp.Get(ctx, v1.KindAddonObject.GVK(), "e1", "net")
 	require.NoError(t, err)
-	path = multinode.PathObjects + "?kind=AddonObject&namespace=e1&name=net&uid=" + string(obj.GetObjectMeta().UID)
-	require.Equal(t, http.StatusForbidden, call(http.MethodDelete, path, nil), "an object a person wrote and did not delete")
+	ref = nodeapi.ObjectRef{Kind: v1.KindAddonObject, Namespace: "e1", Name: "net", UID: obj.GetObjectMeta().UID}
+	require.Equal(t, fault.Forbidden, fault.KindOf(client.DeleteObject(ctx, ref)), "an object a person wrote and did not delete")
 }
 
 func TestANodeGetsTheAPITokensAndTheNamespacesThatConcernIt(t *testing.T) {
@@ -426,13 +424,13 @@ func TestANodeGetsTheAPITokensAndTheNamespacesThatConcernIt(t *testing.T) {
 	lacks("theirs")
 
 	// The feed sends the node nothing of the rest but a name.
-	status, body := nodeCaller(t, n.rig, n.dir)(http.MethodGet, multinode.PathFeed+"?since=0&timeline="+n.cp.(store.ChangeLog).Timeline()+"&wait=1ms", nil)
-	require.Equal(t, http.StatusOK, status)
+	feed, err := nodeClient(t, n.rig, n.dir).Feed(ctx, 0, n.cp.(store.ChangeLog).Timeline(), time.Millisecond)
+	require.NoError(t, err)
+	body, err := json.Marshal(feed)
+	require.NoError(t, err)
 	require.Contains(t, string(body), "hash-of-mine")
 	require.Contains(t, string(body), `"theirs"`)
 	require.NotContains(t, string(body), "hash-of-theirs")
-	var feed multinode.Feed
-	require.NoError(t, json.Unmarshal(body, &feed))
 	for _, c := range feed.Changes {
 		if c.Name == "far" || c.Name == "theirs" {
 			require.Equal(t, store.Deleted, c.Type, "%s", c.Name)

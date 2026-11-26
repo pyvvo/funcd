@@ -2,11 +2,11 @@ package agent
 
 import (
 	"context"
-	"net/http"
 	"path/filepath"
 	"time"
 
 	"github.com/pyvvo/funcd/internal/multinode"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/platform/durable"
 )
 
@@ -34,15 +34,15 @@ func (a *Agent) renewCertificate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var out multinode.JoinResponse
-	if _, err := a.do(ctx, http.MethodPost, multinode.PathRenew, multinode.RenewRequest{CSR: csr}, &out); err != nil {
+	out, err := a.client().Renew(ctx, nodeapi.RenewRequest{CSR: csr})
+	if err != nil {
 		return err
 	}
 	pair, err := identityPEM(out.Certificate, key)
 	if err != nil {
 		return err
 	}
-	next, err := id.with(pair)
+	next, err := id.with(a.cfg.Connector, pair, a.cfg.Version, a.cfg.Platform)
 	if err != nil {
 		return err
 	}
@@ -50,8 +50,7 @@ func (a *Agent) renewCertificate(ctx context.Context) error {
 		return err
 	}
 	a.id.Store(&next)
-	id.client.CloseIdleConnections()
+	_ = id.client.Close()
 	a.log.InfoContext(ctx, "node agent: node certificate renewed", "notAfter", next.notAfter)
-	_, err = a.do(ctx, http.MethodPut, multinode.PathRenew, nil, nil)
-	return err
+	return a.client().Renewed(ctx)
 }

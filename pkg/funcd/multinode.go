@@ -2,6 +2,7 @@ package funcd
 
 import (
 	"net/http"
+	"time"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane"
@@ -9,7 +10,9 @@ import (
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/multinode"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // The writes a worker node's own API answers: the release of the node's own hold and the return of its quarantine
@@ -73,6 +76,30 @@ func (p *Platform) routeNodeParts(own nodeParts, holdSvc *controlplane.HoldServi
 	out.apps, out.volumes, out.hold = p.cluster.AppRetrier(own.apps), p.cluster.Volumes(own.volumes), p.cluster.Hold(holdSvc)
 	out.joinTokens, out.nodes = p.cluster, p.cluster.Nodes(holdSvc, own.backup)
 	return out
+}
+
+// newCluster serves the node API of a control plane that worker nodes join (WithCluster) over its driver, the HTTPS long
+// poll, under a certificate the cluster CA signs: the CA is made on the first start, under o.Dir.
+func (p *Platform) newCluster(o *ClusterOptions, st store.Store, local v1.ObjectName, master []byte) (*multinode.Cluster, error) {
+	ca, err := multinode.LoadOrCreateCA(o.Dir, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	tlsCfg, err := ca.ServerTLS(o.Hosts, time.Now)
+	if err != nil {
+		return nil, err
+	}
+	api, err := longpoll.Listen(longpoll.Config{Addr: o.ListenAddr, TLS: tlsCfg, Logger: p.logger})
+	if err != nil {
+		return nil, err
+	}
+	cl, err := multinode.New(multinode.Config{Store: st, Logger: p.logger, CA: ca, API: api, LocalNode: local,
+		LocalRuns: o.LocalRuns, Master: master, Secrets: p.secrets.facade, Held: p.heldByRestore})
+	if err != nil {
+		_ = api.Close()
+		return nil, err
+	}
+	return cl, nil
 }
 
 // ErrControlPlaneRestored is Run's error on a worker node whose control plane was restored from a backup (FEAT-0002 F251):

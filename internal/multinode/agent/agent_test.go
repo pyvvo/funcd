@@ -1,19 +1,15 @@
 package agent_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"io"
 	"io/fs"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +27,8 @@ import (
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/multinode"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi"
+	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
@@ -57,6 +55,7 @@ type rig struct {
 	cp, node store.Store
 	cluster  *multinode.Cluster
 	cancelCP context.CancelFunc
+	caDir    string // the cluster directory, which keeps the CA across a restart of the control plane
 }
 
 // cpMaster is the control plane's master secret, which every namespace's master derives from.
@@ -66,21 +65,35 @@ const cpMaster = "0123456789abcdef0123456789abcdef"
 func startCP(t *testing.T, opts ...func(*multinode.Config)) rig {
 	t.Helper()
 	cp := store.New(memory.New(), store.WithChangeLog(0))
-	cfg := multinode.Config{Store: cp, Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalNode: "local", LocalRuns: true,
-		Master: []byte(cpMaster)}
+	cfg := multinode.Config{Store: cp, LocalNode: "local", LocalRuns: true, Master: []byte(cpMaster)}
 	for _, o := range opts {
 		o(&cfg)
 	}
-	cluster, err := multinode.New(cfg)
-	require.NoError(t, err)
+	caDir := t.TempDir()
+	cluster := newCluster(t, cfg, caDir, "127.0.0.1:0")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() { _ = cluster.Run(ctx) }()
 	wn := &v1.WorkerNode{TypeMeta: meta(v1.KindWorkerNode)}
 	wn.Name = "vm1"
-	_, err = cp.Create(context.Background(), wn)
+	_, err := cp.Create(context.Background(), wn)
 	require.NoError(t, err)
-	return rig{cp: cp, node: store.New(memory.New()), cluster: cluster, cancelCP: cancel}
+	return rig{cp: cp, node: store.New(memory.New()), cluster: cluster, cancelCP: cancel, caDir: caDir}
+}
+
+// newCluster is a control plane of cfg over the HTTPS long poll on addr, with its CA under dir.
+func newCluster(t *testing.T, cfg multinode.Config, dir, addr string) *multinode.Cluster {
+	t.Helper()
+	ca, err := multinode.LoadOrCreateCA(dir, time.Now())
+	require.NoError(t, err)
+	tlsCfg, err := ca.ServerTLS(nil, time.Now)
+	require.NoError(t, err)
+	api, err := longpoll.Listen(longpoll.Config{Addr: addr, TLS: tlsCfg})
+	require.NoError(t, err)
+	cfg.CA, cfg.API = ca, api
+	cluster, err := multinode.New(cfg)
+	require.NoError(t, err)
+	return cluster
 }
 
 func (r rig) server() string { return "https://" + r.cluster.Addr() }
@@ -96,13 +109,13 @@ func TestANodeJoinsFollowsItsNamespaceAndReportsBack(t *testing.T) {
 	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
 	dir := t.TempDir()
-	name, err := agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	name, err := agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
 	require.NoError(t, err)
 	require.Equal(t, v1.ObjectName("vm1"), name)
-	_, err = agent.Join(ctx, r.server(), token, t.TempDir(), "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, t.TempDir(), "test", "linux/arm64")
 	require.ErrorContains(t, err, "no join token waiting", "a token works once")
 
-	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -198,7 +211,7 @@ func TestAJoinRefusesAControlPlaneWithAnotherCA(t *testing.T) {
 	tok, err := multinode.ParseToken(token)
 	require.NoError(t, err)
 	tok.CAHash = "00" + tok.CAHash[2:]
-	_, err = agent.Join(ctx, r.server(), tok.String(), t.TempDir(), "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), tok.String(), t.TempDir(), "test", "linux/arm64")
 	require.ErrorContains(t, err, "does not present the CA the join token names")
 }
 
@@ -208,7 +221,7 @@ func TestANodeResumesFromItsSavedRevision(t *testing.T) {
 	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
 	require.NoError(t, err)
 	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
 	ns.Name, ns.Spec.Node = "e1", "vm1"
@@ -216,7 +229,7 @@ func TestANodeResumesFromItsSavedRevision(t *testing.T) {
 	require.NoError(t, err)
 
 	run := func() (context.CancelFunc, chan struct{}) {
-		a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Version: "test"})
+		a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Version: "test"})
 		require.NoError(t, err)
 		actx, stop := context.WithCancel(ctx)
 		done := make(chan struct{})
@@ -254,10 +267,10 @@ func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {
 	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
 	require.NoError(t, err)
 	run := func() (*agent.Agent, func()) {
-		a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+		a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
 		require.NoError(t, err)
 		actx, stop := context.WithCancel(ctx)
 		done := make(chan struct{})
@@ -318,9 +331,9 @@ func TestANodeRenewsItsCertificateBeforeItEnds(t *testing.T) {
 	}
 	first := certificate().Status.Certificate
 	require.NotNil(t, first)
-	old := nodeCaller(t, n.rig, n.dir)
+	old := nodeClient(t, n.rig, n.dir)
 	run := func(after time.Duration) func() {
-		a, err := agent.New(agent.Config{Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+		a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
 			Now: func() time.Time { return time.Now().Add(after) }})
 		require.NoError(t, err)
 		actx, cancel := context.WithCancel(ctx)
@@ -340,8 +353,8 @@ func TestANodeRenewsItsCertificateBeforeItEnds(t *testing.T) {
 		c := certificate().Status
 		return c.Certificate.Serial != first.Serial && c.RenewedCertificate == nil
 	})
-	status, _ := old(http.MethodGet, multinode.PathChildren, nil)
-	require.Equal(t, http.StatusUnauthorized, status, "the old certificate ends")
+	_, err = old.Children(ctx)
+	require.Equal(t, fault.Unauthorized, fault.KindOf(err), "the old certificate ends")
 	stop()
 	defer run(0)()
 	_, err = n.cp.Create(ctx, configMap("e1", "b", "1"))
@@ -354,9 +367,9 @@ func TestANodeOnANewerReleaseThanTheControlPlaneIsRefused(t *testing.T) {
 	r := startCP(t, func(c *multinode.Config) { c.Version = "v0.40.0" })
 	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
-	_, err = agent.Join(ctx, r.server(), token, t.TempDir(), "v0.41.0", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, t.TempDir(), "v0.41.0", "linux/arm64")
 	require.ErrorContains(t, err, "newer than the control plane's v0.40.0")
-	_, err = agent.Join(ctx, r.server(), token, t.TempDir(), "v0.39.2", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, t.TempDir(), "v0.39.2", "linux/arm64")
 	require.NoError(t, err, "an older node joins")
 }
 
@@ -391,11 +404,11 @@ func TestTheNodeCommandsRunOnTheNodeThatRunsTheNamespace(t *testing.T) {
 	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
 	require.NoError(t, err)
 	letters, f := dlmemory.New(), &fakeCommands{}
 	require.NoError(t, letters.Put(ctx, deadletter.DeadLetter{ID: "01JDL", Namespace: "e1", Sensor: "s", Action: "a"}))
-	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
 		Commands: multinode.Commands{DeadLetters: letters, Replayer: f, Apps: f, Volumes: f}})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)
@@ -438,10 +451,10 @@ func TestANodeChecksTheAPITokensOfTheControlPlaneItself(t *testing.T) {
 	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
 	require.NoError(t, err)
 	run := func() func() {
-		a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+		a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
 		require.NoError(t, err)
 		actx, stop := context.WithCancel(ctx)
 		done := make(chan struct{})
@@ -517,9 +530,9 @@ func TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState(t *testing.T) {
 	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
 	require.NoError(t, err)
-	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
 		Commands: multinode.Commands{Admissions: []admission.Admission{dbCheck{refuse: true}, volCheck{refuse: true}}}})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)
@@ -572,10 +585,10 @@ func TestANodeReportsItsBackupInItsWorkerNode(t *testing.T) {
 	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
 	require.NoError(t, err)
 	last := v1.NewTimestamp(time.Date(2026, 11, 17, 3, 0, 0, 0, time.UTC))
-	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
 		Commands: multinode.Commands{BlobStore: "s3://node-blobs", Backup: fakeBackup{LastSuccessTime: &last, RPORisk: true}}})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)
@@ -601,9 +614,9 @@ func TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers(t *testing.T) {
 	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
 	require.NoError(t, err)
-	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -634,17 +647,14 @@ func TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers(t *testing.T) {
 	pol.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Name: "api"}, UID: "x"}}
 	raw, err := json.Marshal(pol)
 	require.NoError(t, err)
-	status, _ := nodeCaller(t, r, dir)(http.MethodPut, multinode.PathObjects, multinode.ObjectWrite{Kind: v1.KindPolicy, Object: raw})
-	require.Equal(t, http.StatusForbidden, status)
+	err = nodeClient(t, r, dir).PutObject(ctx, nodeapi.ObjectWrite{Kind: v1.KindPolicy, Object: raw})
+	require.Equal(t, fault.Forbidden, fault.KindOf(err))
 	_, err = r.cp.Get(ctx, v1.KindPolicy.GVK(), "e1", "grant-all")
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 }
 
-// nodeCaller calls r's node API with the certificate of the node that joined under dir, and returns the status and the
-// body it answers.
-//
-//nolint:forbidigo // body is one of the node API's typed requests, sent as JSON
-func nodeCaller(t *testing.T, r rig, dir string) func(method, path string, body any) (int, []byte) {
+// nodeClient is a client of r's node API under the certificate of the node that joined under dir.
+func nodeClient(t *testing.T, r rig, dir string) nodeapi.Client {
 	t.Helper()
 	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "node.pem"), filepath.Join(dir, "node.pem"))
 	require.NoError(t, err)
@@ -652,23 +662,9 @@ func nodeCaller(t *testing.T, r rig, dir string) func(method, path string, body 
 	require.NoError(t, err)
 	roots := x509.NewCertPool()
 	require.True(t, roots.AppendCertsFromPEM(caPEM))
-	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert},
-		RootCAs: roots, MinVersion: tls.VersionTLS13}}}
-	return func(method, path string, body any) (int, []byte) {
-		t.Helper()
-		raw, err := json.Marshal(body)
-		require.NoError(t, err)
-		req, err := http.NewRequestWithContext(context.Background(), method, r.server()+path, bytes.NewReader(raw))
-		require.NoError(t, err)
-		req.Header.Set(multinode.HeaderAPIVersion, strconv.Itoa(multinode.APIVersion))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := hc.Do(req)
-		require.NoError(t, err)
-		defer func() { _ = resp.Body.Close() }()
-		answer, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		return resp.StatusCode, answer
-	}
+	c, err := longpoll.NewConnector().Dial(nodeapi.Identity{Server: r.server(), Certificate: cert, Roots: roots, Version: "test"})
+	require.NoError(t, err)
+	return c
 }
 
 // fakeHold records the hold releases and quarantine returns it ran. Its evidence is held with the paused runs it names, until
@@ -718,7 +714,7 @@ func TestANodesOwnHoldAndBackupAnswerByItsName(t *testing.T) {
 	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
 	require.NoError(t, err)
 	here := &fakeHold{paused: []string{"default/r1"}}
 	nodes := r.cluster.Nodes(here, nil)
@@ -730,7 +726,7 @@ func TestANodesOwnHoldAndBackupAnswerByItsName(t *testing.T) {
 
 	onNode := &fakeHold{paused: []string{"e1/r1"}}
 	last := v1.NewTimestamp(time.Date(2026, 11, 17, 3, 0, 0, 0, time.UTC))
-	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
 		Commands: multinode.Commands{Hold: onNode, Backup: fakeBackup{Enabled: true, LastSuccessTime: &last}}})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)
@@ -774,10 +770,10 @@ func TestANamespacesHoldIsReleasedOnTheNodeThatRunsIt(t *testing.T) {
 	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, r.server(), token, dir, "test", "linux/arm64")
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
 	require.NoError(t, err)
 	onNode := &fakeHold{}
-	a, err := agent.New(agent.Config{Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
 		Commands: multinode.Commands{Hold: onNode}})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)

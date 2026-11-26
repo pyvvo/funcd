@@ -21,6 +21,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/durable"
 	"github.com/pyvvo/funcd/internal/platform/stopsignal"
@@ -255,7 +256,8 @@ func newNodeJoinCmd(out io.Writer, configPath *string) *cobra.Command {
 			defer stop()
 			ctx, cancel := context.WithTimeout(ctx, joinTimeout)
 			defer cancel()
-			name, err := agent.Join(ctx, server, token, cfg.Cluster.DataDir, version.Get().Version, string(v1.HostPlatform()))
+			name, err := agent.Join(ctx, longpoll.NewConnector(), server, token, cfg.Cluster.DataDir, version.Get().Version,
+				string(v1.HostPlatform()))
 			if err != nil {
 				return err
 			}
