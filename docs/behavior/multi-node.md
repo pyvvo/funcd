@@ -67,7 +67,7 @@ recovery](disaster-recovery.md).
 | The node API's driver | `cluster.driver` picks it: `https`, a long poll over HTTPS, or `nats`, core NATS that funcd embeds, with no JetStream. A node takes the driver of the URL it joins, `https://` or `nats://` | none | `node API listening` | decided | decider 2026-11-26, #1495, `TestScenarioNATSPassesTheNodeAPIContract`, `TestAWorkerNodeRunsTheNamespacePlacedOnItOverNATS` |
 | A node on NATS | It publishes only under its own name and certificate serial, and hears only its own answers and calls: the control plane answers only into the asker's inbox. A join, with no certificate, can only send its token | none | no answer | accepted | `TestANodePublishesUnderItsOwnNameOnly`, `TestAnAnswerGoesOnlyIntoTheInboxOfTheNodeThatAsked` |
 | A call to a node on NATS | It is a request to the subject the node listens on; a node with no link, or one that never listened, fails the call at once | at most `CallTimeout` 10 s | 503 `is offline` | accepted | `TestANodeThatLeavesIsOfflineAtOnce` |
-| A link that goes silent on NATS | The server ends it after `maxPingsOut` 2 unanswered pings, one every `pingInterval` 10 s; a call then fails at once, and before waits its timeout. The node dials again every `reconnectWait` 2 s and takes calls within `listenTimeout` 5 s | at most `CallTimeout` 10 s a call | 503 `is offline` | accepted | `TestANodeWhoseLinkGoesSilentIsOfflineOnceTheLinkEnds` |
+| A link that goes silent on NATS | The server ends it after `maxPingsOut` 2 unanswered pings, one every `pingInterval` 1 s; a call then fails at once, and before waits its timeout. The node dials again every `reconnectWait` 2 s and takes calls within `listenTimeout` 5 s | at most `CallTimeout` 10 s a call | 503 `is offline` | accepted | `TestANodeWhoseLinkGoesSilentIsOfflineOnceTheLinkEnds` |
 | A big answer on NATS | An answer over `chunkSize` 512 KiB comes in chunks, so a snapshot fits under the server's `maxPayload` 8 MiB a message | none | none | accepted | `TestABigAnswerComesInChunks` |
 
 <!-- generated values, do not edit: just behavior-values -->
@@ -114,7 +114,7 @@ recovery](disaster-recovery.md).
 | `handlerTimeout` | `nodeapi.MaxWait + 30*time.Second` | `internal/nodeapi/nats/nats.go` |
 | `maxPayload` | 8MiB | `internal/nodeapi/nats/nats.go` |
 | `maxPingsOut` | 2 | `internal/nodeapi/nats/nats.go` |
-| `pingInterval` | 10s | `internal/nodeapi/nats/nats.go` |
+| `pingInterval` | 1s | `internal/nodeapi/nats/nats.go` |
 | `readyTimeout` | 10s | `internal/nodeapi/nats/nats.go` |
 | `CallTimeout` | 10s | `internal/nodeapi/nodeapi.go` |
 | `DefaultWait` | 25s | `internal/nodeapi/nodeapi.go` |

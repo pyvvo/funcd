@@ -32,12 +32,13 @@ import (
 )
 
 // The wire's pacing and bounds: an answer travels in chunks of chunkSize, a message holds maxPayload at most, a dead
-// connection is dropped after maxPingsOut pings unanswered every pingInterval, and a request is served handlerTimeout at
-// most, a feed's longest wait included.
+// connection is dropped after maxPingsOut pings unanswered every pingInterval, within 3 s, as a long poll's node is offline
+// 3 s after its last poll (the decider, 2026-11-27), and a request is served handlerTimeout at most, a feed's longest wait
+// included.
 const (
 	chunkSize      = 512 << 10
 	maxPayload     = 8 << 20
-	pingInterval   = 10 * time.Second
+	pingInterval   = time.Second
 	maxPingsOut    = 2
 	readyTimeout   = 10 * time.Second
 	handlerTimeout = nodeapi.MaxWait + 30*time.Second
