@@ -1,6 +1,7 @@
 # ADR-0359: Under funcdctl dev, an opt-in runs funcd's own runtimes in containers, from images funcdctl carries (amends ADR-0346)
 
-- **Status**: Proposed (2026-11-26)
+- **Status**: Accepted (2026-11-26), by the decider ("accept"), after three rounds of an independent judge at medium
+  effort, every Major and Minor folded
 - **Date**: 2026-11-26
 - **Deciders**: green-0-rabbit
 - **Tags**: dev, runtime, functions, jobs, cli
@@ -215,7 +216,7 @@ None.
 
 - FEAT-0012 F276 and its issue [#1585](https://github.com/pyvvo/funcd/issues/1585); the decider's answers of
   2026-11-26: an opt-in, and the images embedded in funcdctl
-- Experiment 0028, `pyvvo/experiment` (private), folder `0028-dev-own-runtimes` at 223f0387 (pyvvo/experiment#43)
+- Experiment 0028, `pyvvo/experiment` (private), folder `0028-dev-own-runtimes` at cb7b9b18 (pyvvo/experiment#43)
 - ADR-0050, ADR-0054, ADR-0128, ADR-0145, ADR-0149, ADR-0173, ADR-0254, ADR-0334, ADR-0344, ADR-0346
 - `cmd/funcdctl/dev.go` (`devShimOptions`, `linkSources`), `internal/function/function.go` (`NewReconciler`,
   `workerSpec`), `internal/function/addonruntime.go` (`addonImage`, `workerPlatform`),

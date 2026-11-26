@@ -11,6 +11,10 @@
   [#1583](https://github.com/pyvvo/funcd/pull/1583): in a Lima VM a worker reaches funcd at the address the VM gives its
   host, since nerdctl's host gateway is the VM (Decision 5)
 - **Superseded in part by**: [ADR-0351](0351-a-jobs-worker-reaches-the-platform-as-the-job-its-own-principal.md) (2026-11-23) — the Contracts' ListenerFor takes the caller's ref
+- **Superseded in part by**: [ADR-0359](0359-under-funcdctl-dev-an-opt-in-runs-funcds-own-runtimes-in-containers.md)
+  (2026-11-26) — its Scope's Out item "funcd's own runtimes on the engine", Decision 2's sentence that no other
+  process-mode worker sets `Image`, and its Review checklist's first two items, which hold without the `--containers`
+  opt-in only
 - **Date**: 2026-11-23
 - **Deciders**: green-0-rabbit
 - **Tags**: dev, runtime, addons, functions, jobs, local-api
