@@ -17,6 +17,11 @@ func TestScenario_DriverConformanceParity(t *testing.T) {
 	})
 }
 
+// scenario: scan-from (memory engine) — a scan from a key reads that key and those after it, in order.
+func TestScenarioScanFromReadsAfterAKey(t *testing.T) {
+	storecontract.RunScanFrom(t, memory.New())
+}
+
 // scenario: snapshot-is-one-read (metastore, memory engine) — the snapshot contract: a writer commits a=i, then
 // b=i, while 200 snapshots run, and none holds b above a; the snapshot loads back into an empty engine.
 func TestScenarioSnapshotIsOneRead(t *testing.T) {

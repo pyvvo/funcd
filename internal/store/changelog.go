@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -113,6 +114,9 @@ func (s *store) putChange(ctx context.Context, tx Txn, rev uint64, typ EventType
 
 func changeKey(rev uint64) string { return fmt.Sprintf("%020d", rev) }
 
+// errPastFloor ends a compaction's scan at the first record it keeps: the records come in revision order.
+var errPastFloor = errors.New("past the change log's floor")
+
 // afterChange wakes the followers, and drops the records older than the retained window every changeCompactInterval
 // revisions. A failed compaction leaves the records for the next one.
 func (s *store) afterChange(ctx context.Context, rev uint64) {
@@ -123,12 +127,17 @@ func (s *store) afterChange(ctx context.Context, rev uint64) {
 	floor := rev - uint64(s.changeRetain)
 	_ = s.eng.Update(context.WithoutCancel(ctx), func(tx Txn) error {
 		var old []string
-		if err := tx.Scan(changeBucket, func(key string, _ []byte) error {
-			if n, perr := strconv.ParseUint(key, 10, 64); perr == nil && n <= floor {
+		if err := tx.ScanFrom(changeBucket, "", func(key string, _ []byte) error {
+			n, perr := strconv.ParseUint(key, 10, 64)
+			switch {
+			case perr != nil:
+			case n > floor:
+				return errPastFloor
+			default:
 				old = append(old, key)
 			}
 			return nil
-		}); err != nil {
+		}); err != nil && !errors.Is(err, errPastFloor) {
 			return err
 		}
 		for _, key := range old {
@@ -175,7 +184,7 @@ func (s *store) Changes(ctx context.Context, since uint64, limit int, keep func(
 		if since < floor {
 			return nil
 		}
-		return tx.Scan(changeBucket, func(key string, val []byte) error {
+		return tx.ScanFrom(changeBucket, changeKey(since+1), func(key string, val []byte) error {
 			n, perr := strconv.ParseUint(key, 10, 64)
 			if perr != nil || n <= since {
 				return nil

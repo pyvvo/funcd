@@ -170,6 +170,9 @@ type Txn interface {
 	Put(bucket, key string, val []byte) error
 	Delete(bucket, key string) error
 	Scan(bucket string, fn func(key string, val []byte) error) error
+	// ScanFrom is Scan of the keys that sort at or after from, in key order, so a reader of a log keyed by its revision
+	// reads only what follows the revision it asks for. An error of fn ends it and is its own.
+	ScanFrom(bucket, from string, fn func(key string, val []byte) error) error
 }
 
 // store is the wrapper holding the semantics over an Engine.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -214,4 +215,81 @@ func TestASnapshotLeavesTheChangeLogOut(t *testing.T) {
 	out, _, err := got.Changes(ctx, head, 0, all)
 	require.NoError(t, err)
 	require.Len(t, out, 1, "and a follower of the restored store gets what it writes")
+}
+
+// countingEngine counts the records its transactions hand to a scan.
+type countingEngine struct {
+	store.Engine
+	read *atomic.Int64
+}
+
+func (e countingEngine) View(ctx context.Context, fn func(store.Txn) error) error {
+	return e.Engine.View(ctx, func(tx store.Txn) error { return fn(countingTxn{Txn: tx, read: e.read}) })
+}
+
+func (e countingEngine) Update(ctx context.Context, fn func(store.Txn) error) error {
+	return e.Engine.Update(ctx, func(tx store.Txn) error { return fn(countingTxn{Txn: tx, read: e.read}) })
+}
+
+type countingTxn struct {
+	store.Txn
+	read *atomic.Int64
+}
+
+func (t countingTxn) Scan(bucket string, fn func(key string, val []byte) error) error {
+	return t.Txn.Scan(bucket, t.count(fn))
+}
+
+func (t countingTxn) ScanFrom(bucket, from string, fn func(key string, val []byte) error) error {
+	return t.Txn.ScanFrom(bucket, from, t.count(fn))
+}
+
+func (t countingTxn) count(fn func(key string, val []byte) error) func(key string, val []byte) error {
+	return func(key string, val []byte) error {
+		t.read.Add(1)
+		return fn(key, val)
+	}
+}
+
+// A follower that asks for what follows its revision reads only that, however long the log is: each poll of each worker
+// node reads it, so a read from the log's start cost every node 69 ms a change at 100 000 records.
+func TestTheChangeLogIsReadFromTheAskedRevision(t *testing.T) {
+	ctx := context.Background()
+	var read atomic.Int64
+	s := store.New(countingEngine{Engine: memory.New(), read: &read}, store.WithChangeLog(0))
+	cl, ok := s.(store.ChangeLog)
+	require.True(t, ok)
+	for i := range 2000 {
+		put(t, s, "a", strconv.Itoa(i))
+	}
+	head, err := cl.Head(ctx)
+	require.NoError(t, err)
+
+	read.Store(0)
+	out, cursor, err := cl.Changes(ctx, head-1, 500, all)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, head, cursor)
+	require.LessOrEqual(t, read.Load(), int64(1), "a read of the last record reads the last record only")
+
+	read.Store(0)
+	out, _, err = cl.Changes(ctx, head, 500, all)
+	require.NoError(t, err)
+	require.Empty(t, out)
+	require.Zero(t, read.Load(), "a follower at the head reads no record")
+}
+
+// A compaction reads the records it drops and the first one it keeps, not the whole window it keeps.
+func TestCompactionReadsOnlyTheRecordsItDrops(t *testing.T) {
+	var read atomic.Int64
+	s := store.New(countingEngine{Engine: memory.New(), read: &read}, store.WithChangeLog(4000))
+	for i := range 4095 {
+		put(t, s, "a", strconv.Itoa(i))
+	}
+	read.Store(0)
+	for i := range 2048 {
+		put(t, s, "a", "next"+strconv.Itoa(i))
+	}
+	require.LessOrEqual(t, read.Load(), int64(2*1025),
+		"the two compactions at revisions 5120 and 6144 read the 1024 records each drops, and the first it keeps")
 }

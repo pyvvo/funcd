@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"slices"
 	"sync"
 
@@ -207,6 +208,30 @@ func (tx *txn) Scan(bucket string, fn func(key string, val []byte) error) error 
 			continue
 		}
 		if err := fn(key, cloneBytes(v)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (tx *txn) ScanFrom(bucket, from string, fn func(key string, val []byte) error) error {
+	vals := map[string][]byte{}
+	for key, v := range tx.e.data[bucket] {
+		if key >= from {
+			vals[key] = v
+		}
+	}
+	for pk, pv := range tx.writes {
+		switch {
+		case pk.bucket != bucket || pk.key < from:
+		case pv.del:
+			delete(vals, pk.key)
+		default:
+			vals[pk.key] = pv.val
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(vals)) {
+		if err := fn(key, cloneBytes(vals[key])); err != nil {
 			return err
 		}
 	}

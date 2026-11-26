@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -56,6 +58,18 @@ func (t *fakeTxn) Delete(bucket, key string) error {
 func (t *fakeTxn) Scan(bucket string, fn func(key string, val []byte) error) error {
 	for k, v := range t.e.data[bucket] {
 		if err := fn(k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *fakeTxn) ScanFrom(bucket, from string, fn func(key string, val []byte) error) error {
+	for _, k := range slices.Sorted(maps.Keys(t.e.data[bucket])) {
+		if k < from {
+			continue
+		}
+		if err := fn(k, t.e.data[bucket][k]); err != nil {
 			return err
 		}
 	}
