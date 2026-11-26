@@ -261,7 +261,8 @@ func holdStatus(srv nodeapi.Server) error {
 	return err
 }
 
-// A node whose connection ends is offline at once: the control plane's call finds no responder.
+// A node whose connection ends is offline at once once the server has read the end: the control plane's call finds no
+// responder. A call sent before the server read it still goes to the node's subscription and waits its timeout.
 func TestANodeThatLeavesIsOfflineAtOnce(t *testing.T) {
 	srv, ca := listen(t)
 	serve(t, srv, &stub{})
@@ -270,11 +271,16 @@ func TestANodeThatLeavesIsOfflineAtOnce(t *testing.T) {
 	answerCalls(t, c)
 	require.Eventually(t, func() bool { return holdStatus(srv) == nil }, 10*time.Second, 20*time.Millisecond)
 	require.NoError(t, c.Close())
-	start := time.Now()
-	err = holdStatus(srv)
-	require.Equal(t, fault.Unavailable, fault.KindOf(err))
-	require.ErrorContains(t, err, "is offline")
-	require.Less(t, time.Since(start), time.Second, "at once")
+	left := time.Now()
+	require.Eventually(t, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		_, err := srv.Call(ctx, "vm1", nodeapi.Call{Kind: nodeapi.CallHoldStatus})
+		return fault.KindOf(err) == fault.Unavailable && strings.Contains(err.Error(), "is offline") &&
+			time.Since(start) < 100*time.Millisecond
+	}, 2*time.Second, 10*time.Millisecond, "a call fails at once once the server read the node's end")
+	t.Logf("calls fail at once %s after the node left", time.Since(left).Round(time.Millisecond))
 }
 
 // silentLink relays a node's connection to the node API, and can go silent: it drops every byte and keeps both
