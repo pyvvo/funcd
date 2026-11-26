@@ -515,6 +515,9 @@ func validateMatrix() []matrixField {
 		{"kvstore.engine", func(c *config.Config, v string) { c.Kvstore.Engine = v }, []vc{
 			{"", true}, {"memory", true}, {"badger", true}, {"file", false}, {"Badger", false},
 		}},
+		{"cluster.driver", func(c *config.Config, v string) { c.Cluster.Driver = v }, []vc{
+			{"", true}, {"https", true}, {"nats", true}, {"jetstream", false}, {"NATS", false},
+		}},
 		// oneof — empty is INVALID (no omitempty): every member passes, everything else fails.
 		{"storage.mode", func(c *config.Config, v string) { c.Storage.Mode = v }, []vc{
 			{"file", true}, {"memory", true}, {"", false}, {"disk", false},

@@ -1,11 +1,9 @@
 package longpoll
 
 import (
-	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"sync"
 	"time"
 
@@ -14,11 +12,9 @@ import (
 	"github.com/pyvvo/funcd/internal/nodeapi"
 )
 
-// The call pacing: a node with no poll open, nor one within callOffline, is offline; a node gets callTimeout to answer.
-const (
-	callOffline = 3 * time.Second
-	callTimeout = 10 * time.Second
-)
+// callOffline is the call pacing: a node with no poll open, nor one within it, is offline. A node gets
+// nodeapi.CallTimeout to answer.
+const callOffline = 3 * time.Second
 
 // calls queues the node calls of each node (FEAT-0002 decision 9). A node long-polls its own queue and posts each answer
 // back; a call to an offline node fails at once, as decided for a read or an action.
@@ -88,17 +84,17 @@ func (c *calls) do(ctx context.Context, node v1.ObjectName, call nodeapi.Call) (
 		q.added = nil
 	}
 	c.mu.Unlock()
-	t := time.NewTimer(callTimeout)
+	t := time.NewTimer(nodeapi.CallTimeout)
 	defer t.Stop()
 	select {
 	case a := <-p.done:
-		if a.Error != "" {
-			return nodeapi.Answer{}, fault.Wrapf(errors.New(a.Error), cmp.Or(a.Fault, fault.Unavailable), op, "worker node %s answered: %s", node, a.Error)
+		if err := nodeapi.AnswerError(op, node, a); err != nil {
+			return nodeapi.Answer{}, err
 		}
 		return a, nil
 	case <-t.C:
 		c.drop(node, call.ID)
-		return nodeapi.Answer{}, fault.Unavailablef(op, "worker node %s did not answer within %s", node, callTimeout)
+		return nodeapi.Answer{}, fault.Unavailablef(op, "worker node %s did not answer within %s", node, nodeapi.CallTimeout)
 	case <-ctx.Done():
 		c.drop(node, call.ID)
 		return nodeapi.Answer{}, ctx.Err()

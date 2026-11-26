@@ -21,7 +21,9 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
+	natsnode "github.com/pyvvo/funcd/internal/nodeapi/nats"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/durable"
 	"github.com/pyvvo/funcd/internal/platform/stopsignal"
@@ -188,7 +190,7 @@ func (r role) option(cfg config.Config) funcd.Option {
 		return funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: cfg.Cluster.DataDir, Version: version.Get().Version})
 	case r.servesNodes(cfg):
 		return funcd.WithCluster(funcd.ClusterOptions{Dir: cfg.Cluster.DataDir, ListenAddr: cfg.Cluster.ListenAddr,
-			Hosts: cfg.Cluster.Hosts, LocalRuns: r == roleAll})
+			Driver: cfg.Cluster.Driver, Hosts: cfg.Cluster.Hosts, LocalRuns: r == roleAll})
 	}
 	return nil
 }
@@ -256,8 +258,8 @@ func newNodeJoinCmd(out io.Writer, configPath *string) *cobra.Command {
 			defer stop()
 			ctx, cancel := context.WithTimeout(ctx, joinTimeout)
 			defer cancel()
-			name, err := agent.Join(ctx, longpoll.NewConnector(), server, token, cfg.Cluster.DataDir, version.Get().Version,
-				string(v1.HostPlatform()))
+			conn := nodeapi.Schemes{"https": longpoll.NewConnector(), "nats": natsnode.NewConnector()}
+			name, err := agent.Join(ctx, conn, server, token, cfg.Cluster.DataDir, version.Get().Version, string(v1.HostPlatform()))
 			if err != nil {
 				return err
 			}
@@ -265,7 +267,8 @@ func newNodeJoinCmd(out io.Writer, configPath *string) *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&server, "server", "", "the control plane's node API, such as https://homebox.lan:7443")
+	cmd.Flags().StringVar(&server, "server", "", "the control plane's node API, such as https://cp.example.net:7443, or "+
+		"nats://cp.example.net:7443 when its cluster.driver is nats")
 	cmd.Flags().StringVar(&token, "token", "", "the one-time join token (else $FUNCD_JOIN_TOKEN)")
 	_ = cmd.MarkFlagRequired("server")
 	return cmd

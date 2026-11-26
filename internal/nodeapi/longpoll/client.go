@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -40,20 +38,7 @@ func (connector) Join(ctx context.Context, server string, trusted func(caDER []b
 	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return nodeapi.JoinResponse{}, nil, fault.Invalidf(op, "the control plane's node API is an https:// URL, not %q", server)
 	}
-	var caDER []byte
-	pin := &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: true, //nolint:gosec // VerifyPeerCertificate pins the CA that trusted accepts, below
-		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
-			for _, der := range raw {
-				if trusted(der) {
-					caDER = der
-					return verifyChain(raw, der, u.Hostname())
-				}
-			}
-			return fmt.Errorf("the control plane at %s does not present the CA the join token names", server)
-		},
-	}
+	pin, pinned := nodeapi.PinnedTLS(u.Hostname(), trusted)
 	body, err := json.Marshal(in)
 	if err != nil {
 		return nodeapi.JoinResponse{}, nil, fault.Wrapf(err, fault.Internal, op, "marshal the join")
@@ -80,23 +65,7 @@ func (connector) Join(ctx context.Context, server string, trusted func(caDER []b
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nodeapi.JoinResponse{}, nil, fault.Wrapf(err, fault.Internal, op, "decode the join answer")
 	}
-	return out, caDER, nil
-}
-
-// verifyChain checks the presented leaf against the pinned CA, for host.
-func verifyChain(raw [][]byte, caDER []byte, host string) error {
-	ca, err := x509.ParseCertificate(caDER)
-	if err != nil {
-		return err
-	}
-	leaf, err := x509.ParseCertificate(raw[0])
-	if err != nil {
-		return err
-	}
-	roots := x509.NewCertPool()
-	roots.AddCert(ca)
-	_, err = leaf.Verify(x509.VerifyOptions{Roots: roots, DNSName: host, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
-	return err
+	return out, pinned(), nil
 }
 
 func (connector) Dial(id nodeapi.Identity) (nodeapi.Client, error) {

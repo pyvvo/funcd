@@ -8,7 +8,14 @@ package nodeapicontract
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +38,24 @@ type Driver struct {
 	// Identity is a node's identity under a certificate that CA signed for node, reporting release "test" and platform
 	// "test/contract".
 	Identity func(node v1.ObjectName) nodeapi.Identity
+}
+
+// NodeIdentity is node's identity on the control plane at server: a key made for it, the certificate sign makes of its
+// CSR, and roots, reporting release "test" and platform "test/contract".
+func NodeIdentity(t *testing.T, sign func(csrPEM []byte, node v1.ObjectName) ([]byte, error), roots *x509.CertPool,
+	server string, node v1.ObjectName) nodeapi.Identity {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: string(node)}}, key)
+	require.NoError(t, err)
+	certPEM, err := sign(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csr}), node)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	cert, err := tls.X509KeyPair(certPEM, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	require.NoError(t, err)
+	return nodeapi.Identity{Server: server, Certificate: cert, Roots: roots, Version: "test", Platform: "test/contract"}
 }
 
 // RunContract runs the driver-agnostic node API scenarios against the Driver from newDriver, a fresh one each call.

@@ -10,7 +10,9 @@ import (
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/multinode"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
+	natsnode "github.com/pyvvo/funcd/internal/nodeapi/nats"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -78,8 +80,20 @@ func (p *Platform) routeNodeParts(own nodeParts, holdSvc *controlplane.HoldServi
 	return out
 }
 
-// newCluster serves the node API of a control plane that worker nodes join (WithCluster) over its driver, the HTTPS long
-// poll, under a certificate the cluster CA signs: the CA is made on the first start, under o.Dir.
+// The node API's drivers (ClusterOptions.Driver).
+const (
+	driverHTTPS = "https"
+	driverNATS  = "nats"
+)
+
+// nodeConnector is a worker node's side of the node API: the driver its control plane's URL names by its scheme.
+func nodeConnector() nodeapi.Connector {
+	return nodeapi.Schemes{driverHTTPS: longpoll.NewConnector(), driverNATS: natsnode.NewConnector()}
+}
+
+// newCluster serves the node API of a control plane that worker nodes join (WithCluster) over the driver o names, the
+// HTTPS long poll unless it names nats, under a certificate the cluster CA signs: the CA is made on the first start, under
+// o.Dir.
 func (p *Platform) newCluster(o *ClusterOptions, st store.Store, local v1.ObjectName, master []byte) (*multinode.Cluster, error) {
 	ca, err := multinode.LoadOrCreateCA(o.Dir, time.Now())
 	if err != nil {
@@ -89,7 +103,12 @@ func (p *Platform) newCluster(o *ClusterOptions, st store.Store, local v1.Object
 	if err != nil {
 		return nil, err
 	}
-	api, err := longpoll.Listen(longpoll.Config{Addr: o.ListenAddr, TLS: tlsCfg, Logger: p.logger})
+	var api nodeapi.Server
+	if o.Driver == driverNATS {
+		api, err = natsnode.Listen(natsnode.Config{Addr: o.ListenAddr, TLS: tlsCfg, Logger: p.logger})
+	} else {
+		api, err = longpoll.Listen(longpoll.Config{Addr: o.ListenAddr, TLS: tlsCfg, Logger: p.logger})
+	}
 	if err != nil {
 		return nil, err
 	}

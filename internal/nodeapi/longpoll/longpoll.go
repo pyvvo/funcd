@@ -24,13 +24,8 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
+// readHeaderTimeout bounds a node's request header, as on the platform's own listeners, and bodyReadTimeout its body.
 const (
-	defaultWait   = 25 * time.Second
-	maxWait       = 60 * time.Second
-	maxJoinBody   = 64 << 10
-	maxStatusBody = 1 << 20
-	maxObjectBody = 4 << 20
-	// readHeaderTimeout bounds a node's request header, as on the platform's own listeners, and bodyReadTimeout its body.
 	readHeaderTimeout = 10 * time.Second
 	bodyReadTimeout   = 30 * time.Second
 )
@@ -127,23 +122,23 @@ func routes(h nodeapi.Handler, calls *calls, logger *slog.Logger) http.Handler {
 	a := &api{h: h, calls: calls}
 	r := chi.NewRouter()
 	r.Use(fault.LogCauses(logger))
-	handle(nodeAPI(r), op(http.MethodPost, pathJoin, maxJoinBody), a.join)
+	handle(nodeAPI(r), op(http.MethodPost, pathJoin, nodeapi.MaxJoinBody), a.join)
 	r.Group(func(r chi.Router) {
 		r.Use(a.authNode)
 		api := nodeAPI(r)
-		handle(api, op(http.MethodPost, pathRenew, maxJoinBody), a.renew)
+		handle(api, op(http.MethodPost, pathRenew, nodeapi.MaxJoinBody), a.renew)
 		handle(api, op(http.MethodPut, pathRenew, 0), a.renewed)
 		handle(api, op(http.MethodGet, pathSnapshot, 0), a.snapshot)
 		handle(api, op(http.MethodGet, pathFeed, 0), a.feed)
 		handle(api, op(http.MethodGet, pathChildren, 0), a.children)
-		handle(api, op(http.MethodPut, pathStatus, maxStatusBody), a.status)
-		handle(api, op(http.MethodPut, pathObjects, maxObjectBody), a.putObject)
+		handle(api, op(http.MethodPut, pathStatus, nodeapi.MaxStatusBody), a.status)
+		handle(api, op(http.MethodPut, pathObjects, nodeapi.MaxObjectBody), a.putObject)
 		handle(api, op(http.MethodDelete, pathObjects, 0), a.deleteObject)
-		handle(api, op(http.MethodPut, pathReport, maxStatusBody), a.report)
+		handle(api, op(http.MethodPut, pathReport, nodeapi.MaxStatusBody), a.report)
 		handle(api, op(http.MethodGet, pathKeys, 0), a.keys)
-		handle(api, op(http.MethodPost, pathSecrets, maxObjectBody), a.secret)
+		handle(api, op(http.MethodPost, pathSecrets, nodeapi.MaxObjectBody), a.secret)
 		handle(api, op(http.MethodGet, pathCalls, 0), a.poll)
-		handle(api, op(http.MethodPost, pathCalls+"/{id}", maxObjectBody), a.answer)
+		handle(api, op(http.MethodPost, pathCalls+"/{id}", nodeapi.MaxObjectBody), a.answer)
 	})
 	return r
 }
@@ -258,18 +253,15 @@ func (a *api) snapshot(ctx context.Context, in *snapshotInput) (*snapshotOutput,
 	return &snapshotOutput{Body: out}, nil
 }
 
-// WaitInput is a long poll's wait, a duration; one left out, or out of bounds, is defaultWait. It is exported because huma
-// reads no field of an unexported embedded struct.
+// WaitInput is a long poll's wait, a duration; one left out, or out of bounds, is nodeapi.DefaultWait. It is exported
+// because huma reads no field of an unexported embedded struct.
 type WaitInput struct {
 	Wait string `query:"wait"`
 }
 
 func (w WaitInput) duration() time.Duration {
-	d, err := time.ParseDuration(w.Wait)
-	if err != nil || d <= 0 || d > maxWait {
-		return defaultWait
-	}
-	return d
+	d, _ := time.ParseDuration(w.Wait)
+	return nodeapi.Wait(d)
 }
 
 type feedInput struct {
@@ -282,32 +274,14 @@ type feedOutput struct{ Body nodeapi.Feed }
 // feed answers GET …/feed?since=&timeline=&wait= (decision 3): the node's records after since, as soon as there is one, or
 // none once wait passes. A revision the Handler no longer serves is 410: the node starts again from a snapshot.
 func (a *api) feed(ctx context.Context, in *feedInput) (*feedOutput, error) {
-	node, since := nodeOf(ctx), in.Since
-	deadline := time.Now().Add(in.duration())
-	for {
-		changed := a.h.Changed()
-		f, err := a.h.Changes(ctx, node, since, in.Timeline)
-		if fault.KindOf(err) == fault.PreconditionFailed {
-			return nil, huma.Error410Gone(err.Error())
-		}
-		if err != nil {
-			return nil, err
-		}
-		if len(f.Changes) > 0 || !time.Now().Before(deadline) {
-			return &feedOutput{Body: f}, nil
-		}
-		since = f.Rev
-		t := time.NewTimer(time.Until(deadline))
-		select {
-		case <-changed:
-			t.Stop()
-		case <-t.C:
-			return &feedOutput{Body: f}, nil
-		case <-ctx.Done():
-			t.Stop()
-			return nil, ctx.Err()
-		}
+	f, err := nodeapi.WaitForChanges(ctx, a.h, nodeOf(ctx), in.Since, in.Timeline, in.duration())
+	if fault.KindOf(err) == fault.PreconditionFailed {
+		return nil, huma.Error410Gone(err.Error())
 	}
+	if err != nil {
+		return nil, err
+	}
+	return &feedOutput{Body: f}, nil
 }
 
 type childrenOutput struct{ Body []store.Change }

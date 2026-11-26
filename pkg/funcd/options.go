@@ -1213,6 +1213,7 @@ func WithPacing(p Pacing) Option {
 type ClusterOptions struct {
 	Dir        string   // the cluster directory, which holds the CA
 	ListenAddr string   // the node API's address
+	Driver     string   // the node API's driver: "https" (the default, also for "") or "nats"
 	Hosts      []string // the names and addresses the node API's certificate covers
 	LocalRuns  bool     // false on a control plane alone (funcd server), which runs no namespace itself
 }
@@ -1224,6 +1225,9 @@ func WithCluster(o ClusterOptions) Option {
 	return func(c *config) error {
 		if o.Dir == "" || o.ListenAddr == "" {
 			return fault.Invalidf("funcd.WithCluster", "a cluster directory and a listen address are required")
+		}
+		if o.Driver != "" && o.Driver != driverHTTPS && o.Driver != driverNATS {
+			return fault.Invalidf("funcd.WithCluster", "the node API's driver is https or nats, not %q", o.Driver)
 		}
 		c.cluster = &o
 		return nil

@@ -2,12 +2,7 @@ package longpoll_test
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"net/http"
 	"testing"
@@ -38,17 +33,11 @@ func listen(t *testing.T) (nodeapi.Server, *multinode.CA) {
 // identity is node's identity under a certificate ca signed.
 func identity(t *testing.T, ca *multinode.CA, server string, node v1.ObjectName) nodeapi.Identity {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: string(node)}}, key)
-	require.NoError(t, err)
-	certPEM, _, _, err := ca.SignNode(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csr}), node, time.Now())
-	require.NoError(t, err)
-	der, err := x509.MarshalPKCS8PrivateKey(key)
-	require.NoError(t, err)
-	cert, err := tls.X509KeyPair(certPEM, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
-	require.NoError(t, err)
-	return nodeapi.Identity{Server: server, Certificate: cert, Roots: ca.Pool(), Version: "test", Platform: "test/contract"}
+	sign := func(csr []byte, node v1.ObjectName) ([]byte, error) {
+		cert, _, _, err := ca.SignNode(csr, node, time.Now())
+		return cert, err
+	}
+	return nodeapicontract.NodeIdentity(t, sign, ca.Pool(), server, node)
 }
 
 // scenario: driver-conformance — the HTTPS long poll carries the node API as the port's contract says.

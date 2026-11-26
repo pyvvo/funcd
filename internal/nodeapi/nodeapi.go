@@ -4,17 +4,25 @@
 // the control plane sends it.
 //
 // The rules of each request live once, in the control plane's Handler; a driver only carries them, with their errors'
-// api/fault kinds. The port imports no transport library. One driver implements it, the HTTPS long poll of
-// internal/nodeapi/longpoll (FEAT-0002 decisions 3 and 9), the production and the test driver alike, as the gateway's
-// embedded driver is (ADR-0012); a driver of another transport runs the same contract suite (nodeapicontract).
+// api/fault kinds. The port imports no transport library. Two drivers implement it: the HTTPS long poll of
+// internal/nodeapi/longpoll (FEAT-0002 decisions 3 and 9), the default, and core NATS on an embedded server, with no
+// JetStream (internal/nodeapi/nats). Each is the production and the test driver alike, as the gateway's embedded driver
+// is (ADR-0012), and both run the same contract suite (nodeapicontract).
 package nodeapi
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
 	"slices"
+	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -32,6 +40,142 @@ var SupportedAPIVersions = []int{APIVersion} //nolint:gochecknoglobals // a cons
 
 // Supported reports whether a control plane serves node API version v.
 func Supported(v int) bool { return slices.Contains(SupportedAPIVersions, v) }
+
+// The wire's bounds, the same on every driver: a long poll's wait, the bodies of the requests, and the time a node gets
+// to answer a call.
+const (
+	DefaultWait   = 25 * time.Second
+	MaxWait       = 60 * time.Second
+	MaxJoinBody   = 64 << 10
+	MaxStatusBody = 1 << 20
+	MaxObjectBody = 4 << 20
+	CallTimeout   = 10 * time.Second
+)
+
+// Wait is a long poll's wait: wait itself when it is above zero and at most MaxWait, else DefaultWait.
+func Wait(wait time.Duration) time.Duration {
+	if wait <= 0 || wait > MaxWait {
+		return DefaultWait
+	}
+	return wait
+}
+
+// WaitForChanges is h's Changes for node after since as soon as there is one, or none once wait passes: the feed's long
+// poll, which every driver serves the same way.
+func WaitForChanges(ctx context.Context, h Handler, node v1.ObjectName, since uint64, timeline string, wait time.Duration) (Feed, error) {
+	deadline := time.Now().Add(Wait(wait))
+	for {
+		changed := h.Changed()
+		f, err := h.Changes(ctx, node, since, timeline)
+		if err != nil || len(f.Changes) > 0 || !time.Now().Before(deadline) {
+			return f, err
+		}
+		since = f.Rev
+		t := time.NewTimer(time.Until(deadline))
+		select {
+		case <-changed:
+			t.Stop()
+		case <-t.C:
+			return f, nil
+		case <-ctx.Done():
+			t.Stop()
+			return Feed{}, ctx.Err()
+		}
+	}
+}
+
+// AnswerError is the error of a node's answer a, with its kind (fault.Unavailable when it names none), as the control
+// plane's caller gets it; nil when a holds none.
+func AnswerError(op string, node v1.ObjectName, a Answer) error {
+	if a.Error == "" {
+		return nil
+	}
+	return fault.Wrapf(errors.New(a.Error), cmp.Or(a.Fault, fault.Unavailable), op, "worker node %s answered: %s", node, a.Error)
+}
+
+// PinnedTLS is the TLS a node joins with, before it holds a certificate: it trusts the control plane at host only when
+// the chain the control plane presents holds a CA that trusted accepts, and verifies that chain against that CA for host,
+// so a join token never reaches an impostor. ca is that CA's DER once a handshake found it.
+func PinnedTLS(host string, trusted func(caDER []byte) bool) (cfg *tls.Config, ca func() []byte) {
+	var (
+		mu    sync.Mutex
+		found []byte
+	)
+	cfg = &tls.Config{
+		MinVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: true, //nolint:gosec // VerifyPeerCertificate pins the CA that trusted accepts, below
+		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
+			for _, der := range raw {
+				if trusted(der) {
+					if err := verifyChain(raw, der, host); err != nil {
+						return err
+					}
+					mu.Lock()
+					found = der
+					mu.Unlock()
+					return nil
+				}
+			}
+			return fmt.Errorf("the control plane at %s does not present the CA the join token names", host)
+		},
+	}
+	return cfg, func() []byte {
+		mu.Lock()
+		defer mu.Unlock()
+		return found
+	}
+}
+
+// verifyChain checks the presented leaf against the pinned CA, for host.
+func verifyChain(raw [][]byte, caDER []byte, host string) error {
+	ca, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		return err
+	}
+	leaf, err := x509.ParseCertificate(raw[0])
+	if err != nil {
+		return err
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	_, err = leaf.Verify(x509.VerifyOptions{Roots: roots, DNSName: host, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
+	return err
+}
+
+// Schemes is a Connector that hands each join and each client to the driver its control plane's URL names by its scheme,
+// such as https for the HTTPS long poll and nats for NATS.
+type Schemes map[string]Connector
+
+func (s Schemes) Join(ctx context.Context, server string, trusted func(caDER []byte) bool, in JoinRequest) (JoinResponse, []byte, error) {
+	c, err := s.of(server)
+	if err != nil {
+		return JoinResponse{}, nil, err
+	}
+	return c.Join(ctx, server, trusted, in)
+}
+
+func (s Schemes) Dial(id Identity) (Client, error) {
+	c, err := s.of(id.Server)
+	if err != nil {
+		return nil, err
+	}
+	return c.Dial(id)
+}
+
+func (s Schemes) of(server string) (Connector, error) {
+	u, err := url.Parse(server)
+	if err == nil {
+		if c, ok := s[u.Scheme]; ok {
+			return c, nil
+		}
+	}
+	schemes := make([]string, 0, len(s))
+	for k := range s {
+		schemes = append(schemes, k+"://")
+	}
+	sort.Strings(schemes)
+	return nil, fault.Invalidf("nodeapi.Schemes", "the control plane's node API is an %s URL, not %q", strings.Join(schemes, " or "), server)
+}
 
 // Handler is the control plane's side of each request: the rules of the node API. A driver calls Admit for every request
 // of a joined node, then the request's own method as the node Admit let in. Errors are api/fault kinds, which reach the

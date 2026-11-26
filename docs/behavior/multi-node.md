@@ -16,7 +16,8 @@ stateDiagram-v2
 
 The machine is a WorkerNode's phase, which the control plane writes from its node's polls; the node never dials in the other
 direction. A namespace's own objects follow their kinds' chapters, on the node that runs them. The protocol has no ADR yet: its rows
-cite the decider's choices of 2026-11-16 and their feature issues. A node's workers: [Workers](workers.md). Its backups: [Disaster
+cite the decider's choices of 2026-11-16 and their feature issues. It has two drivers, HTTPS and NATS: each row holds on both, and
+names an answer that differs. A node's workers: [Workers](workers.md). Its backups: [Disaster
 recovery](disaster-recovery.md).
 
 | Where | What happens | Time | You see | Status | Source |
@@ -30,8 +31,8 @@ recovery](disaster-recovery.md).
 | Placing a namespace | `spec.node` names a declared WorkerNode; the control plane's reconcilers and owner GC skip the namespace, and the node runs it whole | none | `spec.node names WorkerNode <n>, which is not declared` | decided | decider 2026-11-16, #1483, `TestPlacementSkipsWhatAnotherNodeRuns` |
 | A control plane alone | `funcd server` runs no namespace: it needs no container runtime, opens no data plane, and an unplaced namespace's objects wait | none | no phase on the objects | decided | decider 2026-11-16, #1478, `TestAControlPlaneAloneRunsNoNamespace` |
 | Moving a namespace | Refused while it holds objects, since its data stays on the node that ran it; an empty namespace moves. Its data moves with workload backups, restored on the new node | none | 409 `holds objects, so its spec.node cannot change` | accepted | `TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects` |
-| Following | The node takes a snapshot, then long-polls the change log, and keeps its revision on disk, so a restart of either side resumes with nothing lost | `defaultWait` 25 s per poll | `node agent: feed resumed` | decided | decider 2026-11-16, #1480, `TestANodeResumesFromItsSavedRevision` |
-| An old revision | The log keeps the last `defaultChangeRetain` 100000 records; a node behind that gets 410 and takes a new snapshot | none | 410 | accepted | `TestChangeLogCompactsAndRefusesARevisionBelowItsFloor` |
+| Following | The node takes a snapshot, then long-polls the change log, and keeps its revision on disk, so a restart of either side resumes with nothing lost | `DefaultWait` 25 s per poll | `node agent: feed resumed` | decided | decider 2026-11-16, #1480, `TestANodeResumesFromItsSavedRevision` |
+| An old revision | The log keeps the last `defaultChangeRetain` 100000 records; a node behind that gets 410, or 412 over NATS, and takes a new snapshot | none | 410; 412 | accepted | `TestChangeLogCompactsAndRefusesARevisionBelowItsFloor` |
 | A copy on a node | It is the control plane's object: the same uid, generation and creation time, as a child a node makes is on the control plane. One created again under its name replaces the node's, which goes first with its data | none | one uid on both | accepted | `TestANodesCopyIsTheControlPlanesObject` |
 | Status and children back | The node writes back each object's status, validated, and whole the children it owns of the kinds its reconcilers make, plus the runs, Invocations and Backup records it makes; no Policy or role, never a person's object | none | its status on the control plane | decided | decider 2026-11-16, #1481, `TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers` |
 | A node's late write | A status and a delete name their uid, so one of an object created again changes nothing. A run a node made under a name another run holds is refused, and the node takes the other | none | 409 `was created again since`, `another object holds the name` | accepted | `TestANodesLateWriteChangesNothingOfAnotherObject` |
@@ -43,14 +44,14 @@ recovery](disaster-recovery.md).
 | A workload's Secret write on a node | After the node's checks, the control plane makes them again and writes the Secret; the call waits for the node's copy. Away, the write fails and reads go on | at most `secretEcho` 2 s more | 503 `secrets.control-plane-away` | decided | decider 2026-11-16, #1486, `TestAWorkloadsSecretWriteGoesToTheControlPlane` |
 | Runs and Routes of a node's namespace | The control plane's boot, its JobRun slots, its retention sweeps and its edge leave them to the node: its restart interrupts no run there, and its edge serves none of the hosts | none | 404 at the control plane's edge | decided | decider 2026-11-16, #1483, `TestJobRunsOfAnotherNodesNamespaceAreLeftToIt`, `TestARouteOfAnotherNodesNamespaceIsNotServedHere` |
 | Liveness | A WorkerNode reads Ready while its node polls, and Degraded once it has not for `defaultReadyFor` 40 s | `livenessTick` 5 s | `Polling`, `NotPolling` | decided | decider 2026-11-16, #1482, `TestANodeJoinsFollowsItsNamespaceAndReportsBack` |
-| A log read of a node's namespace | It goes through the node's call queue; with no poll for `callOffline` 3 s the node is offline and the read fails at once | at most `callTimeout` 10 s | 503 `is offline` | decided | decider 2026-11-16, #1487, `TestCallsFailAtOnceForAnOfflineNode` |
-| A node command | Dead letters (list, read, discard, replay), App retries and volume deletes of a node's namespace run on that node through its call queue; the answer keeps the kind of its error | at most `callTimeout` 10 s | the node's own answer; 503 `is offline` | decided | decider 2026-11-16, #1487, `TestTheNodeCommandsRunOnTheNodeThatRunsTheNamespace` |
-| A check before a write | The deletion protection of a KVStore, a Bucket or a SQLDatabase, the booking of declared volumes and the in-place restore guard run on the node that holds the state; an offline node refuses the write | at most `callTimeout` 10 s | the node's own refusal; 503 `is offline` | decided | decider 2026-11-16, #1487, `TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState` |
+| A log read of a node's namespace | It goes through the node's call queue; with no poll for `callOffline` 3 s the node is offline and the read fails at once | at most `CallTimeout` 10 s | 503 `is offline` | decided | decider 2026-11-16, #1487, `TestCallsFailAtOnceForAnOfflineNode` |
+| A node command | Dead letters (list, read, discard, replay), App retries and volume deletes of a node's namespace run on that node through its call queue; the answer keeps the kind of its error | at most `CallTimeout` 10 s | the node's own answer; 503 `is offline` | decided | decider 2026-11-16, #1487, `TestTheNodeCommandsRunOnTheNodeThatRunsTheNamespace` |
+| A check before a write | The deletion protection of a KVStore, a Bucket or a SQLDatabase, the booking of declared volumes and the in-place restore guard run on the node that holds the state; an offline node refuses the write | at most `CallTimeout` 10 s | the node's own refusal; 503 `is offline` | decided | decider 2026-11-16, #1487, `TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState` |
 | A BackupSchedule's target | Refused inside the blob store of the node that runs the namespace, whose address the node reports; one of a node that has not joined is not compared, since no address is known | none | `is inside the blob store it would copy` | decided | decider 2026-11-16, #1487, `TestABackupSchedulesTargetStaysOutsideItsNodesBlobStore` |
-| A namespace's hold | Releasing a namespace's hold and returning its quarantined data run on the node that runs it | at most `callTimeout` 10 s | the node's own answer; 503 `is offline` | decided | decider 2026-11-16, #1487, `TestANamespacesHoldIsReleasedOnTheNodeThatRunsIt` |
-| A node's own hold and backup | Each process holds and backs up its own stores: `--node <name>` reads and releases a node's hold, and reads its backup, through its queue; without it, the funcd that serves the API answers for itself | at most `callTimeout` 10 s | the node's own answer; 404; 503 `is offline` | decided | decider 2026-11-16, #1487, `TestANodesOwnHoldAndBackupAnswerByItsName` |
+| A namespace's hold | Releasing a namespace's hold and returning its quarantined data run on the node that runs it | at most `CallTimeout` 10 s | the node's own answer; 503 `is offline` | decided | decider 2026-11-16, #1487, `TestANamespacesHoldIsReleasedOnTheNodeThatRunsIt` |
+| A node's own hold and backup | Each process holds and backs up its own stores: `--node <name>` reads and releases a node's hold, and reads its backup, through its queue; without it, the funcd that serves the API answers for itself | at most `CallTimeout` 10 s | the node's own answer; 404; 503 `is offline` | decided | decider 2026-11-16, #1487, `TestANodesOwnHoldAndBackupAnswerByItsName` |
 | A host on two nodes | A claim on a host that a namespace on another node holds is refused; namespaces on one node share it, and a gateway in front shares a host across nodes | none | 409 `belongs to worker node <n>` | decided | decider 2026-11-17, #1484, `TestAHostBelongsToOneNode` |
-| A node on another node API version | Every call carries the node's API version; one this control plane does not serve gets 426 | none | 426 | decided | decider 2026-11-16, #1489 |
+| A node on another node API version | Every call carries the node's API version; one this control plane does not serve gets 426, or 409 over NATS | none | 426; 409 `upgrade or downgrade the node` | decided | decider 2026-11-16, #1489, `TestANodeOnAnotherNodeAPIVersionGets426`, `TestANodeOnAnotherNodeAPIVersionIsRefused` |
 | A node on a newer release | A node that runs a newer funcd release than the control plane is refused, at the join and at every call; an older one runs | none | 409 `newer than the control plane's` | decided | decider 2026-11-16, #1489, `TestANodeOnANewerReleaseThanTheControlPlaneIsRefused` |
 | A field a node is too old for | A write that sets a spec field newer than the node API its namespace's node speaks is refused; no field is newer yet, and a test refuses a new field that names no version | none | 400 `upgrade the node first` | decided | decider 2026-11-16, #1489, `TestASpecFieldANodeIsTooOldForIsRefused`, `TestANewSpecFieldNamesTheNodeAPIVersionItNeeds` |
 | The node's own API | It answers reads, and the release of the node's own hold and quarantine: the control plane holds the node's namespaces, so another write there would be undone | none | 405 `this is a worker node` | accepted | `TestAWorkerNodeRunsTheNamespacePlacedOnIt` |
@@ -63,6 +64,11 @@ recovery](disaster-recovery.md).
 | A restored control plane | While it is held, its nodes run on and follow nothing. After the release each starts again on the restored state, with the runs it made since; the data of what the backup lacks goes into its quarantine | `retryMax` 5 s after the release | 503 `is held after its restore` | decided | ADR-0206, ADR-0288, `TestARestoredControlPlaneLosesNoDataOfItsNodes` |
 | A snapshot on a running node | The runs and records it made go to the control plane first, so it loses none; it then reports every status and child again. A metastore's backup leaves the change log out | none | `synced from a snapshot` | accepted | `TestARunTheNodeMadeOutlivesASnapshot`, `TestANodeReportsEverythingAgainAfterASnapshot`, `TestASnapshotLeavesTheChangeLogOut` |
 | The control plane away | The node runs its namespaces from its own store; changes, status and node calls wait until the control plane answers | none | `node agent: feed` | decided | decider 2026-11-16, #1480 |
+| The node API's driver | `cluster.driver` picks it: `https`, a long poll over HTTPS, or `nats`, core NATS that funcd embeds, with no JetStream. A node takes the driver of the URL it joins, `https://` or `nats://` | none | `node API listening` | decided | decider 2026-11-26, #1495, `TestScenarioNATSPassesTheNodeAPIContract`, `TestAWorkerNodeRunsTheNamespacePlacedOnItOverNATS` |
+| A node on NATS | It publishes only under its own name and certificate serial, and hears only its own answers and calls; a join, with no certificate, can only send its token | none | no answer; `Permissions Violation` on the server | accepted | `TestANodePublishesUnderItsOwnNameOnly` |
+| A call to a node on NATS | It is a request to the subject the node listens on; a node with no link, or one that never listened, fails the call at once | at most `CallTimeout` 10 s | 503 `is offline` | accepted | `TestANodeThatLeavesIsOfflineAtOnce` |
+| A link that goes silent on NATS | The server ends it after `maxPingsOut` 2 unanswered pings, one every `pingInterval` 10 s; a call then fails at once, and before waits its timeout. The node dials again every `reconnectWait` 2 s and takes calls within `listenTimeout` 5 s | at most `CallTimeout` 10 s a call | 503 `is offline` | accepted | `TestANodeWhoseLinkGoesSilentIsOfflineOnceTheLinkEnds` |
+| A big answer on NATS | An answer over `chunkSize` 512 KiB comes in chunks, so a snapshot fits under the server's `maxPayload` 8 MiB a message | none | none | accepted | `TestABigAnswerComesInChunks` |
 
 <!-- generated values, do not edit: just behavior-values -->
 <details>
@@ -71,6 +77,7 @@ recovery](disaster-recovery.md).
 | Value | Default | From |
 |---|---|---|
 | `cluster.dataDir` | <storage.dataDir>/cluster | config |
+| `cluster.driver` | https | config |
 | `cluster.hosts` | [], loopback only | config |
 | `cluster.listenAddr` | "", no node joins | config |
 | `pollWait` | 25s | `internal/multinode/agent/agent.go` |
@@ -92,18 +99,29 @@ recovery](disaster-recovery.md).
 | `defaultSeenEvery` | 30s | `internal/multinode/liveness.go` |
 | `livenessTick` | 5s | `internal/multinode/liveness.go` |
 | `callOffline` | 3s | `internal/nodeapi/longpoll/calls.go` |
-| `callTimeout` | 10s | `internal/nodeapi/longpoll/calls.go` |
 | `idleConnTimeout` | 1m30s | `internal/nodeapi/longpoll/client.go` |
 | `joinRequestTimeout` | 30s | `internal/nodeapi/longpoll/client.go` |
 | `maxJoinAnswer` | 1MiB | `internal/nodeapi/longpoll/client.go` |
 | `requestTimeout` | 1m | `internal/nodeapi/longpoll/client.go` |
 | `bodyReadTimeout` | 30s | `internal/nodeapi/longpoll/longpoll.go` |
-| `defaultWait` | 25s | `internal/nodeapi/longpoll/longpoll.go` |
-| `maxJoinBody` | 64KiB | `internal/nodeapi/longpoll/longpoll.go` |
-| `maxObjectBody` | 4MiB | `internal/nodeapi/longpoll/longpoll.go` |
-| `maxStatusBody` | 1MiB | `internal/nodeapi/longpoll/longpoll.go` |
-| `maxWait` | 1m | `internal/nodeapi/longpoll/longpoll.go` |
 | `readHeaderTimeout` | 10s | `internal/nodeapi/longpoll/longpoll.go` |
+| `feedMargin` | 30s | `internal/nodeapi/nats/client.go` |
+| `joinRequestTimeout` | 30s | `internal/nodeapi/nats/client.go` |
+| `listenTimeout` | 5s | `internal/nodeapi/nats/client.go` |
+| `reconnectWait` | 2s | `internal/nodeapi/nats/client.go` |
+| `requestTimeout` | 1m | `internal/nodeapi/nats/client.go` |
+| `chunkSize` | 512KiB | `internal/nodeapi/nats/nats.go` |
+| `handlerTimeout` | `nodeapi.MaxWait + 30*time.Second` | `internal/nodeapi/nats/nats.go` |
+| `maxPayload` | 8MiB | `internal/nodeapi/nats/nats.go` |
+| `maxPingsOut` | 2 | `internal/nodeapi/nats/nats.go` |
+| `pingInterval` | 10s | `internal/nodeapi/nats/nats.go` |
+| `readyTimeout` | 10s | `internal/nodeapi/nats/nats.go` |
+| `CallTimeout` | 10s | `internal/nodeapi/nodeapi.go` |
+| `DefaultWait` | 25s | `internal/nodeapi/nodeapi.go` |
+| `MaxJoinBody` | 64KiB | `internal/nodeapi/nodeapi.go` |
+| `MaxObjectBody` | 4MiB | `internal/nodeapi/nodeapi.go` |
+| `MaxStatusBody` | 1MiB | `internal/nodeapi/nodeapi.go` |
+| `MaxWait` | 1m | `internal/nodeapi/nodeapi.go` |
 
 </details>
 <!-- end of generated values -->

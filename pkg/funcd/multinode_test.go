@@ -17,7 +17,9 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
+	natsnode "github.com/pyvvo/funcd/internal/nodeapi/nats"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -43,9 +45,20 @@ func tmeta(k v1.Kind) v1.TypeMeta { return v1.TypeMeta{APIVersion: k.GVK().APIVe
 // TestAWorkerNodeRunsTheNamespacePlacedOnIt joins a worker node to a control plane, both built from the platform's own
 // options, and checks the node runs what the control plane holds and reports it back (FEAT-0002 F241 to F246, F250).
 func TestAWorkerNodeRunsTheNamespacePlacedOnIt(t *testing.T) {
+	runsTheNamespacePlacedOnIt(t, "", longpoll.NewConnector(), "https://")
+}
+
+// TestAWorkerNodeRunsTheNamespacePlacedOnItOverNATS is the same over the NATS driver: the control plane's cluster.driver
+// is nats, and the node joins a nats:// URL, which its agent's connector follows.
+func TestAWorkerNodeRunsTheNamespacePlacedOnItOverNATS(t *testing.T) {
+	runsTheNamespacePlacedOnIt(t, "nats", natsnode.NewConnector(), "nats://")
+}
+
+func runsTheNamespacePlacedOnIt(t *testing.T, driver string, conn nodeapi.Connector, scheme string) {
+	t.Helper()
 	ctx := context.Background()
 	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))),
-		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true}))
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", Driver: driver, LocalRuns: true}))
 	admin, err := sdk.New("http://"+cp.Addr(), sdk.WithToken(clusterAdmin))
 	require.NoError(t, err)
 
@@ -75,7 +88,7 @@ func TestAWorkerNodeRunsTheNamespacePlacedOnIt(t *testing.T) {
 	tok, err := admin.MintJoinToken(ctx, "vm1", "")
 	require.NoError(t, err)
 	dir := t.TempDir()
-	_, err = agent.Join(ctx, longpoll.NewConnector(), "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
+	_, err = agent.Join(ctx, conn, scheme+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
 	require.NoError(t, err)
 	node := runPlatform(t, funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: dir, Version: "test"}))
 	local, err := sdk.New("http://"+node.Addr(), sdk.WithToken(clusterAdmin))

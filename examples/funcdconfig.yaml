@@ -310,6 +310,7 @@ log:
 # --- cluster: worker nodes that join this control plane (FEAT-0002) -----------------------------
 # cluster:
 #   listenAddr: 0.0.0.0:7443      # the node API, where nodes join and follow their namespaces over mTLS. default: "", no node joins (funcd server: 0.0.0.0:7443)
+#   driver: nats                  # the node API's driver: https, a long poll over HTTPS, or nats, core NATS that funcd embeds, with no JetStream. default: https
 #   hosts:                        # the names and addresses the node API's certificate covers, the ones nodes dial. default: [], loopback only
 #     - homebox.lan
 #   dataDir: /var/lib/funcd/cluster # the CA on a control plane, the node's identity on a worker node. default: <storage.dataDir>/cluster

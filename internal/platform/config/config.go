@@ -506,6 +506,7 @@ type Config struct {
 	// a control plane keeps its CA or a worker node its identity.
 	Cluster struct {
 		ListenAddr string   `json:"listenAddr,omitempty" env:"FUNCD_CLUSTER_LISTEN_ADDR" doc:"The address that the node API listens on, where worker nodes join with a one-time token and then follow their namespaces over mTLS. Empty means no node can join funcd; funcd server listens on 0.0.0.0:7443 then. A worker node does not read it."`
+		Driver     string   `json:"driver,omitempty" env:"FUNCD_CLUSTER_DRIVER" validate:"omitempty,oneof=https nats" doc:"The node API's driver on a control plane: https, a long poll over HTTPS, or nats, core NATS on a server funcd embeds, with no JetStream. Empty means https. A worker node takes its driver from the scheme of the URL it joined, https:// or nats://, and does not read it."`
 		Hosts      []string `json:"hosts,omitempty" env:"FUNCD_CLUSTER_HOSTS" envSeparator:"," doc:"The host names and addresses that the node API's certificate covers, besides localhost and loopback: the ones the worker nodes dial."`
 		DataDir    string   `json:"dataDir,omitempty" env:"FUNCD_CLUSTER_DATA_DIR" doc:"The directory of the cluster CA on a control plane, or of the identity that funcd node join writes on a worker node. Empty means <storage.dataDir>/cluster."`
 	} `json:"cluster,omitempty"`

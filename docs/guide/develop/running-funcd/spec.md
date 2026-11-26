@@ -198,6 +198,7 @@ description: "Every key of funcdconfig.yaml with its type, default, limits and v
 | `health.storageProbeInterval` | string | `10s` | How often funcd reads one key of the KV engine and one of the blob store to check that each answers; with an S3 blob.target, each blob read is one request. While a read fails or runs late, every KVStore, or every Bucket, is Degraded with the reason StorageUnreachable. It is a positive duration, more than health.storageProbeTimeout. Variable: `FUNCD_HEALTH_STORAGE_PROBE_INTERVAL`. |
 | `health.storageProbeTimeout` | string | `2s` | How long one storage read may take before it counts as failed; one late read is enough to make the stores Degraded. It is a positive duration, less than health.storageProbeInterval. Variable: `FUNCD_HEALTH_STORAGE_PROBE_TIMEOUT`. |
 | `cluster.listenAddr` | string |  | The address that the node API listens on, where worker nodes join with a one-time token and then follow their namespaces over mTLS. Empty means no node can join funcd; funcd server listens on 0.0.0.0:7443 then. A worker node does not read it. Variable: `FUNCD_CLUSTER_LISTEN_ADDR`. |
+| `cluster.driver` | string, one of `https` or `nats` |  | The node API's driver on a control plane: https, a long poll over HTTPS, or nats, core NATS on a server funcd embeds, with no JetStream. Empty means https. A worker node takes its driver from the scheme of the URL it joined, https:// or nats://, and does not read it. Variable: `FUNCD_CLUSTER_DRIVER`. |
 | `cluster.hosts` | list of strings |  | The host names and addresses that the node API's certificate covers, besides localhost and loopback: the ones the worker nodes dial. Variable: `FUNCD_CLUSTER_HOSTS=a,b`. |
 | `cluster.dataDir` | string |  | The directory of the cluster CA on a control plane, or of the identity that funcd node join writes on a worker node. Empty means &lt;storage.dataDir&gt;/cluster. Variable: `FUNCD_CLUSTER_DATA_DIR`. |
 
@@ -400,7 +401,7 @@ Join a control plane with a one-time token from funcdctl node token. funcd first
 
 | Flag | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--server` | string |  | the control plane's node API, such as https://homebox.lan:7443 |
+| `--server` | string |  | the control plane's node API, such as https://cp.example.net:7443, or nats://cp.example.net:7443 when its cluster.driver is nats |
 | `--token` | string |  | the one-time join token (else $FUNCD_JOIN_TOKEN) |
 
 ## `funcd restore`
