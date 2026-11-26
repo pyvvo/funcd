@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -191,13 +192,13 @@ func TestAnAPITokenKeptAsAHashWorksUntilItIsMintedAgainOrDeleted(t *testing.T) {
 	ask{what: "a deleted token ends", method: http.MethodGet, path: mine, token: second, status: http.StatusUnauthorized}.run(t, c, base)
 }
 
-// TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn applies a Function on the control plane, and checks that the
-// node it is placed on runs it, answers its calls on its own data plane and reports it Ready back (FEAT-0002 F241 to
-// F244), while the control plane starts no worker for it.
-func TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
+// placedOnANode runs a control plane and its worker node vm1, which namespace e1 is placed on, each with fake workers of
+// its own, and the admin client of the control plane.
+func placedOnANode(t *testing.T) (admin *sdk.Client, cp, node *funcd.Platform, cpWorkers, nodeWorkers *fakeWorkers) {
+	t.Helper()
 	ctx := context.Background()
-	cpWorkers, nodeWorkers := newFakeWorkers(), newFakeWorkers()
-	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))), funcd.WithRuntime(cpWorkers),
+	cpWorkers, nodeWorkers = newFakeWorkers(), newFakeWorkers()
+	cp = runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))), funcd.WithRuntime(cpWorkers),
 		funcd.WithRuntimeShim("node", "shim.mjs"),
 		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true}))
 	admin, err := sdk.New("http://"+cp.Addr(), sdk.WithToken(clusterAdmin))
@@ -215,20 +216,37 @@ func TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
 	dir := t.TempDir()
 	_, err = agent.Join(ctx, longpoll.NewConnector(), "https://"+cp.ClusterAddr(), tok.Token, dir, "test", string(v1.HostPlatform()))
 	require.NoError(t, err)
-	nodeWorkers.serve(t, "echo", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("from vm1")) })
-	node := runPlatform(t, funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: dir, Version: "test"}),
+	node = runPlatform(t, funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: dir, Version: "test"}),
 		funcd.WithRuntime(nodeWorkers), funcd.WithRuntimeShim("node", "shim.mjs"))
+	return admin, cp, node, cpWorkers, nodeWorkers
+}
 
-	fn := function("echo")
+// applyOnNode applies Function e1/name with one replica on the control plane, and waits until the control plane reads it
+// Ready, as its node reports it.
+func applyOnNode(t *testing.T, admin *sdk.Client, name v1.ObjectName, links ...v1.FunctionLink) {
+	t.Helper()
+	ctx := context.Background()
+	fn := function(name)
 	fn.Namespace = "e1"
 	fn.Spec.Image = "file://" + filepath.Join(artifact(t, ""), "handler.mjs")
 	fn.Spec.Replicas, fn.Spec.Scaling = 1, v1.Scaling{MinReplicas: 1}
-	_, err = admin.Apply(ctx, fn)
+	fn.Spec.Bindings.Links = links
+	_, err := admin.Apply(ctx, fn)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		obj, err := admin.Get(ctx, v1.KindFunction, "e1", "echo")
+		obj, err := admin.Get(ctx, v1.KindFunction, "e1", name)
 		return err == nil && obj.(*v1.Function).Status.Phase == v1.PhaseReady
-	}, 20*time.Second, 50*time.Millisecond, "the control plane reads the Function Ready, as the node reports it")
+	}, 20*time.Second, 50*time.Millisecond, "the control plane reads %s Ready, as the node reports it", name)
+}
+
+// TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn applies a Function on the control plane, and checks that the
+// node it is placed on runs it, answers its calls on its own data plane and reports it Ready back (FEAT-0002 F241 to
+// F244), while the control plane starts no worker for it.
+func TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
+	ctx := context.Background()
+	admin, cp, node, cpWorkers, nodeWorkers := placedOnANode(t)
+	nodeWorkers.serve(t, "echo", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("from vm1")) })
+	applyOnNode(t, admin, "echo")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+node.DataPlaneAddr()+"/function/echo", strings.NewReader(`{}`))
 	require.NoError(t, err)
@@ -276,6 +294,38 @@ func TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
 	cpWorkers.mu.Lock()
 	defer cpWorkers.mu.Unlock()
 	require.Empty(t, cpWorkers.insts, "the control plane starts no worker for a namespace placed on a node")
+}
+
+// TestALinkCallStaysOnTheWorkerNodeOfItsNamespace has one Function call another of its namespace through a link, on the
+// worker node the namespace is placed on: the call goes through the node's own local API and data plane to the node's
+// worker, and the control plane starts no worker for either. A link stays in its namespace (ADR-0064), and a namespace on
+// one node (FEAT-0002 F246), so no call crosses machines.
+func TestALinkCallStaysOnTheWorkerNodeOfItsNamespace(t *testing.T) {
+	admin, _, node, cpWorkers, nodeWorkers := placedOnANode(t)
+	nodeWorkers.serve(t, "target", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `"from the target on vm1"`) })
+	nodeWorkers.serve(t, "caller", func(http.ResponseWriter, *http.Request) {})
+	applyOnNode(t, admin, "target")
+	applyOnNode(t, admin, "caller", v1.FunctionLink{Alias: "t", Target: "target"})
+
+	sock, err := funcd.LocalAPISocketForTest(node, "e1", "caller")
+	require.NoError(t, err)
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}}
+	defer client.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://local/invoke/t", strings.NewReader(`{}`))
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	require.Contains(t, string(body), "from the target on vm1", "the node's own worker answers the link")
+
+	cpWorkers.mu.Lock()
+	defer cpWorkers.mu.Unlock()
+	require.Empty(t, cpWorkers.insts, "the control plane starts no worker for either")
 }
 
 // TestAJobRunsOnTheWorkerNodeItsNamespaceIsPlacedOn applies a Job and starts a run of it on the control plane before and
