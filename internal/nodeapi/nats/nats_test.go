@@ -6,9 +6,12 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,13 +67,21 @@ func TestScenarioNATSPassesTheNodeAPIContract(t *testing.T) {
 }
 
 // stub is a Handler that lets every node in and records the statuses and joins it gets; it answers a snapshot of big
-// objects, and refuses every join.
+// objects, refuses every join, and has no change to give, ever.
 type stub struct {
 	nodeapi.Handler
 	mu       sync.Mutex
 	statuses []string
 	joins    int
 	big      int
+	reads    atomic.Int32
+}
+
+func (*stub) Changed() <-chan struct{} { return nil }
+
+func (s *stub) Changes(context.Context, v1.ObjectName, uint64, string) (nodeapi.Feed, error) {
+	s.reads.Add(1)
+	return nodeapi.Feed{}, nil
 }
 
 func (*stub) Admit(context.Context, nodeapi.Peer) error { return nil }
@@ -380,6 +391,43 @@ func TestANodeWhoseLinkGoesSilentIsOfflineOnceTheLinkEnds(t *testing.T) {
 	require.Eventually(t, func() bool { return holdStatus(srv) == nil }, 20*time.Second, 50*time.Millisecond,
 		"the node dials again and takes its calls")
 	t.Logf("the node took a call %s after its link answered again", time.Since(start).Round(100*time.Millisecond))
+}
+
+// A request that waits for its answer holds little memory on its node: nats.go's default queue for the answer's
+// subscription, 65,536 messages, is a channel of 512 KiB, which a node with its feed open would hold all the time.
+func TestAWaitingRequestHoldsLittleMemory(t *testing.T) {
+	srv, ca := listen(t)
+	h := &stub{}
+	serve(t, srv, h)
+	const n = 40
+	clients := make([]nodeapi.Client, n)
+	for i := range clients {
+		c, err := natsdriver.NewConnector().Dial(identity(t, ca, "nats://"+srv.Addr(), v1.ObjectName(fmt.Sprintf("vm%d", i))))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
+		clients[i] = c
+	}
+	heap := func() uint64 {
+		runtime.GC()
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		return m.HeapInuse
+	}
+	before := heap()
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	for _, c := range clients {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = c.Feed(ctx, 0, "t", 3*time.Second)
+		}()
+	}
+	require.Eventually(t, func() bool { return h.reads.Load() >= n }, 5*time.Second, 10*time.Millisecond, "every feed waits")
+	after := heap()
+	cancel()
+	wg.Wait()
+	require.Less(t, (int64(after)-int64(before))/n, int64(64<<10), "a waiting request holds under 64 KiB, both sides")
 }
 
 // An answer over a NATS message's size comes in chunks, and the node gets it whole.

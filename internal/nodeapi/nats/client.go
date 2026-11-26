@@ -20,7 +20,9 @@ import (
 
 // The node side's bounds: requestTimeout bounds a request but a feed, which gets its wait and feedMargin, and a
 // listen, which the control plane answers at once: listenTimeout frees the call loop of one sent on a link that went
-// silent. A lost connection is dialed again every reconnectWait; callBuffer calls wait for the node at most.
+// silent. A lost connection is dialed again every reconnectWait; callBuffer calls wait for the node at most. An answer's
+// subscription queues syncQueue chunks, 64 MiB, the server's own bound on what a client leaves unread; nats.go's default
+// of 65,536 is a 512 KiB channel for each request in flight, so 512 KiB a node with its feed open.
 const (
 	requestTimeout     = time.Minute
 	feedMargin         = 30 * time.Second
@@ -28,6 +30,7 @@ const (
 	joinRequestTimeout = 30 * time.Second
 	reconnectWait      = 2 * time.Second
 	callBuffer         = 256
+	syncQueue          = 128
 )
 
 // scheme is the scheme of a control plane's URL on this driver: nats://host:port.
@@ -56,7 +59,7 @@ func (connector) Join(ctx context.Context, server string, trusted func(caDER []b
 	u, _ := url.Parse(server)
 	pin, pinned := nodeapi.PinnedTLS(u.Hostname(), trusted)
 	nc, err := nats.Connect("tls://"+host, nats.Secure(pin), nats.CustomInboxPrefix(joinInbox), nats.Name("funcd node join"),
-		nats.Timeout(joinRequestTimeout))
+		nats.Timeout(joinRequestTimeout), nats.SyncQueueLen(syncQueue))
 	if err != nil {
 		return nodeapi.JoinResponse{}, nil, fault.Wrapf(err, fault.Unavailable, op, "reach the control plane at %s", server)
 	}
@@ -99,7 +102,7 @@ func (connector) Dial(id nodeapi.Identity) (nodeapi.Client, error) {
 		nats.Secure(&tls.Config{Certificates: []tls.Certificate{id.Certificate}, RootCAs: id.Roots, MinVersion: tls.VersionTLS13}),
 		nats.CustomInboxPrefix(inbox(node, serial)), nats.Name("funcd node "+string(node)), nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(-1), nats.ReconnectWait(reconnectWait), nats.PingInterval(pingInterval),
-		nats.MaxPingsOutstanding(maxPingsOut))
+		nats.MaxPingsOutstanding(maxPingsOut), nats.SyncQueueLen(syncQueue))
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Unavailable, op, "reach the control plane at %s", id.Server)
 	}
