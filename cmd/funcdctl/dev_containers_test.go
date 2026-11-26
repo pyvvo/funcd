@@ -4,10 +4,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -266,4 +269,64 @@ func TestScenarioDevContainersLinkedBuild(t *testing.T) {
 	inst, _, _ := containersDev(t, sock, dir, io.Discard)
 	answers(t, inst, "api", `{"msg":"from a module"}`)
 	answers(t, inst, "intake", `{"msg":"from a sibling"}`)
+}
+
+// homeProject is devProject in a folder under the user's home directory, which colima and Lima share with their VM at the
+// same path, so that an engine in a VM sees it (ADR-0359 Decision 5); it skips when the user's cache directory, where the
+// folder goes, lies elsewhere.
+func homeProject(t *testing.T, files map[string]string) string {
+	t.Helper()
+	home, herr := os.UserHomeDir()
+	cache, err := os.UserCacheDir()
+	if herr != nil || err != nil || !strings.HasPrefix(cache, home+string(filepath.Separator)) {
+		t.Skip("this scenario needs a folder under the home directory, which an engine in a VM shares")
+	}
+	require.NoError(t, os.MkdirAll(cache, 0o700))
+	dir, err := os.MkdirTemp(cache, "funcd-dev-bind-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	writeProject(t, dir, files)
+	return dir
+}
+
+// scenario: dev-containers-linked-build, as amended on 2026-11-26 (ADR-0359 Decision 5) — a Node Function beside a
+// node_modules in a folder the engine sees binds that node_modules read-only into its worker: the handler imports from
+// it, and a write into it fails.
+func TestScenarioDevContainersBindsNodeModules(t *testing.T) {
+	sock := requireDocker(t)
+	requireOwnImages(t)
+	d := newDockerEngine(t, sock)
+	dir := homeProject(t, merge(
+		nodeFunction("api", "", "import { writeFileSync } from 'node:fs';\nimport { greet } from 'greet';\n\n"+
+			"export function handle() {\n  let write = 'written';\n"+
+			"  try { writeFileSync(new URL('./node_modules/x', import.meta.url), ''); } catch (e) { write = e.code; }\n"+
+			"  return { msg: greet(), write };\n}\n"),
+		map[string]string{
+			"node_modules/greet/package.json": `{"name":"greet","type":"module","exports":"./index.mjs"}`,
+			"node_modules/greet/index.mjs":    "export const greet = () => 'from a module';\n",
+		}))
+	modules, err := filepath.EvalSymlinks(filepath.Join(dir, "node_modules"))
+	require.NoError(t, err)
+	inst, key, _ := containersDev(t, sock, dir, io.Discard)
+	answers(t, inst, "api", `{"msg":"from a module","write":"EROFS"}`)
+
+	workers := d.workers(key)
+	require.Len(t, workers, 1)
+	_, b := d.get("/containers/"+workers[0]+"/json", nil)
+	var c struct {
+		Mounts []struct {
+			Type, Source, Destination string
+			RW                        bool
+		}
+	}
+	require.NoError(t, json.Unmarshal(b, &c))
+	var binds []string
+	for _, m := range c.Mounts {
+		if m.Type == "bind" {
+			binds = append(binds, m.Source+" "+m.Destination)
+			require.False(t, m.RW, "%s is bound read-only", m.Destination)
+		}
+	}
+	require.Equal(t, []string{modules + " /var/funcd/artifact/node_modules"}, binds,
+		"the worker binds the folder's node_modules, not a copy")
 }

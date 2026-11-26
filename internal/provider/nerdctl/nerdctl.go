@@ -6,6 +6,7 @@ package nerdctl
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -252,10 +253,13 @@ func (c cli) Run(ctx context.Context, spec docker.RunSpec) error {
 	args = append(args, labelArgs("--label", spec.Labels)...)
 	for _, m := range spec.Mounts {
 		// nerdctl's releases take no volume-nocopy, so the engine mounts the volume's own directory as a bind, which
-		// never copies the image's files up (ADR-0334 Decision 3).
-		dir, err := c.mountpoint(ctx, m.Volume)
-		if err != nil {
-			return err
+		// never copies the image's files up (ADR-0334 Decision 3); a Bind is a host directory already.
+		dir := m.Bind
+		if dir == "" {
+			var err error
+			if dir, err = c.mountpoint(ctx, m.Volume); err != nil {
+				return err
+			}
 		}
 		mount := "type=bind,source=" + dir + ",target=" + m.Target
 		if m.ReadOnly {
@@ -388,7 +392,7 @@ func helperArgs(h docker.Helper, interactive bool) []string {
 	}
 	args = append(args, labelArgs("--label", h.Labels)...)
 	for _, m := range h.Mounts {
-		v := m.Volume + ":" + m.Target
+		v := cmp.Or(m.Bind, m.Volume) + ":" + m.Target
 		if m.ReadOnly {
 			v += ":ro"
 		}

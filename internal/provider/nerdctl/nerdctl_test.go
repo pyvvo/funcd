@@ -326,6 +326,28 @@ func TestWorkersThroughNerdctl(t *testing.T) {
 	find(t, cs, []string{"volume", "rm", name})
 }
 
+// ADR-0359 Decision 5, amended 2026-11-26, through nerdctl: a bind mounts its host directory read-only, after the
+// bundle's volume and with no volume to look up, and a helper takes it with -v.
+func TestBindsThroughNerdctl(t *testing.T) {
+	t.Parallel()
+	bin, dir := fake(t)
+	c := cli{bin: bin}
+	ctx := context.Background()
+	require.NoError(t, c.CreateVolume(ctx, "w", map[string]string{"funcd/role": "worker"}))
+	modules := docker.Mount{Bind: "/srv/app/node_modules", Target: "/var/funcd/artifact/node_modules", ReadOnly: true}
+	require.NoError(t, c.Run(ctx, docker.RunSpec{Name: "w", Image: "img",
+		Mounts: []docker.Mount{{Volume: "w", Target: "/var/funcd/artifact", ReadOnly: true}, modules}}))
+	run := find(t, calls(t, dir), []string{"run", "-d"}, "--name", "w")
+	volume := slices.Index(run.Args, "type=bind,source=/var/lib/nerdctl/volumes/w/_data,target=/var/funcd/artifact,readonly")
+	bind := slices.Index(run.Args, "type=bind,source=/srv/app/node_modules,target=/var/funcd/artifact/node_modules,readonly")
+	require.Positive(t, volume, "%v", run.Args)
+	require.Greater(t, bind, volume, "the bind mounts after the volume that holds its mount point: %v", run.Args)
+
+	_, err := c.Exec(ctx, docker.Helper{Name: "h", Image: docker.HelperImage, Mounts: []docker.Mount{modules}}, "true")
+	require.NoError(t, err)
+	find(t, calls(t, dir), []string{"run", "--rm"}, "-v", "/srv/app/node_modules:/var/funcd/artifact/node_modules:ro")
+}
+
 // ADR-0359 Decision 4: HasImage runs nerdctl image inspect, an image nerdctl does not hold is no error, and a load keeps
 // the references the tar names.
 func TestHasImageAndLoad(t *testing.T) {

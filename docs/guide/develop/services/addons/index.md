@@ -60,7 +60,8 @@ under `funcdctl dev` on the Docker or nerdctl that runs dev's add-on engines; on
 `RuntimeUnavailable`. A Function on such a runtime is a cloudevent one, with the bindings its image's shim builds in.
 
 Under `funcdctl dev`, the worker's bundle is the one for the container engine's platform, such as `linux/arm64` on a
-Mac. It is copied into a volume of its own, and the worker reaches funcd's local API at `FUNCD_INVOKE_URL`, sending
+Mac. It is copied into a volume of its own, except a directory it links to that the engine sees, such as a folder's
+`node_modules`, which is bound read-only. The worker reaches funcd's local API at `FUNCD_INVOKE_URL`, sending
 `FUNCD_INVOKE_TOKEN` in the `X-Funcd-Invoke-Token` header, as funcd's shims do. On a Linux host it shares the host's
 network; on an engine in a VM, as on macOS, it reaches funcd at `funcd.host`. With no container engine, or a rootless
 one, the Function or Job is `RuntimeUnavailable`, naming why.

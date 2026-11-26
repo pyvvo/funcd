@@ -3,6 +3,7 @@ package docker
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -78,14 +79,15 @@ func newProcEngine(t *testing.T) *procEngine {
 
 func (e *procEngine) volume(name string) string { return filepath.Join(e.root, name) }
 
-// local is s, a path in a container with mounts, as the folder of its volume.
+// local is s, a path in a container with mounts, as the folder of its volume, or its Bind; the deepest mount wins.
 func (e *procEngine) local(mounts []Mount, s string) string {
+	out, depth := s, -1
 	for _, m := range mounts {
-		if s == m.Target || strings.HasPrefix(s, m.Target+"/") {
-			return e.volume(m.Volume) + strings.TrimPrefix(s, m.Target)
+		if (s == m.Target || strings.HasPrefix(s, m.Target+"/")) && len(m.Target) > depth {
+			out, depth = cmp.Or(m.Bind, e.volume(m.Volume))+strings.TrimPrefix(s, m.Target), len(m.Target)
 		}
 	}
-	return s
+	return out
 }
 
 func carries(labels, want map[string]string) bool {
@@ -702,8 +704,8 @@ func workerName(w containerrt.Runtime, id containerrt.InstanceID) string {
 
 // ADR-0346 Decisions 4 and 5 at the Engine API: a worker's container on the host's network publishes nothing; one on an
 // engine in a VM publishes its port on 127.0.0.1 alone and resolves funcd.host to the host gateway; both mount their
-// volumes with no copy-up, the bundle read-only, run Cmd as the whole of their argv, and take their limits; a helper may
-// run on the host's network.
+// volumes with no copy-up, the bundle read-only, and a bundle's directory as a bind (ADR-0359 Decision 5), run Cmd as the
+// whole of their argv, and take their limits; a helper may run on the host's network.
 func TestRunSpecAtTheEngineAPI(t *testing.T) {
 	t.Parallel()
 	dir, err := os.MkdirTemp("", "api")
@@ -735,7 +737,8 @@ func TestRunSpecAtTheEngineAPI(t *testing.T) {
 	e := &engineAPI{http: socketClient(sock), base: "http://docker/v" + maxAPIVersion}
 	ctx := context.Background()
 
-	mounts := []Mount{{Volume: "w", Target: "/var/funcd/artifact", ReadOnly: true}, {Volume: "w-run", Target: "/run/funcd"}}
+	mounts := []Mount{{Volume: "w", Target: "/var/funcd/artifact", ReadOnly: true}, {Volume: "w-run", Target: "/run/funcd"},
+		{Bind: "/srv/app/node_modules", Target: "/var/funcd/artifact/node_modules", ReadOnly: true}}
 	require.NoError(t, e.Run(ctx, RunSpec{Name: "w", Image: "img", Cmd: []string{"sh", "-c", "true"}, Mounts: mounts,
 		HostNetwork: true, Port: 8080, NanoCPUs: 5e8, MemoryBytes: 64 << 20}))
 	require.NoError(t, e.Run(ctx, RunSpec{Name: "v", Image: "img", Mounts: mounts[:1], Port: 8080,
@@ -754,12 +757,14 @@ func TestRunSpecAtTheEngineAPI(t *testing.T) {
 	require.Empty(t, host.Cmd)
 	require.Equal(t, int64(5e8), host.HostConfig.NanoCPUs)
 	require.Equal(t, int64(64<<20), host.HostConfig.Memory)
-	require.Len(t, host.HostConfig.Mounts, 2)
-	for i, m := range host.HostConfig.Mounts {
+	require.Len(t, host.HostConfig.Mounts, 3)
+	for i, m := range host.HostConfig.Mounts[:2] {
 		require.Equal(t, "volume", m.Type)
 		require.True(t, m.VolumeOptions.NoCopy)
 		require.Equal(t, i == 0, m.ReadOnly, "%s", m.Target)
 	}
+	require.Equal(t, mountBody{Type: "bind", Source: "/srv/app/node_modules", Target: "/var/funcd/artifact/node_modules",
+		ReadOnly: true}, host.HostConfig.Mounts[2], "a bind of its host directory, read-only, with no volume options")
 	require.Empty(t, vm.HostConfig.NetworkMode)
 	require.Equal(t, map[string][]portBinding{"8080/tcp": {{HostIP: "127.0.0.1"}}}, vm.HostConfig.PortBindings,
 		"published on 127.0.0.1 at a free port")
@@ -792,27 +797,8 @@ func TestTarTreeLinks(t *testing.T) {
 	link(filepath.Join(bundle, "lib", "util.py"), filepath.Join(bundle, "util.py"))
 	link("lib", filepath.Join(bundle, "libs"))
 
-	var out bytes.Buffer
-	require.NoError(t, tarTree(bundle, &out))
-	got := map[string]string{}
-	tr := tar.NewReader(&out)
-	for {
-		h, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		require.NoError(t, err)
-		switch h.Typeflag {
-		case tar.TypeDir:
-			got[h.Name] = "dir"
-		case tar.TypeSymlink:
-			got[h.Name] = "link " + h.Linkname
-		case tar.TypeReg:
-			b, err := io.ReadAll(tr)
-			require.NoError(t, err)
-			got[h.Name] = "file " + string(b)
-		}
-	}
+	got, binds := tarEntries(t, bundle, never)
+	require.Empty(t, binds, "an engine that sees none of them binds none")
 	require.Equal(t, map[string]string{
 		"lib/":                         "dir",
 		"lib/util.py":                  "file X = 1\n",
@@ -830,13 +816,119 @@ func TestTarTreeLinks(t *testing.T) {
 	link("..", filepath.Join(outside, "deps", "pkg", "up"))
 	loop := t.TempDir()
 	link(filepath.Join(outside, "deps"), filepath.Join(loop, "deps"))
-	err := tarTree(loop, io.Discard)
+	_, err := tarTree(loop, io.Discard, never)
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.ErrorContains(t, err, "deps/pkg/up")
 
 	dangling := t.TempDir()
 	link(filepath.Join(outside, "gone"), filepath.Join(dangling, "gone"))
-	err = tarTree(dangling, io.Discard)
+	_, err = tarTree(dangling, io.Discard, never)
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.ErrorContains(t, err, "gone")
+}
+
+func never(string) bool { return false }
+
+// tarEntries is the tar tarTree writes of bundle, each entry as "dir", "link <name>" or "file <body>", and its binds.
+func tarEntries(t *testing.T, bundle string, sees func(string) bool) (map[string]string, []Mount) {
+	t.Helper()
+	var out bytes.Buffer
+	binds, err := tarTree(bundle, &out, sees)
+	require.NoError(t, err)
+	got := map[string]string{}
+	tr := tar.NewReader(&out)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return got, binds
+		}
+		require.NoError(t, err)
+		switch h.Typeflag {
+		case tar.TypeDir:
+			got[h.Name] = "dir"
+		case tar.TypeSymlink:
+			got[h.Name] = "link " + h.Linkname
+		case tar.TypeReg:
+			b, err := io.ReadAll(tr)
+			require.NoError(t, err)
+			got[h.Name] = "file " + string(b)
+		}
+	}
+}
+
+// ADR-0359 Decision 5, amended 2026-11-26: a link to a directory outside the bundle that the engine sees is an empty
+// directory in the tar, the mount point of a read-only bind of that directory; an engine on the host's network sees
+// every directory, and one in a VM only those under the user's home directory, so it copies the others; a link to a
+// file is still copied.
+func TestTarTreeBindsTheDirectoriesTheEngineSees(t *testing.T) {
+	t.Parallel()
+	resolved := func(p string) string {
+		r, err := filepath.EvalSymlinks(p)
+		require.NoError(t, err)
+		return r
+	}
+	home, elsewhere := resolved(t.TempDir()), resolved(t.TempDir())
+	for _, dir := range []string{home, elsewhere} {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "node_modules", "greet"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "node_modules", "greet", "index.mjs"), []byte("export {}\n"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.py"), []byte("X = 1\n"), 0o600))
+	}
+	bundle := t.TempDir()
+	require.NoError(t, os.Symlink(filepath.Join(home, "node_modules"), filepath.Join(bundle, "node_modules")))
+	require.NoError(t, os.Symlink(filepath.Join(elsewhere, "node_modules"), filepath.Join(bundle, "deps")))
+	require.NoError(t, os.Symlink(filepath.Join(home, "main.py"), filepath.Join(bundle, "main.py")))
+	bind := func(dir, at string) Mount {
+		return Mount{Bind: filepath.Join(dir, "node_modules"), Target: at, ReadOnly: true}
+	}
+
+	got, binds := tarEntries(t, bundle, (&workers{net: workerNet{host: true}, home: home}).sees)
+	require.Equal(t, map[string]string{"node_modules/": "dir", "deps/": "dir", "main.py": "file X = 1\n"}, got,
+		"each mount point is empty, and the file is copied")
+	require.ElementsMatch(t, []Mount{bind(home, "node_modules"), bind(elsewhere, "deps")}, binds,
+		"on the host's network the engine sees every directory")
+
+	got, binds = tarEntries(t, bundle, (&workers{home: home}).sees)
+	require.Equal(t, []Mount{bind(home, "node_modules")}, binds, "in a VM, only what lies under the home directory")
+	require.Equal(t, "dir", got["node_modules/"])
+	require.NotContains(t, got, "node_modules/greet/index.mjs")
+	require.Equal(t, "file export {}\n", got["deps/greet/index.mjs"], "the rest is copied, as before")
+
+	_, binds = tarEntries(t, bundle, (&workers{}).sees)
+	require.Empty(t, binds, "in a VM with no home directory to read, nothing is bound")
+}
+
+// ADR-0359 Decision 5, amended 2026-11-26: a worker's bundle that links to a directory the engine sees takes it as a
+// read-only bind at the link's path, after the bundle's volume, which holds its empty mount point; the worker reads the
+// directory's files through it.
+func TestWorkersBindTheDirectoriesTheirBundleLinksTo(t *testing.T) {
+	t.Parallel()
+	e := newProcEngine(t)
+	w := newTestWorkers(t, e, onHost)
+	modules, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(modules, "greet"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(modules, "greet", "index.mjs"), []byte("export const greet = 1;\n"), 0o600))
+	spec := workerSpec(t, nil, "cat", "/var/funcd/artifact/node_modules/greet/index.mjs")
+	require.NoError(t, os.Symlink(modules, filepath.Join(spec.Mounts[0].Source, "node_modules")))
+	inst, err := w.Create(context.Background(), spec)
+	require.NoError(t, err)
+	require.NoError(t, w.Start(context.Background(), inst.ID))
+
+	require.Len(t, e.runs, 1)
+	run := e.runs[0]
+	require.Equal(t, []Mount{{Volume: run.Name, Target: "/var/funcd/artifact", ReadOnly: true},
+		{Bind: modules, Target: "/var/funcd/artifact/node_modules", ReadOnly: true},
+		{Volume: run.Name + "-run", Target: "/run/funcd"}}, run.Mounts)
+	entries, err := os.ReadDir(filepath.Join(e.volume(run.Name), "node_modules"))
+	require.NoError(t, err)
+	require.Empty(t, entries, "the volume holds the bind's mount point, empty")
+	require.Eventually(t, func() bool {
+		got, serr := w.Status(context.Background(), inst.ID)
+		return serr == nil && got.State.Terminal()
+	}, 10*time.Second, 10*time.Millisecond)
+	rc, err := w.Logs(context.Background(), inst.ID)
+	require.NoError(t, err)
+	out, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	require.Equal(t, "export const greet = 1;", strings.TrimSpace(string(out)), "the worker reads the module through the bind")
 }

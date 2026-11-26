@@ -160,10 +160,10 @@ type Volume struct {
 	Labels map[string]string
 }
 
-// RunSpec is a container to run (Decision 2): Port, when set, published on 127.0.0.1 at a free port, each of Mounts with
-// no copy-up, no restart policy, the stop signal SIGTERM and StopGrace before a kill. The image's own user runs it, its
-// entrypoint or Cmd, which replaces the whole of it. A worker (ADR-0346 Decisions 4 and 5) runs on the host's network or
-// with ExtraHosts, within NanoCPUs and MemoryBytes when they are set.
+// RunSpec is a container to run (Decision 2): Port, when set, published on 127.0.0.1 at a free port, each of Mounts a
+// volume with no copy-up or a bind of a host directory, no restart policy, the stop signal SIGTERM and StopGrace before a
+// kill. The image's own user runs it, its entrypoint or Cmd, which replaces the whole of it. A worker (ADR-0346
+// Decisions 4 and 5) runs on the host's network or with ExtraHosts, within NanoCPUs and MemoryBytes when they are set.
 type RunSpec struct {
 	Name        string
 	Image       string
@@ -189,10 +189,12 @@ type Helper struct {
 	HostNetwork bool
 }
 
-// Mount is a volume mounted at an absolute path, read-only when ReadOnly is set.
+// Mount is a volume mounted at an absolute path, read-only when ReadOnly is set; with Bind set, the host directory Bind
+// is mounted there instead (ADR-0359 Decision 5).
 type Mount struct {
 	Volume, Target string
 	ReadOnly       bool
+	Bind           string
 }
 
 // Runtime is the add-on runtime of one dev session over an Engine.
@@ -1409,22 +1411,28 @@ type createHostConfig struct {
 }
 
 type mountBody struct {
-	Type          string `json:"Type"`
-	Source        string `json:"Source"`
-	Target        string `json:"Target"`
-	ReadOnly      bool   `json:"ReadOnly,omitempty"`
-	VolumeOptions struct {
-		NoCopy bool `json:"NoCopy"`
-	} `json:"VolumeOptions"`
+	Type          string         `json:"Type"`
+	Source        string         `json:"Source"`
+	Target        string         `json:"Target"`
+	ReadOnly      bool           `json:"ReadOnly,omitempty"`
+	VolumeOptions *volumeOptions `json:"VolumeOptions,omitempty"`
 }
 
-// volumeMounts are ms as the Engine API mounts volumes: with no copy-up (Decision 3).
-func volumeMounts(ms []Mount) []mountBody {
+type volumeOptions struct {
+	NoCopy bool `json:"NoCopy"`
+}
+
+// mountBodies are ms as the Engine API mounts them: a volume with no copy-up (Decision 3), a Bind as a bind, which takes
+// no volume options.
+func mountBodies(ms []Mount) []mountBody {
 	out := make([]mountBody, 0, len(ms))
 	for _, m := range ms {
-		b := mountBody{Type: "volume", Source: m.Volume, Target: m.Target, ReadOnly: m.ReadOnly}
-		b.VolumeOptions.NoCopy = true
-		out = append(out, b)
+		if m.Bind != "" {
+			out = append(out, mountBody{Type: "bind", Source: m.Bind, Target: m.Target, ReadOnly: m.ReadOnly})
+			continue
+		}
+		out = append(out, mountBody{Type: "volume", Source: m.Volume, Target: m.Target, ReadOnly: m.ReadOnly,
+			VolumeOptions: &volumeOptions{NoCopy: true}})
 	}
 	return out
 }
@@ -1463,7 +1471,7 @@ func (e *engineAPI) Run(ctx context.Context, spec RunSpec) error {
 		body.ExposedPorts = map[string]struct{}{port: {}}
 		body.HostConfig.PortBindings = map[string][]portBinding{port: {{HostIP: "127.0.0.1"}}}
 	}
-	body.HostConfig.Mounts = volumeMounts(spec.Mounts)
+	body.HostConfig.Mounts = mountBodies(spec.Mounts)
 	body.HostConfig.ExtraHosts = spec.ExtraHosts
 	body.HostConfig.NanoCPUs, body.HostConfig.Memory = spec.NanoCPUs, spec.MemoryBytes
 	id, err := e.create(ctx, spec.Name, body)
@@ -1588,7 +1596,7 @@ func (e *engineAPI) helperContainer(ctx context.Context, h Helper, argv []string
 		return "", err
 	}
 	body := createBody{Image: h.Image, Cmd: argv, Labels: h.Labels}
-	body.HostConfig.Mounts = volumeMounts(h.Mounts)
+	body.HostConfig.Mounts = mountBodies(h.Mounts)
 	if h.HostNetwork {
 		body.HostConfig.NetworkMode = "host"
 	}
