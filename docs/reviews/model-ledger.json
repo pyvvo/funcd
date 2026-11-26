@@ -15523,5 +15523,20 @@
     "dod_total": 4,
     "report": "docs/reviews/adr-0346-amendment-implementation-claude-opus-5-5.md",
     "notes": "pass (amendment, a container worker reaches funcd from a VM on containerd); an engine on the host's network is never asked, the address is kept under the lock, the tests fail on the old line; Minor 1 (model): three texts kept the former rule or missed the new test; Minor 2 (model): the helper's failure had no test; both fixed"
+  },
+  {
+    "date": "2026-11-26",
+    "adr": "0359",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 13,
+    "dod_total": 13,
+    "report": "docs/reviews/adr-0359-implementation-claude-opus-5-5.md",
+    "notes": "pass; Minor[model]: behavior row in workers.md, not funcdctl-dev.md as the ADR names; fix 152aada9 verified (revert fails, ADR-0125 bug); real scenarios pass on Docker and containerd (load-once rerun)"
   }
 ]
