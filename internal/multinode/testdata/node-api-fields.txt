@@ -3,6 +3,7 @@ Action.input
 Action.name
 Action.on
 Action.workflow
+AddonObjectBindings.job
 AddonObjectBindings.secret
 AddonObjectFunction.kind
 AddonObjectFunction.ref
