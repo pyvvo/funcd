@@ -123,6 +123,9 @@ type server struct {
 	nc   *nats.Conn
 	once sync.Once
 	done chan struct{}
+	// life ends with Close, and every request's handler with it, so none waits out its feed on a closed server.
+	life context.Context
+	end  context.CancelFunc
 
 	mu      sync.Mutex
 	serials map[v1.ObjectName]string // the certificate serial of each node's last admitted request
@@ -176,7 +179,9 @@ func Listen(cfg Config) (nodeapi.Server, error) {
 		srv.Shutdown()
 		return nil, fault.Wrapf(err, fault.Internal, op, "connect the control plane to its node API")
 	}
-	return &server{cfg: cfg, srv: srv, nc: nc, done: make(chan struct{}), serials: map[v1.ObjectName]string{}}, nil
+	life, end := context.WithCancel(context.Background())
+	return &server{cfg: cfg, srv: srv, nc: nc, done: make(chan struct{}), life: life, end: end,
+		serials: map[v1.ObjectName]string{}}, nil
 }
 
 func randomHex(n int) (string, error) {
@@ -216,6 +221,7 @@ func (s *server) Serve(ctx context.Context, h nodeapi.Handler) error {
 // Close drops every connection, and the server.
 func (s *server) Close() error {
 	s.once.Do(func() {
+		s.end()
 		close(s.done)
 		s.nc.Close()
 		s.srv.Shutdown()
@@ -279,7 +285,7 @@ func (s *server) request(h nodeapi.Handler, m *nats.Msg) {
 			"reply", m.Reply)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), handlerTimeout)
+	ctx, cancel := context.WithTimeout(s.life, handlerTimeout)
 	defer cancel()
 	out, err := s.serve(ctx, h, m, v1.ObjectName(parts[2]), parts[3], parts[4])
 	s.reply(m, out, err)
@@ -377,7 +383,7 @@ func (s *server) join(h nodeapi.Handler, m *nats.Msg) {
 		s.cfg.Logger.Warn("node API: a join whose answer would leave the joins' inbox is dropped", "reply", m.Reply)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), handlerTimeout)
+	ctx, cancel := context.WithTimeout(s.life, handlerTimeout)
 	defer cancel()
 	var in nodeapi.JoinRequest
 	if err := decode(m.Data, nodeapi.MaxJoinBody, &in); err != nil {

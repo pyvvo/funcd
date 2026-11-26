@@ -75,11 +75,15 @@ type stub struct {
 	joins    int
 	big      int
 	reads    atomic.Int32
+	read     context.Context // the context of the last read of changes
 }
 
 func (*stub) Changed() <-chan struct{} { return nil }
 
-func (s *stub) Changes(context.Context, v1.ObjectName, uint64, string) (nodeapi.Feed, error) {
+func (s *stub) Changes(ctx context.Context, _ v1.ObjectName, _ uint64, _ string) (nodeapi.Feed, error) {
+	s.mu.Lock()
+	s.read = ctx
+	s.mu.Unlock()
 	s.reads.Add(1)
 	return nodeapi.Feed{}, nil
 }
@@ -428,6 +432,27 @@ func TestAWaitingRequestHoldsLittleMemory(t *testing.T) {
 	cancel()
 	wg.Wait()
 	require.Less(t, (int64(after)-int64(before))/n, int64(64<<10), "a waiting request holds under 64 KiB, both sides")
+}
+
+// A request in flight ends when the server closes: its handler no longer waits out its feed's wait on a store that may be
+// gone, as an HTTPS request ends with its connection.
+func TestARequestInFlightEndsWhenTheServerCloses(t *testing.T) {
+	srv, ca := listen(t)
+	h := &stub{}
+	serve(t, srv, h)
+	c, err := natsdriver.NewConnector().Dial(identity(t, ca, "nats://"+srv.Addr(), "vm1"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	go func() { _, _ = c.Feed(context.Background(), 0, "t", time.Minute) }()
+	read := func() context.Context {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.read
+	}
+	require.Eventually(t, func() bool { return read() != nil }, 5*time.Second, 10*time.Millisecond, "the feed waits")
+	require.NoError(t, srv.Close())
+	require.Eventually(t, func() bool { return read().Err() != nil }, time.Second, 10*time.Millisecond,
+		"the handler's request ends with the server")
 }
 
 // An answer over a NATS message's size comes in chunks, and the node gets it whole.
