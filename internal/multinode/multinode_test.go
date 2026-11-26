@@ -49,6 +49,50 @@ func workerNode(name string) *v1.WorkerNode {
 	return n
 }
 
+// A write wakes only the feeds of the nodes it concerns (#1586): a record of a namespace wakes the node it is placed on,
+// unless that node wrote it, and a Namespace wakes every node.
+func TestAWriteWakesOnlyTheNodesItConcerns(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(memory.New(), store.WithChangeLog(0))
+	for _, obj := range []v1.Object{workerNode("vm1"), workerNode("vm2"), namespace("e1", "vm1"), namespace("e2", "vm2")} {
+		_, err := st.Create(ctx, obj)
+		require.NoError(t, err)
+	}
+	h := newTestCluster(t, st).handler
+	rctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	require.NoError(t, h.startRouting(rctx))
+	woken := func(ch <-chan struct{}, within time.Duration) bool {
+		select {
+		case <-ch:
+			return true
+		case <-time.After(within):
+			return false
+		}
+	}
+	write := func(ctx context.Context, name v1.ObjectName) {
+		cm := &v1.ConfigMap{TypeMeta: tm(v1.KindConfigMap)}
+		cm.Name, cm.Namespace, cm.ResourceGroup = name, "e1", "rg1"
+		_, err := st.Create(ctx, cm)
+		require.NoError(t, err)
+	}
+
+	vm1, vm2 := h.Changed("vm1"), h.Changed("vm2")
+	write(ctx, "a")
+	require.True(t, woken(vm1, 5*time.Second), "a write in e1 wakes vm1, which runs e1")
+	require.False(t, woken(vm2, 200*time.Millisecond), "and leaves vm2 waiting")
+
+	vm1 = h.Changed("vm1")
+	write(store.WithOrigin(ctx, "vm1"), "b")
+	require.False(t, woken(vm1, 200*time.Millisecond), "a write vm1 made itself does not wake it")
+
+	vm1, vm2 = h.Changed("vm1"), h.Changed("vm2")
+	_, err := st.Create(ctx, namespace("e3", ""))
+	require.NoError(t, err)
+	require.True(t, woken(vm1, 5*time.Second), "a Namespace wakes vm1")
+	require.True(t, woken(vm2, 5*time.Second), "and vm2")
+}
+
 func TestATokenReadsBackAndAMalformedOneIsRefused(t *testing.T) {
 	tok := Token{CAHash: HashSecret("ca"), Node: "vm1", Secret: "s3cret"}
 	got, err := ParseToken(tok.String())

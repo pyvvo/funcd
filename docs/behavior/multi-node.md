@@ -32,6 +32,7 @@ recovery](disaster-recovery.md).
 | A control plane alone | `funcd server` runs no namespace: it needs no container runtime, opens no data plane, and an unplaced namespace's objects wait | none | no phase on the objects | decided | decider 2026-11-16, #1478, `TestAControlPlaneAloneRunsNoNamespace` |
 | Moving a namespace | Refused while it holds objects, since its data stays on the node that ran it; an empty namespace moves. Its data moves with workload backups, restored on the new node | none | 409 `holds objects, so its spec.node cannot change` | accepted | `TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects` |
 | Following | The node takes a snapshot, then long-polls the change log, and keeps its revision on disk, so a restart of either side resumes with nothing lost | `DefaultWait` 25 s per poll | `node agent: feed resumed` | decided | decider 2026-11-16, #1480, `TestANodeResumesFromItsSavedRevision` |
+| A write on the control plane | It wakes only the nodes it concerns: its namespace's node, unless that node wrote it, or all nodes for a Namespace or a kind they all follow | none | none | accepted | `TestAWriteWakesOnlyTheNodesItConcerns` |
 | An old revision | The log keeps the last `defaultChangeRetain` 100000 records; a node behind that gets 410, or 412 over NATS, and takes a new snapshot | none | 410; 412 | accepted | `TestChangeLogCompactsAndRefusesARevisionBelowItsFloor` |
 | A copy on a node | It is the control plane's object: the same uid, generation and creation time, as a child a node makes is on the control plane. One created again under its name replaces the node's, which goes first with its data | none | one uid on both | accepted | `TestANodesCopyIsTheControlPlanesObject` |
 | Status and children back | The node writes back each object's status, validated, and whole the children it owns of the kinds its reconcilers make, plus the runs, Invocations and Backup records it makes; no Policy or role, never a person's object | none | its status on the control plane | decided | decider 2026-11-16, #1481, `TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers` |
@@ -68,7 +69,7 @@ recovery](disaster-recovery.md).
 | A node on NATS | It publishes only under its own name and certificate serial, and hears only its own answers and calls: the control plane answers only into the asker's inbox. A join, with no certificate, can only send its token | none | no answer | accepted | `TestANodePublishesUnderItsOwnNameOnly`, `TestAnAnswerGoesOnlyIntoTheInboxOfTheNodeThatAsked` |
 | A call to a node on NATS | It is a request to the subject the node listens on; a node with no link, or one that never listened, fails the call at once | at most `CallTimeout` 10 s | 503 `is offline` | accepted | `TestANodeThatLeavesIsOfflineAtOnce` |
 | A link that goes silent on NATS | The server ends it after `maxPingsOut` 2 unanswered pings, one every `pingInterval` 1 s; a call then fails at once, and before waits its timeout. The node dials again every `reconnectWait` 2 s and takes calls within `listenTimeout` 5 s | at most `CallTimeout` 10 s a call | 503 `is offline` | accepted | `TestANodeWhoseLinkGoesSilentIsOfflineOnceTheLinkEnds` |
-| A big answer on NATS | An answer over `chunkSize` 512 KiB comes in chunks, so a snapshot fits under the server's `maxPayload` 8 MiB a message | none | none | accepted | `TestABigAnswerComesInChunks` |
+| A big answer on NATS | An answer over `chunkSize` 512 KiB comes in chunks, under the server's `maxPayload` 8 MiB | none | none | accepted | `TestABigAnswerComesInChunks` |
 
 <!-- generated values, do not edit: just behavior-values -->
 <details>
@@ -98,6 +99,7 @@ recovery](disaster-recovery.md).
 | `defaultReadyFor` | 40s | `internal/multinode/liveness.go` |
 | `defaultSeenEvery` | 30s | `internal/multinode/liveness.go` |
 | `livenessTick` | 5s | `internal/multinode/liveness.go` |
+| `routeRetry` | 100ms | `internal/multinode/wake.go` |
 | `callOffline` | 3s | `internal/nodeapi/longpoll/calls.go` |
 | `idleConnTimeout` | 1m30s | `internal/nodeapi/longpoll/client.go` |
 | `joinRequestTimeout` | 30s | `internal/nodeapi/longpoll/client.go` |

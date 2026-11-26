@@ -34,8 +34,9 @@ type HandlerConfig struct {
 // Handler is the node API's rules (FEAT-0002 decisions 2, 3, 4, 5, 7, 8 and 12), the nodeapi.Handler a driver carries:
 // who may join and send, what each node follows, and what it may write back.
 type Handler struct {
-	cfg HandlerConfig
-	cl  store.ChangeLog
+	cfg   HandlerConfig
+	cl    store.ChangeLog
+	wakes wakes
 }
 
 var _ nodeapi.Handler = (*Handler)(nil)
@@ -46,7 +47,7 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 	if !ok {
 		return nil, fault.Invalidf("multinode.NewHandler", "the store keeps no change log")
 	}
-	return &Handler{cfg: cfg, cl: cl}, nil
+	return &Handler{cfg: cfg, cl: cl, wakes: wakes{nodes: map[v1.ObjectName]chan struct{}{}}}, nil
 }
 
 // Admit lets a joined node in by the certificate it joined with, or the one it renewed it with: one its WorkerNode names,
@@ -365,8 +366,8 @@ func (s *Handler) Changes(ctx context.Context, node v1.ObjectName, since uint64,
 	return nodeapi.Feed{Rev: cursor, Changes: out}, nil
 }
 
-// Changed is closed at the change log's next record.
-func (s *Handler) Changed() <-chan struct{} { return s.cl.ChangeSignal() }
+// Changed is closed at the next record of the change log that concerns node.
+func (s *Handler) Changed(node v1.ObjectName) <-chan struct{} { return s.wakes.of(node) }
 
 // Report writes what the node reports of itself into its WorkerNode's status.
 func (s *Handler) Report(ctx context.Context, node v1.ObjectName, in nodeapi.NodeReport) error {

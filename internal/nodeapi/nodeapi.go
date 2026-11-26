@@ -65,7 +65,7 @@ func Wait(wait time.Duration) time.Duration {
 func WaitForChanges(ctx context.Context, h Handler, node v1.ObjectName, since uint64, timeline string, wait time.Duration) (Feed, error) {
 	deadline := time.Now().Add(Wait(wait))
 	for {
-		changed := h.Changed()
+		changed := h.Changed(node)
 		f, err := h.Changes(ctx, node, since, timeline)
 		if err != nil || len(f.Changes) > 0 || !time.Now().Before(deadline) {
 			return f, err
@@ -194,8 +194,9 @@ type Handler interface {
 	// Changes is node's records after since, of the change log's timeline, and none while there is none: a since older
 	// than the change log, or of another timeline, is fault.PreconditionFailed, after which the node takes a snapshot.
 	Changes(ctx context.Context, node v1.ObjectName, since uint64, timeline string) (Feed, error)
-	// Changed is closed at the next record of the change log, which a driver waits for to ask Changes again.
-	Changed() <-chan struct{}
+	// Changed is closed at the next record of the change log that concerns node, which a driver waits for to ask Changes
+	// again; a record that concerns another node leaves it open.
+	Changed(node v1.ObjectName) <-chan struct{}
 	// Children are the children node made in its namespaces, as the control plane holds them.
 	Children(ctx context.Context, node v1.ObjectName) ([]store.Change, error)
 	// Status writes node's status of the object in.UID names.

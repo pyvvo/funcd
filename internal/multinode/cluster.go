@@ -88,6 +88,9 @@ func New(cfg Config) (*Cluster, error) {
 // Run serves the node API and keeps the WorkerNodes' statuses until ctx ends.
 func (c *Cluster) Run(ctx context.Context) error {
 	go c.liveness.Run(ctx)
+	if err := c.handler.startRouting(ctx); err != nil {
+		return err
+	}
 	c.cfg.Logger.InfoContext(ctx, "node API listening", "addr", c.cfg.API.Addr(), "caHash", c.ca.Hash())
 	return c.cfg.API.Serve(ctx, c.handler)
 }

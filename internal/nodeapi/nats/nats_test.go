@@ -78,7 +78,7 @@ type stub struct {
 	read     context.Context // the context of the last read of changes
 }
 
-func (*stub) Changed() <-chan struct{} { return nil }
+func (*stub) Changed(v1.ObjectName) <-chan struct{} { return nil }
 
 func (s *stub) Changes(ctx context.Context, _ v1.ObjectName, _ uint64, _ string) (nodeapi.Feed, error) {
 	s.mu.Lock()

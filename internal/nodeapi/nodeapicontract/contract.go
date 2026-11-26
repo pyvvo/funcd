@@ -363,7 +363,7 @@ func (h *handler) Changes(_ context.Context, _ v1.ObjectName, since uint64, _ st
 	return out, nil
 }
 
-func (h *handler) Changed() <-chan struct{} {
+func (h *handler) Changed(v1.ObjectName) <-chan struct{} {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.changed
