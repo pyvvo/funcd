@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-10; the implementation review passed on its sixth round, docs/reviews/adr-0217-implementation-claude-opus-5-5-6.md; accepted 2026-10-10)
 - **Superseded in part by**: [ADR-0337](0337-an-app-template-carries-its-add-on.md) (2026-11-22) — Decision 1 (a template may hold `addon.yaml`) and Decision 9 (`app delete` walks add-on parts by their kinds).
+- **Superseded in part by**: [ADR-0362](0362-app-deploy-and-delete-show-their-progress-as-a-live-view.md) (2026-11-27) — Decisions 8 and 9: what `app deploy` and `app delete` print while they wait.
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit
