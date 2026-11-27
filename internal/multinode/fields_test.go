@@ -19,7 +19,8 @@ import (
 
 var update = flag.Bool("update", false, "write the spec fields of this tree to testdata") //nolint:gochecknoglobals // a test flag
 
-// specFields are the fields a node's kinds carry in their spec, each with the paths by kind it is found at.
+// specFields are the fields the kinds a node runs or follows carry in their spec, each with the paths by kind it is found
+// at: every namespaced kind, the Namespace and the cluster-scoped kinds of NodeKinds.
 func specFields() map[string]map[v1.Kind][]string {
 	out := map[string]map[v1.Kind][]string{}
 	marshaler := reflect.TypeFor[json.Marshaler]()
@@ -57,9 +58,10 @@ func specFields() map[string]map[v1.Kind][]string {
 			walk(kind, f.Type, path+"."+name, append(seen, t))
 		}
 	}
+	followed := append([]v1.Kind{v1.KindNamespace}, NodeKinds()...)
 	for _, k := range v1.AllKinds() {
 		obj, ok := v1.NewObject(k)
-		if !ok || !k.Namespaced() {
+		if !ok || !k.Namespaced() && !slices.Contains(followed, k) {
 			continue
 		}
 		if f, ok := reflect.TypeOf(obj).Elem().FieldByName("Spec"); ok {

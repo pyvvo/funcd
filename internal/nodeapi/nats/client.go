@@ -69,6 +69,7 @@ func (connector) Join(ctx context.Context, server string, trusted func(caDER []b
 		return nodeapi.JoinResponse{}, nil, fault.Wrapf(err, fault.Internal, op, "marshal the join")
 	}
 	msg := nats.NewMsg(joinSubject)
+	msg.Header.Set(headerAPIVersion, strconv.Itoa(nodeapi.APIVersion))
 	msg.Data = data
 	answer, err := request(ctx, nc, msg, joinRequestTimeout)
 	if err != nil {

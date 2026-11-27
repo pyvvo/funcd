@@ -296,7 +296,7 @@ func (s *server) serve(ctx context.Context, h nodeapi.Handler, m *nats.Msg, node
 	const op = "nats.request"
 	version, err := strconv.Atoi(m.Header.Get(headerAPIVersion))
 	if err != nil || !nodeapi.Supported(version) {
-		return nil, fault.Conflictf(op, "this control plane serves node API versions %s; upgrade or downgrade the node", versions())
+		return nil, fault.Conflictf(op, "%s", nodeapi.Unserved(m.Header.Get(headerAPIVersion)))
 	}
 	p := nodeapi.Peer{Node: node, Serial: serial, APIVersion: version, Version: m.Header.Get(headerVersion),
 		Platform: m.Header.Get(headerPlatform)}
@@ -391,6 +391,10 @@ func (s *server) join(h nodeapi.Handler, m *nats.Msg) {
 		s.cfg.Logger.Warn("node API: a join whose answer would leave the joins' inbox is dropped", "reply", m.Reply)
 		return
 	}
+	if v, err := strconv.Atoi(m.Header.Get(headerAPIVersion)); err != nil || !nodeapi.Supported(v) { // before its token is read
+		s.reply(m, nil, fault.Conflictf("nats.join", "%s", nodeapi.Unserved(m.Header.Get(headerAPIVersion))))
+		return
+	}
 	ctx, cancel := context.WithTimeout(s.life, handlerTimeout)
 	defer cancel()
 	var in nodeapi.JoinRequest
@@ -466,14 +470,6 @@ func (s *server) reply(m *nats.Msg, out json.RawMessage, err error) {
 			return
 		}
 	}
-}
-
-func versions() string {
-	out := make([]string, 0, len(nodeapi.SupportedAPIVersions))
-	for _, v := range nodeapi.SupportedAPIVersions {
-		out = append(out, strconv.Itoa(v))
-	}
-	return strings.Join(out, ", ")
 }
 
 // auth lets in the control plane's own connection by its credential, a connection with a node certificate the CA verified

@@ -15,8 +15,8 @@ import (
 )
 
 // newerRelease reports whether a node's release is newer than the control plane's (ADR-0374): a node runs
-// the control plane's release or an older one, never a newer one. Releases that do not order, such as a build of a
-// branch, pass.
+// the control plane's release or an older one, never a newer one. Releases that do not order, dev and a bare commit
+// hash, pass; a build past a tag orders by its commit count (version.Compare).
 func newerRelease(node, controlPlane string) bool {
 	c, ok := version.Compare(node, controlPlane)
 	return ok && c > 0
@@ -30,8 +30,9 @@ type FieldVersions map[v1.Kind]map[string]int
 // nodeFields is this release's FieldVersions: none while the node API has its first version only.
 func nodeFields() FieldVersions { return FieldVersions{} }
 
-// nodeTooOld refuses a spec field that the node of the object's namespace is too old to run (ADR-0374). A node that
-// has not joined yet has no known version, and a namespace on the control plane's own node has none to check.
+// nodeTooOld refuses a spec field that a node the object reaches is too old to run (ADR-0374): the node of its
+// namespace, or every node for a cluster-scoped kind the nodes follow. A node that has not joined yet has no known
+// version, and a namespace on the control plane's own node has none to check.
 type nodeTooOld struct {
 	st        store.Store
 	placement *Placement
@@ -46,30 +47,54 @@ func (a nodeTooOld) Handles(gvk v1.GroupVersionKind, op admission.Operation) boo
 
 func (a nodeTooOld) Admit(ctx context.Context, req admission.Request) (v1.Object, error) {
 	const op = "admission.node-too-old"
-	node, err := a.placement.NodeOf(ctx, req.Object.GetObjectMeta().Namespace)
-	if err != nil || a.placement.Local(node) {
+	nodes, err := a.nodesOf(ctx, req)
+	if err != nil || len(nodes) == 0 {
 		return req.Object, err
-	}
-	obj, err := a.st.Get(ctx, v1.KindWorkerNode.GVK(), "", node)
-	if err != nil {
-		return nil, err
-	}
-	wn, ok := obj.(*v1.WorkerNode)
-	if !ok || wn.Status.NodeAPIVersion == 0 {
-		return req.Object, nil
 	}
 	raw, err := json.Marshal(req.Object)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "marshal")
 	}
 	fields := a.fields[req.GVK.Kind]
-	for _, path := range slices.Sorted(maps.Keys(fields)) {
-		if need := fields[path]; need > wn.Status.NodeAPIVersion && fieldSet(raw, path) {
-			return nil, fault.Invalidf(op, "worker node %s speaks node API version %d, and %s needs version %d: upgrade the node first",
-				node, wn.Status.NodeAPIVersion, path, need)
+	for _, wn := range nodes {
+		for _, path := range slices.Sorted(maps.Keys(fields)) {
+			if need := fields[path]; need > wn.Status.NodeAPIVersion && fieldSet(raw, path) {
+				return nil, fault.Invalidf(op, "worker node %s speaks node API version %d, and %s needs version %d: upgrade the node first",
+					wn.Name, wn.Status.NodeAPIVersion, path, need)
+			}
 		}
 	}
 	return req.Object, nil
+}
+
+// nodesOf are the joined worker nodes that req's object reaches: its namespace's node, or every one for a cluster-scoped
+// kind.
+func (a nodeTooOld) nodesOf(ctx context.Context, req admission.Request) ([]*v1.WorkerNode, error) {
+	var objs []v1.Object
+	if req.GVK.Kind.Namespaced() {
+		node, err := a.placement.NodeOf(ctx, req.Object.GetObjectMeta().Namespace)
+		if err != nil || a.placement.Local(node) {
+			return nil, err
+		}
+		obj, err := a.st.Get(ctx, v1.KindWorkerNode.GVK(), "", node)
+		if err != nil {
+			return nil, err
+		}
+		objs = append(objs, obj)
+	} else {
+		res, err := a.st.List(ctx, v1.KindWorkerNode.GVK(), store.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		objs = res.Items
+	}
+	var out []*v1.WorkerNode
+	for _, obj := range objs {
+		if wn, ok := obj.(*v1.WorkerNode); ok && wn.Status.NodeAPIVersion > 0 {
+			out = append(out, wn)
+		}
+	}
+	return out, nil
 }
 
 // fieldSet reports whether the JSON raw holds a value at the dotted path, in any item of the lists on the way.

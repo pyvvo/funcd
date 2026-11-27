@@ -460,6 +460,11 @@ func TestASpecFieldANodeIsTooOldForIsRefused(t *testing.T) {
 	require.NoError(t, admit("new", "retry"), "a node that speaks the version")
 	require.NoError(t, admit("waiting", "retry"), "a node that has not joined has no known version")
 	require.NoError(t, admit("here", "retry"), "the control plane's own node runs its own release")
+	a.fields = FieldVersions{v1.KindAPIToken: {"spec.role": 2}}
+	tok := &v1.APIToken{TypeMeta: tm(v1.KindAPIToken)}
+	tok.Name, tok.Spec.Role = "ci", "developer"
+	_, err = a.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindAPIToken.GVK(), Object: tok})
+	require.ErrorContains(t, err, "worker node vm1 speaks node API version 1", "a cluster-scoped kind reaches every node")
 	require.False(t, newerRelease("v0.39.0", "v0.40.0"))
 	require.True(t, newerRelease("v0.41.0", "v0.40.0"))
 	require.False(t, newerRelease("v0.41.0", "dev"), "a release that does not order passes")

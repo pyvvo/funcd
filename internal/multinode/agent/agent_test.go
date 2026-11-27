@@ -584,8 +584,27 @@ func TestANodeOnANewerReleaseThanTheControlPlaneIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, t.TempDir(), "v0.41.0", "linux/arm64")
 	require.ErrorContains(t, err, "newer than the control plane's v0.40.0")
-	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, t.TempDir(), "v0.39.2", "linux/arm64")
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "v0.39.2", "linux/arm64")
 	require.NoError(t, err, "an older node joins")
+	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+	ns.Name, ns.Spec.Node = "e1", "vm1"
+	_, err = r.cp.Create(ctx, ns)
+	require.NoError(t, err)
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "v0.39.2", Platform: "linux/arm64"})
+	require.NoError(t, err)
+	actx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { _ = a.Run(actx); close(done) }()
+	eventually(t, "and follows its namespace", func() bool {
+		_, err := r.node.Get(ctx, v1.KindNamespace.GVK(), "", "e1")
+		return err == nil
+	})
+	stop()
+	<-done
+	_, err = nodeClientAt(t, r, dir, "v0.41.0").Children(ctx)
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "a node upgraded past its control plane is refused at its next request")
+	require.ErrorContains(t, err, "newer than the control plane's v0.40.0")
 }
 
 // fakeCommands records the node commands a node ran.
@@ -957,13 +976,19 @@ func TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers(t *testing.T) {
 // nodeClient is a client of r's node API under the certificate of the node that joined under dir.
 func nodeClient(t *testing.T, r rig, dir string) nodeapi.Client {
 	t.Helper()
+	return nodeClientAt(t, r, dir, "test")
+}
+
+// nodeClientAt is nodeClient, the node running release version.
+func nodeClientAt(t *testing.T, r rig, dir, version string) nodeapi.Client {
+	t.Helper()
 	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "node.pem"), filepath.Join(dir, "node.pem"))
 	require.NoError(t, err)
 	caPEM, err := os.ReadFile(filepath.Join(dir, "ca.crt"))
 	require.NoError(t, err)
 	roots := x509.NewCertPool()
 	require.True(t, roots.AppendCertsFromPEM(caPEM))
-	c, err := longpoll.NewConnector().Dial(nodeapi.Identity{Server: r.server(), Certificate: cert, Roots: roots, Version: "test"})
+	c, err := longpoll.NewConnector().Dial(nodeapi.Identity{Server: r.server(), Certificate: cert, Roots: roots, Version: version})
 	require.NoError(t, err)
 	return c
 }

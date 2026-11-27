@@ -228,8 +228,25 @@ func TestANodeOnAnotherNodeAPIVersionIsRefused(t *testing.T) {
 	require.NoError(t, json.Unmarshal(answer.Data, &env))
 	require.NotNil(t, env.Error)
 	require.Equal(t, fault.Conflict, fault.KindOfProblem(*env.Error))
-	require.Contains(t, env.Error.Detail, "upgrade or downgrade the node")
+	require.Contains(t, env.Error.Detail, "serves node API versions 1, and the node speaks 99; upgrade or downgrade the node")
 	require.Empty(t, h.statuses)
+
+	joins, err := nats.Connect("tls://"+srv.Addr(), nats.Secure(&tls.Config{RootCAs: ca.Pool(), MinVersion: tls.VersionTLS13}),
+		nats.CustomInboxPrefix("_INBOX_join"))
+	require.NoError(t, err)
+	t.Cleanup(joins.Close)
+	join := nats.NewMsg("funcd.join")
+	join.Header.Set("Funcd-Node-Api", "99")
+	join.Data = []byte(`{"token":"t"}`)
+	answer, err = joins.RequestMsg(join, 5*time.Second)
+	require.NoError(t, err)
+	env.Error = nil
+	require.NoError(t, json.Unmarshal(answer.Data, &env))
+	require.NotNil(t, env.Error)
+	require.Equal(t, fault.Conflict, fault.KindOfProblem(*env.Error), "a join too")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	require.Zero(t, h.joins, "before its token is read")
 }
 
 // answerCalls answers every call c takes, as a node's call loop does, until the test ends.

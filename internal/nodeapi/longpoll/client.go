@@ -49,6 +49,7 @@ func (connector) Join(ctx context.Context, server string, trusted func(caDER []b
 		return nodeapi.JoinResponse{}, nil, fault.Wrapf(err, fault.Invalid, op, "build the join request")
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerAPIVersion, strconv.Itoa(nodeapi.APIVersion))
 	resp, err := hc.Do(req)
 	if err != nil {
 		return nodeapi.JoinResponse{}, nil, fault.Wrapf(err, fault.Unavailable, op, "reach the control plane at %s", server)

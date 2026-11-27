@@ -121,7 +121,7 @@ type api struct {
 func routes(h nodeapi.Handler, calls *calls, logger *slog.Logger) http.Handler {
 	a := &api{h: h, calls: calls}
 	r := chi.NewRouter()
-	r.Use(fault.LogCauses(logger))
+	r.Use(fault.LogCauses(logger), apiVersion)
 	handle(nodeAPI(r), op(http.MethodPost, pathJoin, nodeapi.MaxJoinBody), a.join)
 	r.Group(func(r chi.Router) {
 		r.Use(a.authNode)
@@ -176,11 +176,7 @@ func nodeOf(ctx context.Context) v1.ObjectName {
 func (a *api) authNode(next http.Handler) http.Handler {
 	const op = "longpoll.authNode"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		version, err := strconv.Atoi(r.Header.Get(headerAPIVersion))
-		if err != nil || !nodeapi.Supported(version) {
-			upgradeRequired(w)
-			return
-		}
+		version, _ := strconv.Atoi(r.Header.Get(headerAPIVersion)) // apiVersion refused any other
 		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
 			fault.WriteProblem(w, fault.Unauthorizedf(op, "a node certificate is required"))
 			return
@@ -196,24 +192,20 @@ func (a *api) authNode(next http.Handler) http.Handler {
 	})
 }
 
-// upgradeRequired answers a node API version this control plane does not serve.
-func upgradeRequired(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(http.StatusUpgradeRequired)
-	_ = json.NewEncoder(w).Encode(fault.Problem{Type: "about:blank", Title: http.StatusText(http.StatusUpgradeRequired),
-		Status: http.StatusUpgradeRequired, Detail: "this control plane serves node API versions " + versions() +
-			"; upgrade or downgrade the node"})
-}
-
-func versions() string {
-	out := ""
-	for i, v := range nodeapi.SupportedAPIVersions {
-		if i > 0 {
-			out += ", "
+// apiVersion answers 426 to a request, the join's included, whose node API version this control plane does not serve,
+// before anything else reads it (ADR-0374 Decision 1).
+func apiVersion(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := r.Header.Get(headerAPIVersion)
+		if v, err := strconv.Atoi(got); err != nil || !nodeapi.Supported(v) {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusUpgradeRequired)
+			_ = json.NewEncoder(w).Encode(fault.Problem{Type: "about:blank", Title: http.StatusText(http.StatusUpgradeRequired),
+				Status: http.StatusUpgradeRequired, Detail: nodeapi.Unserved(got)})
+			return
 		}
-		out += strconv.Itoa(v)
-	}
-	return out
+		next.ServeHTTP(w, r)
+	})
 }
 
 type joinInput struct{ Body nodeapi.JoinRequest }

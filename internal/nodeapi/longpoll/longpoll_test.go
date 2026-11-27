@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/pem"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,4 +82,15 @@ func TestANodeOnAnotherNodeAPIVersionGets426(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusUpgradeRequired, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "serves node API versions 1, and the node speaks 99")
+
+	join, err := http.NewRequestWithContext(ctx, http.MethodPost, id.Server+"/node/v1/join", strings.NewReader(`{"token":"t"}`))
+	require.NoError(t, err)
+	join.Header.Set("Funcd-Node-Api", "99")
+	answer, err := hc.Do(join)
+	require.NoError(t, err)
+	defer func() { _ = answer.Body.Close() }()
+	require.Equal(t, http.StatusUpgradeRequired, answer.StatusCode, "a join too, before its token is read")
 }

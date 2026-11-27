@@ -41,6 +41,20 @@ var SupportedAPIVersions = []int{APIVersion} //nolint:gochecknoglobals // a cons
 // Supported reports whether a control plane serves node API version v.
 func Supported(v int) bool { return slices.Contains(SupportedAPIVersions, v) }
 
+// Unserved is the refusal of a node's request whose node API version, got as its header carries it, this control plane
+// does not serve (ADR-0374 Decision 1).
+func Unserved(got string) string {
+	served := make([]string, 0, len(SupportedAPIVersions))
+	for _, v := range SupportedAPIVersions {
+		served = append(served, fmt.Sprint(v))
+	}
+	if got == "" {
+		got = "none"
+	}
+	return "this control plane serves node API versions " + strings.Join(served, ", ") + ", and the node speaks " + got +
+		"; upgrade or downgrade the node"
+}
+
 // The wire's bounds, the same on every driver: a long poll's wait, the bodies of the requests, and the time a node gets
 // to answer a call.
 const (
