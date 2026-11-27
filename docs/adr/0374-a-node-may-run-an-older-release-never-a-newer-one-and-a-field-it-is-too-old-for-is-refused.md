@@ -83,8 +83,9 @@ are checked at each write against the node that would run them.
    version nor is added to that list; the list holds the spec fields of every namespaced kind, the Namespace, and the
    cluster-scoped kinds nodes follow (`NodeKinds`). A write that sets such a field is 400 `upgrade the node first` (the
    admission `node-too-old`) when a node it reaches speaks an older version: its namespace's node, or every joined node
-   for a cluster-scoped kind. A node that has not joined, or whose WorkerNode shows no version yet, is not checked; a
-   namespace on the control plane's own node has no node to check.
+   for a cluster-scoped kind, more than the nodes a Namespace or an APIToken reaches, so the check errs toward refusing.
+   A node that has not joined, or whose WorkerNode shows no version yet, is not checked; a namespace on the control
+   plane's own node has no node to check.
 
 ## Design model
 

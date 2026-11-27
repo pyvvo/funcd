@@ -468,6 +468,7 @@ func TestASpecFieldANodeIsTooOldForIsRefused(t *testing.T) {
 	require.False(t, newerRelease("v0.39.0", "v0.40.0"))
 	require.True(t, newerRelease("v0.41.0", "v0.40.0"))
 	require.False(t, newerRelease("v0.41.0", "dev"), "a release that does not order passes")
+	require.False(t, newerRelease("abc1234", "v0.40.0"), "nor does a bare commit hash")
 }
 
 func TestANodeWritesBackOnlyTheKindsItsReconcilersMake(t *testing.T) {

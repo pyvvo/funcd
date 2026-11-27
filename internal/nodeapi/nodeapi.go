@@ -48,8 +48,11 @@ func Unserved(got string) string {
 	for _, v := range SupportedAPIVersions {
 		served = append(served, fmt.Sprint(v))
 	}
-	if got == "" {
+	switch {
+	case got == "":
 		got = "none"
+	case len(got) > 16:
+		got = got[:16] + "..."
 	}
 	return "this control plane serves node API versions " + strings.Join(served, ", ") + ", and the node speaks " + got +
 		"; upgrade or downgrade the node"
