@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.51.0](https://github.com/pyvvo/funcd/compare/v0.50.0...v0.51.0) (2026-11-27)
+
+
+### Features
+
+* **function:** a Function that serves HTTP takes WebSocket connections ([3222664](https://github.com/pyvvo/funcd/commit/32226642518c0d28e8a10bf183654faec886f6a5))
+
 ## [0.50.0](https://github.com/pyvvo/funcd/compare/v0.49.2...v0.50.0) (2026-11-27)
 
 
