@@ -4,6 +4,8 @@ package funcd_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net"
@@ -187,6 +189,28 @@ func TestAnAppsRouteOnAnotherNodesHostIsRefused(t *testing.T) {
 	_, err = admin.Apply(ctx, shop)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "belongs to worker node vm1", "an App's part passes the host check")
+}
+
+// The config's credentials come before the stored tokens (ADR-0370 Decision 3): a token both hold takes the config's
+// identity, so the first admin works whatever the store holds.
+func TestTheConfigsCredentialsComeFirst(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(memory.New())
+	sum := sha256.Sum256([]byte("s3cret"))
+	at := &v1.APIToken{TypeMeta: tmeta(v1.KindAPIToken)}
+	at.Name, at.Spec.Role = "ci", "admin"
+	at.Status = v1.APITokenStatus{TokenHash: hex.EncodeToString(sum[:]), ExpiresAt: v1.NewTimestamp(time.Now().Add(time.Hour))}
+	_, err := st.Create(ctx, at)
+	require.NoError(t, err)
+	cp := runPlatform(t, funcd.WithStore(st), funcd.WithCredentials(
+		funcd.Credential{Token: clusterAdmin, Role: "admin"},
+		funcd.Credential{Token: "funcd.ci.s3cret", Role: "viewer", Namespaces: []string{"e1"}}))
+	viewer, err := sdk.New("http://"+cp.Addr(), sdk.WithToken("funcd.ci.s3cret"))
+	require.NoError(t, err)
+	wn := &v1.WorkerNode{TypeMeta: tmeta(v1.KindWorkerNode)}
+	wn.Name = "vm1"
+	_, err = viewer.Apply(ctx, wn)
+	require.Error(t, err, "the config's viewer decides, not the stored admin token of the same text")
 }
 
 func TestAnAPITokenKeptAsAHashWorksUntilItIsMintedAgainOrDeleted(t *testing.T) {

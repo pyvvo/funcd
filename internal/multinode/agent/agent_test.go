@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/auth/apitoken"
 	"github.com/stretchr/testify/require"
 
@@ -655,6 +656,27 @@ func TestANodeChecksTheAPITokensOfTheControlPlaneItself(t *testing.T) {
 		_, err := onNode.Lookup(ctx, secret)
 		return fault.KindOf(err) == fault.Unauthorized
 	})
+}
+
+func TestANodeChecksATokenWhileItsControlPlaneIsAway(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t)
+	defer n.start(t)()
+	at := &v1.APIToken{TypeMeta: meta(v1.KindAPIToken)}
+	at.Name, at.Spec.Role, at.Spec.Namespaces = "ci", "developer", []v1.NamespaceName{"e1"}
+	_, err := n.cp.Create(ctx, at)
+	require.NoError(t, err)
+	secret, _, err := apitoken.NewMinter(n.cp, nil).MintAPIToken(ctx, "ci", time.Hour)
+	require.NoError(t, err)
+	onNode := apitoken.NewCredentials(n.node, nil)
+	eventually(t, "the node holds the token", func() bool {
+		_, err := onNode.Lookup(ctx, secret)
+		return err == nil
+	})
+	n.cancelCP()
+	id, err := onNode.Lookup(ctx, secret)
+	require.NoError(t, err, "the node checks its callers while its control plane is away")
+	require.Equal(t, auth.RoleDeveloper, id.Role)
 }
 
 // dbCheck is a SQLDatabase deletion protection that answers as told.

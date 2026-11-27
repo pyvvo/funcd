@@ -5,6 +5,9 @@
 - **Deciders**: green-0-rabbit
 - **Tags**: multi-node, security, auth
 - **Realizes**: [FEAT-0002/F248](../feat/0002-feat-multi-node.md) (tokens checked on the node)
+- **Supersedes (in part)**: [ADR-0171](0171-static-credential-list.md): its first Temporary workaround and its Scope
+  Out items issuance, rotation, revocation without restart and hashing tokens at rest; its Decision 6, a restart
+  applies a change, still holds for the config's list
 - **Relates to**: [ADR-0365](0365-a-worker-node-follows-its-namespaces-through-the-change-log-over-a-link-it-opens.md)
   (the feed that carries the tokens) · [ADR-0171](0171-static-credential-list.md) (`auth.credentials`) ·
   [ADR-0153](0153-catalog-token-carries-its-owner.md) (a token that names its record) ·
@@ -27,8 +30,8 @@ every process check it against its own store.
   node.
 - `scenario: mint-again`: Given token ci in use, When the admin mints ci again, Then the old token is 401 and the new
   one passes, with no restart.
-- `scenario: expired`: Given a token minted for a minute, When it is used after two, Then it is 401 `expired: mint a new
-  one`.
+- `scenario: expired`: Given a token minted for a minute, When it is used at its end or after, Then it is 401
+  `invalid credential`, as every refused credential is.
 - `scenario: deleted`: Given token ci, When the admin deletes APIToken ci, Then the token is 401.
 - `scenario: only-its-tokens`: Given vm1 runs e1 and vm2 runs e2, When an APIToken spans only e2, Then vm1 does not
   hold it, and a token that stops spanning e1 leaves vm1.
@@ -54,8 +57,8 @@ every process check it against its own store.
 - **Tokens in each node's config**: every change is a config push and a restart on every node. Rejected.
 - **A node asks the control plane at each call**: a node could not check callers while the control plane is away.
   Rejected.
-- **Signed tokens (JWT)** that need no lookup: a revoked one works until it ends, and the signing key would live on
-  every node. Rejected.
+- **Signed tokens (JWT)** that need no lookup: a revoked one works until it ends, since a node checks only the
+  signature. Rejected.
 - **A token's secret kept encrypted**: a leaked store would still expose the secrets to whoever holds the key.
   Rejected; a hash needs no key.
 
@@ -65,13 +68,14 @@ every process check it against its own store.
    admin and at least one for the others, as an `auth.credentials` entry says them; its name is a DNS-1123 label. Its
    status, which only the minting writes, holds `tokenHash`, the SHA-256 of the secret, `issuedAt` and `expiresAt`.
 2. **Minting.** `funcdctl apitoken mint <name> [--ttl]` (`POST /apis/funcd.io/v1alpha1/apitokens/{name}/token`, an
-   admin action) mints `funcd.<name>.<secret>` with a 256-bit secret, shown once. It lives `defaultTTL` 720 h, or the
-   TTL asked, from `minTTL` 1 s to `maxTTL` 8760 h; another is 400. A new mint replaces the hash, so the token before
-   it ends.
+   admin action) mints `funcd.<name>.<secret>` with a 256-bit secret, shown once. It lives `defaultTTL` 720 h when no
+   TTL or 0 is asked, else the TTL asked, from `minTTL` 1 s to `maxTTL` 8760 h; another is 400. A new mint replaces the
+   hash, so the token before it ends.
 3. **The check.** Every process's API and edge resolve a `funcd.` token by one read of the APIToken its name names,
-   compare the hash in constant time and check its end: an unknown name, a wrong secret or a deleted APIToken is 401
-   `unknown credential`, an expired one 401 `expired: mint a new one`. `auth.credentials` is checked first, and stays
-   as the first admin's credential.
+   compare the hash in constant time and check its end, which refuses it at the instant of `expiresAt`. A caller of an
+   unknown name, a wrong secret, a deleted APIToken, one never minted or one past its end gets 401 `invalid
+   credential`, as for every refused credential (ADR-0018). `auth.credentials` is checked first, and stays as the first
+   admin's credential.
 4. **On a node.** A node follows the APITokens that concern it (ADR-0365 Decision 4): an admin's, and each one whose
    namespaces include one placed on the node. One that stops concerning it reaches it as a bare delete of its name, and
    a node drops the tokens that span none of its namespaces when a namespace leaves it. The node checks its own
@@ -79,13 +83,15 @@ every process check it against its own store.
 
 ## Design model
 
-None: a token is one record, checked by one comparison of its hash and its end at each call, and it reaches a node
-through the feed, whose ordering and resume ADR-0365's model covers.
+None: the decision adds no state, timer or actor. A token's end is a value compared at each read, and nothing fires
+when it passes; a mint is one conditional write of the APIToken's status, the last one winning, with no use-up race as
+a join token has (ADR-0364's model). A token reaches a node through the feed, reused unchanged
+([`feed.fizz`](../design/multinode/feed.fizz), ADR-0365).
 
 ## Behavior rows
 
 - **security.md**: "An API token kept as a hash" and "An API token on a worker node" cite this ADR's Decisions at
-  acceptance; the second row then says a node follows the tokens that concern it, not every token.
+  acceptance; both now show 401 `invalid credential`, and the second says a node follows the tokens that concern it.
 
 ## Temporary workarounds
 
@@ -141,8 +147,8 @@ Built ahead of this ADR on the branch of draft PR #1495: `api/types/v1alpha1/api
 | expired | `TestAnAPITokenWorksUntilItExpiresOrIsMintedAgain` |
 | deleted | `TestAnAPITokenKeptAsAHashWorksUntilItIsMintedAgainOrDeleted` |
 | only-its-tokens | `TestANodeGetsTheAPITokensAndTheNamespacesThatConcernIt` |
-| control-plane-away | `TestANodeChecksTheAPITokensOfTheControlPlaneItself` |
-| config-first | `TestTheConfigsCredentialsComeBeforeTheStoredTokens` |
+| control-plane-away | `TestANodeChecksATokenWhileItsControlPlaneIsAway` |
+| config-first | `TestTheConfigsCredentialsComeBeforeTheStoredTokens`, `TestTheConfigsCredentialsComeFirst` |
 
 Done when every test above passes and `just ci` is green.
 
@@ -159,7 +165,12 @@ Done when every test above passes and `just ci` is green.
 - Tokens rotate and end with no restart, and a leaked store exposes no usable token.
 - A node checks its callers while the control plane is away; a token minted or deleted meanwhile reaches the node when
   it follows again, so until then the node goes by the hash it holds.
-- Every node holds the hashes of every admin token, which span every namespace.
+- Every node holds the hashes of every admin token, which span every namespace, and the name of every APIToken, since
+  one that does not concern it comes as a bare delete of its name (ADR-0365 Decision 4).
+- A node judges a token's end by its own clock.
+- A metastore restored from a backup taken before a revocation or a new mint brings the old hash back, until its end;
+  the hold after a restore applies first (ADR-0206).
+- This closes ADR-0171's first workaround: tokens are issued, rotated and revoked with no restart, and kept as hashes.
 
 ## Open questions
 

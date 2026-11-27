@@ -54,16 +54,19 @@ func TestAnAPITokenWorksUntilItExpiresOrIsMintedAgain(t *testing.T) {
 		require.Equal(t, fault.Unauthorized, fault.KindOf(err), bad)
 	}
 
-	again, _, err := m.MintAPIToken(ctx, "ci", 0)
+	again, ends, err := m.MintAPIToken(ctx, "ci", 0)
 	require.NoError(t, err)
 	_, err = creds.Lookup(ctx, token)
 	require.Equal(t, fault.Unauthorized, fault.KindOf(err), "a token minted again ends the one before")
 	_, err = creds.Lookup(ctx, again)
 	require.NoError(t, err)
 
-	now = now.Add(31 * 24 * time.Hour)
+	now = ends.Add(-time.Millisecond)
 	_, err = creds.Lookup(ctx, again)
-	require.ErrorContains(t, err, "expired")
+	require.NoError(t, err, "a token works until its end")
+	now = ends
+	_, err = creds.Lookup(ctx, again)
+	require.ErrorContains(t, err, "expired", "and is refused at its end")
 	require.Equal(t, fault.Unauthorized, fault.KindOf(err))
 }
 
