@@ -7,7 +7,7 @@
 - **Realizes**: [FEAT-0010/F279](../feat/0010-feat-apps.md) (a live view of an App's deploy and delete)
 - **Supersedes (in part)**: [ADR-0217](0217-app-templates-values-and-rendering.md) Decisions 8 and 9 (Decision 9 as
   [ADR-0337](0337-an-app-template-carries-its-add-on.md) amends it), what deploy and delete print while they wait;
-  their waits, refusals and exit codes stay (Decision 7)
+  their waits, refusals and exit codes stay ADR-0217's (Decision 7)
 - **Relates to**: [ADR-0219](0219-app-requirements.md) (requirements) ·
   [ADR-0214](0214-app-hooks.md) (hooks) · [ADR-0220](0220-dry-run-engine.md) (the plan) ·
   [ADR-0199](0199-app-resource.md) and [ADR-0357](0357-an-app-never-waits-for-its-stacks-and-a-part-waits-for-their-outputs.md)
@@ -99,8 +99,8 @@ long; a CI log keeps lines it can read.
      required Apps · no deadline yet` and the parts section reads `⋯ <n> parts wait for the required Apps; none is
      written and no hook runs` (ADR-0219 Decision 3);
    - a row per hook in the followed revision's `preApply` and `postApply` lists: ◐ due until `status.hooks` records
-     its call, then ✓ done or ✗ failed; a due hook's time runs on the CLI's clock, a recorded one's is its Invocation's
-     `endTime − startTime`;
+     its call, then ✓ done or ✗ failed, a retried hook showing failed until its new call is recorded; a due hook's
+     time runs on the CLI's clock, a recorded one's is its Invocation's `endTime − startTime`;
    - a row per `status.children` entry, in its order: ✓ Ready or NotStarted, ◐ Pending or Lagging, ✗ Pending with the
      reason ChildInvalid or ChildNotOwned, ⋯ Pruning; `<Kind>/<name>`, the plan's action or none, the state and
      reason, what it waits on (Decision 4) and its time;
@@ -111,10 +111,11 @@ long; a CI log keeps lines it can read.
    own Ready reason when it has one, else `InUse: <Kind>/<name>` for a noted object still present that names it
    (Decision 4), else no reason, as for a store that an object outside the App holds; ■ kept, for a store that stays.
 4. **Waits on.** `gc.Names(u)` lists every object `u`'s spec names, each once with the field that names it, in field
-   order: a Function's or a Job's bindings (`kv`, `sql`, `blob`, `lake`, `addon`, `config`, `job`) and links, a
-   Workflow's step bindings, a Lake's `blob` and `config`, a Route rule's `function`, `site` and static `bucket`, a
-   Site's blob `bucket`, its rules' `bucket` and its runtime `configMap`, an EventSource's `bucket` and sql `database`,
-   and a Sensor's dependency `source` and its trigger's `workflow` and `function`. An `addon` binding names an
+   order: a Function's or a Job's bindings (`kv`, `sql`, `blob`, `lake`, `addon`, `config`, `job`, `secret`), links
+   and root entries' `ref`, a Workflow's step bindings, a Lake's `blob`, `config` and `secret`, a Route's
+   `auth.provider` and its rules' `function`, `site` and static `bucket`, a Site's blob `bucket`, its rules' `bucket`
+   and its runtime `configMap`, an EventSource's `bucket` and sql `database`, and a Sensor's dependency `source` and
+   its `actions[]`' `workflow` and `function`. A Secret or an OIDCProvider is no App part, so no row waits on one. An `addon` binding names an
    AddonObject by name, which the view matches to the App's add-on part of that name. A row waits on the first part of
    the App that `u` names and that is not settled. `uses` keeps its own set of kinds and fields, read through `Names`,
    so `InUse` answers as before.
@@ -128,8 +129,9 @@ long; a CI log keeps lines it can read.
 6. **Lines.** Off a terminal, the lines of ADR-0217 Decisions 8 and 9 (as ADR-0337 amends Decision 9), plus ` after <d>` on a part's line when it
    settles, and one `App/<app> requires App/<name>: <text>` line per change of a requirement's state; lipgloss renders
    no escape there.
-7. **Exits.** As today: deploy exits at the switch, 1 on a Failed revision, and delete once its tree is gone. The last
-   draw stays on screen, so a post-hook still due shows there.
+7. **Exits.** This ADR decides no exit: ADR-0217 Decisions 8 and 9 stay the rule, and Decision 8's wait for the
+   post-hooks stays unbuilt, as the `differs` row of `docs/behavior/apps.md` records. Today deploy returns at the
+   switch, so its last draw, which stays on screen, shows a post-hook still due.
 
 ## Design model
 
