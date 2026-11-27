@@ -30,6 +30,7 @@ func (d *deletes) DeleteObject(_ context.Context, ref nodeapi.ObjectRef) error {
 }
 
 // A delete that the control plane did not take is sent again, until it does.
+// oracle: docs/design/multinode/writeback.fizz#TheControlPlaneConverges
 func TestADeleteTheControlPlaneDidNotTakeIsSentAgain(t *testing.T) {
 	ctx := context.Background()
 	cp := &deletes{away: true}
@@ -38,7 +39,7 @@ func TestADeleteTheControlPlaneDidNotTakeIsSentAgain(t *testing.T) {
 	a.id.Store(&identity{name: "vm1", client: cp})
 	run := &v1.JobRun{}
 	run.Name, run.Namespace, run.UID = "report-1", "e1", "u1"
-	a.push(ctx, store.Deleted, run)
+	require.NoError(t, a.push(ctx, store.Deleted, run), "a delete goes into the queue, not into an error")
 	require.Len(t, cp.asked, 1)
 	a.resendDeletes(ctx)
 	require.Len(t, a.unsent, 1, "still away")

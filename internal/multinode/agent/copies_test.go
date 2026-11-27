@@ -157,6 +157,38 @@ func jobRun(name, of v1.ObjectName) *v1.JobRun {
 	return r
 }
 
+// oracle: docs/design/multinode/writeback.fizz#NoRunIsLost
+func TestASnapshotWaitsForTheRunsTheNodeMade(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t, refuseOnCP("made", 3))
+	n.start(t)()
+	_, err := n.node.Create(ctx, jobRun("made", "report"))
+	require.NoError(t, err)
+	n.forgetTimeline(t)
+	defer n.start(t)()
+	onCP(t, n, v1.KindJobRun, "made", "a run the node made reaches the control plane before the snapshot", anyJobRun)
+	onNode(t, n, v1.KindJobRun, "made", "and stays on the node", anyJobRun)
+}
+
+// oracle: docs/design/multinode/writeback.fizz#NoRunIsLost
+func TestARunMadeDuringASnapshotStays(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t, refuseOnCP("late", 1))
+	n.start(t)()
+	s := &spy{Connector: longpoll.NewConnector()}
+	s.onSnapshot = func() {
+		if s.snapshots.Load() == 1 {
+			_, _ = n.node.Create(ctx, jobRun("late", "report"))
+		}
+	}
+	n.forgetTimeline(t)
+	defer n.startVia(t, s)()
+	onCP(t, n, v1.KindJobRun, "late", "a run the node made during its snapshot reaches the control plane", anyJobRun)
+	onNode(t, n, v1.KindJobRun, "late", "and stays on the node", anyJobRun)
+}
+
+func anyJobRun(*v1.JobRun) bool { return true }
+
 func TestANodesCopyIsTheControlPlanesObject(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)
@@ -261,6 +293,7 @@ func TestANodeReportsEverythingAgainAfterASnapshot(t *testing.T) {
 	onCP(t, n, v1.KindConfigMap, "child", "and the child", func(*v1.ConfigMap) bool { return true })
 }
 
+// oracle: docs/design/multinode/writeback.fizz#APersonsDecisionStays
 func TestAPersonsDecisionOnARunReachesItsNode(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)
@@ -347,6 +380,7 @@ func TestARunThatANodeStartsReachesTheControlPlane(t *testing.T) {
 }
 
 // What a node sends late, or of an object the control plane no longer holds, changes nothing of the one it holds now.
+// oracle: docs/design/multinode/writeback.fizz#NoStatusOnAnotherObject
 func TestANodesLateWriteChangesNothingOfAnotherObject(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)

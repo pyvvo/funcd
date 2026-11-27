@@ -111,6 +111,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 }
 
 // oracle: docs/design/multinode/join.fizz#ATokenJoinsOnce
+// oracle: docs/design/multinode/writeback.fizz#TheControlPlaneConverges
 func TestANodeJoinsFollowsItsNamespaceAndReportsBack(t *testing.T) {
 	ctx := context.Background()
 	r := startCP(t)
@@ -317,6 +318,19 @@ func (c spyClient) Feed(ctx context.Context, since uint64, timeline string, wait
 		f = c.s.onFeed(f)
 	}
 	return f, err
+}
+
+// refuseOnCP makes the control plane's store refuse the first n writes of the object named name, as an outage would.
+func refuseOnCP(name v1.ObjectName, n int) func(*multinode.Config) {
+	return func(c *multinode.Config) {
+		c.Store = refusingCP{refusing: &refusing{Store: c.Store, refuse: map[v1.ObjectName]int{name: n}}, ChangeLog: c.Store.(store.ChangeLog)}
+	}
+}
+
+// refusingCP is refusing for a control plane, whose store keeps the change log.
+type refusingCP struct {
+	*refusing
+	store.ChangeLog
 }
 
 // refusing is a node's store that refuses the first writes of the objects named in refuse, as a full disk would.

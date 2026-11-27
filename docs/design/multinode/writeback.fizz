@@ -1,0 +1,189 @@
+---
+# What a worker node writes back (ADR-0366, FEAT-0002 F244). The node runs object O, which a person made on the control
+# plane, and writes O's status back by O's uid; the control plane keeps the decision a person recorded in that status
+# (an approval). A person may delete O and make it again under its name, with a new uid, while a status write of the old
+# one is in flight. The node makes run R with no owner, at any time, and writes it back whole. Before a snapshot it writes
+# back what it made, and takes the snapshot only once that is done; the snapshot then removes from the node what the
+# control plane does not hold, but what the node made since it wrote back. The node deletes child C, which it
+# owns, and sends the delete again at each pass until the control plane takes it. One write back fails at most, and
+# the pass after it sends again. Every action is atomic. Environment: the control plane's status write is
+# conditional on the version it read (Status retries a conflict), one step here; the feed brings the control plane's O
+# to the node in one step; the node forgets what it wrote back of a copy it removes.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 18
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant no-uid-check: NoStatusOnAnotherObject
+# mutant no-keep-decisions: APersonsDecisionStays
+# mutant snapshot-despite-a-failed-push: NoRunIsLost
+# mutant prune-what-came-since: NoRunIsLost
+# mutant no-resend: liveness
+
+# no-uid-check: the control plane writes a status to the object of its name, whatever its uid. no-keep-decisions: a
+# status write replaces the decision the control plane recorded. snapshot-despite-a-failed-push: the node takes its
+# snapshot although the write back of what it made failed. prune-what-came-since: the snapshot removes a run the node
+# made after it wrote back what it had made. no-resend: a delete the control plane did not take is not sent again.
+MUTANT = ""
+
+FAILS = 1
+
+action Init:
+    phase = "follow"
+    cpUID = 1
+    cpStatus = 0
+    cpDecision = False
+    recreated = False
+    nUID = 1
+    nStatus = 0
+    nDecision = False
+    sent = 0
+    infUID = 0
+    infStatus = 0
+    infDecision = False
+    rMade = False
+    rLocal = False
+    rCP = False
+    rListed = False
+    cLocal = True
+    cCP = True
+    unsent = False
+    snaps = 0
+    fails = 0
+    statusOnAnother = False
+    decisionLost = False
+
+atomic action Reconcile:
+    require nStatus < 2
+    nStatus += 1
+
+atomic fair action PushStatus:
+    require infUID == 0 and nStatus != sent
+    infUID = nUID
+    infStatus = nStatus
+    infDecision = nDecision
+
+atomic fair action StatusArrives:
+    require infUID != 0
+    failed = False
+    if fails < FAILS:
+        failed = any [False, True]
+    if failed:
+        fails += 1
+        infUID = 0
+        return
+    if infUID == cpUID or MUTANT == "no-uid-check":
+        if infUID != cpUID:
+            statusOnAnother = True
+        cpStatus = infStatus
+        if MUTANT == "no-keep-decisions":
+            if cpDecision and not infDecision:
+                decisionLost = True
+            cpDecision = infDecision
+        if infUID == nUID:
+            sent = infStatus
+    infUID = 0
+
+atomic action Decide:
+    require not cpDecision
+    cpDecision = True
+
+atomic action Recreate:
+    require not recreated
+    recreated = True
+    cpUID = 2
+    cpStatus = 0
+    cpDecision = False
+
+atomic fair action Feed:
+    require nUID != cpUID or nDecision != cpDecision
+    if nUID != cpUID:
+        nUID = cpUID
+        nStatus = 0
+        sent = 0
+    nDecision = cpDecision
+
+atomic action MakeRun:
+    require not rMade
+    rMade = True
+    rLocal = True
+
+atomic fair action PushRun:
+    require rLocal and not rCP and phase == "follow"
+    failed = False
+    if fails < FAILS:
+        failed = any [False, True]
+    if failed:
+        fails += 1
+        return
+    rCP = True
+
+atomic action StartSnapshot:
+    require phase == "follow" and snaps < 1
+    snaps += 1
+    phase = "push-made"
+
+atomic fair action PushMade:
+    require phase == "push-made"
+    rListed = rLocal
+    ok = True
+    if rLocal and not rCP:
+        failed = False
+        if fails < FAILS:
+            failed = any [False, True]
+        if failed:
+            fails += 1
+            ok = False
+        else:
+            rCP = True
+    if ok or MUTANT == "snapshot-despite-a-failed-push":
+        phase = "snapshot"
+
+atomic fair action Snapshot:
+    require phase == "snapshot"
+    if rLocal and not rCP and (rListed or MUTANT == "prune-what-came-since"):
+        rLocal = False
+    if nUID != cpUID:
+        nUID = cpUID
+        nStatus = 0
+        sent = 0
+    nDecision = cpDecision
+    phase = "follow"
+
+atomic action DeleteChild:
+    require cLocal
+    cLocal = False
+    unsent = True
+
+atomic fair action SendDelete:
+    require unsent
+    failed = False
+    if fails < FAILS:
+        failed = any [False, True]
+    if failed:
+        fails += 1
+        if MUTANT == "no-resend":
+            unsent = False
+        return
+    cCP = False
+    unsent = False
+
+always assertion NoStatusOnAnotherObject:
+    return not statusOnAnother
+
+always assertion APersonsDecisionStays:
+    return not decisionLost
+
+always assertion NoRunIsLost:
+    return not rMade or rLocal or rCP
+
+eventually always assertion TheControlPlaneConverges:
+    if rMade and not rCP:
+        return False
+    if not cLocal and cCP:
+        return False
+    if nUID == cpUID and nStatus != cpStatus:
+        return False
+    return phase == "follow"

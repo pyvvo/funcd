@@ -18,7 +18,7 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// report writes back what the node's reconcilers change (FEAT-0002 decision 4): the status of each control-plane object,
+// report writes back what the node's reconcilers change (ADR-0366 Decision 4): the status of each control-plane object,
 // and the whole of each child the node owns, as the local store's watch shows them. A pass every resyncEvery catches
 // what a failed write missed.
 func (a *Agent) report(ctx context.Context) {
@@ -38,7 +38,7 @@ func (a *Agent) report(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case ev := <-events:
-			a.push(ctx, ev.Type, ev.Object)
+			_ = a.push(ctx, ev.Type, ev.Object)
 		case <-a.resynced:
 			a.resyncReports(ctx)
 			dropped = a.dropChildren(ctx)
@@ -101,17 +101,20 @@ func (a *Agent) resyncReports(ctx context.Context) {
 				continue
 			}
 			for _, obj := range res.Items {
-				a.push(ctx, store.Modified, obj)
+				_ = a.push(ctx, store.Modified, obj)
 			}
 		}
 	}
 }
 
-// pushMade writes back the objects the node made with no owner that the control plane does not hold yet.
-func (a *Agent) pushMade(ctx context.Context) {
+// pushMade writes back the objects the node made with no owner that the control plane does not hold yet, and returns the
+// keys of every one it holds. Each went through, or the control plane refused it (400, 403 or 409); any other failure is
+// the error, and the node takes no snapshot, so the prune after a snapshot never drops one (ADR-0366 Decision 5).
+func (a *Agent) pushMade(ctx context.Context) (map[string]bool, error) {
 	a.mu.Lock()
 	namespaces := slices.Collect(maps.Keys(a.mine))
 	a.mu.Unlock()
+	made := map[string]bool{}
 	for _, ns := range namespaces {
 		for _, k := range v1.AllKinds() {
 			if !k.Namespaced() || !multinode.WrittenBack(k, false) {
@@ -119,22 +122,32 @@ func (a *Agent) pushMade(ctx context.Context) {
 			}
 			res, err := a.cfg.Store.List(ctx, k.GVK(), store.ListOptions{Namespace: ns})
 			if err != nil {
-				continue
+				return nil, err
 			}
 			for _, obj := range res.Items {
-				if len(obj.GetObjectMeta().OwnerReferences) == 0 {
-					a.push(ctx, store.Modified, obj)
+				m := obj.GetObjectMeta()
+				if len(m.OwnerReferences) > 0 {
+					continue
+				}
+				made[key(k, ns, m.Name)] = true
+				if err := a.push(ctx, store.Modified, obj); err != nil && !slices.Contains(refusals, fault.KindOf(err)) {
+					return nil, err
 				}
 			}
 		}
 	}
+	return made, nil
 }
 
-// push writes one local change back, once: the pushed map keeps what the control plane already has.
-func (a *Agent) push(ctx context.Context, typ store.EventType, obj v1.Object) {
+// refusals are the control plane's answers that refuse a node's write for good: the write goes no further.
+var refusals = []fault.Kind{fault.Invalid, fault.Forbidden, fault.Conflict} //nolint:gochecknoglobals // a constant list
+
+// push writes one local change back, once: the pushed map keeps what the control plane already has. The error is the
+// control plane's answer, or the link's.
+func (a *Agent) push(ctx context.Context, typ store.EventType, obj v1.Object) error {
 	m := obj.GetObjectMeta()
 	if !a.isMine(m.Namespace) {
-		return
+		return nil
 	}
 	kind := obj.GroupVersionKind().Kind
 	k := key(kind, m.Namespace, m.Name)
@@ -144,38 +157,39 @@ func (a *Agent) push(ctx context.Context, typ store.EventType, obj v1.Object) {
 		if whole || m.DeletionTime != nil { // the node ended the deletion the control plane holds
 			a.sendDelete(ctx, k, nodeapi.ObjectRef{Kind: kind, Namespace: m.Namespace, Name: m.Name, UID: m.UID})
 		}
-		return
+		return nil
 	}
 	raw, err := json.Marshal(obj)
 	if err != nil {
-		return
+		return nil
 	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) != nil {
-		return
+		return nil
 	}
 	if whole {
 		fp := fingerprint(fields)
 		if a.wasPushed(k, fp) {
-			return
+			return nil
 		}
 		if err := a.client().PutObject(ctx, nodeapi.ObjectWrite{Kind: kind, Object: raw}); err != nil {
 			a.log.WarnContext(ctx, "node agent: write a child back", "kind", kind, "name", m.Name, "error", err)
-			return
+			return err
 		}
 		a.remember(k, fp)
-		return
+		return nil
 	}
 	status := fields["status"]
 	if len(status) == 0 || string(status) == "{}" || a.wasPushed(k, string(status)) {
-		return
+		return nil
 	}
 	w := nodeapi.StatusWrite{Kind: kind, Namespace: m.Namespace, Name: m.Name, UID: m.UID, Status: status}
 	if err := a.client().Status(ctx, w); err != nil {
 		a.log.WarnContext(ctx, "node agent: write a status back", "kind", kind, "name", m.Name, "error", err)
-		return
+		return err
 	}
 	a.remember(k, string(status))
+	return nil
 }
 
 // sendDelete deletes on the control plane the object ref names, which the node deleted; one it did not take is sent again

@@ -260,8 +260,12 @@ func (a *Agent) saveCursor(timeline string, rev uint64) {
 // syncAll replaces the local copy with a snapshot of every namespace placed on the node. The runs and records the node
 // made go to the control plane first, so the snapshot holds them, unless the store is new or restored to an older point.
 func (a *Agent) syncAll(ctx context.Context) error {
+	var made map[string]bool
 	if a.timeline != "" || a.restored {
-		a.pushMade(ctx)
+		var err error
+		if made, err = a.pushMade(ctx); err != nil {
+			return err
+		}
 	}
 	snap, err := a.client().Snapshot(ctx, "")
 	if err != nil {
@@ -320,7 +324,7 @@ func (a *Agent) syncAll(ctx context.Context) error {
 		return err // a snapshot cut short saves no revision, so the next start takes it again
 	}
 	for ns := range placed {
-		a.prune(ctx, ns, seen)
+		a.prune(ctx, ns, seen, made)
 	}
 	a.pruneClusterKinds(ctx, seen)
 	if failed > 0 { // a snapshot saves no revision until it is whole, so it is taken again (ADR-0365 Decision 6)
@@ -413,7 +417,7 @@ func (a *Agent) removeNamespace(ctx context.Context, ns v1.NamespaceName) {
 	a.mu.Lock()
 	delete(a.mine, ns)
 	a.mu.Unlock()
-	a.prune(ctx, ns, map[string]bool{})
+	a.prune(ctx, ns, map[string]bool{}, nil)
 	if err := a.cfg.Store.Delete(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns), ""); err != nil && fault.KindOf(err) != fault.NotFound {
 		a.log.WarnContext(ctx, "node agent: remove a Namespace", "namespace", ns, "error", err)
 	}

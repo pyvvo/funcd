@@ -113,6 +113,7 @@ func TestANodeOutlivesTheRestoreOfItsControlPlane(t *testing.T) {
 }
 
 // A run the node made while the control plane was away outlives the snapshot the node starts again from.
+// oracle: docs/design/multinode/writeback.fizz#NoRunIsLost
 func TestARunTheNodeMadeOutlivesASnapshot(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)

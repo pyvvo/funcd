@@ -6,7 +6,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// childKinds are the kinds a node writes back whole as children it owns (FEAT-0002 decision 5): what its reconcilers
+// childKinds are the kinds a node writes back whole as children it owns (ADR-0366 Decision 1): what its reconcilers
 // make with an ownerReference. They are Revisions, AppRevisions and the Invocations of App hooks, the parts of an App
 // (its stores, Functions, Jobs, Workflows, EventSources, Sensors, Routes, Sites, Lakes, add-on objects, ConfigMaps and
 // BackupSchedules), the Functions of Workflow steps, the stores a Function, a Job or a Workflow owns, the Routes of an

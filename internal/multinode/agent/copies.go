@@ -147,21 +147,23 @@ func gone(err error) error {
 // holds, so what it revoked or retired while the node was behind goes on the node too.
 func (a *Agent) pruneClusterKinds(ctx context.Context, keep map[string]bool) {
 	for _, k := range multinode.NodeKinds() {
-		a.pruneKind(ctx, k, "", keep)
+		a.pruneKind(ctx, k, "", keep, nil)
 	}
 }
 
 // prune removes the local objects of ns the control plane does not hold (not in keep). The node's own children stay: its
-// reconcilers own them.
-func (a *Agent) prune(ctx context.Context, ns v1.NamespaceName, keep map[string]bool) {
+// reconcilers own them. So does an object the node made with no owner that made does not name: made are those it wrote
+// back before the snapshot, and one made since reaches the control plane at the next pass (ADR-0366 Decision 5). With
+// made nil, the snapshot decides every one, as for a store that is new or restored.
+func (a *Agent) prune(ctx context.Context, ns v1.NamespaceName, keep, made map[string]bool) {
 	for _, k := range v1.AllKinds() {
 		if k.Namespaced() {
-			a.pruneKind(ctx, k, ns, keep)
+			a.pruneKind(ctx, k, ns, keep, made)
 		}
 	}
 }
 
-func (a *Agent) pruneKind(ctx context.Context, k v1.Kind, ns v1.NamespaceName, keep map[string]bool) {
+func (a *Agent) pruneKind(ctx context.Context, k v1.Kind, ns v1.NamespaceName, keep, made map[string]bool) {
 	res, err := a.cfg.Store.List(ctx, k.GVK(), store.ListOptions{Namespace: ns})
 	if err != nil {
 		a.log.WarnContext(ctx, "node agent: list for a prune", "kind", k, "namespace", ns, "error", err)
@@ -169,7 +171,8 @@ func (a *Agent) pruneKind(ctx context.Context, k v1.Kind, ns v1.NamespaceName, k
 	}
 	for _, obj := range res.Items {
 		m := obj.GetObjectMeta()
-		if len(m.OwnerReferences) > 0 || keep[key(k, ns, m.Name)] {
+		name := key(k, ns, m.Name)
+		if len(m.OwnerReferences) > 0 || keep[name] || made != nil && multinode.WrittenBack(k, false) && !made[name] {
 			continue
 		}
 		if err := a.remove(ctx, obj); err != nil && !errors.Is(err, errHeld) {

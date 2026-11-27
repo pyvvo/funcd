@@ -387,9 +387,9 @@ func (s *Handler) Report(ctx context.Context, node v1.ObjectName, in nodeapi.Nod
 	})
 }
 
-// Status writes a node's status back (decision 4): the object's status becomes the node's, but the decisions the control
+// Status writes a node's status back (ADR-0366 Decision 2): the object's status becomes the node's, but the decisions the control
 // plane records there; nothing else of it changes. The object must sit in a namespace placed on the node, be the one the
-// node runs, by its uid, and pass validation (decision 5).
+// node runs, by its uid, and pass validation.
 func (s *Handler) Status(ctx context.Context, node v1.ObjectName, in nodeapi.StatusWrite) error {
 	const op = "multinode.status"
 	if err := s.mustBePlacedOn(ctx, op, in.Namespace, node); err != nil {
