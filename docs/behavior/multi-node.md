@@ -14,10 +14,9 @@ stateDiagram-v2
     Ready --> [*] : deleted, once no Namespace names it
 ```
 
-The machine is a WorkerNode's phase, which the control plane writes from its node's polls; the node never dials in the other
-direction. A namespace's own objects follow their kinds' chapters, on the node that runs them. The protocol has no ADR yet: its rows
-cite the decider's choices of 2026-11-16 and their feature issues. It has two drivers, HTTPS and NATS: each row holds on both, and
-names an answer that differs. A node's workers: [Workers](workers.md). Its backups: [Disaster
+The machine is a WorkerNode's phase, which the control plane writes from its node's polls; it never dials a node. A
+namespace's own objects follow their kinds' chapters, on the node that runs them. Each row holds on both drivers, HTTPS and
+NATS, and names an answer that differs. A node's workers: [Workers](workers.md). Its backups: [Disaster
 recovery](disaster-recovery.md).
 
 | Where | What happens | Time | You see | Status | Source |
@@ -31,7 +30,7 @@ recovery](disaster-recovery.md).
 | Placing a namespace | `spec.node` names a declared WorkerNode; the control plane's reconcilers and owner GC skip the namespace, and the node runs it whole | none | `spec.node names WorkerNode <n>, which is not declared` | decided | decider 2026-11-16, #1483, `TestPlacementSkipsWhatAnotherNodeRuns` |
 | A control plane alone | `funcd server` runs no namespace: it needs no container runtime, opens no data plane, and an unplaced namespace's objects wait | none | no phase on the objects | decided | decider 2026-11-16, #1478, `TestAControlPlaneAloneRunsNoNamespace` |
 | Moving a namespace | Refused while it holds objects, since its data stays on the node that ran it; an empty namespace moves. Its data moves with workload backups, restored on the new node | none | 409 `holds objects, so its spec.node cannot change` | accepted | `TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects` |
-| Following | The node takes a snapshot, then long-polls the change log, and keeps its revision on disk, so a restart of either side resumes with nothing lost | `DefaultWait` 25 s per poll | `node agent: feed resumed` | decided | decider 2026-11-16, #1480, `TestANodeResumesFromItsSavedRevision` |
+| Following | The node takes a snapshot, then long-polls the change log, and keeps its revision on disk, so a restart of either side resumes with nothing lost; a change it fails to write brings a snapshot | `DefaultWait` 25 s per poll | `node agent: feed resumed` | decided | decider 2026-11-16, #1480, `TestANodeResumesFromItsSavedRevision`, `TestAChangeTheNodeFailedToWriteComesWithASnapshot` |
 | A write on the control plane | It wakes only the nodes it concerns: its namespace's node, unless that node wrote it, or all nodes for a Namespace or a kind they all follow | none | none | accepted | `TestAWriteWakesOnlyTheNodesItConcerns` |
 | An old revision | The log keeps the last `defaultChangeRetain` 100000 records; a node behind that gets 410, or 412 over NATS, and takes a new snapshot | none | 410; 412 | accepted | `TestChangeLogCompactsAndRefusesARevisionBelowItsFloor` |
 | A copy on a node | It is the control plane's object: the same uid, generation and creation time, as a child a node makes is on the control plane. One created again under its name replaces the node's, which goes first with its data | none | one uid on both | accepted | `TestANodesCopyIsTheControlPlanesObject` |

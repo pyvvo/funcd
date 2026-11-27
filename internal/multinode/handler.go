@@ -64,11 +64,12 @@ func (s *Handler) Admit(ctx context.Context, p nodeapi.Peer) error {
 	}
 	n, ok := obj.(*v1.WorkerNode)
 	var cert *v1.NodeCertificate
+	renewed := false
 	switch {
 	case ok && n.Status.Certificate.Is(p.Serial):
 		cert = n.Status.Certificate
 	case ok && n.Status.RenewedCertificate.Is(p.Serial):
-		cert = n.Status.RenewedCertificate
+		cert, renewed = n.Status.RenewedCertificate, true
 	default:
 		return fault.Unauthorizedf(op, "this certificate is not the node's current one; join again")
 	}
@@ -76,7 +77,7 @@ func (s *Handler) Admit(ctx context.Context, p nodeapi.Peer) error {
 	if s.cfg.Now().After(time.Time(cert.NotAfter)) {
 		return fault.Unauthorizedf(op, "this node certificate ended at %s; join again", time.Time(cert.NotAfter).Format(time.RFC3339))
 	}
-	if cert == n.Status.RenewedCertificate {
+	if renewed {
 		if err := s.useRenewed(ctx, p.Node, p.Serial); err != nil {
 			return err
 		}

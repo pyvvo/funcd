@@ -227,12 +227,19 @@ func (a *Agent) follow(ctx context.Context) error {
 			a.log.InfoContext(ctx, "node agent: feed resumed", "since", a.cursor)
 		}
 		backoff, failing = retryMin, false
+		applied := true
 		for _, c := range feed.Changes {
-			a.apply(ctx, c)
+			if err := a.apply(ctx, c); err != nil {
+				applied = false
+			}
 		}
 		a.fetchMissingKeys(ctx)
 		if ctx.Err() != nil {
 			return nil // a change cut short is applied again after the restart
+		}
+		if !applied { // a snapshot brings what the node failed to write, and saves the revision then (ADR-0365 Decision 6)
+			resync = true
+			continue
 		}
 		if feed.Rev > a.cursor {
 			a.saveCursor(a.timeline, feed.Rev)
@@ -335,14 +342,13 @@ func (a *Agent) syncNamespace(ctx context.Context, ns v1.NamespaceName) {
 	}
 }
 
-// apply applies one feed record to the local copy.
-func (a *Agent) apply(ctx context.Context, c store.Change) {
+// apply applies one feed record to the local copy; an error leaves the copy short of it.
+func (a *Agent) apply(ctx context.Context, c store.Change) error {
 	if c.Kind == v1.KindNamespace {
-		a.applyNamespace(ctx, c)
-		return
+		return a.applyNamespace(ctx, c)
 	}
 	if c.Namespace != "" && !a.isMine(c.Namespace) {
-		return
+		return nil
 	}
 	var err error
 	if c.Type == store.Deleted {
@@ -353,11 +359,12 @@ func (a *Agent) apply(ctx context.Context, c store.Change) {
 	if err != nil {
 		a.log.WarnContext(ctx, "node agent: apply a change", "rev", c.Rev, "kind", c.Kind, "namespace", c.Namespace, "name", c.Name, "error", err)
 	}
+	return err
 }
 
 // applyNamespace follows a Namespace record: a namespace placed on the node starts from its snapshot, and one that left
 // the node goes.
-func (a *Agent) applyNamespace(ctx context.Context, c store.Change) {
+func (a *Agent) applyNamespace(ctx context.Context, c store.Change) error {
 	ns := v1.NamespaceName(c.Name)
 	placed := false
 	if c.Type != store.Deleted {
@@ -371,7 +378,7 @@ func (a *Agent) applyNamespace(ctx context.Context, c store.Change) {
 	case placed:
 		if err := a.upsert(ctx, c); err != nil {
 			a.log.WarnContext(ctx, "node agent: apply a Namespace", "namespace", ns, "error", err)
-			return
+			return err
 		}
 		if !was {
 			a.mu.Lock()
@@ -383,6 +390,7 @@ func (a *Agent) applyNamespace(ctx context.Context, c store.Change) {
 	case was:
 		a.removeNamespace(ctx, ns)
 	}
+	return nil
 }
 
 // removeNamespace drops every local object of a namespace that left the node, then its Namespace.

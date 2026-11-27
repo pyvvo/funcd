@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -69,6 +70,7 @@ func startCP(t *testing.T, opts ...func(*multinode.Config)) rig {
 	for _, o := range opts {
 		o(&cfg)
 	}
+	cp = cfg.Store
 	caDir := t.TempDir()
 	cluster := newCluster(t, cfg, caDir, "127.0.0.1:0")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -220,50 +222,102 @@ func TestAJoinRefusesAControlPlaneWithAnotherCA(t *testing.T) {
 	require.ErrorContains(t, err, "does not present the CA the join token names")
 }
 
+// oracle: docs/design/multinode/feed.fizz#TheCursorNeverPassesWhatTheNodeApplied
+// oracle: docs/design/multinode/feed.fizz#TheNodeConverges
 func TestANodeResumesFromItsSavedRevision(t *testing.T) {
 	ctx := context.Background()
-	r := startCP(t)
-	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	n := joinNode(t)
+	stop := n.start(t)
+	_, err := n.cp.Create(ctx, configMap("e1", "a", "1"))
 	require.NoError(t, err)
-	dir := t.TempDir()
-	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
-	require.NoError(t, err)
-	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
-	ns.Name, ns.Spec.Node = "e1", "vm1"
-	_, err = r.cp.Create(ctx, ns)
-	require.NoError(t, err)
-
-	run := func() (context.CancelFunc, chan struct{}) {
-		a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Version: "test"})
-		require.NoError(t, err)
-		actx, stop := context.WithCancel(ctx)
-		done := make(chan struct{})
-		go func() { _ = a.Run(actx); close(done) }()
-		return stop, done
-	}
-	stop, done := run()
-	_, err = r.cp.Create(ctx, configMap("e1", "a", "1"))
-	require.NoError(t, err)
-	eventually(t, "the first change arrives", func() bool {
-		_, err := r.node.Get(ctx, v1.KindConfigMap.GVK(), "e1", "a")
-		return err == nil
-	})
+	onNode(t, n, v1.KindConfigMap, "a", "the first change arrives", anyConfigMap)
 	stop()
-	<-done
-	for _, n := range []string{"b", "c", "d"} {
-		_, err = r.cp.Create(ctx, configMap("e1", n, "1"))
+	for _, name := range []v1.ObjectName{"b", "c", "d"} {
+		_, err = n.cp.Create(ctx, configMap("e1", string(name), "1"))
 		require.NoError(t, err)
 	}
-	stop, done = run()
-	defer func() { stop(); <-done }()
-	eventually(t, "every change made while the node was stopped arrives", func() bool {
-		for _, n := range []string{"b", "c", "d"} {
-			if _, err := r.node.Get(ctx, v1.KindConfigMap.GVK(), "e1", v1.ObjectName(n)); err != nil {
-				return false
-			}
-		}
-		return true
-	})
+	defer n.start(t)()
+	for _, name := range []v1.ObjectName{"b", "c", "d"} {
+		onNode(t, n, v1.KindConfigMap, name, "every change made while the node was stopped arrives", anyConfigMap)
+	}
+}
+
+func TestANodeFollowsAgainOnceItsControlPlaneIsBack(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t)
+	defer n.start(t)()
+	_, err := n.cp.Create(ctx, configMap("e1", "a", "1"))
+	require.NoError(t, err)
+	onNode(t, n, v1.KindConfigMap, "a", "a change arrives", anyConfigMap)
+	addr := n.cluster.Addr()
+	n.cancelCP()
+	back := newCluster(t, multinode.Config{Store: n.cp, LocalNode: "local", LocalRuns: true, Master: []byte(cpMaster)}, n.caDir, addr)
+	cpctx, stopCP := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { _ = back.Run(cpctx); close(done) }()
+	defer func() { stopCP(); <-done }()
+	_, err = n.node.Get(ctx, v1.KindConfigMap.GVK(), "e1", "a")
+	require.NoError(t, err, "the node keeps what it holds while its control plane is away")
+	_, err = n.cp.Create(ctx, configMap("e1", "b", "1"))
+	require.NoError(t, err)
+	onNode(t, n, v1.KindConfigMap, "b", "the node follows again once its control plane is back", anyConfigMap)
+}
+
+// oracle: docs/design/multinode/feed.fizz#TheNodeConverges
+func TestANodeBehindTheChangeLogsFloorTakesASnapshot(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t, func(c *multinode.Config) { c.Store = store.New(memory.New(), store.WithChangeLog(1)) })
+	n.start(t)()
+	for i := range 1100 { // past a compaction, which runs every 1024 revisions
+		_, err := n.cp.Create(ctx, configMap("other", "c"+strconv.Itoa(i), "1"))
+		require.NoError(t, err)
+	}
+	_, err := n.cp.Create(ctx, configMap("e1", "late", "1"))
+	require.NoError(t, err)
+	defer n.start(t)()
+	onNode(t, n, v1.KindConfigMap, "late", "a node whose revision the change log dropped takes a snapshot", anyConfigMap)
+}
+
+// refusing is a node's store that refuses the first writes of the objects named in refuse, as a full disk would.
+type refusing struct {
+	store.Store
+	mu     sync.Mutex
+	refuse map[v1.ObjectName]int
+}
+
+func (s *refusing) refused(obj v1.Object) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if name := obj.GetObjectMeta().Name; s.refuse[name] > 0 {
+		s.refuse[name]--
+		return fault.Unavailablef("test.store", "the write of %s is refused", name)
+	}
+	return nil
+}
+
+func (s *refusing) Create(ctx context.Context, obj v1.Object) (v1.Object, error) {
+	if err := s.refused(obj); err != nil {
+		return nil, err
+	}
+	return s.Store.Create(ctx, obj)
+}
+
+func (s *refusing) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
+	if err := s.refused(obj); err != nil {
+		return nil, err
+	}
+	return s.Store.Update(ctx, obj)
+}
+
+// oracle: docs/design/multinode/feed.fizz#TheCursorNeverPassesWhatTheNodeApplied
+func TestAChangeTheNodeFailedToWriteComesWithASnapshot(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t)
+	n.node = &refusing{Store: n.node, refuse: map[v1.ObjectName]int{"probe": 1}}
+	defer n.start(t)()
+	_, err := n.cp.Create(ctx, configMap("e1", "probe", "1"))
+	require.NoError(t, err)
+	onNode(t, n, v1.KindConfigMap, "probe", "a change the node failed to write comes with the snapshot it takes then", anyConfigMap)
 }
 
 func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {
