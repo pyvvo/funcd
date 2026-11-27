@@ -22,6 +22,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/app/template"
+	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/pkg/sdk"
@@ -204,9 +205,22 @@ type cliRun struct {
 
 func startCLI(t *testing.T, c *sdk.Client, args ...string) *cliRun {
 	t.Helper()
+	return startCLIOf(t, func(out io.Writer) *cli { return &cli{out: out, client: c, images: hashImages{}} }, args...)
+}
+
+// startLiveCLI is startCLI with funcdctl drawing the App view live, as on a terminal (ADR-0362 Decision 1).
+func startLiveCLI(t *testing.T, c *sdk.Client, args ...string) *cliRun {
+	t.Helper()
+	return startCLIOf(t, func(out io.Writer) *cli {
+		return &cli{out: out, client: c, images: hashImages{}, live: func(io.Writer) bool { return true }}
+	}, args...)
+}
+
+func startCLIOf(t *testing.T, of func(io.Writer) *cli, args ...string) *cliRun {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &cliRun{done: make(chan struct{})}
-	root := newRootCmdFor(&r.out, c, hashImages{})
+	root := newRootCmdOf(of(&r.out))
 	root.SetErr(io.Discard)
 	root.SetArgs(args)
 	go func() {
@@ -607,4 +621,63 @@ func TestAppTreeKinds(t *testing.T) {
 	require.NotContains(t, treeKinds(), v1.KindAddonObject, "the SDK serves no AddonObject route")
 	require.Contains(t, treeKinds(), v1.KindRevision, "a Function's Revisions are the App's grandchildren")
 	require.NotContains(t, treeKinds(), v1.KindSecret)
+}
+
+// planBeforeApply plans one create while the App is not stored, and nothing once it is, as a stamped App plans: a
+// plan line that counts the create proves the dry run came before the apply.
+type planBeforeApply struct{ st store.Store }
+
+func (p planBeforeApply) PlanApp(ctx context.Context, a *v1.App) (v1.AppPlan, error) {
+	if _, err := p.st.Get(ctx, v1.KindApp.GVK(), a.Namespace, a.Name); err == nil {
+		return v1.AppPlan{}, nil
+	}
+	return v1.AppPlan{Revision: "todo-1", Parts: []v1.PlanPart{{Kind: v1.KindFunction, Name: "todo-api", Action: v1.PlanCreate}}}, nil
+}
+
+// scenario: app-view-deploy, through the command — on a terminal, app deploy draws the plan line from a dry run made
+// before the apply, redraws the box as the part turns Ready, and leaves the last draw.
+func TestScenarioAppViewDeployLive(t *testing.T) {
+	t.Parallel()
+	var st store.Store
+	c, _, _ := newTestServerVia(t, nil, func(d *controlplane.Deps) { st, d.Planner = d.Store, planBeforeApply{st: d.Store} })
+	run := startLiveCLI(t, c, "app", "deploy", deployTemplate(t, "1.0.0"), "-n", "team-a")
+	app := waitApplied(t, c, "1.0.0")
+	seedAppRevision(t, st, "todo", app.UID, 1, app.Spec, v1.PhaseDeploying)
+	setAppStatus(t, st, func(s *v1.AppStatus) {
+		s.LatestRevision = "todo-1"
+		s.Children = []v1.AppChild{{Kind: v1.KindFunction, Name: "todo-api", State: v1.AppChildPending, Reason: "Progressing"}}
+		s.Conditions = readyIs(v1.ConditionFalse, "Progressing")
+	})
+	run.waitOut(t, "◐ Function/todo-api")
+	setAppStatus(t, st, func(s *v1.AppStatus) {
+		s.CurrentRevision = "todo-1"
+		s.Children[0].State, s.Children[0].Reason = v1.AppChildReady, ""
+		s.Conditions = readyIs(v1.ConditionTrue, "")
+	})
+	require.NoError(t, run.wait(t))
+	got := run.out.String()
+	requireLines(t, got, "● funcd app deploy", "todo 1.0.0", "plan  1 create · 0 update · 0 prune · 0 hooks", "◐ Function/todo-api")
+	requireLines(t, got, "\x1b[", "✓ Function/todo-api", "create", "App/todo Ready=True")
+}
+
+// scenario: app-view-delete, through the command — on a terminal, app delete draws each noted object deleted with its
+// time, and the stores kept in the last draw.
+func TestScenarioAppViewDeleteLive(t *testing.T) {
+	t.Parallel()
+	c, _, st := newTestServer(t)
+	app := applyTodo(t, c, v1.AppSpec{KV: []v1.KVStoreEntry{{Name: "todo-store"}, {Name: "todo-cache", Deletion: v1.DeletionDelete}}})
+	seedAppRevision(t, st, "todo", app.UID, 1, app.Spec, v1.PhaseReady)
+	seedChild(t, st, v1.KindKVStore, "todo-cache", app, true)
+	seedChild(t, st, v1.KindKVStore, "todo-store", app, false)
+	run := startLiveCLI(t, c, "app", "delete", "todo", "-n", "team-a")
+	require.Eventually(t, func() bool {
+		_, err := c.Get(context.Background(), v1.KindApp, "team-a", "todo")
+		return fault.KindOf(err) == fault.NotFound
+	}, cliWithin, 10*time.Millisecond, "the App is deleted")
+	run.waitOut(t, "● funcd app delete")
+	storeDelete(t, st, v1.KindAppRevision, "todo-1")
+	storeDelete(t, st, v1.KindKVStore, "todo-cache")
+	require.NoError(t, run.wait(t))
+	requireLines(t, run.out.String(), "● funcd app delete", "todo · 2 of 2 gone", "✓ AppRevision/todo-1", "deleted",
+		"✓ KVStore/todo-cache", "deleted", "■ KVStore/todo-store", "kept")
 }

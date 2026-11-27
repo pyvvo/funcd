@@ -229,14 +229,161 @@ func TestScenarioAppViewDelete(t *testing.T) {
 	requireLines(t, out.String(), "shop · 3 of 3 gone · 5s", "■ Bucket/assets", "kept")
 }
 
-// A failed dry run, or a plan that holds a stop, draws no plan line and no action (ADR-0362 Decision 2).
+// A failed dry run, or a plan that holds a stop in any of the Planner's shapes, draws no plan line and no action
+// (ADR-0362 Decision 2, ADR-0220 Decision 5).
 func TestAppViewPlanFallback(t *testing.T) {
 	t.Parallel()
 	require.Nil(t, actions(nil))
-	require.Nil(t, actions(&v1.AppPlan{Parts: []v1.PlanPart{{Kind: v1.KindKVStore, Name: "cart", Reason: "ChildNotOwned"}}}))
+	for _, stop := range []v1.PlanPart{
+		{Kind: v1.KindKVStore, Name: "cart", Action: v1.PlanUpdate, Reason: "ChildNotOwned"},
+		{Kind: v1.KindAppRevision, Name: "shop-7", Action: v1.PlanCreate, Reason: "ChildNotOwned"},
+		{Kind: v1.KindSecret, Name: "keys", Reason: "SecretNotFound"},
+	} {
+		require.Nil(t, actions(&v1.AppPlan{Parts: []v1.PlanPart{{Kind: v1.KindFunction, Name: "api", Action: v1.PlanUpdate}, stop}}), "%+v", stop)
+	}
+	require.Equal(t, map[v1.ObjectRef]v1.PlanAction{{Kind: v1.KindFunction, Name: "api"}: v1.PlanUpdate},
+		actions(&v1.AppPlan{Parts: []v1.PlanPart{{Kind: v1.KindFunction, Name: "api", Action: v1.PlanUpdate}}}))
 	clk := newViewClock()
 	var out bytes.Buffer
 	a := shopApp()
 	require.NoError(t, newAppView(&out, true, clk.now).deploy(a, shopRevision(a, clk.t), actions(nil), nil, appParts(a), nil))
 	require.NotContains(t, out.String(), "plan ")
+}
+
+// The plan line counts the plan's hooks, not the spec's.
+func TestAppViewPlanCountsThePlansHooks(t *testing.T) {
+	t.Parallel()
+	plan := &v1.AppPlan{Parts: []v1.PlanPart{{Kind: v1.KindLake, Name: "events", Action: v1.PlanCreate}}, Hooks: []string{"migrate"}}
+	require.Equal(t, "1 create · 0 update · 0 prune · 1 hooks", planCounts(actions(plan), plan))
+}
+
+// Server text reaches the box escaped, as the lines escape it: a child's reason, a required App's version and the
+// App's own version (ADR-0362 Decision 2).
+func TestAppViewEscapesServerText(t *testing.T) {
+	t.Parallel()
+	clk := newViewClock()
+	var out bytes.Buffer
+	a := shopApp()
+	a.Spec.Version = "1.4.0\x1b[31m"
+	a.Status.Children[1].Reason = "Bad\x1b[2J"
+	a.Spec.Requires = []v1.AppRequirement{{App: "payments", Version: "^2.0"}}
+	payments := &v1.App{ObjectMeta: v1.ObjectMeta{Name: "payments"}, Spec: v1.AppSpec{Version: "2.1.0\x1b[1m"}}
+	require.NoError(t, newAppView(&out, true, clk.now).deploy(a, shopRevision(a, clk.t), nil,
+		map[v1.ObjectName]*v1.App{"payments": payments}, appParts(a), nil))
+	require.NotContains(t, out.String(), "\x1b", "no escape byte reaches the terminal")
+	require.Contains(t, out.String(), `Bad\x1b[2J`)
+}
+
+// A started revision draws its parts even when a required App turns unmet later, and an upgrade that waits draws the
+// waiting line, not the previous revision's parts (ADR-0219 Decision 3).
+func TestAppViewRequiresWaitOnlyBeforeTheStart(t *testing.T) {
+	t.Parallel()
+	clk := newViewClock()
+	a := shopApp()
+	a.Spec.Requires = []v1.AppRequirement{{App: "billing", Version: "^1.0"}}
+	required := map[v1.ObjectName]*v1.App{"billing": nil}
+	var started bytes.Buffer
+	require.NoError(t, newAppView(&started, true, clk.now).deploy(a, shopRevision(a, clk.t), nil, required, appParts(a), nil))
+	require.NotContains(t, started.String(), "waiting for")
+	requireLines(t, started.String(), "✗ App/billing", "does not exist", "PARTS", "✓ KVStore/cart")
+
+	rev := shopRevision(a, clk.t)
+	rev.Status.StartedAt = nil
+	var waiting bytes.Buffer
+	require.NoError(t, newAppView(&waiting, true, clk.now).deploy(a, rev, nil, required, appParts(a), nil))
+	requireLines(t, waiting.String(), "waiting for 1 of 1 required Apps", "PARTS", "⋯ 6 parts wait for the required Apps")
+	require.NotContains(t, waiting.String(), "KVStore/cart  ", "no part row of the previous revision")
+}
+
+// A Lagging part counts as settled, as the server counts it, and keeps its running time; past the deadline the
+// progress line names the App's Ready reason.
+func TestAppViewLaggingAndPastTheDeadline(t *testing.T) {
+	t.Parallel()
+	clk := newViewClock()
+	var out bytes.Buffer
+	a := shopApp()
+	a.Status.Children = append(a.Status.Children, child(v1.KindAddonObject, "net", v1.AppChildLagging, "AwaitingApproval"))
+	a.Status.Conditions = readyIs(v1.ConditionFalse, "ChildNotReady")
+	rev := shopRevision(a, clk.t)
+	v := newAppView(&out, true, clk.now)
+	require.NoError(t, v.deploy(a, rev, nil, nil, appParts(a), nil))
+	clk.add(6 * time.Minute)
+	require.NoError(t, v.deploy(a, rev, nil, nil, appParts(a), nil))
+	got := out.String()
+	requireLines(t, got, "3/7 ready", "◐ AddonObject/net", "Lagging", "AwaitingApproval", "6m0s…")
+	requireLines(t, got, "· ChildNotReady")
+}
+
+// A hook whose last call failed shows ✗ failed.
+func TestAppViewFailedHook(t *testing.T) {
+	t.Parallel()
+	clk := newViewClock()
+	var out bytes.Buffer
+	a := shopApp()
+	a.Spec.Hooks = &v1.AppHooks{PreApply: []v1.AppHook{{Function: "migrate"}}}
+	rev := shopRevision(a, clk.t)
+	rev.Status.Hooks = []v1.AppHookCall{{Point: "preApply", Function: "migrate", Invocation: "inv-1", Phase: v1.PhaseFailed}}
+	require.NoError(t, newAppView(&out, true, clk.now).deploy(a, rev, nil, nil, appParts(a), nil))
+	requireLines(t, out.String(), "✗ preApply Function/migrate", "failed")
+}
+
+// An object that stays shows its own Ready reason; InUse names only what the GC's protections read, so a Route that
+// names a Function holds nothing.
+func TestAppViewDeleteReasons(t *testing.T) {
+	t.Parallel()
+	clk := newViewClock()
+	var out bytes.Buffer
+	stack := &v1.AddonObject{ObjectMeta: v1.ObjectMeta{Namespace: "default", Name: "net"}}
+	stack.Status.Conditions = readyIs(v1.ConditionFalse, "Deleting")
+	fn := &v1.Function{ObjectMeta: v1.ObjectMeta{Namespace: "default", Name: "api"}}
+	route := &v1.Route{ObjectMeta: v1.ObjectMeta{Namespace: "default", Name: "web"},
+		Spec: v1.RouteSpec{Rules: []v1.RouteRule{{Backend: v1.RouteBackend{Function: "api"}}}}}
+	noted := []v1.ObjectRef{{Kind: "InfraStack", Name: "net"}, {Kind: v1.KindFunction, Name: "api"}, {Kind: v1.KindRoute, Name: "web"}}
+	present := map[v1.ObjectRef]v1.Object{noted[0]: stack, noted[1]: fn, noted[2]: route}
+	require.NoError(t, newAppView(&out, true, clk.now).remove("shop", noted, present, nil))
+	got := out.String()
+	requireLines(t, got, "◐ InfraStack/net", "waiting", "Deleting")
+	require.NotContains(t, got, "InUse: Route/web", "a Route does not hold a Function from the GC")
+}
+
+// A box taller than the terminal folds its settled rows into one, so a redraw stays on the screen.
+func TestAppViewFoldsToTheTerminal(t *testing.T) {
+	t.Parallel()
+	clk := newViewClock()
+	var out bytes.Buffer
+	v := newAppView(&out, true, clk.now)
+	v.height = func() int { return 12 }
+	a := shopApp()
+	require.NoError(t, v.deploy(a, shopRevision(a, clk.t), nil, nil, appParts(a), nil))
+	requireLines(t, out.String(), "◐ Function/api", "✓ 2 more ready")
+	require.NotContains(t, out.String(), "✓ KVStore/cart")
+}
+
+// Only a terminal other than TERM=dumb draws live (ADR-0362 Decision 1).
+func TestAppViewLiveFile(t *testing.T) {
+	t.Parallel()
+	require.True(t, liveFile("xterm-256color", true))
+	require.False(t, liveFile("dumb", true))
+	require.False(t, liveFile("xterm-256color", false))
+	require.False(t, liveTerminal(&bytes.Buffer{}))
+}
+
+// Off a terminal, a requirement's change prints a line of its own (ADR-0362 Decision 6).
+func TestAppViewRequirementLines(t *testing.T) {
+	t.Parallel()
+	clk := newViewClock()
+	var out bytes.Buffer
+	v := newAppView(&out, false, clk.now)
+	a := shopApp()
+	a.Spec.Requires = []v1.AppRequirement{{App: "payments", Version: "^2.0"}}
+	payments := &v1.App{ObjectMeta: v1.ObjectMeta{Name: "payments"}, Spec: v1.AppSpec{Version: "2.1.0"}}
+	payments.Status.Phase = v1.PhaseDeploying
+	w := &deployWatch{children: map[string]string{}, requires: map[v1.ObjectName]string{}, times: v.clock,
+		required: map[v1.ObjectName]*v1.App{"payments": payments}}
+	cli := &cli{out: &out}
+	require.NoError(t, cli.report(w, a, nil))
+	payments.Status.Phase, payments.Status.CurrentRevision, payments.Status.LatestRevision, payments.Status.Version = v1.PhaseReady, "p-1", "p-1", "2.1.0"
+	require.NoError(t, cli.report(w, a, nil))
+	require.NoError(t, cli.report(w, a, nil))
+	require.Equal(t, "App/shop requires App/payments: is not Ready (Deploying)\nApp/shop requires App/payments: met\n", out.String())
 }

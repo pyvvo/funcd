@@ -37,6 +37,8 @@ func notNames() map[string]string {
 		"spec.on[].event": "an event of the EventSource", "spec.do[].name": "an action of this Sensor",
 		"spec.do[].on": "a dependency of this Sensor", "spec.timer.events[].name": "an event of this EventSource",
 		"spec.blob.events[].name": "an event of this EventSource", "spec.sql.events[].name": "an event of this EventSource",
+		"spec.owner.name": "the workload the store serves", "spec.prefixes[].owner.name": "the workload the prefix serves",
+		"spec.tables[].owner.name": "the workload the table serves",
 	}
 }
 
@@ -60,6 +62,9 @@ func TestNamesCoversEveryField(t *testing.T) {
 		}
 		for f := range read {
 			require.Contains(t, fields, f, "%s: Names reads %s, which is no ObjectName field", kind, f)
+		}
+		for _, n := range Names(obj) {
+			require.Equal(t, kindOfField(index.ReplaceAllString(n.Field, "[]")), n.Ref.Kind, "%s: %s", kind, n.Field)
 		}
 	}
 }
@@ -160,6 +165,8 @@ func TestUsesReadsTheProtectedFields(t *testing.T) {
 		"a Function's kv binding":                 {&v1.Function{Spec: v1.FunctionSpec{Bindings: v1.FunctionBindings{KV: []v1.FunctionKV{{Store: "k"}}}}}, kv, true},
 		"a Function's root kv ref":                {&v1.Function{Spec: v1.FunctionSpec{KVStores: []v1.KVStoreEntry{{Ref: "k"}}}}, kv, false},
 		"a Job's blob binding":                    {&v1.Job{Spec: v1.JobSpec{Bindings: v1.FunctionBindings{Blob: []v1.FunctionBlob{{Bucket: "b"}}}}}, bucket, true},
+		"a Function's sql binding":                {&v1.Function{Spec: v1.FunctionSpec{Bindings: v1.FunctionBindings{SQL: []v1.FunctionSQL{{Database: "d"}}}}}, &v1.SQLDatabase{ObjectMeta: meta("d")}, true},
+		"a Function's sql root ref":               {&v1.Function{Spec: v1.FunctionSpec{SQLDatabases: []v1.SQLDatabaseEntry{{Ref: "d"}}}}, &v1.SQLDatabase{ObjectMeta: meta("d")}, false},
 		"a Function's link":                       {&v1.Function{ObjectMeta: meta("g"), Spec: v1.FunctionSpec{Bindings: v1.FunctionBindings{Links: []v1.FunctionLink{{Target: "f"}}}}}, fnObj, true},
 		"a Function's own link":                   {&v1.Function{ObjectMeta: meta("f"), Spec: v1.FunctionSpec{Bindings: v1.FunctionBindings{Links: []v1.FunctionLink{{Target: "f"}}}}}, fnObj, false},
 		"a Function's addon binding, client copy": {&v1.Function{Spec: v1.FunctionSpec{Bindings: v1.FunctionBindings{Addon: []v1.FunctionAddon{{Object: "a"}}}}}, addon, true},
@@ -176,8 +183,33 @@ func TestUsesReadsTheProtectedFields(t *testing.T) {
 		"a Sensor's Function":                     {&v1.Sensor{Spec: v1.SensorSpec{Do: []v1.Action{{Function: "f"}}}}, fnObj, false},
 	} {
 		tc.user.GetObjectMeta().Namespace = ns
-		require.Equal(t, tc.want, uses(tc.user, tc.obj), name)
+		require.Equal(t, tc.want, Uses(tc.user, tc.obj), name)
 	}
 	require.True(t, slices.ContainsFunc(Names(&v1.Site{Spec: v1.SiteSpec{Ingress: v1.SiteIngress{Rules: []v1.SiteRule{{Bucket: "b"}}}}}),
 		func(n Name) bool { return n.Field == "spec.ingress.rules[0].bucket" }), "Names still lists what uses leaves out")
+}
+
+// kindOfField is the kind a Names field names, by its path's end (ADR-0362 Decision 4).
+func kindOfField(field string) v1.Kind {
+	for _, r := range []struct {
+		suffix string
+		kind   v1.Kind
+	}{
+		{"kv[].store", v1.KindKVStore}, {"kv[].ref", v1.KindKVStore}, {"kvStores[]", v1.KindKVStore},
+		{"bucket", v1.KindBucket}, {"buckets[].ref", v1.KindBucket}, {"buckets[]", v1.KindBucket},
+		{"database", v1.KindSQLDatabase}, {"sql[].ref", v1.KindSQLDatabase}, {"databases[]", v1.KindSQLDatabase},
+		{"addon[].object", v1.KindAddonObject}, {"addons[]", v1.KindAddonObject},
+		{"lake[].lake", v1.KindLake}, {"lakes[].ref", v1.KindLake}, {"lakes[]", v1.KindLake},
+		{"links[].target", v1.KindFunction}, {"function.ref", v1.KindFunction}, {"functions[].ref", v1.KindFunction},
+		{".function", v1.KindFunction}, {"job[].job", v1.KindJob}, {"config[]", v1.KindConfigMap},
+		{"configMaps[].ref", v1.KindConfigMap}, {"configMap", v1.KindConfigMap}, {"secret[]", v1.KindSecret},
+		{"secrets[].name", v1.KindSecret}, {"credentialsSecret", v1.KindSecret}, {"provider", v1.KindOIDCProvider},
+		{".site", v1.KindSite}, {".source", v1.KindEventSource}, {"workflow.ref", v1.KindWorkflow},
+		{".workflow", v1.KindWorkflow}, {"scope.app", v1.KindApp},
+	} {
+		if strings.HasSuffix(field, r.suffix) {
+			return r.kind
+		}
+	}
+	return ""
 }

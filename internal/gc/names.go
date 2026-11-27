@@ -17,8 +17,8 @@ type Name struct {
 // Names lists the objects u's spec names, each once, in field order (ADR-0362 Decision 4): bindings and links, the
 // ref of a root entry, a Lake's location, the Functions, Sites, Buckets and providers of routes and ingresses, a
 // Site's runtime ConfigMap, an EventSource's sources, a Sensor's EventSources, Workflows and Functions, an add-on
-// object's Functions, a backup scope's objects, and the owner of a SQLDatabase, a Bucket prefix or a KV table. The
-// first field that names an object wins.
+// object's Functions and a backup scope's objects. An owner that a store names for one of its tables or prefixes is
+// whom the store serves, not what it waits on, so it is no Name. The first field that names an object wins.
 func Names(u v1.Object) []Name {
 	n := &namer{ns: u.GetObjectMeta().Namespace, seen: map[v1.ObjectRef]bool{}}
 	switch o := u.(type) {
@@ -106,16 +106,6 @@ func Names(u v1.Object) []Name {
 		n.list(v1.KindAddonObject, "spec.scope.addons", s.Addons)
 		n.add(v1.KindApp, s.App, "spec.scope.app")
 		n.add(v1.KindSecret, o.Spec.Target.CredentialsSecret, "spec.target.credentialsSecret")
-	case *v1.SQLDatabase:
-		n.add(o.Spec.Owner.Kind, o.Spec.Owner.Name, "spec.owner.name")
-	case *v1.Bucket:
-		for i, pr := range o.Spec.Prefixes {
-			n.add(pr.Owner.Kind, pr.Owner.Name, fmt.Sprintf("spec.prefixes[%d].owner.name", i))
-		}
-	case *v1.KVStore:
-		for i, tb := range o.Spec.Tables {
-			n.add(tb.Owner.Kind, tb.Owner.Name, fmt.Sprintf("spec.tables[%d].owner.name", i))
-		}
 	}
 	return n.out
 }
@@ -248,8 +238,9 @@ func protected(user v1.Kind) []string {
 	return nil
 }
 
-// uses reports whether u names obj in one of the fields InUse reads; a Function's link to itself is no use.
-func uses(u, obj v1.Object) bool {
+// Uses reports whether u names obj in one of the fields InUse reads, its deletion protections; a Function's link to
+// itself is no use. funcdctl's delete view names such a user (ADR-0362 Decision 3).
+func Uses(u, obj v1.Object) bool {
 	kind, name, user := storedKind(obj), obj.GetObjectMeta().Name, storedKind(u)
 	if kind == v1.KindFunction && user == v1.KindFunction && u.GetName() == name {
 		return false

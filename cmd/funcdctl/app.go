@@ -537,7 +537,20 @@ func (a *cli) deploy(ctx context.Context, c *sdk.Client, t *template.Template, i
 		s      *deployStart
 		answer v1.Object
 		err    error
+		v      *appView
 	)
+	if !dryRun && !noWait {
+		v = newAppView(a.out, a.liveView(), time.Now)
+		if v.live {
+			// The plan line's dry run, before the apply: once the revision is stamped, a plan says nothing changes
+			// (ADR-0362 Decision 2). A failed dry run draws no plan line.
+			if _, planned, err := applyRendered(ctx, c, t, in, true); err == nil {
+				if p, ok := planned.(*v1.App); ok {
+					v.plan = p.Status.Plan
+				}
+			}
+		}
+	}
 	for attempt := 1; ; attempt++ {
 		s, answer, err = applyRendered(ctx, c, t, in, dryRun)
 		if err == nil || fault.KindOf(err) != fault.Conflict || attempt == applyAttempts {
@@ -564,15 +577,15 @@ func (a *cli) deploy(ctx context.Context, c *sdk.Client, t *template.Template, i
 	if noWait {
 		return nil
 	}
-	v := newAppView(a.out, liveTerminal(a.out), time.Now)
-	if v.live {
-		if _, planned, err := applyRendered(ctx, c, t, in, true); err == nil {
-			if p, ok := planned.(*v1.App); ok {
-				v.plan = p.Status.Plan // the dry run's plan, for the plan line and the actions (ADR-0362 Decision 2)
-			}
-		}
-	}
 	return a.waitDeploy(ctx, c, s.applied, s.n0, s.ready, v)
+}
+
+// liveView reports whether the App view draws live: on a terminal, or as a test sets it.
+func (a *cli) liveView() bool {
+	if a.live != nil {
+		return a.live(a.out)
+	}
+	return liveTerminal(a.out)
 }
 
 // deployAddon readies the template's Addon before the App (ADR-0337 Decision 2) and reports whether the App goes on.
@@ -777,7 +790,7 @@ func (a *cli) waitDeployEvery(ctx context.Context, c *sdk.Client, applied *v1.Ap
 	const op = "funcdctl app deploy"
 	w := &deployWatch{children: map[string]string{}, ready: ready, requires: map[v1.ObjectName]string{}}
 	if v != nil {
-		defer v.done()
+		defer func() { _ = v.done() }()
 		if !v.live {
 			w.times = v.clock
 		}
@@ -977,8 +990,8 @@ func (a *cli) deleteApp(ctx context.Context, c *sdk.Client, ns v1.NamespaceName,
 	if noWait {
 		return nil
 	}
-	v := newAppView(a.out, liveTerminal(a.out), time.Now)
-	defer v.done()
+	v := newAppView(a.out, a.liveView(), time.Now)
+	defer func() { _ = v.done() }()
 	all, err := a.waitTreeGone(ctx, c, ns, name, tree, v)
 	if err != nil {
 		return err

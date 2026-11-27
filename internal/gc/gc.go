@@ -621,7 +621,7 @@ func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Objec
 			if v1.ControlledBy(um.OwnerReferences, obj.GroupVersionKind().Kind, m.UID) {
 				continue
 			}
-			if uses(u, obj) && (skip == nil || !skip(u)) {
+			if Uses(u, obj) && (skip == nil || !skip(u)) {
 				return v1.ObjectRef{Kind: kind, Namespace: um.Namespace, Name: um.Name}, true, nil
 			}
 		}

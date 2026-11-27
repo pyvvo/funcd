@@ -35,43 +35,47 @@ func palette() boxPalette {
 	}
 }
 
-// liveTerminal reports whether w is a terminal the App view may redraw: TERM=dumb and every non-terminal get lines
-// (ADR-0362 Decision 1).
+// liveTerminal reports whether w is a terminal the App view may redraw (ADR-0362 Decision 1).
 func liveTerminal(w io.Writer) bool {
 	f, ok := w.(*os.File)
-	return ok && os.Getenv("TERM") != "dumb" && (isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd()))
+	return ok && liveFile(os.Getenv("TERM"), isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd()))
 }
+
+// liveFile is a terminal other than TERM=dumb; every other output gets lines.
+func liveFile(term string, tty bool) bool { return tty && term != "dumb" }
 
 // appView draws a deploy's or a delete's progress: a live box on a terminal, lines elsewhere (ADR-0362 Decisions 1
 // and 6). Times run on now, from the first poll that sees a row unsettled.
 type appView struct {
-	out   io.Writer
-	live  bool
-	now   func() time.Time
-	width func() int
-	r     *lipgloss.Renderer
-	start time.Time
-	drawn int
-	box   string
-	since map[string]time.Time
-	took  map[string]time.Duration
-	plan  *v1.AppPlan
-	calls map[v1.ObjectName]*v1.Invocation
+	out    io.Writer
+	live   bool
+	now    func() time.Time
+	width  func() int
+	height func() int
+	r      *lipgloss.Renderer
+	start  time.Time
+	drawn  int
+	box    string
+	since  map[string]time.Time
+	took   map[string]time.Duration
+	plan   *v1.AppPlan
+	calls  map[v1.ObjectName]*v1.Invocation
 }
 
 func newAppView(out io.Writer, live bool, now func() time.Time) *appView {
-	v := &appView{out: out, live: live, now: now, r: lipgloss.NewRenderer(out), start: now(),
-		since: map[string]time.Time{}, took: map[string]time.Duration{},
-		calls: map[v1.ObjectName]*v1.Invocation{}}
-	v.width = func() int {
+	size := func() (int, int) {
 		if f, ok := out.(*os.File); ok {
-			if w, _, err := term.GetSize(f.Fd()); err == nil && w > 20 {
-				return w
+			if w, h, err := term.GetSize(f.Fd()); err == nil && w > 20 && h > 5 {
+				return w, h
 			}
 		}
-		return 120
+		return 120, 1000
 	}
-	return v
+	return &appView{out: out, live: live, now: now, r: lipgloss.NewRenderer(out), start: now(),
+		since: map[string]time.Time{}, took: map[string]time.Duration{}, calls: map[v1.ObjectName]*v1.Invocation{},
+		width:  func() int { w, _ := size(); return w },
+		height: func() int { _, h := size(); return h },
+	}
 }
 
 // clock times the row id: it starts at the first poll that sees it unsettled and stops at the first that sees it
@@ -145,9 +149,10 @@ func requiredApps(ctx context.Context, c *sdk.Client, a *v1.App) (map[v1.ObjectN
 	return out, nil
 }
 
-// actions is a plan's action per part, nil for no plan or a plan that holds a stop (ADR-0362 Decision 2).
+// actions is a plan's action per part, nil for no plan or for one that holds a stop, a line with a reason
+// (ADR-0362 Decision 2): ChildNotOwned, a namesake or a Secret's stop (ADR-0220 Decision 5).
 func actions(plan *v1.AppPlan) map[v1.ObjectRef]v1.PlanAction {
-	if plan == nil || slices.ContainsFunc(plan.Parts, func(p v1.PlanPart) bool { return p.Action == "" }) {
+	if plan == nil || slices.ContainsFunc(plan.Parts, func(p v1.PlanPart) bool { return p.Action == "" || p.Reason != "" }) {
 		return nil
 	}
 	out := map[v1.ObjectRef]v1.PlanAction{}
@@ -158,54 +163,58 @@ func actions(plan *v1.AppPlan) map[v1.ObjectRef]v1.PlanAction {
 }
 
 // deploy draws one poll of a deploy: the App, the followed revision (nil before its stamp), the plan's action per
-// part, the required Apps by name, the App's parts by reference and the hooks' Invocations.
+// part, the required Apps by name, the App's parts by reference and the hooks' Invocations. While the revision waits
+// for its required Apps, before its clock starts, no part row is drawn (ADR-0219 Decision 3).
 func (v *appView) deploy(a *v1.App, rev *v1.AppRevision, plan map[v1.ObjectRef]v1.PlanAction,
 	required map[v1.ObjectName]*v1.App, parts map[v1.ObjectRef]v1.Object, hooks map[v1.ObjectName]*v1.Invocation) error {
 	st := v.styles()
-	title := st.title.Render("● funcd app deploy") + st.dim.Render(fmt.Sprintf("   %s %s", a.Name, a.Spec.Version))
+	title := st.title.Render("● funcd app deploy") + st.dim.Render(fmt.Sprintf("   %s %s", a.Name, termSafe(a.Spec.Version)))
 	if rev != nil {
 		title += st.dim.Render(" · revision " + string(rev.Name))
 	}
-	lines := []string{title + st.dim.Render(" · Ctrl-C stops the wait")}
+	head := []string{title + st.dim.Render(" · Ctrl-C stops the wait")}
 	if plan != nil {
-		lines = append(lines, st.dim.Render("plan  ")+planCounts(plan, a))
+		head = append(head, st.dim.Render("plan  ")+planCounts(plan, v.plan))
 	}
 	reqRows, unmet := v.requireRows(a, required, st)
-	children := slices.DeleteFunc(slices.Clone(a.Status.Children), func(c v1.AppChild) bool { return c.State == v1.AppChildPruning })
-	switch {
-	case unmet > 0:
-		lines = append(lines, st.warn.Render(fmt.Sprintf("waiting for %d of %d required Apps", unmet, len(a.Spec.Requires)))+
+	waiting := unmet > 0 && (rev == nil || rev.Status.StartedAt == nil)
+	if waiting {
+		head = append(head, st.warn.Render(fmt.Sprintf("waiting for %d of %d required Apps", unmet, len(a.Spec.Requires)))+
 			st.dim.Render(" · no deadline yet · "+span(v.now().Sub(v.start))))
-	default:
-		lines = append(lines, v.progress(a, rev, children, st))
-	}
-	if len(reqRows) > 0 {
-		lines = append(lines, "", st.title.Render("REQUIRES"), table(reqRows))
-	}
-	if rows := v.hookRows(rev, hooks, st); len(rows) > 0 {
-		lines = append(lines, "", st.title.Render("HOOKS"), table(rows))
-	}
-	lines = append(lines, "", st.title.Render("PARTS"))
-	if unmet > 0 && len(a.Status.Children) == 0 {
-		lines = append(lines, st.dim.Render(fmt.Sprintf("⋯ %d parts wait for the required Apps; none is written and no hook runs", len(parts))))
 	} else {
-		lines = append(lines, table(v.partRows(a, plan, parts, st)))
+		head = append(head, v.progress(a, rev, st))
 	}
-	if r := readyLine(a); r != "" {
-		lines = append(lines, "", st.dim.Render("App/"+string(a.Name)+" "+termSafe(r)))
+	build := func(fold bool) []string {
+		lines := slices.Clone(head)
+		if len(reqRows) > 0 {
+			lines = append(lines, "", st.title.Render("REQUIRES"), table(reqRows))
+		}
+		if rows := v.hookRows(rev, hooks, st); len(rows) > 0 {
+			lines = append(lines, "", st.title.Render("HOOKS"), table(rows))
+		}
+		lines = append(lines, "", st.title.Render("PARTS"))
+		if waiting {
+			lines = append(lines, st.dim.Render(fmt.Sprintf("⋯ %d parts wait for the required Apps; none is written and no hook runs", len(parts))))
+		} else {
+			lines = append(lines, table(v.partRows(a, plan, parts, st, fold)))
+		}
+		if r := readyLine(a); r != "" {
+			lines = append(lines, "", st.dim.Render("App/"+string(a.Name)+" "+termSafe(r)))
+		}
+		return lines
 	}
-	return v.draw(lines, st)
+	return v.drawFitting(build, st)
 }
 
-// planCounts is the plan line: its create, update and prune parts, and the hooks of the App's spec.
-func planCounts(plan map[v1.ObjectRef]v1.PlanAction, a *v1.App) string {
+// planCounts is the plan line: its create, update and prune parts, and its hooks.
+func planCounts(acts map[v1.ObjectRef]v1.PlanAction, plan *v1.AppPlan) string {
 	count := map[v1.PlanAction]int{}
-	for _, act := range plan {
+	for _, act := range acts {
 		count[act]++
 	}
 	hooks := 0
-	if h := a.Spec.Hooks; h != nil {
-		hooks = len(h.PreApply) + len(h.PostApply)
+	if plan != nil {
+		hooks = len(plan.Hooks)
 	}
 	return fmt.Sprintf("%d create · %d update · %d prune · %d hooks", count[v1.PlanCreate], count[v1.PlanUpdate], count[v1.PlanPrune], hooks)
 }
@@ -217,7 +226,8 @@ func settled(c v1.AppChild) bool {
 
 // progress is the progress line: ▰ per settled part, the time since startedAt and the deadline, or the App's Ready
 // reason once the deadline has passed.
-func (v *appView) progress(a *v1.App, rev *v1.AppRevision, children []v1.AppChild, st viewStyles) string {
+func (v *appView) progress(a *v1.App, rev *v1.AppRevision, st viewStyles) string {
+	children := slices.DeleteFunc(slices.Clone(a.Status.Children), func(c v1.AppChild) bool { return c.State == v1.AppChildPruning })
 	n := 0
 	for _, c := range children {
 		if settled(c) {
@@ -237,7 +247,7 @@ func (v *appView) progress(a *v1.App, rev *v1.AppRevision, children []v1.AppChil
 		line += st.dim.Render(" · deadline in " + span(time.Time(*d).Sub(now)))
 	default:
 		c, _ := a.Status.Conditions.Get("Ready")
-		line += st.warn.Render(" · " + cmp.Or(c.Reason, "past the deadline"))
+		line += st.warn.Render(" · " + termSafe(cmp.Or(c.Reason, "past the deadline")))
 	}
 	return line
 }
@@ -251,20 +261,20 @@ func (v *appView) requireRows(a *v1.App, required map[v1.ObjectName]*v1.App, st 
 		why := appctl.Unmet(e, dep)
 		version := "–"
 		if dep != nil {
-			version = dep.Spec.Version
+			version = termSafe(dep.Spec.Version)
 		}
 		icon, state := st.ok.Render("✓"), st.ok.Render("Ready")
 		switch {
 		case why == "":
 		case dep == nil || strings.HasPrefix(why, "is ") && !strings.HasPrefix(why, "is not Ready"), strings.HasPrefix(why, "has no SemVer"):
-			icon, state = st.bad.Render("✗"), st.bad.Render(why)
+			icon, state = st.bad.Render("✗"), st.bad.Render(termSafe(why))
 		default:
-			icon, state = st.warn.Render("◐"), st.warn.Render(why)
+			icon, state = st.warn.Render("◐"), st.warn.Render(termSafe(why))
 		}
 		if why != "" {
 			unmet++
 		}
-		rows = append(rows, []string{icon + " App/" + string(e.App), version, st.dim.Render(cmp.Or(e.Version, "any")), state,
+		rows = append(rows, []string{icon + " App/" + string(e.App), version, st.dim.Render(termSafe(cmp.Or(e.Version, "any"))), state,
 			v.clock("requires/"+string(e.App), why == "")})
 	}
 	return rows, unmet
@@ -282,20 +292,19 @@ func (v *appView) hookRows(rev *v1.AppRevision, calls map[v1.ObjectName]*v1.Invo
 			id := point + "/" + string(h.Function)
 			label := point + " Function/" + string(h.Function)
 			call, recorded := lastCall(rev, point, h.Function)
-			switch {
-			case !recorded:
+			if !recorded {
 				rows = append(rows, []string{st.warn.Render("◐") + " " + label, st.warn.Render("due"), v.clock(id, false)})
-			default:
-				took := "–"
-				if inv := calls[call.Invocation]; inv != nil && !inv.Status.StartTime.IsZero() {
-					took = span(time.Time(inv.Status.EndTime).Sub(time.Time(inv.Status.StartTime)))
-				}
-				icon, state := st.ok.Render("✓"), st.ok.Render("done")
-				if call.Phase == v1.PhaseFailed {
-					icon, state = st.bad.Render("✗"), st.bad.Render("failed")
-				}
-				rows = append(rows, []string{icon + " " + label, state, took})
+				continue
 			}
+			took := "–"
+			if inv := calls[call.Invocation]; inv != nil && !inv.Status.StartTime.IsZero() {
+				took = span(time.Time(inv.Status.EndTime).Sub(time.Time(inv.Status.StartTime)))
+			}
+			icon, state := st.ok.Render("✓"), st.ok.Render("done")
+			if call.Phase == v1.PhaseFailed {
+				icon, state = st.bad.Render("✗"), st.bad.Render("failed")
+			}
+			rows = append(rows, []string{icon + " " + label, state, took})
 		}
 	}
 	add("preApply", rev.Spec.Spec.Hooks.PreApply)
@@ -314,19 +323,22 @@ func lastCall(rev *v1.AppRevision, point string, fn v1.ObjectName) (v1.AppHookCa
 }
 
 // partRows are the PARTS rows, one per status.children entry: its icon, action, state, what it waits on and its time
-// (ADR-0362 Decisions 2, 4 and 5).
-func (v *appView) partRows(a *v1.App, plan map[v1.ObjectRef]v1.PlanAction, parts map[v1.ObjectRef]v1.Object, st viewStyles) [][]string {
+// (ADR-0362 Decisions 2, 4 and 5). fold folds the Ready and NotStarted rows into one, for a box the terminal is too
+// short to hold.
+func (v *appView) partRows(a *v1.App, plan map[v1.ObjectRef]v1.PlanAction, parts map[v1.ObjectRef]v1.Object, st viewStyles, fold bool) [][]string {
 	var rows [][]string
+	folded := 0
 	for _, c := range a.Status.Children {
 		id := string(c.Kind) + "/" + string(c.Name)
 		ref := v1.ObjectRef{Kind: c.Kind, Name: c.Name}
 		act := plan[ref]
-		state := strings.TrimSpace(string(c.State) + " " + st.dim.Render(c.Reason))
+		done := c.State == v1.AppChildReady || c.State == v1.AppChildNotStarted
+		state := strings.TrimSpace(string(c.State) + " " + st.dim.Render(termSafe(c.Reason)))
 		var icon, waits, took string
 		switch {
 		case c.State == v1.AppChildPruning:
 			icon, act, took = st.dim.Render("⋯"), v1.PlanPrune, "–"
-		case c.State == v1.AppChildReady || c.State == v1.AppChildNotStarted:
+		case done:
 			icon, state = st.ok.Render("✓"), st.ok.Render(string(c.State))
 		case c.Reason == "ChildInvalid" || c.Reason == "ChildNotOwned":
 			icon = st.bad.Render("✗")
@@ -335,14 +347,20 @@ func (v *appView) partRows(a *v1.App, plan map[v1.ObjectRef]v1.PlanAction, parts
 			waits = waitsOn(a, parts[partKey(a, c)])
 		}
 		if took == "" {
-			done := c.State == v1.AppChildReady || c.State == v1.AppChildNotStarted
 			if _, planned := plan[ref]; plan != nil && !planned && done && v.since[id].IsZero() {
 				took = "–"
 			} else {
 				took = v.clock(id, done)
 			}
 		}
+		if fold && done {
+			folded++
+			continue
+		}
 		rows = append(rows, []string{icon + " " + id, string(act), state, st.link.Render(waits), took})
+	}
+	if folded > 0 {
+		rows = append(rows, []string{st.ok.Render("✓") + fmt.Sprintf(" %d more ready", folded), "", "", "", ""})
 	}
 	return rows
 }
@@ -379,46 +397,56 @@ func waitsOn(a *v1.App, p v1.Object) string {
 func (v *appView) remove(name v1.ObjectName, noted []v1.ObjectRef, present map[v1.ObjectRef]v1.Object, kept []v1.ObjectRef) error {
 	st := v.styles()
 	gone := 0
-	var rows [][]string
 	for _, ref := range noted {
-		id := string(ref.Kind) + "/" + string(ref.Name)
-		if _, timed := v.since[id]; !timed {
-			v.since[id] = v.start // each object's time counts from the delete
-		}
-		o, here := present[ref]
-		if !here {
+		if _, here := present[ref]; !here {
 			gone++
-			rows = append(rows, []string{st.ok.Render("✓") + " " + id, st.ok.Render("deleted"), v.clock(id, true)})
-			continue
 		}
-		rows = append(rows, []string{st.warn.Render("◐") + " " + id, st.warn.Render("waiting") + " " + st.dim.Render(holdReason(o, noted, present)), v.clock(id, false)})
 	}
-	for _, ref := range kept {
-		rows = append(rows, []string{st.link.Render("■") + " " + string(ref.Kind) + "/" + string(ref.Name), st.link.Render("kept"), ""})
+	build := func(fold bool) []string {
+		var rows [][]string
+		folded := 0
+		for _, ref := range noted {
+			id := string(ref.Kind) + "/" + string(ref.Name)
+			if _, timed := v.since[id]; !timed {
+				v.since[id] = v.start // each object's time counts from the delete
+			}
+			o, here := present[ref]
+			switch {
+			case !here && fold:
+				v.clock(id, true)
+				folded++
+			case !here:
+				rows = append(rows, []string{st.ok.Render("✓") + " " + id, st.ok.Render("deleted"), v.clock(id, true)})
+			default:
+				rows = append(rows, []string{st.warn.Render("◐") + " " + id,
+					st.warn.Render("waiting") + " " + st.dim.Render(termSafe(holdReason(o, noted, present))), v.clock(id, false)})
+			}
+		}
+		if folded > 0 {
+			rows = append(rows, []string{st.ok.Render("✓") + fmt.Sprintf(" %d more deleted", folded), "", ""})
+		}
+		for _, ref := range kept {
+			rows = append(rows, []string{st.link.Render("■") + " " + string(ref.Kind) + "/" + string(ref.Name), st.link.Render("kept"), ""})
+		}
+		title := st.title.Render("● funcd app delete") +
+			st.dim.Render(fmt.Sprintf("   %s · %d of %d gone · %s", name, gone, len(noted), span(v.now().Sub(v.start))))
+		return []string{title, "", table(rows)}
 	}
-	title := st.title.Render("● funcd app delete") + st.dim.Render(fmt.Sprintf("   %s · %d of %d gone · %s", name, gone, len(noted), span(v.now().Sub(v.start))))
-	return v.draw([]string{title, "", table(rows)}, st)
+	return v.drawFitting(build, st)
 }
 
 // holdReason is why a noted object stays: its own Ready reason, else InUse naming a noted object still present that
-// names it, else none, as for one that an object outside the App holds.
+// holds it as the GC's deletion protections read it (gc.Uses), else none, as for one that an object outside the App
+// holds.
 func holdReason(o v1.Object, noted []v1.ObjectRef, present map[v1.ObjectRef]v1.Object) string {
 	if s, ok := o.(v1.StatusObject); ok {
 		if c, ok := s.GetStatus().Conditions.Get("Ready"); ok && c.Status != v1.ConditionTrue && c.Reason != "" {
 			return c.Reason
 		}
 	}
-	key := v1.ObjectRef{Kind: o.GroupVersionKind().Kind, Name: o.GetName()}
 	for _, ref := range noted {
-		u, here := present[ref]
-		if !here || ref == key {
-			continue
-		}
-		_, addon := o.(*v1.AddonObject)
-		for _, n := range gc.Names(u) {
-			if n.Ref.Name == key.Name && (n.Ref.Kind == key.Kind || addon && n.Ref.Kind == v1.KindAddonObject) {
-				return "InUse: " + string(ref.Kind) + "/" + string(ref.Name)
-			}
+		if u, here := present[ref]; here && u != o && gc.Uses(u, o) {
+			return "InUse: " + string(ref.Kind) + "/" + string(ref.Name)
 		}
 	}
 	return ""
@@ -458,11 +486,20 @@ func table(rows [][]string) string {
 	return strings.Join(lines, "\n")
 }
 
+// drawFitting draws the box that build makes, folded when it is taller than the terminal, so a redraw never moves
+// up past the top of the screen.
+func (v *appView) drawFitting(build func(fold bool) []string, st viewStyles) error {
+	lines := build(false)
+	if len(strings.Split(strings.Join(lines, "\n"), "\n"))+2 >= v.height() {
+		lines = build(true)
+	}
+	return v.draw(lines, st)
+}
+
 // draw redraws the box in place: it moves the cursor up over the last draw, clears to the end of the screen and
 // writes the new box, its lines cut to the terminal's width so none wraps (ADR-0362 Decision 5).
 func (v *appView) draw(lines []string, st viewStyles) error {
-	w := v.width()
-	box := st.box.MaxWidth(w).Render(strings.Join(lines, "\n"))
+	box := st.box.MaxWidth(v.width()).Render(strings.Join(lines, "\n"))
 	if box == v.box {
 		return nil
 	}
@@ -477,4 +514,7 @@ func (v *appView) draw(lines []string, st viewStyles) error {
 }
 
 // done leaves the last draw on screen: the next output starts below it.
-func (v *appView) done() { v.drawn = 0 }
+func (v *appView) done() error {
+	v.drawn = 0
+	return nil
+}
