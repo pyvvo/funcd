@@ -34,8 +34,10 @@ ADRs (F244, F245, F248 to F252).
 - `scenario: behind-the-floor`: Given vm1 stopped while the change log compacted past its revision, When it starts
   again, Then the feed refuses its revision (410, or 412 over NATS), and vm1 takes a snapshot that brings what it
   missed.
-- `scenario: a-failed-write`: Given vm1's store refuses the write of a record, When the record comes, Then vm1 saves no
-  revision past it and takes a snapshot, which brings it.
+- `scenario: a-failed-write`: Given vm1's store refuses the write of a record twice, When the record comes, Then vm1
+  saves no revision past it and takes a snapshot, which saves none either while it fails, until one brings the record.
+- `scenario: a-record-it-cannot-decode`: Given a record of a kind vm1 does not know, When it comes, Then vm1 skips it
+  and follows on, with no snapshot.
 - `scenario: control-plane-away`: Given the control plane is stopped, When it comes back and a ConfigMap is written in
   e1, Then vm1 kept what it held meanwhile, and follows again from its revision.
 - `scenario: control-plane-restored`: Given the control plane's metastore restored from a backup, When vm1 asks for its
@@ -67,6 +69,8 @@ ADRs (F244, F245, F248 to F252).
 - **JetStream, or a queue per node**: the log would live twice, in the metastore and a stream, with its own retention
   and backup, while the metastore's transaction already orders the writes. Rejected (the decider, 2026-11-26).
 - **A list on every poll**, with no log: each poll of each node costs a list of its namespaces. Rejected.
+- **The store's own watch** and its replay ring (`store.WatchOptions.SinceResourceVersion`): it lives in memory, so a
+  control plane's restart loses it, and a node could not resume. Rejected by the second constraint.
 - **Each waiting feed reads the log at every write**: the cost of a write grows with the nodes that wait (#1586).
   Rejected for one router per control plane.
 
@@ -103,12 +107,14 @@ ADRs (F244, F245, F248 to F252).
 6. **The node's side.** The agent keeps `cursor` under `cluster.dataDir`: the control plane's timeline, the revision,
    and the node store's own timeline. It applies each record to its store as the same object (uid, generation and
    creation time), then saves the cursor, so a batch cut short is applied again, and twice changes nothing. A node with
-   no cursor of its store takes a snapshot first. A refused revision sends it to a snapshot, and so does a record it
-   failed to write, after which it saves no cursor until the snapshot. A snapshot of another timeline than its cursor's
-   means the control plane was restored: the node's platform starts again and takes the restored state before it runs
-   anything. A newly placed namespace comes from its own snapshot, and one that left goes from the node's store. While
-   the control plane is away, the node serves from its store and asks again from `retryMin` 100 ms, doubled up to
-   `retryMax` 5 s.
+   no cursor of its store, or one a crash tore, takes a snapshot first. A refused revision sends the node to a
+   snapshot, and so does a record it failed to write, after which it saves no cursor until the snapshot; a snapshot
+   that fails to write an object saves none either, and is taken again. A record the node cannot decode or validate
+   (`fault.Invalid`), as from a newer release, is skipped, since no snapshot would bring it (F252). A snapshot of
+   another timeline than the cursor's means the control plane was restored: the node's platform starts again and takes
+   the restored state before it runs anything. A newly placed namespace comes from its own snapshot, and one that left
+   goes from the node's store. While the control plane is away, the node serves from its store and asks again from
+   `retryMin` 100 ms, doubled up to `retryMax` 5 s, as it takes a failed snapshot again.
 
 ## Design model
 
@@ -118,27 +124,29 @@ ADRs (F244, F245, F248 to F252).
 
   | Assertion | Kind | Protects | Oracle test |
   |---|---|---|---|
-  | `TheCursorNeverPassesWhatTheNodeApplied` | always | `scenario: resume-after-a-restart`, `scenario: a-failed-write` | `TestANodeResumesFromItsSavedRevision`, `TestAChangeTheNodeFailedToWriteComesWithASnapshot` |
+  | `TheCursorNeverPassesWhatTheNodeApplied` | always | `scenario: resume-after-a-restart`, `scenario: a-failed-write` | `TestANodeResumesFromItsSavedRevision`, `TestAChangeTheNodeFailedToWriteComesWithASnapshot`, `TestAFailedSnapshotIsTakenAgain` |
   | `TheNodeConverges` | eventually always | `scenario: behind-the-floor`, `scenario: resume-after-a-restart` | `TestANodeBehindTheChangeLogsFloorTakesASnapshot`, `TestANodeResumesFromItsSavedRevision` |
 
-- **Bounds**: two names, three writes, a log that keeps one record, batches of two, one crash and one failed write, 20
-  actions: enough for a compaction past the node, a crash mid-batch and a write between a snapshot's head and its list.
-  A run at 24 actions explores the same 14,620 states.
-- **Faults**: the node crashes once, at any step; one batch fails to write.
+- **Bounds**: two names, two writes, a log that keeps one record, batches of two, one crash and one failed write, in a
+  batch or in a snapshot, 16 actions: the smallest scenario in which every mutant fails, and the first that every path
+  completes in. Wider (three writes, 20 actions): pass, 21,966 states, 5.9 s.
+- **Faults**: the node crashes once, at any step; one write fails, of a batch or of a snapshot.
 - **Environment**: a write and its record are one transaction; the node's store keeps what it committed before a crash
   (each commit syncs); a feed's wait ends at its deadline, so a missed wake only delays a read. Modeled as atomic steps.
-- **Mutants**: `save-before-apply`, `no-floor-check`, `list-before-head`, `no-reapply` and `skip-failed-apply` fail
-  `TheCursorNeverPassesWhatTheNodeApplied`; `no-resync` fails `TheNodeConverges`.
-- **Result**: pass, 14,620 states, 4.0 s, FizzBee v0.5.4.
+- **Mutants**: `save-before-apply`, `no-floor-check`, `list-before-head`, `no-reapply`, `skip-failed-apply` and
+  `snapshot-saves-past-a-failed-write` fail `TheCursorNeverPassesWhatTheNodeApplied`; `no-resync` fails
+  `TheNodeConverges`.
+- **Result**: pass, 2,708 states, 1.0 s, FizzBee v0.5.4.
 - **Left to tests**: which records concern a node (`TestAWriteWakesOnlyTheNodesItConcerns`,
   `TestANodeGetsTheAPITokensAndTheNamespacesThatConcernIt`); each driver's wire (`nodeapicontract`, and the NATS tests
-  of permissions, chunks and silent links); a cursor a crash tore, which reads as none, so the node takes a snapshot.
+  of permissions, chunks and silent links); a torn cursor, which reads as none (`TestATornCursorReadsAsNone`); a record
+  the node cannot decode, skipped with no snapshot (`TestARecordTheNodeCannotDecodeIsSkipped`).
 
 ## Behavior rows
 
 - **multi-node.md**: "Following" (now with a failed write and `TestAChangeTheNodeFailedToWriteComesWithASnapshot`), "A
-  write on the control plane", "An old revision", "The control plane away", "The node API's driver", "A node on NATS"
-  and "A link that goes silent on NATS" cite this ADR's Decisions at acceptance.
+  write on the control plane", "An old revision", "A copy on a node", "The control plane away", "The node API's
+  driver", "A node on NATS" and "A link that goes silent on NATS" cite this ADR's Decisions at acceptance.
 
 ## Temporary workarounds
 
@@ -224,7 +232,8 @@ Built ahead of this ADR on the branch of draft PR #1495: `internal/nodeapi/nodea
 | follow-a-change | `TestANodeJoinsFollowsItsNamespaceAndReportsBack`, `TestAWriteWakesOnlyTheNodesItConcerns`, `TestANodesCopyIsTheControlPlanesObject`, `TestChangeLogRecordsEachWriteInOrder` |
 | resume-after-a-restart | `TestANodeResumesFromItsSavedRevision`, `TestTheChangeLogIsReadFromTheAskedRevision` |
 | behind-the-floor | `TestANodeBehindTheChangeLogsFloorTakesASnapshot`, `TestChangeLogCompactsAndRefusesARevisionBelowItsFloor`, the contract's `a-gone-revision-fails-its-precondition` |
-| a-failed-write | `TestAChangeTheNodeFailedToWriteComesWithASnapshot` |
+| a-failed-write | `TestAChangeTheNodeFailedToWriteComesWithASnapshot`, `TestAFailedSnapshotIsTakenAgain` |
+| a-record-it-cannot-decode | `TestARecordTheNodeCannotDecodeIsSkipped` |
 | control-plane-away | `TestANodeFollowsAgainOnceItsControlPlaneIsBack` |
 | control-plane-restored | `TestANodeOutlivesTheRestoreOfItsControlPlane`, `TestScenarioRestoreTakesNewTimeline` |
 | over-nats | `TestAWorkerNodeRunsTheNamespacePlacedOnItOverNATS`, `TestScenarioNATSPassesTheNodeAPIContract`, `TestANodePublishesUnderItsOwnNameOnly`, `TestAnAnswerGoesOnlyIntoTheInboxOfTheNodeThatAsked` |
@@ -239,7 +248,8 @@ Done when every test above passes, `just check-specs` passes the spec and its mu
 - [ ] `Snapshot` reads the head before it lists, and leaves out the children the node owns.
 - [ ] A feed never carries a record of the node's own writes, nor one of a namespace placed on another node.
 - [ ] The router reads the log once per record, whatever the number of nodes that wait.
-- [ ] The agent saves its cursor only after the batch is applied, and not at all after a record it failed to write.
+- [ ] The agent saves its cursor only after the batch or the snapshot is applied, and not at all after a write it
+      failed, but one of a record it cannot decode (`fault.Invalid`).
 - [ ] Each oracle test carries its `oracle:` line, and the spec passes with its mutants failing.
 
 ## Consequences
@@ -248,9 +258,10 @@ Done when every test above passes, `just check-specs` passes the spec and its mu
 - A write reaches its node in about a millisecond on either driver, flat in the number of nodes that wait (experiment
   0031), and costs one read of the log.
 - A node away for more than 100,000 writes, or one that failed to write a record, takes a snapshot of all its
-  namespaces.
-- Each write of a control plane with the cluster option adds one record to its transaction, and the log holds 100,000
-  of them at most.
+  namespaces. A write that keeps failing, as on a full disk, makes the node take its snapshot again every 5 s at most.
+- Each write of a control plane with the cluster option adds one record to its transaction. The log keeps the last
+  100,000, and about a compaction interval more between compactions: one runs when a logged write lands on a multiple
+  of 1024 revisions, which a status write-back can take instead.
 - At acceptance, the blueprint's worker node no longer "exposes an API to the control plane": it dials the control
   plane, and its local API serves its workers and its own operator.
 

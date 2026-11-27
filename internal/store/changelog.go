@@ -12,7 +12,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// The change log that worker nodes follow (FEAT-0002 decision 3): one record per object write, at the write's revision
+// The change log that worker nodes follow (ADR-0365 Decision 3): one record per object write, at the write's revision
 // and in its transaction, so a node that follows it after a restart of either side misses nothing. A kind encrypted at
 // rest keeps its record sealed by the same encryptor.
 const (

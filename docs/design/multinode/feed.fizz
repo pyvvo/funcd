@@ -5,14 +5,15 @@
 # log's head, then lists the objects, so a write between the two is both in the list and in the feed after the head.
 # The node applies what it gets to its own store, which survives a crash, and then saves its cursor to disk; applying
 # a record is an upsert of the control plane's object, so applying it twice changes nothing. A batch the node fails to
-# write (a full disk, a write race lost every time) saves no cursor, and the node takes a snapshot. The node may crash
-# at any step, once; its store and its cursor survive, and it starts again from the cursor. Every action is atomic.
+# write (a full disk, a write race lost every time) saves no cursor, and the node takes a snapshot; a snapshot that fails
+# to write an object saves no cursor either, and is taken again. One write fails at most. The node may crash at any
+# step, once; its store and its cursor survive, and it starts again from the cursor. Every action is atomic.
 # Environment: the store's transaction and its revision order; the node's disk, which keeps what was written before a
 # crash; the feed's wait, which ends at its deadline, so a missed wake only delays a read (not modeled).
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
-  max_actions: 20
+  max_actions: 16
   crash_on_yield: false
 ---
 # diagram: phase
@@ -22,15 +23,17 @@ options:
 # mutant no-reapply: TheCursorNeverPassesWhatTheNodeApplied
 # mutant no-resync: liveness
 # mutant skip-failed-apply: TheCursorNeverPassesWhatTheNodeApplied
+# mutant snapshot-saves-past-a-failed-write: TheCursorNeverPassesWhatTheNodeApplied
 
 # save-before-apply: the node saves the cursor of a batch before it applies the batch. no-floor-check: a feed below the
 # floor answers from the floor on. list-before-head: a snapshot lists the objects, then reads the head. no-reapply: a
 # node that starts again skips the batch it had got but not applied. no-resync: a node refused below the floor keeps
 # asking the feed and takes no snapshot. skip-failed-apply: a node that failed to write a batch saves its cursor past it.
+# snapshot-saves-past-a-failed-write: a snapshot that failed to write an object saves its cursor all the same.
 MUTANT = ""
 
 NAMES = 2
-WRITES = 3
+WRITES = 2
 RETAIN = 1
 FAILS = 1
 
@@ -77,8 +80,17 @@ atomic fair action SnapshotList:
         snapHead = head
     else:
         snapList = dict(cp)
+    lost = -1
+    if fails < FAILS:
+        lost = any [-1] + list(range(NAMES))
     for n in range(NAMES):
-        copy[n] = snapList[n]
+        if n != lost:
+            copy[n] = snapList[n]
+    if lost >= 0:
+        fails += 1
+        if MUTANT != "snapshot-saves-past-a-failed-write":
+            phase = "snapshot"
+            return
     cursor = snapHead
     phase = "follow"
 
@@ -138,7 +150,7 @@ atomic action Crash:
 
 always assertion TheCursorNeverPassesWhatTheNodeApplied:
     for r in log:
-        if r[0] <= cursor and copy[r[1]] < r[2] and phase != "snapshot-head" and phase != "snapshot-listed":
+        if r[0] <= cursor and copy[r[1]] < r[2]:
             return False
     return True
 

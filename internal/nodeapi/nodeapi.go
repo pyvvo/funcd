@@ -5,7 +5,7 @@
 //
 // The rules of each request live once, in the control plane's Handler; a driver only carries them, with their errors'
 // api/fault kinds. The port imports no transport library. Two drivers implement it: the HTTPS long poll of
-// internal/nodeapi/longpoll (FEAT-0002 decisions 3 and 9), the default, and core NATS on an embedded server, with no
+// internal/nodeapi/longpoll (ADR-0365 Decision 2), the default, and core NATS on an embedded server, with no
 // JetStream (internal/nodeapi/nats). Each is the production and the test driver alike, as the gateway's embedded driver
 // is (ADR-0012), and both run the same contract suite (nodeapicontract).
 package nodeapi

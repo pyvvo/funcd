@@ -202,6 +202,7 @@ func (a *Agent) follow(ctx context.Context) error {
 	}
 	for ctx.Err() == nil {
 		if resync || a.resync.Swap(false) {
+			resync = true // a snapshot that failed is taken again after the backoff
 			if err := a.syncAll(ctx); errors.Is(err, ErrRestored) {
 				a.saveCursor(restoredMark, 0)
 				return err
@@ -229,7 +230,7 @@ func (a *Agent) follow(ctx context.Context) error {
 		backoff, failing = retryMin, false
 		applied := true
 		for _, c := range feed.Changes {
-			if err := a.apply(ctx, c); err != nil {
+			if err := a.apply(ctx, c); transient(err) {
 				applied = false
 			}
 		}
@@ -305,14 +306,21 @@ func (a *Agent) syncAll(ctx context.Context) error {
 			a.log.WarnContext(ctx, "node agent: fetch a namespace's master", "namespace", ns, "error", err)
 		}
 	}
+	failed := 0
 	for _, c := range snap.Objects {
 		seen[key(c.Kind, c.Namespace, c.Name)] = true
 		if err := a.upsert(ctx, c); err != nil {
 			a.log.WarnContext(ctx, "node agent: apply from the snapshot", "kind", c.Kind, "namespace", c.Namespace, "name", c.Name, "error", err)
+			if transient(err) {
+				failed++
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err // a snapshot cut short saves no revision, so the next start takes it again
+	}
+	if failed > 0 { // a snapshot saves no revision until it is whole, so it is taken again (ADR-0365 Decision 6)
+		return fault.Unavailablef("agent.syncAll", "%d objects of the snapshot failed to write", failed)
 	}
 	for ns := range placed {
 		a.prune(ctx, ns, seen)
@@ -338,9 +346,16 @@ func (a *Agent) syncNamespace(ctx context.Context, ns v1.NamespaceName) {
 	for _, c := range snap.Objects {
 		if err := a.upsert(ctx, c); err != nil {
 			a.log.WarnContext(ctx, "node agent: apply from the snapshot", "kind", c.Kind, "name", c.Name, "error", err)
+			if transient(err) {
+				a.resync.Store(true) // the whole snapshot brings it (ADR-0365 Decision 6)
+			}
 		}
 	}
 }
+
+// transient reports whether a write the node failed may pass when it is made again: any error but its refusal to
+// decode or validate the record (fault.Invalid), which no snapshot brings either.
+func transient(err error) bool { return err != nil && fault.KindOf(err) != fault.Invalid }
 
 // apply applies one feed record to the local copy; an error leaves the copy short of it.
 func (a *Agent) apply(ctx context.Context, c store.Change) error {

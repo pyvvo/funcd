@@ -46,7 +46,13 @@ func joinNode(t *testing.T, opts ...func(*multinode.Config)) *joinedNode {
 // start runs the node's agent until the func it returns is called, and waits until the node follows e1.
 func (n *joinedNode) start(t *testing.T) func() {
 	t.Helper()
-	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+	return n.startVia(t, longpoll.NewConnector())
+}
+
+// startVia is start with the node side of the node API that conn gives.
+func (n *joinedNode) startVia(t *testing.T, conn nodeapi.Connector) func() {
+	t.Helper()
+	a, err := agent.New(agent.Config{Connector: conn, Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
 	require.NoError(t, err)
 	n.agent = a
 	actx, cancel := context.WithCancel(context.Background())

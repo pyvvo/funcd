@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -278,6 +279,46 @@ func TestANodeBehindTheChangeLogsFloorTakesASnapshot(t *testing.T) {
 	onNode(t, n, v1.KindConfigMap, "late", "a node whose revision the change log dropped takes a snapshot", anyConfigMap)
 }
 
+// spy is the node side of the node API, whose clients count the whole snapshots they take, run onSnapshot before each,
+// and pass each feed answer through onFeed.
+type spy struct {
+	nodeapi.Connector
+	snapshots  atomic.Int32
+	onSnapshot func()
+	onFeed     func(nodeapi.Feed) nodeapi.Feed
+}
+
+func (s *spy) Dial(id nodeapi.Identity) (nodeapi.Client, error) {
+	c, err := s.Connector.Dial(id)
+	if err != nil {
+		return nil, err
+	}
+	return spyClient{Client: c, s: s}, nil
+}
+
+type spyClient struct {
+	nodeapi.Client
+	s *spy
+}
+
+func (c spyClient) Snapshot(ctx context.Context, ns v1.NamespaceName) (nodeapi.Snapshot, error) {
+	if ns == "" {
+		c.s.snapshots.Add(1)
+		if c.s.onSnapshot != nil {
+			c.s.onSnapshot()
+		}
+	}
+	return c.Client.Snapshot(ctx, ns)
+}
+
+func (c spyClient) Feed(ctx context.Context, since uint64, timeline string, wait time.Duration) (nodeapi.Feed, error) {
+	f, err := c.Client.Feed(ctx, since, timeline, wait)
+	if err == nil && c.s.onFeed != nil {
+		f = c.s.onFeed(f)
+	}
+	return f, err
+}
+
 // refusing is a node's store that refuses the first writes of the objects named in refuse, as a full disk would.
 type refusing struct {
 	store.Store
@@ -313,11 +354,59 @@ func (s *refusing) Update(ctx context.Context, obj v1.Object) (v1.Object, error)
 func TestAChangeTheNodeFailedToWriteComesWithASnapshot(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)
-	n.node = &refusing{Store: n.node, refuse: map[v1.ObjectName]int{"probe": 1}}
+	n.node = &refusing{Store: n.node, refuse: map[v1.ObjectName]int{"probe": 2}}
 	defer n.start(t)()
 	_, err := n.cp.Create(ctx, configMap("e1", "probe", "1"))
 	require.NoError(t, err)
-	onNode(t, n, v1.KindConfigMap, "probe", "a change the node failed to write comes with the snapshot it takes then", anyConfigMap)
+	onNode(t, n, v1.KindConfigMap, "probe", "a change the node failed to write, in the feed and in the snapshot after it, "+
+		"comes with the next snapshot", anyConfigMap)
+}
+
+// oracle: docs/design/multinode/feed.fizz#TheCursorNeverPassesWhatTheNodeApplied
+func TestAFailedSnapshotIsTakenAgain(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t)
+	n.node = &refusing{Store: n.node, refuse: map[v1.ObjectName]int{"probe": 2}}
+	defer n.start(t)()
+	_, err := n.cp.Create(ctx, configMap("e2", "probe", "1"))
+	require.NoError(t, err)
+	ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+	ns.Name, ns.Spec.Node = "e2", "vm1"
+	_, err = n.cp.Create(ctx, ns)
+	require.NoError(t, err)
+	eventually(t, "a namespace whose snapshot failed, and the whole snapshot after it, comes with the next one", func() bool {
+		_, err := n.node.Get(ctx, v1.KindConfigMap.GVK(), "e2", "probe")
+		return err == nil
+	})
+}
+
+func TestATornCursorReadsAsNone(t *testing.T) {
+	n := joinNode(t)
+	n.start(t)()
+	require.NoError(t, os.WriteFile(filepath.Join(n.dir, "cursor"), []byte("tl 12\n"), 0o600))
+	s := &spy{Connector: longpoll.NewConnector()}
+	defer n.startVia(t, s)()
+	eventually(t, "a node whose cursor a crash tore takes a snapshot", func() bool { return s.snapshots.Load() > 0 })
+}
+
+func TestARecordTheNodeCannotDecodeIsSkipped(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t)
+	n.start(t)()
+	var injected atomic.Bool
+	s := &spy{Connector: longpoll.NewConnector(), onFeed: func(f nodeapi.Feed) nodeapi.Feed {
+		if len(f.Changes) > 0 && injected.CompareAndSwap(false, true) {
+			bad := store.Change{Rev: f.Changes[0].Rev, Type: store.Added, Kind: "Nope", Namespace: "e1", Name: "x", Object: []byte("{}")}
+			f.Changes = append([]store.Change{bad}, f.Changes...)
+		}
+		return f
+	}}
+	defer n.startVia(t, s)()
+	_, err := n.cp.Create(ctx, configMap("e1", "after", "1"))
+	require.NoError(t, err)
+	onNode(t, n, v1.KindConfigMap, "after", "the node follows past a record it cannot decode", anyConfigMap)
+	require.True(t, injected.Load())
+	require.Zero(t, s.snapshots.Load(), "and takes no snapshot for it, which would not bring it either")
 }
 
 func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {

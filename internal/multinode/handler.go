@@ -340,7 +340,7 @@ func (s *Handler) Children(ctx context.Context, node v1.ObjectName) ([]store.Cha
 	return out, nil
 }
 
-// Changes are the node's records after since (decision 3): those of the namespaces placed on it and of the cluster-scoped
+// Changes are the node's records after since (ADR-0365 Decision 4): those of the namespaces placed on it and of the cluster-scoped
 // kinds it follows, as they concern it, so it sees placements come and go, but not the ones it wrote itself. A since older
 // than the change log, or of another timeline of the metastore (one restored from a backup since), is
 // fault.PreconditionFailed: the node starts again from a snapshot.

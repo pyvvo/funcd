@@ -25,7 +25,7 @@ stateDiagram-v2
     s3 --> s3 : Compact, Write
     s3 --> s4 : SnapshotHead
     s4 --> s1 : SnapshotList
-    s4 --> s3 : Crash
+    s4 --> s3 : Crash, SnapshotList
     s4 --> s4 : Compact, Write
     s1 --> [*]
 ```

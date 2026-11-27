@@ -1,4 +1,4 @@
-// Package longpoll is the node API port's HTTPS long-poll driver (FEAT-0002 decisions 3 and 9): HTTPS and JSON on one
+// Package longpoll is the node API port's HTTPS long-poll driver (ADR-0365 Decision 2): HTTPS and JSON on one
 // listener, on the API's own stack (chi and huma), with mTLS for every route but the join. A node long-polls the change log
 // and its call queue, and the control plane never dials it. It is the production driver and the test driver alike.
 package longpoll
@@ -271,7 +271,7 @@ type feedInput struct {
 }
 type feedOutput struct{ Body nodeapi.Feed }
 
-// feed answers GET …/feed?since=&timeline=&wait= (decision 3): the node's records after since, as soon as there is one, or
+// feed answers GET …/feed?since=&timeline=&wait= (ADR-0365 Decision 4): the node's records after since, as soon as there is one, or
 // none once wait passes. A revision the Handler no longer serves is 410: the node starts again from a snapshot.
 func (a *api) feed(ctx context.Context, in *feedInput) (*feedOutput, error) {
 	f, err := nodeapi.WaitForChanges(ctx, a.h, nodeOf(ctx), in.Since, in.Timeline, in.duration())
