@@ -34,7 +34,8 @@ each host on one node.
 - `scenario: an-app-part`: Given a claims shop.example.com on vm1, When an App in a namespace on another node declares
   a Route on it, Then the App is refused (409), as the Route would be.
 - `scenario: another-nodes-namespace-host`: Given e1 on vm1, When a namespace on vm2 claims `e1.<server.baseDomain>`,
-  e1's own host, Then the write is 409 `own host of namespace e1`.
+  e1's own host, Then the write is 409 `own host of namespace e1`; a host under the base that names no namespace is an
+  ordinary one.
 - `scenario: the-namespace-host`: Given a namespace on any node, When an object claims no host, Then it takes its
   namespace's own host, which only its node answers, and no check applies.
 - `scenario: a-nodes-own-route`: Given vm1's reconciler makes a Route for a parent that passed the check, When vm1
@@ -74,7 +75,8 @@ each host on one node.
    Function, a Site, a Lake or an add-on object, written directly or declared as an App's part, is refused with 409
    when a namespace on another node, the control plane's own node counting as one, claims the same host. A disabled
    claim counts. A namespace's own host, under the control plane's `server.baseDomain`, which the nodes are meant to
-   share (ADR-0240), belongs to the node that runs that namespace, so another node's claim on it is 409 too. The host
+   share (ADR-0240), belongs to the node that runs that namespace, so another node's claim on it is 409 too; a host
+   under the base that names no namespace is an ordinary one. The host
    is compared in the edge's spelling (`router.CanonicalHost`). Namespaces on one node share a host under one edge's
    rules.
 3. **Only people's writes are checked.** The check is an admission on the control plane's API (`host-on-one-node`). A
@@ -155,6 +157,10 @@ Done when every test above passes and `just ci` is green.
 - Risk accepted: two claims of one host for namespaces on two nodes, applied at the same moment, can both pass; both
   nodes then answer the host where DNS sends its clients, until a person deletes one claim. Nothing signals it: both
   claims read Ready.
+- Risk accepted: a Namespace made later, under a name another node's namespace already claims as a host, gets that
+  host as its own, so two nodes answer it until one claim goes.
+- A node whose `server.baseDomain` differs from the control plane's gets no such protection for its namespaces'
+  hosts: the check compares under the control plane's.
 
 ## Open questions
 

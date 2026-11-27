@@ -72,13 +72,18 @@ func (a hostOnOneNode) Admit(ctx context.Context, req admission.Request) (v1.Obj
 	if err != nil {
 		return nil, err
 	}
-	// A namespace's own host (ADR-0240) belongs to the node that runs that namespace.
+	// A namespace's own host (ADR-0240) belongs to the node that runs that namespace; a host under the base that names
+	// no namespace is an ordinary one.
 	if owner := edge.NamespaceOfHost(host, a.base); owner != "" && owner != ns {
-		at, err := a.node(ctx, owner)
-		if err != nil {
+		_, err := a.st.Get(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(owner))
+		if err != nil && fault.KindOf(err) != fault.NotFound {
 			return nil, err
 		}
-		if at != mine {
+		at, nerr := a.node(ctx, owner)
+		if nerr != nil {
+			return nil, nerr
+		}
+		if err == nil && at != mine {
 			return nil, fault.Conflictf("admission.host-on-one-node",
 				"host %s is the own host of namespace %s, which %s runs: a host belongs to one node", host, owner, describeNode(at))
 		}

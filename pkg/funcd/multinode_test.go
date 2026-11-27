@@ -170,14 +170,18 @@ func TestAnAppsRouteOnAnotherNodesHostIsRefused(t *testing.T) {
 		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0"}))
 	admin, err := sdk.New("http://"+cp.Addr(), sdk.WithToken(clusterAdmin))
 	require.NoError(t, err)
-	wn := &v1.WorkerNode{TypeMeta: tmeta(v1.KindWorkerNode)}
-	wn.Name = "vm1"
-	_, err = admin.Apply(ctx, wn)
-	require.NoError(t, err)
-	ns := &v1.Namespace{TypeMeta: tmeta(v1.KindNamespace)}
-	ns.Name, ns.Spec.Node = "a", "vm1"
-	_, err = admin.Apply(ctx, ns)
-	require.NoError(t, err)
+	for _, name := range []v1.ObjectName{"vm1", "vm2"} {
+		wn := &v1.WorkerNode{TypeMeta: tmeta(v1.KindWorkerNode)}
+		wn.Name = name
+		_, err = admin.Apply(ctx, wn)
+		require.NoError(t, err)
+	}
+	for ns, node := range map[v1.ObjectName]v1.ObjectName{"a": "vm1", "b": "vm2"} {
+		n := &v1.Namespace{TypeMeta: tmeta(v1.KindNamespace)}
+		n.Name, n.Spec.Node = ns, node
+		_, err = admin.Apply(ctx, n)
+		require.NoError(t, err)
+	}
 	rules := []v1.RouteRule{{Path: "/", Backend: v1.RouteBackend{Function: "f"}}}
 	theirs := &v1.Route{TypeMeta: tmeta(v1.KindRoute)}
 	theirs.Name, theirs.Namespace, theirs.ResourceGroup, theirs.Spec = "r", "a", "rg1", v1.RouteSpec{Host: "shop.example.com", Rules: rules}

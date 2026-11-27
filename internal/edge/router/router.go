@@ -241,7 +241,6 @@ func ruleStance(e Entry, r CompiledRule) (v1.AuthMode, *OIDCAuth) {
 // CanonicalHost is the one spelling a host is claimed and matched by: lowercase, without a port, IPv6 brackets or
 // a trailing dot. The Aggregator claims Entry hosts in it and Resolve matches the Host header in it, so a respelled
 // host is the same claim (ADR-0110 Decision 3) and a Host header carrying a port still matches.
-// CanonicalHost is h as the edge matches it: lower case, with no port, no brackets and no trailing dot.
 func CanonicalHost(h string) string {
 	if host, _, err := net.SplitHostPort(h); err == nil {
 		h = host

@@ -396,6 +396,7 @@ func TestANamespacesOwnHostBelongsToItsNode(t *testing.T) {
 	require.ErrorContains(t, err, "own host of namespace e1")
 	require.Equal(t, fault.Conflict, fault.KindOf(admit(route("d", "r", "api.e1.example.com"))), "nor the control plane's own node")
 	require.NoError(t, admit(route("e1", "r", "e1.example.com")), "e1 claims its own host")
+	require.NoError(t, admit(route("c", "r", "shop.example.com")), "a host under the base that names no namespace is ordinary")
 }
 
 // reader adapts store.Store to admission.StoreReader, as the control plane's wiring does.
