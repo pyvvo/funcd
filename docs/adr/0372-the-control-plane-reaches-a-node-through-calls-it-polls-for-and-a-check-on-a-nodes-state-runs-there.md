@@ -108,8 +108,8 @@ own parts, and the checks that read a node's state run on that node.
   | `NoAnswerAfterItsCallEnded` | always | `scenario: a-node-that-does-not-answer` | `TestACallThatTimesOutRefusesItsLateAnswer` |
   | `NoCallWaitsForAnOfflineNode` | always | `scenario: offline-at-once`, `scenario: needs-an-offline-node` | `TestCallsFailAtOnceForAnOfflineNode` |
 
-- **Bounds**: one call, one node that may stop, an offline window of one tick shorter than a timeout of two (as 3 s is
-  to 10 s), three ticks of time, 6 actions: the smallest scenario in which every mutant fails (at 5 actions `no-drop`
+- **Bounds**: one call, one node that may stop, an offline window of one tick and a timeout of two, kept in the order
+  of 3 s and 10 s (a tick less each also fails every mutant), three ticks of time, 6 actions: the smallest scenario in which every mutant fails (at 5 actions `no-drop`
   passes, at two ticks `no-timeout` does). Wider (a second call, queued while the first is taken, so one poll takes
   both and a timeout drops one of two; 8 actions): pass, 1,479 states, 0.5 s.
 - **Faults**: the node stops for good, once, before or after it takes a call.
@@ -190,8 +190,8 @@ Built ahead of this ADR on the branch of draft PR #1495: `internal/nodeapi/nodea
 kinds), `longpoll/calls.go` (the queue), `nats/nats.go` (`Call`, the serials), `internal/multinode/calls.go`
 (`LogRouter`, `RunLogRouter`), `commands.go` (the command routers, `Nodes`), `admit.go` (`NodeState`, `Forward`), and
 `internal/multinode/agent/report.go` (`serveCalls`, `answer`, `run`, `admit`). This ADR changed the built code: on NATS
-a refused request withdraws its certificate from the calls, and the long poll's call timeout is a field its test
-shortens.
+a request refused as unauthorized withdraws its serial from the calls while it is still the node's, and the long
+poll's call timeout is a field its test shortens.
 
 | Scenario | Test |
 |---|---|

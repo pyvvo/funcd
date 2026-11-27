@@ -353,7 +353,10 @@ func TestALateRequestUnderAReplacedCertificateKeepsTheNodesCalls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	_, err = srv.Call(ctx, "vm1", nodeapi.Call{Kind: nodeapi.CallHoldStatus})
-	require.ErrorIs(t, err, context.DeadlineExceeded, "the call went to the node's new certificate, and waits for its answer")
+	require.ErrorIs(t, err, context.DeadlineExceeded, "the call is not refused as offline, and waits for its answer")
+	got, err := renewed.Calls(context.Background(), time.Second)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "it went to the node's new certificate")
 }
 
 // silentLink relays a node's connection to the node API, and can go silent: it drops every byte and keeps both
