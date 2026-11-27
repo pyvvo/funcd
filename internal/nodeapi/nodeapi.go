@@ -362,7 +362,7 @@ type SecretAnswer struct {
 	Fault      fault.Kind `json:"fault,omitempty"`
 }
 
-// The node call kinds (FEAT-0002 decision 9).
+// The node call kinds (ADR-0372 Decision 1).
 const (
 	CallLogs              = "logs"
 	CallRunLogs           = "runLogs"

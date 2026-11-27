@@ -16,10 +16,11 @@ import (
 // nodeapi.CallTimeout to answer.
 const callOffline = 3 * time.Second
 
-// calls queues the node calls of each node (FEAT-0002 decision 9). A node long-polls its own queue and posts each answer
+// calls queues the node calls of each node (ADR-0372 Decision 2). A node long-polls its own queue and posts each answer
 // back; a call to an offline node fails at once, as decided for a read or an action.
 type calls struct {
-	now func() time.Time
+	now     func() time.Time
+	timeout time.Duration // how long a call waits for its answer: nodeapi.CallTimeout
 
 	mu    sync.Mutex
 	nodes map[v1.ObjectName]*nodeQueue
@@ -39,7 +40,7 @@ type pendingCall struct {
 }
 
 func newCalls(now func() time.Time) *calls {
-	return &calls{now: now, nodes: map[v1.ObjectName]*nodeQueue{}}
+	return &calls{now: now, timeout: nodeapi.CallTimeout, nodes: map[v1.ObjectName]*nodeQueue{}}
 }
 
 func (c *calls) queue(node v1.ObjectName) *nodeQueue {
@@ -84,7 +85,7 @@ func (c *calls) do(ctx context.Context, node v1.ObjectName, call nodeapi.Call) (
 		q.added = nil
 	}
 	c.mu.Unlock()
-	t := time.NewTimer(nodeapi.CallTimeout)
+	t := time.NewTimer(c.timeout)
 	defer t.Stop()
 	select {
 	case a := <-p.done:
@@ -94,7 +95,7 @@ func (c *calls) do(ctx context.Context, node v1.ObjectName, call nodeapi.Call) (
 		return a, nil
 	case <-t.C:
 		c.drop(node, call.ID)
-		return nodeapi.Answer{}, fault.Unavailablef(op, "worker node %s did not answer within %s", node, nodeapi.CallTimeout)
+		return nodeapi.Answer{}, fault.Unavailablef(op, "worker node %s did not answer within %s", node, c.timeout)
 	case <-ctx.Done():
 		c.drop(node, call.ID)
 		return nodeapi.Answer{}, ctx.Err()
@@ -155,7 +156,7 @@ func (c *calls) poll(ctx context.Context, node v1.ObjectName, wait time.Duration
 	}
 }
 
-// answer delivers node's answer to call id. A node answers only its own calls (the sender check of decision 9).
+// answer delivers node's answer to call id. A node answers only its own calls (ADR-0372 Decision 3).
 func (c *calls) answer(node v1.ObjectName, id string, a nodeapi.Answer) error {
 	c.mu.Lock()
 	p, ok := c.queue(node).inflight[id]

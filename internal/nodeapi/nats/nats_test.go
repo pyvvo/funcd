@@ -283,6 +283,40 @@ func TestANodeThatLeavesIsOfflineAtOnce(t *testing.T) {
 	t.Logf("calls fail at once %s after the node left", time.Since(left).Round(time.Millisecond))
 }
 
+// ended is a stub whose admission refuses every request once end is set, as a certificate past its end is (ADR-0364).
+type ended struct {
+	stub
+	end atomic.Bool
+}
+
+func (e *ended) Admit(context.Context, nodeapi.Peer) error {
+	if e.end.Load() {
+		return fault.Unauthorizedf("stub.admit", "this node certificate ended")
+	}
+	return nil
+}
+
+// A node whose certificate the control plane no longer takes gets no call, though its link is open: its answers are NATS
+// replies, which no admission checks, so a refused request withdraws its certificate from the calls.
+func TestANodeWhoseCertificateEndedGetsNoCall(t *testing.T) {
+	srv, ca := listen(t)
+	h := &ended{}
+	serve(t, srv, h)
+	c, err := natsdriver.NewConnector().Dial(identity(t, ca, "nats://"+srv.Addr(), "vm1"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	answerCalls(t, c)
+	require.Eventually(t, func() bool { return holdStatus(srv) == nil }, 10*time.Second, 20*time.Millisecond)
+	h.end.Store(true)
+	_, err = c.Feed(context.Background(), 0, "t", time.Millisecond)
+	require.Equal(t, fault.Unauthorized, fault.KindOf(err))
+	start := time.Now()
+	err = holdStatus(srv)
+	require.Equal(t, fault.Unavailable, fault.KindOf(err), "a call to it fails at once")
+	require.ErrorContains(t, err, "is offline")
+	require.Less(t, time.Since(start), time.Second)
+}
+
 // silentLink relays a node's connection to the node API, and can go silent: it drops every byte and keeps both
 // connections open, as a link that fails with no reset does.
 type silentLink struct {

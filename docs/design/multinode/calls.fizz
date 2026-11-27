@@ -1,0 +1,87 @@
+---
+# A node call (ADR-0372, FEAT-0002 F250). The control plane sends one call to a node, which it never dials: on the long
+# poll it queues the call for the node's next poll, and a node with no poll open and none within OFFLINE ticks is
+# offline, so the call fails at once; the node takes the call with a poll, and answers it later, or never if it stops.
+# The caller waits TIMEOUT ticks at most, then drops the call, after which an answer to it is refused. Time passes in
+# ticks; every action is atomic. Environment: a poll, the queue and the answer are each one step (the queue's lock);
+# a poll that is open counts as one within OFFLINE (calls.online); the caller's timer fires at its deadline, before time
+# moves on; NATS has the same shape, with no responders as the offline answer.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 6
+  crash_on_yield: false
+---
+# diagram: call
+# mutant no-timeout: NoCallWaitsPastItsTimeout
+# mutant no-drop: NoAnswerAfterItsCallEnded
+# mutant no-offline-check: NoCallWaitsForAnOfflineNode
+
+# no-timeout: the caller waits for an answer however long it takes. no-drop: a call that timed out stays in flight, so a
+# late answer reaches it. no-offline-check: a call to an offline node is queued anyway.
+MUTANT = ""
+
+OFFLINE = 1
+TIMEOUT = 2
+T_END = 4
+
+action Init:
+    clock = 0
+    running = True
+    lastPoll = 0
+    call = "none"
+    sentAt = 0
+    offlineAtSend = False
+    lateAnswer = False
+
+atomic fair action Tick:
+    require clock < T_END
+    if MUTANT != "no-timeout":
+        require not (call in ["queued", "taken"] and clock - sentAt >= TIMEOUT)
+    clock += 1
+
+atomic action Poll:
+    require running
+    lastPoll = clock
+    if call == "queued":
+        call = "taken"
+
+atomic action Stop:
+    require running
+    running = False
+
+atomic action Send:
+    require call == "none"
+    sentAt = clock
+    offline = clock - lastPoll > OFFLINE
+    offlineAtSend = offline
+    if offline and MUTANT != "no-offline-check":
+        call = "offline"
+    else:
+        call = "queued"
+
+atomic action Answer:
+    require running and call in ["taken", "dropped"]
+    if call == "dropped":
+        if MUTANT == "no-drop":
+            lateAnswer = True
+        return
+    call = "answered"
+
+atomic fair action Timeout:
+    require call in ["queued", "taken"] and clock - sentAt >= TIMEOUT
+    if MUTANT == "no-timeout":
+        return
+    if MUTANT == "no-drop":
+        call = "dropped"
+        return
+    call = "timedout"
+
+always assertion NoCallWaitsPastItsTimeout:
+    return not (call in ["queued", "taken"] and clock - sentAt > TIMEOUT)
+
+always assertion NoAnswerAfterItsCallEnded:
+    return not lateAnswer
+
+always assertion NoCallWaitsForAnOfflineNode:
+    return not (offlineAtSend and call in ["queued", "taken", "answered"])

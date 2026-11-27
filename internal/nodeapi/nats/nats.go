@@ -301,6 +301,13 @@ func (s *server) serve(ctx context.Context, h nodeapi.Handler, m *nats.Msg, node
 	p := nodeapi.Peer{Node: node, Serial: serial, APIVersion: version, Version: m.Header.Get(headerVersion),
 		Platform: m.Header.Get(headerPlatform)}
 	if err := h.Admit(ctx, p); err != nil {
+		if fault.KindOf(err) == fault.Unauthorized { // a certificate the control plane no longer takes gets no call (ADR-0372 Decision 2)
+			s.mu.Lock()
+			if s.serials[node] == serial {
+				delete(s.serials, node)
+			}
+			s.mu.Unlock()
+		}
 		return nil, err
 	}
 	s.mu.Lock()
