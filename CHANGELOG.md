@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.0](https://github.com/pyvvo/funcd/compare/v0.53.0...v0.54.0) (2026-11-27)
+
+
+### Features
+
+* **funcdctl:** app deploy and app delete show their progress as a live view (ADR-0362) ([#1607](https://github.com/pyvvo/funcd/issues/1607)) ([f4c36d0](https://github.com/pyvvo/funcd/commit/f4c36d05c98577b0f3a323633bc3cbd51a1bde7e))
+
 ## [0.53.0](https://github.com/pyvvo/funcd/compare/v0.52.0...v0.53.0) (2026-11-27)
 
 
