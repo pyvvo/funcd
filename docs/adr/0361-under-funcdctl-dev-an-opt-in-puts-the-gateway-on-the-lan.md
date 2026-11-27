@@ -45,14 +45,14 @@ A *LAN address* is an IPv4 address of one of the machine's interfaces that is up
 - `dev-lan-loopback-kept` — *Given* `--lan`, *when* a client dials the control plane's port and the S3 frontend's
   port on a LAN address, *then* both connections are refused, and both services answer on 127.0.0.1.
 - `dev-lan-one-address` — *Given* `--lan=<a LAN address>`, *then* the gateway answers on that address, a call on
-  127.0.0.1 is refused, and the banner's gateway lines name that address, with the LAN warning.
+  127.0.0.1 is refused, and the banner's title and gateway lines name that address, with the LAN warning.
 - `dev-lan-banner` — *Given* `dev.lan: true` in `funcdctl.config.yaml`, an App with a Route `/api` that names no host,
   a Route on host `login.localhost` and a Site `web`, and two LAN addresses at start, *when* dev prints its banner,
   *then* the gateway's line, the `/api` line and the Site's line each have one network line per address beneath
   them, the `login.localhost` line has none, the control and s3 lines name 127.0.0.1, and the LAN warning is printed.
-- `dev-lan-refused` — *When* dev starts, in a directory with no `funcdctl.config.yaml`, with `--lan=tv.local` or with
-  `--lan 192.168.1.20` (a space), a directory after it or not, or with `dev.lan: 3` in that file, *then* it refuses to
-  start: `tv.local` and `3` are named with what the option takes, and the space form is told to write
+- `dev-lan-refused` — *When* dev starts with no `funcdctl.config.yaml` and `--lan=tv.local`, or `--lan 192.168.1.20`
+  (a space) with or without a directory after it, or with a `funcdctl.config.yaml` that sets `dev.lan: 3`, *then* it
+  refuses to start: `tv.local` and `3` are named with what the option takes, and the space form is told to write
   `--lan=192.168.1.20`.
 
 ## Scope
@@ -124,9 +124,10 @@ A *LAN address* is an IPv4 address of one of the machine's interfaces that is up
    Function's `POST` line in folder mode, and in App mode each Route's and Site's line that names no host. A line with
    a host gets none, since that rule answers only on its host (ADR-0110 Decision 1). While the gateway listens off
    loopback, as `platformconfig.IsLoopbackAddr` judges the bound address (the check `checkDevTokenBind` makes), the
-   title reads `serving on localhost and the LAN` in place of `serving on localhost`, and the banner warns `⚠ the
-   gateway is reachable from the LAN without authentication: anyone on the network can call every Function, Route
-   and Site`, above the egress warning. The control, s3 and reload lines keep 127.0.0.1.
+   title reads `serving on localhost and the LAN` on every address and `serving on localhost and <address>` on one, in
+   place of `serving on localhost`, and the banner warns `⚠ the gateway is reachable from the LAN without
+   authentication: anyone on the network can call every Function, Route and Site`, above the egress warning. The
+   control, s3 and reload lines keep 127.0.0.1.
 
 ## Design model
 
