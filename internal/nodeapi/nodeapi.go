@@ -31,7 +31,7 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// APIVersion is the node API version this release speaks (FEAT-0002 decision 12): a node sends it with every request.
+// APIVersion is the node API version this release speaks (ADR-0374): a node sends it with every request.
 const APIVersion = 1
 
 // SupportedAPIVersions are the node API versions a control plane serves: the current one, and the previous one once
@@ -184,7 +184,7 @@ type Handler interface {
 	// Join swaps a one-time join token for a node certificate (ADR-0364 Decision 2): the one request of a node that holds none.
 	Join(ctx context.Context, in JoinRequest) (JoinResponse, error)
 	// Admit lets p's request in: fault.Unauthorized for a node that is not declared, or a certificate that is not its
-	// current one or is past its end, fault.Conflict for a release newer than the control plane's (decision 12). It
+	// current one or is past its end, fault.Conflict for a release newer than the control plane's (ADR-0374). It
 	// records the contact.
 	Admit(ctx context.Context, p Peer) error
 	// Renew signs a new certificate for node's key; the node's certificate stays its own until a request under the new one.

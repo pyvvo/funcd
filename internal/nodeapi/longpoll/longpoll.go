@@ -45,7 +45,7 @@ const (
 	pathRenew    = "/node/v1/renew"
 )
 
-// The headers of a node's request (decision 12): the node API version it speaks, its release and its platform.
+// The headers of a node's request (ADR-0374): the node API version it speaks, its release and its platform.
 const (
 	headerAPIVersion = "Funcd-Node-Api"
 	headerVersion    = "Funcd-Node-Version"

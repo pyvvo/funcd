@@ -27,7 +27,7 @@ type HandlerConfig struct {
 	Secrets   SecretWriter
 	Held      func() bool // the control plane is held after its restore; nil ⇒ never
 	Logger    *slog.Logger
-	Version   string // the control plane's release (decision 12)
+	Version   string // the control plane's release (ADR-0374)
 	Now       func() time.Time
 }
 
@@ -52,7 +52,7 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 
 // Admit lets a joined node in by the certificate it joined with, or the one it renewed it with: one its WorkerNode names,
 // so a new join or a deleted WorkerNode ends the old ones, and the first request with a renewed certificate ends the one
-// before. A node on a newer release than the control plane's is refused (decision 12).
+// before. A node on a newer release than the control plane's is refused (ADR-0374).
 func (s *Handler) Admit(ctx context.Context, p nodeapi.Peer) error {
 	const op = "multinode.Admit"
 	if newerRelease(p.Version, s.cfg.Version) {

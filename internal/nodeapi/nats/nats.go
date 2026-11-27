@@ -51,7 +51,7 @@ const (
 	joinInbox   = "_INBOX_join"
 )
 
-// The headers of a node's request (decision 12), and of each chunk of an answer.
+// The headers of a node's request (ADR-0374), and of each chunk of an answer.
 const (
 	headerAPIVersion = "Funcd-Node-Api"
 	headerVersion    = "Funcd-Node-Version"

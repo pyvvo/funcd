@@ -14,7 +14,7 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// newerRelease reports whether a node's release is newer than the control plane's (FEAT-0002 decision 12): a node runs
+// newerRelease reports whether a node's release is newer than the control plane's (ADR-0374): a node runs
 // the control plane's release or an older one, never a newer one. Releases that do not order, such as a build of a
 // branch, pass.
 func newerRelease(node, controlPlane string) bool {
@@ -22,7 +22,7 @@ func newerRelease(node, controlPlane string) bool {
 	return ok && c > 0
 }
 
-// FieldVersions are the spec fields that need a node API newer than its first version (decision 12), by kind and by
+// FieldVersions are the spec fields that need a node API newer than its first version (ADR-0374), by kind and by
 // JSON path such as "spec.retry", which goes through the items of a list, and through a map's values as "*": a write that
 // sets one into a namespace whose node speaks an older version is refused.
 type FieldVersions map[v1.Kind]map[string]int
@@ -30,7 +30,7 @@ type FieldVersions map[v1.Kind]map[string]int
 // nodeFields is this release's FieldVersions: none while the node API has its first version only.
 func nodeFields() FieldVersions { return FieldVersions{} }
 
-// nodeTooOld refuses a spec field that the node of the object's namespace is too old to run (decision 12). A node that
+// nodeTooOld refuses a spec field that the node of the object's namespace is too old to run (ADR-0374). A node that
 // has not joined yet has no known version, and a namespace on the control plane's own node has none to check.
 type nodeTooOld struct {
 	st        store.Store
