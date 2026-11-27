@@ -1,6 +1,6 @@
 ---
 name: brief
-description: Brief the decider on one decision in plain short words so they can decide without reading the whole document. Refine mode takes a needs-adr card, an issue or an agent report before its ADR exists; acceptance mode takes a Proposed ADR. Use for "summarize ADR-NNNN / card 07", "TL;DR of the ADR", "should I accept ADR-NNNN?", "refine card 07", "let's refine the next decision", "next card", "brief ADR-NNNN". Follow-ups inside a brief: "explain this with an example", "any caveat?", "what do you choose?", "I don't get the number". It explains, recommends and asks; the decider decides. It does not judge (run `adr-judge` first if there is no verdict), write the ADR (`adr`) or fix defects (`/fix`).
+description: Brief the decider on one decision in plain short words so they can decide without reading the whole document. Refine mode takes a needs-adr card, an issue or an agent report before its ADR exists; acceptance mode takes a Proposed ADR. Use for "summarize ADR-NNNN / card 07", "TL;DR of the ADR", "should I accept ADR-NNNN?", "refine card 07", "let's refine the next decision", "next card", "brief ADR-NNNN". Follow-ups inside a brief: "explain this with an example", "show me", "any caveat?", "what do you choose?", "I don't get the number". It explains, recommends and asks; the decider decides. It does not judge (run `adr-judge` first if there is no verdict), write the ADR (`adr`) or fix defects (`/fix`).
 ---
 
 # Brief the decider
@@ -28,8 +28,14 @@ decision in one read, on any screen, between other work. Two modes share one sty
 ## Style (both modes)
 
 - Short plain sentences, one idea each, the answer first. Technical terms are fine; do not explain them.
-- **One small concrete example** in an ASCII or YAML block: real names from the code or the ADR, before and after,
-  the measured numbers. Mermaid does not render in the chat.
+- **One small concrete example, drawn**, with real names from the code or the ADR, before and after, the measured
+  numbers. What a user or an operator sees (a command's output, a banner, a page, a status) is a mockup with the inline
+  widget tool, `mcp__visualize__show_widget` after `mcp__visualize__read_me` with the `mockup` module: today and the
+  proposal side by side or one above the other, in the platform's own colors and shapes. A process, a state machine or
+  an architecture is drawn with the `diagram` skill, which shows inline too. The reply's text says what the picture
+  shows; the picture holds no prose. A code block stays only for exact text the decider must read as written: a
+  manifest, a config key, a command line. In a session with no widget tool, an ASCII block. Mermaid does not render in
+  the chat.
 - A table for a comparison of two or more things, or one line per item when short.
 - No line-by-line detail, no contract text, no history of how it was found: the ADR holds the depth.
 - At most four questions, numbered, each answerable by a choice; the decider replies "1. ok 2. B".
@@ -38,7 +44,8 @@ decision in one read, on any screen, between other work. Two modes share one sty
 ## Refine mode — one card per message
 
 1. **Title:** `**Card NN (#issues): <the problem in plain words>**`
-2. **Today:** one or two sentences, then the example.
+2. **Today:** one or two sentences, then the example, drawn as Style says, with the proposal beside it when it changes
+   what someone sees.
 3. **Cause:** one sentence with the `file:line`.
 4. **Options:** `A`, `B`, `C`, one or two lines each: what it does and its cost; one marked **(recommended)**; the
    Accepted or Implemented ADRs it supersedes or refines (header links), in a few words each.
@@ -58,7 +65,7 @@ recommend running `adr-judge` first.
    the last verdict, the card or issues it answers.
 2. **It decides:** three to five bullets, one line each.
 3. **What changes for users and operators:** behavior, new config keys, kinds, fields and CLI flags (with
-   defaults), new status reasons — one line each, with one example when the change is visible.
+   defaults), new status reasons — one line each, with one example, drawn, when the change is visible.
 4. **Choices:** the decider's own choices (to recall) and any choice an agent made that the decider has not
    confirmed (to confirm). The second group must be empty before acceptance.
 5. **Deferred / debt:** the judge's routed findings and where each goes, workarounds (exit criterion), open
@@ -75,7 +82,8 @@ row). On a change: revise, re-judge if the change is substantive, and brief agai
 
 ## Follow-ups (both modes)
 
-- **"Explain X with an example":** a smaller example, two or three named things, today versus proposed.
+- **"Explain X with an example", "show me", "a schema":** a smaller example, drawn as Style says: two or three named
+  things, today versus proposed.
 - **"What do you choose?":** one line per open question: the choice and its one-line reason.
 - **"Any caveat?":** the real cost in one or two bullets, then how to reduce it (a mitigation is offered as an
   option, never added silently).
@@ -94,7 +102,8 @@ row). On a change: revise, re-judge if the change is substantive, and brief agai
 
 ## Examples
 
-Illustrative (from the ADR-0150 draft). Refine:
+Illustrative (from the ADR-0150 draft). Its change shows in no output, so its example stays text; a change someone
+sees is drawn (2026-11-27: `funcdctl app deploy`'s live view, sketched as a mockup of the dev banner's box). Refine:
 
 ```
 **Card 25 (#518): int64 contract range**
