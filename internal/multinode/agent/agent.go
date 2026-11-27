@@ -426,7 +426,7 @@ func (a *Agent) removeNamespace(ctx context.Context, ns v1.NamespaceName) {
 	a.log.InfoContext(ctx, "node agent: namespace left this node", "namespace", ns)
 }
 
-// dropTokens removes the API tokens that span none of the node's namespaces any more (decision 7).
+// dropTokens removes the API tokens that span none of the node's namespaces any more (ADR-0370 Decision 4).
 func (a *Agent) dropTokens(ctx context.Context) {
 	res, err := a.cfg.Store.List(ctx, v1.KindAPIToken.GVK(), store.ListOptions{})
 	if err != nil {

@@ -197,7 +197,7 @@ func (s *Handler) mustBePlacedOn(ctx context.Context, op string, ns v1.Namespace
 }
 
 // concerns reports whether node takes the cluster-scoped obj whole: its own Namespaces, the API tokens that span one of
-// them (decision 7), and every object of the other kinds it follows.
+// them (ADR-0370 Decision 4), and every object of the other kinds it follows.
 func (s *Handler) concerns(ctx context.Context, node v1.ObjectName, obj v1.Object) bool {
 	switch o := obj.(type) {
 	case *v1.Namespace:

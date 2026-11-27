@@ -1,4 +1,4 @@
-// Package apitoken is the API tokens kept in the metastore (FEAT-0002 F248, decision 7). An admin mints a token for a
+// Package apitoken is the API tokens kept in the metastore (ADR-0370). An admin mints a token for a
 // declared APIToken; funcd shows it once and keeps the SHA-256 of its secret with an expiry. The API and the edge of
 // every node check it against their own store, so a token works, changes and ends with no restart.
 package apitoken

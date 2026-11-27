@@ -7,7 +7,7 @@ import (
 )
 
 // NodeKinds are the cluster-scoped kinds a node follows, besides its Namespaces: the runtimes its workers run on, the API
-// tokens that span one of its namespaces (decision 7), and the add-ons with the revisions their objects pin (ADR-0339).
+// tokens that span one of its namespaces (ADR-0370 Decision 4), and the add-ons with the revisions their objects pin (ADR-0339).
 func NodeKinds() []v1.Kind {
 	return []v1.Kind{v1.KindRuntimeClass, v1.KindAPIToken, v1.KindAddon, v1.KindAddonRevision}
 }

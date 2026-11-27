@@ -2,7 +2,7 @@ package v1alpha1
 
 import "github.com/pyvvo/funcd/api/fault"
 
-// APIToken is an API token kept as a hash (FEAT-0002 F248, decision 7): an admin declares the role and the namespaces
+// APIToken is an API token kept as a hash (ADR-0370): an admin declares the role and the namespaces
 // of its caller, then mints it. funcd shows the token once and keeps only the SHA-256 of its secret, with an expiry.
 // The API and the edge of every node check it, so it works, changes and ends with no restart.
 type APIToken struct {
