@@ -1,11 +1,12 @@
 # ADR-0361: Under funcdctl dev, an opt-in puts the gateway on the LAN, and every other listener stays on loopback
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-11-27), by the decider ("accept with --lan", relayed word for word by the DR session, to
+  which the decider gave the decision), after three rounds of an independent judge at medium effort, every finding folded
 - **Date**: 2026-11-27
 - **Deciders**: green-0-rabbit
 - **Tags**: dev, cli, edge, security
 - **Realizes**: [FEAT-0012/F278](../feat/0012-feat-infrastack.md) (dev's gateway on the LAN)
-- **Supersedes (in part)**, with a back-link at acceptance: [ADR-0125](0125-funcdctl-dev-local-run.md) Decision 1's
+- **Supersedes (in part)**, with a back-link: [ADR-0125](0125-funcdctl-dev-local-run.md) Decision 1's
   "serves on localhost", which now holds without the opt-in only: with it, the gateway also serves on the LAN
 - **Relates to**: [ADR-0254](0254-funcdctl-dev-config-file.md) (a key added to its file) ·
   [ADR-0253](0253-funcdctl-dev-runs-an-app-template.md) (the App's banner, Decision 11) ·
