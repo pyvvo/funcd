@@ -125,6 +125,24 @@ def issues(state="open", label=None):
     return json.loads(gh(*args))
 
 
+def set_status(number, name):
+    """Set issue #number's status to the repo's status called name, in any case; return that status's name."""
+    owner, repo = REPO.split("/")
+    query = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){"
+             "planningStatuses(first:20){nodes{id name}} issue(number:$n){id}}}")
+    data = json.loads(gh("api", "graphql", "-f", f"query={query}", "-f", f"o={owner}", "-f", f"r={repo}",
+                         "-F", f"n={number}"))["data"]["repository"]
+    if not data["issue"]:
+        sys.exit(f"error: {REPO} has no issue #{number}")
+    statuses = {st["name"].lower(): st for st in data["planningStatuses"]["nodes"]}
+    status = statuses.get(name.lower())
+    if not status:
+        sys.exit(f"error: {REPO} has no issue status {name!r}; it has {', '.join(st['name'] for st in statuses.values())}")
+    mutation = "mutation($i:ID!,$s:ID!){setIssueStatus(input:{issueId:$i,statusId:$s}){issue{number}}}"
+    gh("api", "graphql", "-f", f"query={mutation}", "-f", f"i={data['issue']['id']}", "-f", f"s={status['id']}")
+    return status["name"]
+
+
 def names(labels):
     return " ".join(sorted(lb["name"] for lb in labels))
 
@@ -209,8 +227,9 @@ def cmd_create(a):
     if a.needs_adr:
         labels.append("needs-adr")
     body = check_body(a.kind, sys.stdin.read() if a.body_file == "-" else Path(a.body_file).read_text())
+    status = "Backlog" if a.kind == "feature" else None
     if a.dry_run:
-        print(f"title:  {a.title}\nlabels: {' '.join(labels)}\n\n{body}")
+        print(f"title:  {a.title}\nlabels: {' '.join(labels)}" + (f"\nstatus: {status}" if status else "") + f"\n\n{body}")
         return
     missing = [lb for lb in labels if lb not in live_labels()]
     if missing:
@@ -221,7 +240,14 @@ def cmd_create(a):
     args = ["issue", "create", "-R", REPO, "--title", a.title, "--body-file", "-"]
     for lb in labels:
         args += ["--label", lb]
-    print(gh(*args, stdin=body).strip())
+    url = gh(*args, stdin=body).strip()
+    print(url)
+    if status:
+        print(f"status: {set_status(int(url.rstrip('/').rsplit('/', 1)[-1]), status)}")
+
+
+def cmd_status(a):
+    print(f"#{a.number} {set_status(a.number, a.name)}")
 
 
 def cmd_edit(a):
@@ -349,13 +375,16 @@ def main():
     s.add_argument("number", type=int)
     s.add_argument("--add", action="append", default=[])
     s.add_argument("--remove", action="append", default=[])
+    s = sub.add_parser("status")
+    s.add_argument("number", type=int)
+    s.add_argument("name", help="an issue status of the repo, such as Backlog, Todo, In progress, In review or Done")
     s = sub.add_parser("labels")
     s.add_argument("--sync", action="store_true")
     s = sub.add_parser("forms")
     s.add_argument("--check", action="store_true")
     a = p.parse_args()
     {"list": cmd_list, "show": cmd_show, "template": cmd_template, "create": cmd_create,
-     "edit": cmd_edit, "relabel": cmd_relabel, "labels": cmd_labels, "forms": cmd_forms}[a.cmd](a)
+     "edit": cmd_edit, "relabel": cmd_relabel, "status": cmd_status, "labels": cmd_labels, "forms": cmd_forms}[a.cmd](a)
 
 
 if __name__ == "__main__":

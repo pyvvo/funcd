@@ -1,6 +1,6 @@
 ---
 name: issue-management
-description: File and triage funcd's GitHub issues (pyvvo/funcd) in the fixed issue shape and label taxonomy — create an issue, list or show issues, relabel one, sync the repo's labels, or regenerate the issue forms. Use whenever asked to open, record, file, triage or label an issue (a bug, a flaky test, a task, a feature request), or to change the issue shapes or the labels. The shapes and labels live in driver.py, which checks every issue before filing it.
+description: File and triage funcd's GitHub issues (pyvvo/funcd) in the fixed issue shape and label taxonomy — create an issue, list or show issues, relabel one, set its status, sync the repo's labels, or regenerate the issue forms. Use whenever asked to open, record, file, triage or label an issue (a bug, a flaky test, a task, a feature request), or to change the issue shapes or the labels. The shapes and labels live in driver.py, which checks every issue before filing it.
 ---
 
 # issue-management — funcd's GitHub issues, in one shape
@@ -122,6 +122,16 @@ issue's `kind/` label, so a bug filed before the Design check gets one at its ne
 ```bash
 python3 .claude/skills/issue-management/driver.py show 13 --body > issue.md   # the body only
 python3 .claude/skills/issue-management/driver.py edit 13 --body-file issue.md [--title "<new title>"]
+```
+
+## Issue statuses
+
+An issue also has a status, one of the repo's issue statuses: Backlog, Todo, In progress, In review, Done, Not planned
+and Duplicate. An unbuilt feature issue carries Backlog, so `create --kind feature` sets it; the other kinds get none.
+`status` sets one by its name, in any case:
+
+```bash
+python3 .claude/skills/issue-management/driver.py status <N> "In review"
 ```
 
 ## Features: one tracker per epoch, one issue per feature row
