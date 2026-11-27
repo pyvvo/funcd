@@ -36,7 +36,7 @@ const (
 // RenewalDue reports whether a certificate that ends at notAfter is to be renewed.
 func RenewalDue(notAfter, now time.Time) bool { return now.After(notAfter.Add(-renewWithin)) }
 
-// CA is the cluster's certificate authority (FEAT-0002 decision 2). It signs the node API's server certificate and each
+// CA is the cluster's certificate authority (ADR-0364 Decision 3). It signs the node API's server certificate and each
 // node's client certificate; its key stays in the control plane's cluster directory.
 type CA struct {
 	cert *x509.Certificate
@@ -199,7 +199,7 @@ func (c *CA) SignNode(csrPEM []byte, node v1.ObjectName, now time.Time) ([]byte,
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), serial.Text(16), notAfter, nil
 }
 
-// ServerTLS is the node API's TLS (FEAT-0002 decision 2): a certificate for hosts that the CA signs, signed again before
+// ServerTLS is the node API's TLS (ADR-0364 Decisions 3 and 4): a certificate for hosts that the CA signs, signed again before
 // it ends, and the certificates of the nodes the CA signed, verified when a node gives one: the join comes with none.
 func (c *CA) ServerTLS(hosts []string, now func() time.Time) (*tls.Config, error) {
 	cert := &serverCertificate{ca: c, hosts: hosts, now: now}

@@ -181,7 +181,7 @@ func (s Schemes) of(server string) (Connector, error) {
 // of a joined node, then the request's own method as the node Admit let in. Errors are api/fault kinds, which reach the
 // node as they are.
 type Handler interface {
-	// Join swaps a one-time join token for a node certificate (decision 2): the one request of a node that holds none.
+	// Join swaps a one-time join token for a node certificate (ADR-0364 Decision 2): the one request of a node that holds none.
 	Join(ctx context.Context, in JoinRequest) (JoinResponse, error)
 	// Admit lets p's request in: fault.Unauthorized for a node that is not declared or a certificate that is not its
 	// current one, fault.Conflict for a release newer than the control plane's (decision 12). It records the contact.

@@ -19,9 +19,10 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// The join tokens' lifetime: defaultTokenTTL unless asked, maxTokenTTL at most.
+// The join tokens' lifetime: defaultTokenTTL unless asked, from minTokenTTL to maxTokenTTL.
 const (
 	defaultTokenTTL = time.Hour
+	minTokenTTL     = time.Second
 	maxTokenTTL     = 24 * time.Hour
 )
 
@@ -161,8 +162,8 @@ func (c *Cluster) MintJoinToken(ctx context.Context, node v1.ObjectName, ttl tim
 	switch {
 	case ttl == 0:
 		ttl = defaultTokenTTL
-	case ttl < 0 || ttl > maxTokenTTL:
-		return "", time.Time{}, fault.Invalidf(op, "a join token lives from a second to %s, not %s", maxTokenTTL, ttl)
+	case ttl < minTokenTTL || ttl > maxTokenTTL:
+		return "", time.Time{}, fault.Invalidf(op, "a join token lives from %s to %s, not %s", minTokenTTL, maxTokenTTL, ttl)
 	}
 	secret, err := newSecret()
 	if err != nil {

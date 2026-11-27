@@ -23,7 +23,7 @@ recovery](disaster-recovery.md).
 | Where | What happens | Time | You see | Status | Source |
 |---|---|---|---|---|---|
 | Declaring a node | An admin applies a WorkerNode by name before its machine exists; it reads Pending until a node joins under that name | none | `NotJoined` | decided | decider 2026-11-16, #1482 |
-| A join token | `funcdctl node token` mints a token bound to the node's name, kept only as a hash; a new token ends an unused old one | `defaultTokenTTL` 1 h, at most `maxTokenTTL` 24 h | the token, shown once | decided | decider 2026-11-16, #1479, `TestAJoinTokenNeedsADeclaredNodeAndABoundedLife` |
+| A join token | `funcdctl node token` mints a token bound to the node's name, kept only as a hash; a new token ends an unused old one | `defaultTokenTTL` 1 h, from `minTokenTTL` 1 s to `maxTokenTTL` 24 h | the token, shown once | decided | decider 2026-11-16, #1479, `TestAJoinTokenNeedsADeclaredNodeAndABoundedLife` |
 | Joining | `funcd node join` checks the CA the token names before it sends the token, then swaps it for a node certificate; a used or expired token is refused | none | `joined as worker node <name>`; 403 | decided | decider 2026-11-16, #1479, `TestAJoinRefusesAControlPlaneWithAnotherCA` |
 | A name a running node holds | A join under the name of a node that polls is refused, so no machine takes over another's name | none | 409 `a running node holds the name` | decided | decider 2026-11-16, #1479 |
 | A certificate near its end | The node renews its certificate in the last third of its life, and its first call with the new one ends the old one; a node away past the end joins again. The node API signs its own again too | `certLifetime` 8760 h, `renewWithin` its last third, looked at every `renewEvery` 1 h | `node certificate renewed` | accepted | `TestANodeRenewsItsCertificateBeforeItEnds` |
@@ -95,6 +95,7 @@ recovery](disaster-recovery.md).
 | `certLifetime` | 8760h | `internal/multinode/ca.go` |
 | `defaultTokenTTL` | 1h | `internal/multinode/cluster.go` |
 | `maxTokenTTL` | 24h | `internal/multinode/cluster.go` |
+| `minTokenTTL` | 1s | `internal/multinode/cluster.go` |
 | `feedLimit` | 500 | `internal/multinode/handler.go` |
 | `defaultReadyFor` | 40s | `internal/multinode/liveness.go` |
 | `defaultSeenEvery` | 30s | `internal/multinode/liveness.go` |

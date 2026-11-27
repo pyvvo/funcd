@@ -11,7 +11,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// tokenPrefix marks a join token in the k3s "K10" form: K10<CA hash>::<node>:<secret> (FEAT-0002 decision 2).
+// tokenPrefix marks a join token in the k3s "K10" form: K10<CA hash>::<node>:<secret> (ADR-0364 Decision 1).
 const tokenPrefix = "K10"
 
 // Token is a one-time join token bound to one node's name. CAHash lets the node check it reached the real control plane

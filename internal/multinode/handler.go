@@ -63,14 +63,23 @@ func (s *Handler) Admit(ctx context.Context, p nodeapi.Peer) error {
 		return fault.Unauthorizedf(op, "worker node %s is not declared", p.Node)
 	}
 	n, ok := obj.(*v1.WorkerNode)
-	switch renewed := ok && n.Status.RenewedCertificate.Is(p.Serial); {
+	var cert *v1.NodeCertificate
+	switch {
 	case ok && n.Status.Certificate.Is(p.Serial):
-	case renewed:
+		cert = n.Status.Certificate
+	case ok && n.Status.RenewedCertificate.Is(p.Serial):
+		cert = n.Status.RenewedCertificate
+	default:
+		return fault.Unauthorizedf(op, "this certificate is not the node's current one; join again")
+	}
+	// TLS checks a certificate's end at the handshake only, and a driver's link outlives it (ADR-0364 Decision 3).
+	if s.cfg.Now().After(time.Time(cert.NotAfter)) {
+		return fault.Unauthorizedf(op, "this node certificate ended at %s; join again", time.Time(cert.NotAfter).Format(time.RFC3339))
+	}
+	if cert == n.Status.RenewedCertificate {
 		if err := s.useRenewed(ctx, p.Node, p.Serial); err != nil {
 			return err
 		}
-	default:
-		return fault.Unauthorizedf(op, "this certificate is not the node's current one; join again")
 	}
 	s.cfg.Liveness.Seen(p.Node, p.Version, p.APIVersion, p.Platform)
 	return nil
@@ -109,7 +118,7 @@ func tooNew(op, release, ours string) error {
 	return fault.Conflictf(op, "this node runs funcd %s, newer than the control plane's %s: upgrade the control plane first", release, ours)
 }
 
-// Join swaps a one-time token for a node certificate (decision 2). The token must match the hash the node's WorkerNode
+// Join swaps a one-time token for a node certificate (ADR-0364 Decision 2). The token must match the hash the node's WorkerNode
 // keeps, not be expired, and no running node may hold the name; the swap uses the token up.
 func (s *Handler) Join(ctx context.Context, in nodeapi.JoinRequest) (nodeapi.JoinResponse, error) {
 	const op = "multinode.join"

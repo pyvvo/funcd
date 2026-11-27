@@ -13,7 +13,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
 )
 
-// JoinTokenMinter mints a worker node's one-time join token (FEAT-0002 decision 2). Optional; when set, NewServer
+// JoinTokenMinter mints a worker node's one-time join token (ADR-0364 Decision 1). Optional; when set, NewServer
 // registers POST /apis/funcd.io/v1alpha1/workernodes/{name}/token.
 type JoinTokenMinter interface {
 	MintJoinToken(ctx context.Context, node v1.ObjectName, ttl time.Duration) (string, time.Time, error)

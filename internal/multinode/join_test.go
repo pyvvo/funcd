@@ -98,6 +98,20 @@ func mint(t *testing.T, c *Cluster) string {
 	return tok
 }
 
+// vm1 is a request of node vm1 with the certificate of serial.
+func vm1(serial string) nodeapi.Peer {
+	return nodeapi.Peer{Node: "vm1", Serial: serial, APIVersion: nodeapi.APIVersion, Version: "test"}
+}
+
+// renew is a renewed certificate of vm1, and is its serial.
+func renew(t *testing.T, c *Cluster) string {
+	t.Helper()
+	csr, _ := csrFor(t, "vm1")
+	resp, err := c.handler.Renew(context.Background(), "vm1", nodeapi.RenewRequest{CSR: csr})
+	require.NoError(t, err)
+	return serialOf(t, resp.Certificate)
+}
+
 // oracle: docs/design/multinode/join.fizz#NoJoinWithATokenPastItsEnd
 func TestAJoinTokenPastItsEndIsRefused(t *testing.T) {
 	c, clk := joinRig(t)
@@ -142,18 +156,51 @@ func TestARenewedCertificateTakesOverAtItsFirstRequest(t *testing.T) {
 	c, _ := joinRig(t)
 	old, err := join(t, c, mint(t, c))
 	require.NoError(t, err)
-	peer := func(serial string) nodeapi.Peer {
-		return nodeapi.Peer{Node: "vm1", Serial: serial, APIVersion: nodeapi.APIVersion, Version: "test"}
-	}
-	require.NoError(t, c.handler.Admit(ctx, peer(old)))
-	csr, _ := csrFor(t, "vm1")
-	resp, err := c.handler.Renew(ctx, "vm1", nodeapi.RenewRequest{CSR: csr})
+	require.NoError(t, c.handler.Admit(ctx, vm1(old)))
+	renewed := renew(t, c)
+	require.NoError(t, c.handler.Admit(ctx, vm1(old)), "a request with the old certificate passes until the new one's first")
+	require.NoError(t, c.handler.Admit(ctx, vm1(renewed)))
+	require.Equal(t, fault.Unauthorized, fault.KindOf(c.handler.Admit(ctx, vm1(old))), "the new one's first request ends the old one")
+	require.NoError(t, c.handler.Admit(ctx, vm1(renewed)))
+}
+
+func TestALostRenewAnswerCostsNothing(t *testing.T) {
+	ctx := context.Background()
+	c, _ := joinRig(t)
+	old, err := join(t, c, mint(t, c))
 	require.NoError(t, err)
-	renewed := serialOf(t, resp.Certificate)
-	require.NoError(t, c.handler.Admit(ctx, peer(old)), "a request with the old certificate passes until the new one's first")
-	require.NoError(t, c.handler.Admit(ctx, peer(renewed)))
-	require.Equal(t, fault.Unauthorized, fault.KindOf(c.handler.Admit(ctx, peer(old))), "the new one's first request ends the old one")
-	require.NoError(t, c.handler.Admit(ctx, peer(renewed)))
+	lost := renew(t, c)
+	again := renew(t, c)
+	require.NoError(t, c.handler.Admit(ctx, vm1(old)), "a node no renewal reached keeps its certificate")
+	require.Equal(t, fault.Unauthorized, fault.KindOf(c.handler.Admit(ctx, vm1(lost))), "the next renewal replaces the lost one")
+	require.NoError(t, c.handler.Admit(ctx, vm1(again)))
+}
+
+// oracle: docs/design/multinode/join.fizz#NoRequestWithACertificateAJoinReplaced
+func TestARejoinEndsTheOldCertificates(t *testing.T) {
+	ctx := context.Background()
+	c, _ := joinRig(t)
+	old, err := join(t, c, mint(t, c))
+	require.NoError(t, err)
+	pending := renew(t, c)
+	fresh, err := join(t, c, mint(t, c))
+	require.NoError(t, err)
+	require.Equal(t, fault.Unauthorized, fault.KindOf(c.handler.Admit(ctx, vm1(old))), "the joined certificate ends")
+	require.Equal(t, fault.Unauthorized, fault.KindOf(c.handler.Admit(ctx, vm1(pending))), "and so does the one it renewed")
+	require.NoError(t, c.handler.Admit(ctx, vm1(fresh)))
+}
+
+// oracle: docs/design/multinode/join.fizz#NoRequestWithACertificatePastItsEnd
+func TestANodeCertificatePastItsEndIsRefusedOnAnOpenLink(t *testing.T) {
+	ctx := context.Background()
+	c, clk := joinRig(t)
+	serial, err := join(t, c, mint(t, c))
+	require.NoError(t, err)
+	require.NoError(t, c.handler.Admit(ctx, vm1(serial)))
+	clk.Add(certLifetime + time.Minute)
+	err = c.handler.Admit(ctx, vm1(serial))
+	require.Equal(t, fault.Unauthorized, fault.KindOf(err), "a link opened before the end checked nothing since")
+	require.ErrorContains(t, err, "ended")
 }
 
 // oracle: docs/design/multinode/join.fizz#NoRequestWithACertificatePastItsEnd

@@ -14,6 +14,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/multinode"
 	"github.com/pyvvo/funcd/internal/nodeapi"
+	"github.com/pyvvo/funcd/internal/platform/durable"
 )
 
 // The node's identity files, in its cluster directory.
@@ -34,7 +37,7 @@ const (
 	cursorFile   = "cursor"
 )
 
-// Join swaps a one-time join token for this node's certificate (FEAT-0002 decision 2), through conn, the node side of the
+// Join swaps a one-time join token for this node's certificate (ADR-0364 Decision 2), through conn, the node side of the
 // node API's driver, and writes the node's identity to dir. Before it sends the token, conn checks that the control plane
 // at server presents a certificate chain whose CA has the hash the token carries, so a token never reaches an impostor.
 func Join(ctx context.Context, conn nodeapi.Connector, server, token, dir, version, platform string) (v1.ObjectName, error) {
@@ -56,18 +59,25 @@ func Join(ctx context.Context, conn nodeapi.Connector, server, token, dir, versi
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := (durable.Disk{}).MkdirAll(dir, 0o700); err != nil {
 		return "", fault.Wrapf(err, fault.Internal, op, "create %s", dir)
 	}
-	files := map[string][]byte{
-		identityFile: id,
-		caFile:       pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
-		serverFile:   []byte(strings.TrimRight(server, "/") + "\n"),
-		nameFile:     []byte(string(tok.Node) + "\n"),
+	// The name goes first and comes back last, each file whole: loadIdentity reads it first, so a join a crash cut
+	// short reads as no join, a first one and a rejoin alike (ADR-0364 Decision 2).
+	if err := os.Remove(filepath.Join(dir, nameFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fault.Wrapf(err, fault.Internal, op, "remove %s", nameFile)
 	}
-	for name, b := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
-			return "", fault.Wrapf(err, fault.Internal, op, "write %s", name)
+	for _, f := range []struct {
+		name string
+		b    []byte
+	}{
+		{identityFile, id},
+		{caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})},
+		{serverFile, []byte(strings.TrimRight(server, "/") + "\n")},
+		{nameFile, []byte(string(tok.Node) + "\n")},
+	} {
+		if err := (durable.Disk{}).WriteFile(dir, f.name, f.b, 0o600); err != nil {
+			return "", fault.Wrapf(err, fault.Internal, op, "write %s", f.name)
 		}
 	}
 	joinedAgain(dir)

@@ -251,6 +251,8 @@ func TestAJoinTokenNeedsADeclaredNodeAndABoundedLife(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = c.MintJoinToken(ctx, "vm1", 48*time.Hour)
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	_, _, err = c.MintJoinToken(ctx, "vm1", 500*time.Millisecond)
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "a token lives a second at least")
 	tok, exp, err := c.MintJoinToken(ctx, "vm1", time.Minute)
 	require.NoError(t, err)
 	require.WithinDuration(t, time.Now().Add(time.Minute), exp, 5*time.Second)

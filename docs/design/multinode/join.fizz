@@ -8,7 +8,9 @@
 # request with the new one makes it the current one, which ends the old one. A request sent with the old certificate
 # just before the renewal may arrive after it. Time passes in ticks. Every action is atomic. Environment: the status
 # write is conditional on the version it read (writeNodeStatus retries a conflict), so a join's checks and its write
-# are one step; liveness reads Ready while the node polled since the last tick; TLS refuses a certificate past its end.
+# are one step; liveness reads Ready while the node polled since the last tick; admission refuses a certificate past
+# its end on every request, as TLS does at a link's handshake. A lost renew answer is not modeled: the certificate it
+# carried reaches no machine, so nothing presents it.
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
@@ -23,11 +25,13 @@ options:
 # mutant renew-replaces: NoRequestRefusedMidRenewal
 # mutant keep-old-cert: TheOldCertificateEndsAtTheNewOnesFirstRequest
 # mutant no-cert-end: NoRequestWithACertificatePastItsEnd
+# mutant join-keeps-renewed: NoRequestWithACertificateAJoinReplaced
 
 # no-use-up: a join leaves its token waiting. no-end-check: a join takes a token past its end. keep-old-tokens: a mint
 # keeps the unused token beside the new one. no-ready-check: a join goes on while the node polls. renew-replaces: a
 # renewal makes the new certificate the current one at once. keep-old-cert: the first request with the new certificate
-# keeps the old one accepted. no-cert-end: a request is admitted with a certificate past its end.
+# keeps the old one accepted. no-cert-end: a request is admitted with a certificate past its end. join-keeps-renewed: a
+# join leaves the replaced identity's pending renewed certificate accepted.
 MUTANT = ""
 
 TTL = 2
@@ -45,6 +49,7 @@ action Init:
     current = 0
     renewed = 0
     retired = []
+    replaced = []
     certEnd = {}
     signed = 0
     wallet = {0: 0, 1: 0}
@@ -58,6 +63,7 @@ action Init:
     refusedMidRenewal = False
     retiredAdmitted = False
     expiredAdmitted = False
+    replacedAdmitted = False
 
 atomic action Mint:
     require minted < 2
@@ -96,9 +102,14 @@ atomic action Join:
     if MUTANT != "no-use-up":
         pending.pop(t)
     held[m] = 0
+    if current != 0:
+        replaced.append(current)
+    if renewed != 0:
+        replaced.append(renewed)
+    if MUTANT != "join-keeps-renewed":
+        renewed = 0
     signed += 1
     current = signed
-    renewed = 0
     certEnd[signed] = clock + LIFE
     wallet[m] = signed
     inflight = 0
@@ -117,6 +128,8 @@ atomic action Poll:
         expiredAdmitted = True
     if c in retired:
         retiredAdmitted = True
+    if c in replaced:
+        replacedAdmitted = True
     if c == renewed:
         old = current
         current = renewed
@@ -154,6 +167,8 @@ atomic action InflightArrives:
         refusedMidRenewal = True
     if ok and c in retired:
         retiredAdmitted = True
+    if ok and c in replaced:
+        replacedAdmitted = True
 
 atomic fair action Tick:
     require clock < T_END
@@ -180,3 +195,6 @@ always assertion TheOldCertificateEndsAtTheNewOnesFirstRequest:
 
 always assertion NoRequestWithACertificatePastItsEnd:
     return not expiredAdmitted
+
+always assertion NoRequestWithACertificateAJoinReplaced:
+    return not replacedAdmitted

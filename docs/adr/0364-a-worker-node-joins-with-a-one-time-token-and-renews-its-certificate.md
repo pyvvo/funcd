@@ -34,14 +34,18 @@ into an identity that the node keeps and renews for as long as it reaches its co
   refused; once vm1 has stopped polling for `defaultReadyFor`, the join passes.
 - `scenario: renewal-takes-over`: Given a node in the last third of its certificate's life, When it renews, Then its
   requests with the old certificate pass until its first request with the new one, which ends the old one.
-- `scenario: certificate-past-its-end`: Given a node certificate past its end, When the node connects, Then TLS
-  refuses it, and the node must join again.
+- `scenario: lost-renew-answer`: Given a renewal whose answer never reached the node, When the node renews again, Then
+  its certificate passes until then, and the new renewal replaces the lost one.
+- `scenario: rejoin-ends-the-old-identity`: Given node vm1 with a renewed certificate waiting, When vm1 joins again with
+  a new token, Then its old certificate and the waiting one are refused, and the new one passes.
+- `scenario: certificate-past-its-end`: Given a node certificate past its end, When the node connects, or sends a
+  request on a link it opened before the end, Then it is refused, and the node must join again.
 
 ## Scope
 
 - **In**: the join token, the join, the node certificate, its renewal, the CA, and the node API's own certificate.
 - **Out**: the transport that carries the join and the requests (F243); the version checks at the join (F252); a node
-  that provisions itself (F253).
+  that provisions itself (F253); the backup of the CA (F251); the rotation of the CA.
 
 ## Constraints & Decision drivers
 
@@ -65,26 +69,31 @@ into an identity that the node keeps and renews for as long as it reaches its co
 
 1. **The token.** `funcdctl node token <name> [--ttl]` (`POST /apis/funcd.io/v1alpha1/workernodes/{name}/token`, an
    admin action) mints `K10<CA hash>::<node>:<secret>` for a declared WorkerNode; an undeclared one is 404. It lives
-   `defaultTokenTTL` 1 h, from a second up to `maxTokenTTL` 24 h. The control plane keeps only the secret's SHA-256 and
-   the token's end, in `status.pendingJoin`, and a new token replaces one not used yet.
+   `defaultTokenTTL` 1 h, or the TTL asked, from `minTokenTTL` 1 s up to `maxTokenTTL` 24 h; another is 400. The
+   control plane keeps only the secret's SHA-256 and the token's end, in `status.pendingJoin`, and a new token replaces
+   one not used yet.
 2. **The join.** `funcd node join --server <url> --token <token>` checks that the server's chain holds a CA with the
    token's hash before it sends the token, then sends it with a certificate request for the token's name. The control
    plane refuses a token of another CA (403), a name whose node polls (409 `a running node holds the name`, until it has
    not polled for `defaultReadyFor`), and a node on a newer release (F252). Then one conditional write of the
    WorkerNode's status checks that the token waits, is not past its end and matches, signs the request, records the
    certificate in `status.certificate`, and clears `status.pendingJoin` and `status.renewedCertificate`. A refusal
-   there is 403. The node writes its certificate and key, the CA, the server's URL and its name under
-   `cluster.dataDir`.
+   there is 403, and so is a name no WorkerNode declares. Under `cluster.dataDir`, the node then removes its name,
+   writes its certificate and key, the CA and the server's URL, each file whole, and writes its name last, so a join
+   that a crash cut short reads as no join.
 3. **The certificate.** The cluster CA, made under `cluster.dataDir` at the control plane's first start and valid
    `caLifetime` 87600 h, signs a node certificate with the node's name as its common name, valid `certLifetime` 8760 h
-   from `certBackdate` 1 h before its signing. Every later request is mTLS with it, and the control plane admits the
-   serial of `status.certificate` or of `status.renewedCertificate` only; any other is 401 `join again`. So a new join
-   or a deleted WorkerNode ends a node's old certificate.
+   from `certBackdate` 1 h before its signing. Every later request is mTLS with it. The control plane admits the serial
+   of `status.certificate` or of `status.renewedCertificate` only, and only before that certificate's end: TLS checks
+   the end at a link's handshake, and admission checks it again at every request, since a driver's link outlives its
+   handshake. Any other request is 401 `join again`. So a new join, which clears both, or a deleted WorkerNode ends a
+   node's old certificates.
 4. **Renewal.** Every `renewEvery` 1 h the node looks whether its certificate is in the last third of its life. If so,
-   it sends a new certificate request; the control plane signs it and keeps it in `status.renewedCertificate`. The node
-   writes it to disk, switches to it, and its first request with it makes it `status.certificate`, which ends the old
-   one. A node away past its certificate's end is refused by TLS and joins again with a new token. The node API's own
-   server certificate is signed again before it ends too.
+   it sends a new certificate request; the control plane signs it and keeps it in `status.renewedCertificate`, in place
+   of one waiting there. The node writes it to disk, switches to it, and its first request with it makes it
+   `status.certificate`, which ends the old one. A renewal whose answer is lost leaves the node on its certificate, and
+   its next look renews again. A node whose certificate ended is refused, at the handshake or at its next request, and
+   joins again with a new token. The node API's own server certificate is signed again before it ends too.
 
 ## Design model
 
@@ -100,27 +109,31 @@ into an identity that the node keeps and renews for as long as it reaches its co
   | `NoJoinOverAPollingNode` | always | `scenario: name-held-by-polling-node` | `TestAJoinUnderTheNameOfAPollingNodeIsRefused` |
   | `NoRequestRefusedMidRenewal` | always | `scenario: renewal-takes-over` | `TestARenewedCertificateTakesOverAtItsFirstRequest` |
   | `TheOldCertificateEndsAtTheNewOnesFirstRequest` | always | `scenario: renewal-takes-over` | `TestARenewedCertificateTakesOverAtItsFirstRequest`, `TestANodeRenewsItsCertificateBeforeItEnds` |
-  | `NoRequestWithACertificatePastItsEnd` | always | `scenario: certificate-past-its-end` | `TestANodeCertificatePastItsEndIsRefused` |
+  | `NoRequestWithACertificatePastItsEnd` | always | `scenario: certificate-past-its-end` | `TestANodeCertificatePastItsEndIsRefused`, `TestANodeCertificatePastItsEndIsRefusedOnAnOpenLink` |
+  | `NoRequestWithACertificateAJoinReplaced` | always | `scenario: rejoin-ends-the-old-identity` | `TestARejoinEndsTheOldCertificates` |
 
 - **Bounds**: two machines, two mints, a clock of four ticks (a token lives two, a certificate three, renewed from its
-  second), one action at a time, 12 actions: enough for a copied token, a renewal and a request in flight.
+  second), one action at a time, 12 actions: enough for a copied token, a renewal, a rejoin and a request in flight. A
+  lost renew answer is not modeled: its certificate reaches no machine, so nothing presents it, and the model renews
+  only when no renewed certificate waits.
 - **Faults**: none; every step is atomic, since a join's checks and its write are one conditional write.
 - **Environment**: the status write is conditional on the version read (`writeNodeStatus` retries a conflict);
-  liveness reads Ready while the node polled in its window; TLS refuses a certificate past its end. All three are
-  modeled as guards.
-- **Mutants**: `no-use-up`, `no-end-check`, `keep-old-tokens`, `no-ready-check`, `renew-replaces`, `keep-old-cert`
-  and `no-cert-end`, each failing the assertion it names.
-- **Result**: pass, 8,714 states, 4.6 s, FizzBee v0.5.4; wider (14 actions): pass, 9,302 states, 5.6 s.
+  liveness reads Ready while the node polled in its window; admission refuses a certificate past its end at every
+  request, as TLS does at a handshake. All three are modeled as guards.
+- **Mutants**: `no-use-up`, `no-end-check`, `keep-old-tokens`, `no-ready-check`, `renew-replaces`, `keep-old-cert`,
+  `no-cert-end` and `join-keeps-renewed`, each failing the assertion it names.
+- **Result**: pass, 8,714 states, 5.1 s, FizzBee v0.5.4; wider (14 actions): pass, 9,302 states, 6.6 s.
 - **Left to tests**: the liveness check reads before the conditional write, so a node that starts polling again
   between the two is cut off by the new certificate, which `TestAJoinUnderTheNameOfAPollingNodeIsRefused` and the
   admission rule hold; the agent's hourly look and its write to disk before the switch are
-  `TestANodeRenewsItsCertificateBeforeItEnds`'s.
+  `TestANodeRenewsItsCertificateBeforeItEnds`'s; a renewal that replaces a waiting one is
+  `TestALostRenewAnswerCostsNothing`'s.
 
 ## Behavior rows
 
-- **multi-node.md**: "A join token", "Joining", "A name a running node holds" (now with
-  `TestAJoinUnderTheNameOfAPollingNodeIsRefused`) and "A certificate near its end" cite this ADR's Decisions 1 to 4
-  at acceptance.
+- **multi-node.md**: "A join token" (now from a second), "Joining", "A name a running node holds" (now with
+  `TestAJoinUnderTheNameOfAPollingNodeIsRefused`) and "A certificate near its end" (now also refused on an open link,
+  with `TestANodeCertificatePastItsEndIsRefusedOnAnOpenLink`) cite this ADR's Decisions 1 to 4 at acceptance.
 
 ## Temporary workarounds
 
@@ -190,18 +203,23 @@ Built ahead of this ADR on the branch of draft PR #1495: `internal/multinode/tok
 | impostor-control-plane | `TestAJoinRefusesAControlPlaneWithAnotherCA`, the contract's `a-join-sends-its-token-only-to-the-ca-it-trusts` |
 | name-held-by-polling-node | `TestAJoinUnderTheNameOfAPollingNodeIsRefused` |
 | renewal-takes-over | `TestARenewedCertificateTakesOverAtItsFirstRequest`, `TestANodeRenewsItsCertificateBeforeItEnds`, `TestTheNodeAPIsCertificateIsRenewedBeforeItEnds` |
-| certificate-past-its-end | `TestANodeCertificatePastItsEndIsRefused` |
+| lost-renew-answer | `TestALostRenewAnswerCostsNothing` |
+| rejoin-ends-the-old-identity | `TestARejoinEndsTheOldCertificates` |
+| certificate-past-its-end | `TestANodeCertificatePastItsEndIsRefused`, `TestANodeCertificatePastItsEndIsRefusedOnAnOpenLink` |
 
 Done when every test above passes, `just check-specs` passes the spec and its mutants, and `just ci` is green.
 
 ## Review checklist
 
-- [ ] The control plane keeps a token's hash and end only, and a new token replaces an unused one.
+- [ ] The control plane keeps a token's hash and end only, a new token replaces an unused one, and a TTL under
+      `minTokenTTL` or over `maxTokenTTL` is 400.
 - [ ] The node checks the CA's hash before it sends the token, on every driver.
-- [ ] A join's token checks, its signing and its certificate record are one conditional write that uses the token up.
+- [ ] A join's token checks, its signing and its certificate record are one conditional write that uses the token up
+      and clears `status.renewedCertificate`.
+- [ ] The node removes its name file before it writes its identity, each file whole, and writes the name last.
 - [ ] A join under a name whose node polls is 409, and passes once the node has not polled for `defaultReadyFor`.
-- [ ] Admission takes the serial of `status.certificate` or `status.renewedCertificate` only, and the first request
-      with the renewed one promotes it.
+- [ ] Admission takes the serial of `status.certificate` or `status.renewedCertificate` only, refuses it past its
+      `notAfter` at every request, and the first request with the renewed one promotes it.
 - [ ] The node writes a renewed certificate to disk before it switches to it.
 - [ ] Each oracle test carries its `oracle:` line, and the spec passes with its mutants failing.
 
@@ -209,10 +227,16 @@ Done when every test above passes, `just check-specs` passes the spec and its mu
 
 - A node joins with one command and a token that works once, and keeps its identity with no further step while it
   reaches its control plane.
-- A leaked token is spent at its first join, or ends with its hour; a leaked certificate ends at the node's next join
-  or with its WorkerNode.
+- A leaked token is spent at its first join, or ends with its hour; a leaked certificate ends at the node's next join,
+  with its WorkerNode, or at its end, on an open link too.
+- A join whose answer is lost spends its token: the admin, or the automation, mints another.
 - A node that stays away past its certificate's year joins again, with a new token.
+- Losing the CA under `cluster.dataDir` changes its hash, so every node joins again; its backup is the F251 ADR's.
 - Risk accepted: a certificate is trusted until it ends, a new join or a deleted WorkerNode, with no revocation list.
+- Risk accepted: the 409 reads liveness the control plane keeps in memory, so after its restart a name reads free until
+  its node polls again. A join in that window still needs a token an admin minted, and its certificate ends the
+  running node's.
+- Risk accepted: the CA lives `caLifetime` 10 years, and nothing rotates it yet.
 
 ## Open questions
 
