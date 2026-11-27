@@ -50,10 +50,12 @@ type devFileKeys struct {
 	S3port    int      `yaml:"s3port"`
 	Cport     int      `yaml:"cport"`
 	// Containers is --containers (ADR-0359 Decision 1).
-	Containers bool              `yaml:"containers"`
-	Env        map[string]string `yaml:"env"`
-	EnvFile    string            `yaml:"envFile"`
-	Platform   devFilePlatform   `yaml:"platform"`
+	Containers bool `yaml:"containers"`
+	// LAN is --lan (ADR-0361 Decision 1).
+	LAN      devLANKey         `yaml:"lan"`
+	Env      map[string]string `yaml:"env"`
+	EnvFile  string            `yaml:"envFile"`
+	Platform devFilePlatform   `yaml:"platform"`
 	// Watch and LiveReload are App-only keys of the file alone (ADR-0255 Decision 1).
 	Watch      []devWatchEntry `yaml:"watch"`
 	LiveReload bool            `yaml:"liveReload"`
@@ -98,8 +100,8 @@ var watchNameFormat = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // devFileKeyNames are the keys dev takes.
 func devFileKeyNames() []string {
-	return []string{"dir", "values", "build", "hooks", "apply", "persist", "persistTo", "gport", "s3port", "cport", "containers", "env",
-		"envFile", "platform", "watch", "liveReload", "addons"}
+	return []string{"dir", "values", "build", "hooks", "apply", "persist", "persistTo", "gport", "s3port", "cport", "containers", "lan",
+		"env", "envFile", "platform", "watch", "liveReload", "addons"}
 }
 
 // devPlatformKeys are the FuncdConfig keys platform takes (Decision 4).
@@ -236,6 +238,9 @@ func decodeDevFile(op string, data []byte) (devFileKeys, error) {
 	}
 	if err := dev.Decode(&keys); err != nil {
 		return keys, fault.Invalidf(op, "%s: dev: %v", devConfigFile, err)
+	}
+	if err := checkLAN(op, devConfigFile+": dev.lan", string(keys.LAN)); err != nil {
+		return keys, err
 	}
 	if r := keys.Addons.Runtime; r != "" && r != devAddonsDocker && r != devAddonsContainerd {
 		return keys, fault.Invalidf(op, "%s: dev.addons.runtime %q is not %s or %s", devConfigFile, r, devAddonsDocker, devAddonsContainerd)
@@ -426,6 +431,11 @@ func (k devFileKeys) appOnlyKeysSet() []string {
 // returns the directory to run, cfg filled, and the file's state (nil without a file).
 func resolveDevRun(op, start string, args []string, flags *pflag.FlagSet, cfg *devConfig) (string, *devFileState, error) {
 	cfg.pace = defaultDevPace()
+	// The flag is checked before the file is read, so it is with no file too (ADR-0361 Decision 1).
+	if err := checkLAN(op, "--lan", cfg.lan); err != nil {
+		return "", nil, err
+	}
+	cfg.lan = lanValue(cfg.lan)
 	st, err := loadDevFile(op, start)
 	if err != nil {
 		return "", nil, err
@@ -465,6 +475,9 @@ func resolveDevRun(op, start string, args []string, flags *pflag.FlagSet, cfg *d
 	}
 	if !changed("containers") {
 		cfg.containers = k.Containers
+	}
+	if !changed("lan") {
+		cfg.lan = string(k.LAN)
 	}
 	cfg.addonsRuntime = k.Addons.Runtime
 	if !changed("persist-to") {
@@ -599,7 +612,7 @@ func changedDevKeys(a, b devFileKeys) []string {
 		{"dir", a.Dir == b.Dir}, {"values", slices.Equal(a.Values, b.Values)}, {"build", slices.Equal(a.Build, b.Build)},
 		{"hooks", a.Hooks == b.Hooks}, {"apply", slices.Equal(a.Apply, b.Apply)}, {"persist", a.Persist == b.Persist},
 		{"persistTo", a.PersistTo == b.PersistTo}, {"gport", a.Gport == b.Gport}, {"s3port", a.S3port == b.S3port},
-		{"cport", a.Cport == b.Cport}, {"containers", a.Containers == b.Containers}, {"env", maps.Equal(a.Env, b.Env)}, {"envFile", a.EnvFile == b.EnvFile},
+		{"cport", a.Cport == b.Cport}, {"containers", a.Containers == b.Containers}, {"lan", a.LAN == b.LAN}, {"env", maps.Equal(a.Env, b.Env)}, {"envFile", a.EnvFile == b.EnvFile},
 		{"platform.runtime.handOutSettle", a.Platform.Runtime.HandOutSettle == b.Platform.Runtime.HandOutSettle},
 		{"platform.eventing.blobPollInterval", a.Platform.Eventing.BlobPollInterval == b.Platform.Eventing.BlobPollInterval},
 		{"platform.funclog.segmentMaxAge", a.Platform.Funclog.SegmentMaxAge == b.Platform.Funclog.SegmentMaxAge},

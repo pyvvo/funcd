@@ -385,7 +385,7 @@ funcdctl dev [dir] [flags]
 
 funcdctl dev runs a folder's resource files from their local builds. A directory that holds app.yaml beside resources/ runs as an App template instead: dev pushes each image's build, renders the template as funcdctl app deploy does and applies the App, then again on each save.
 
-A funcdctl.config.yaml in the current directory holds what dev is run with: its dev keys are these flags in camelCase (dir, values, build, hooks, apply, persist, persistTo, gport, s3port, cport, containers), plus env and envFile for the values of a declared Secret no document defines, platform for runtime.handOutSettle, eventing.blobPollInterval and funclog.segmentMaxAge, and addons.runtime, docker or containerd, the container engine that runs the add-ons' engines, Docker first when it is unset. A flag given here replaces its key, and a dir argument replaces dev.dir.
+A funcdctl.config.yaml in the current directory holds what dev is run with: its dev keys are these flags in camelCase (dir, values, build, hooks, apply, persist, persistTo, gport, s3port, cport, containers, lan), plus env and envFile for the values of a declared Secret no document defines, platform for runtime.handOutSettle, eventing.blobPollInterval and funclog.segmentMaxAge, and addons.runtime, docker or containerd, the container engine that runs the add-ons' engines, Docker first when it is unset. A flag given here replaces its key, and a dir argument replaces dev.dir.
 
 For an App template the file also takes watch, a list of name, run and dir: dev starts each command, waits for the builds they write and keeps their output in log files; and liveReload: true, which reloads open Site pages after a Site change.
 ```
@@ -398,6 +398,7 @@ For an App template the file also takes watch, a list of name, run and dir: dev 
 | `--cport` | int | `0` | fixed control-plane port (for `funcdctl --server`: apply, workflow run); 0 ⇒ a random free port |
 | `--gport` | int | `0` | fixed gateway (function-invoke) port; 0 ⇒ a random free port |
 | `--hooks` | bool | `false` | keep the App's preApply and postApply hooks, called on each new revision (App mode) |
+| `--lan` | string |  | serve the gateway on every address too, with no authentication, or with --lan=&lt;IP address&gt; on that one address only; the control plane and the S3 frontend stay on 127.0.0.1 |
 | `--persist` | bool | `false` | keep the metastore, KV, blob, SQL, lake and volume data between runs, in the --persist-to directory (default: in memory or in temporary directories, gone when dev stops) |
 | `--persist-to` | string | `.funcd-dev` | directory for --persist state, one subdirectory per service: metastore, kv, blob, lake, sql, volumes and bundles |
 | `--print-env` | bool | `false` | print the dev S3 credentials as `export …` lines and exit (no server); pair with a fixed --s3port. Use: eval "$(funcdctl dev &lt;dir&gt; --s3port 3006 --print-env)" |

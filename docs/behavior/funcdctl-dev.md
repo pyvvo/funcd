@@ -23,8 +23,8 @@ stateDiagram-v2
     Stopping --> [*] : platform, workers and commands stopped, exit 0
 ```
 
-`funcdctl dev` is the real platform on `funcd.InMemory()` and the [process driver](workers.md), on loopback (ADR-0254). A folder of
-resource files runs as ADR-0247 says; a directory with `app.yaml` beside `resources/` runs as an App (ADR-0253), and only there do
+`funcdctl dev` is the real platform on `funcd.InMemory()` and the [process driver](workers.md), on loopback unless `--lan`
+(ADR-0361). A folder runs as ADR-0247 says; a directory with `app.yaml` beside `resources/` runs as an App (ADR-0253), and only there do
 `dev.watch` and `dev.liveReload` work. The banner prints once the objects are applied, not once they serve (ADR-0253 Decisions 8 and 11).
 Phases: [Functions](functions.md). New words: Reading, Waiting, Starting, Serving, Settling, Stopping.
 

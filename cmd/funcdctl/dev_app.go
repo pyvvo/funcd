@@ -1218,25 +1218,35 @@ func (d *devInstance) appRevision() string {
 	return "no revision yet"
 }
 
-// appEndpoints are the banner's lines for the App: each Route's paths and each Site's URL on the gateway.
+// appEndpoints are the banner's lines for the App: each Route's paths and each Site's URL on the gateway, a line that
+// names no host followed by its network lines, one per LAN address (ADR-0361 Decision 3). A line with a host has none:
+// its rule answers only on that host.
 func (d *devInstance) appEndpoints() [][2]string {
-	url := func(host, path string) string {
-		if u, err := neturl.Parse(d.gatewayURL); err == nil && host != "" {
-			return "http://" + net.JoinHostPort(host, u.Port()) + path
-		}
-		return d.gatewayURL + path
-	}
 	var out [][2]string
+	add := func(name, host, path string) {
+		if host == "" {
+			out = append(out, [2]string{name, d.gatewayURL + path})
+			for _, n := range d.networkURLs {
+				out = append(out, [2]string{"network", n + path})
+			}
+			return
+		}
+		if u, err := neturl.Parse(d.gatewayURL); err == nil {
+			out = append(out, [2]string{name, "http://" + net.JoinHostPort(host, u.Port()) + path})
+			return
+		}
+		out = append(out, [2]string{name, d.gatewayURL + path})
+	}
 	for _, r := range d.app.Spec.Routes {
 		for _, rule := range r.Rules {
-			out = append(out, [2]string{"route", url(r.Host, rule.Path)})
+			add("route", r.Host, rule.Path)
 		}
 	}
 	for _, si := range d.app.Spec.Sites {
 		if si.Name == "" {
 			continue
 		}
-		out = append(out, [2]string{"site", url(si.Ingress.Host, v1.IngressPath(&si.Ingress.Ingress, v1.KindSite, si.Name))})
+		add("site", si.Ingress.Host, v1.IngressPath(&si.Ingress.Ingress, v1.KindSite, si.Name))
 	}
 	return out
 }

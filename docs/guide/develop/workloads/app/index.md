@@ -364,6 +364,8 @@ nothing. `funcdctl dev` also stops at its start, before it serves the App, on it
 - It renders and applies again within about a second after an input changes, and prints `reloaded in <duration>`; a
   failed reload keeps the last App running.
 - It keeps volumes as plain folders, only warning when one exceeds its size, and runs the namespace `default` only.
+- It serves the App on 127.0.0.1 only, unless [`--lan`](../../tools/funcdctl/index.md) also puts the gateway on the
+  machine's network addresses, for a phone on the same network.
 
 Without `--persist`, it loses the App, its revisions and its data when it stops; the pushed images stay in
 `funcd/dev/<id>` in the user's cache folder. With `--persist`, it keeps everything in `.funcd-dev`, and a restart

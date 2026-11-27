@@ -1,6 +1,6 @@
 # ADR-0361: Under funcdctl dev, an opt-in puts the gateway on the LAN, and every other listener stays on loopback
 
-- **Status**: Accepted (2026-11-27), by the decider ("accept with --lan", relayed word for word by the DR session, to
+- **Status**: Reviewing (2026-11-27, implemented); Accepted (2026-11-27), by the decider ("accept with --lan", relayed word for word by the DR session, to
   which the decider gave the decision), after three rounds of an independent judge at medium effort, every finding folded
 - **Date**: 2026-11-27
 - **Deciders**: green-0-rabbit
