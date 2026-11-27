@@ -109,7 +109,8 @@ ADRs (F244, F245, F248 to F252).
    creation time), then saves the cursor, so a batch cut short is applied again, and twice changes nothing. A node with
    no cursor of its store, or one a crash tore, takes a snapshot first. A refused revision sends the node to a
    snapshot, and so does a record it failed to write, after which it saves no cursor until the snapshot; a snapshot
-   that fails to write an object saves none either, and is taken again. A record the node cannot decode or validate
+   that fails to write an object saves none either, removes what the control plane no longer holds, and is taken
+   again. A record the node cannot decode or validate
    (`fault.Invalid`), as from a newer release, is skipped, since no snapshot would bring it (F252). A snapshot of
    another timeline than the cursor's means the control plane was restored: the node's platform starts again and takes
    the restored state before it runs anything. A newly placed namespace comes from its own snapshot, and one that left
@@ -258,7 +259,9 @@ Done when every test above passes, `just check-specs` passes the spec and its mu
 - A write reaches its node in about a millisecond on either driver, flat in the number of nodes that wait (experiment
   0031), and costs one read of the log.
 - A node away for more than 100,000 writes, or one that failed to write a record, takes a snapshot of all its
-  namespaces. A write that keeps failing, as on a full disk, makes the node take its snapshot again every 5 s at most.
+  namespaces. While one write keeps failing, as on a full disk, the node gets changes only through snapshots, which
+  the control plane serves it whole every 5 s at most, and saves no cursor until one is whole; each snapshot still
+  removes what the control plane no longer holds.
 - Each write of a control plane with the cluster option adds one record to its transaction. The log keeps the last
   100,000, and about a compaction interval more between compactions: one runs when a logged write lands on a multiple
   of 1024 revisions, which a status write-back can take instead.

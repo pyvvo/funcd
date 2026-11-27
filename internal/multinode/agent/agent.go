@@ -319,13 +319,13 @@ func (a *Agent) syncAll(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err // a snapshot cut short saves no revision, so the next start takes it again
 	}
-	if failed > 0 { // a snapshot saves no revision until it is whole, so it is taken again (ADR-0365 Decision 6)
-		return fault.Unavailablef("agent.syncAll", "%d objects of the snapshot failed to write", failed)
-	}
 	for ns := range placed {
 		a.prune(ctx, ns, seen)
 	}
 	a.pruneClusterKinds(ctx, seen)
+	if failed > 0 { // a snapshot saves no revision until it is whole, so it is taken again (ADR-0365 Decision 6)
+		return fault.Unavailablef("agent.syncAll", "%d objects of the snapshot failed to write", failed)
+	}
 	a.reportAgain()
 	a.saveCursor(snap.Timeline, snap.Rev)
 	a.log.InfoContext(ctx, "node agent: synced from a snapshot", "rev", snap.Rev, "objects", len(snap.Objects), "namespaces", len(placed))
