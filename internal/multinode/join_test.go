@@ -49,6 +49,12 @@ func joinRig(t *testing.T) (*Cluster, *clock) {
 	st := store.New(memory.New(), store.WithChangeLog(0))
 	_, err := st.Create(context.Background(), workerNode("vm1"))
 	require.NoError(t, err)
+	return clusterOn(t, st, clk), clk
+}
+
+// clusterOn is a control plane over st, on clk.
+func clusterOn(t *testing.T, st store.Store, clk *clock) *Cluster {
+	t.Helper()
 	ca, err := LoadOrCreateCA(t.TempDir(), clk.Now())
 	require.NoError(t, err)
 	tlsCfg, err := ca.ServerTLS(nil, time.Now)
@@ -58,7 +64,7 @@ func joinRig(t *testing.T) (*Cluster, *clock) {
 	c, err := New(Config{Store: st, CA: ca, API: api, LocalNode: "local", LocalRuns: true, Now: clk.Now})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
-	return c, clk
+	return c
 }
 
 // csrFor is a certificate request for node and its key.

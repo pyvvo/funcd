@@ -86,8 +86,10 @@ func New(cfg Config) (*Cluster, error) {
 	return c, nil
 }
 
-// Run serves the node API and keeps the WorkerNodes' statuses until ctx ends.
+// Run serves the node API and keeps the WorkerNodes' statuses until ctx ends. The nodes that read Ready are assumed to
+// poll before the node API serves, so no join slips in before their names are held (ADR-0367 Decision 3).
 func (c *Cluster) Run(ctx context.Context) error {
+	c.liveness.assumeReady(ctx)
 	go c.liveness.Run(ctx)
 	if err := c.handler.startRouting(ctx); err != nil {
 		return err

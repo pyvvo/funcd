@@ -71,9 +71,9 @@ func (l *Liveness) Ready(node v1.ObjectName) bool {
 	return ok && l.now().Sub(c.at) < l.readyFor
 }
 
-// Run writes the WorkerNodes' statuses every livenessTick until ctx ends.
+// Run writes the WorkerNodes' statuses every livenessTick until ctx ends; the control plane assumes its nodes' contacts
+// first (assumeReady).
 func (l *Liveness) Run(ctx context.Context) {
-	l.assumeReady(ctx)
 	t := time.NewTicker(livenessTick)
 	defer t.Stop()
 	for {
@@ -90,6 +90,7 @@ func (l *Liveness) Run(ctx context.Context) {
 
 // assumeReady takes each node whose WorkerNode reads Ready as polled at the control plane's start, so a restart of the
 // control plane flips no node that polls again within readyFor, and holds its name against a join (ADR-0367 Decision 3).
+// The control plane calls it before the node API serves; a failed read assumes no contact.
 func (l *Liveness) assumeReady(ctx context.Context) {
 	res, err := l.st.List(ctx, v1.KindWorkerNode.GVK(), store.ListOptions{})
 	if err != nil {

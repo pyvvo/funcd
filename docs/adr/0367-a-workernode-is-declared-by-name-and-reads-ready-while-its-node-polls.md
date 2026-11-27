@@ -56,6 +56,8 @@ condition, which `funcdctl get workernodes` shows, and which the join reads to k
 - **A `lastSeen` written at each request**: one metastore write per node request. Rejected for `defaultSeenEvery`.
 - **Liveness kept in memory alone, with no assumption at start**, as first built: a control plane's restart flipped
   every node to Degraded until its next poll. Rejected (Decision 3).
+- **The persisted `lastSeen` taken as the contact at start**: it is up to `defaultSeenEvery` 30 s stale, plus the
+  outage, so it would still flip nodes that poll again. Rejected.
 
 ## Decision
 
@@ -71,7 +73,8 @@ condition, which `funcdctl get workernodes` shows, and which the join reads to k
 3. **A control plane's start.** The contacts live in memory. A control plane that starts takes each node whose
    WorkerNode reads Ready as polled at its start, and writes no `lastSeen` for it: a node that polls again within
    `defaultReadyFor` stays Ready, and its name stays held against a join (ADR-0364 Decision 2); one that does not reads
-   Degraded then.
+   Degraded then. It does so before its node API serves, so no join comes before the names are held; a failed read of
+   the WorkerNodes assumes no contact.
 
 ## Design model
 
@@ -84,17 +87,19 @@ condition, which `funcdctl get workernodes` shows, and which the join reads to k
   | `NoReadyLongAfterTheLastPoll` | always | `scenario: degraded-when-it-stops` | `TestAWorkerNodeReadsReadyWhileItsNodePolls`, `TestAControlPlaneThatStartsFlipsNoNodeThatPollsAgain` |
   | `NoDegradedWhilePolling` | always | `scenario: control-plane-restart` | `TestAControlPlaneThatStartsFlipsNoNodeThatPollsAgain` |
 
-- **Bounds**: one node, a window of two ticks, four ticks of time, one stop, one restart, 8 actions: the smallest
-  scenario in which every mutant fails. The full space is 226 states; wider (five ticks): pass, 346 states, 0.4 s.
+- **Bounds**: one node, a window of two ticks, three ticks of time, one stop, one restart, 8 actions: the smallest
+  scenario in which every mutant fails, the action bound binding (at 7, `assume-degraded` passes). Wider (9 actions):
+  pass, 114 states, 0.4 s.
 - **Faults**: the node stops for good, once; the control plane restarts once and loses what it kept.
 - **Environment**: a node's request and the record of its contact are one step (`Admit`); a sync reads the clock and
   writes the phase in one step (`writeNodeStatus` retries a conflict); a sync runs at least once per tick
   (`livenessTick`); a running node polls every tick, as a long poll comes back within its wait.
 - **Mutants**: `no-assume` fails `NoDegradedWhilePolling`; `no-window` and `assume-degraded` fail
   `NoReadyLongAfterTheLastPoll`.
-- **Result**: pass, 94 states, 0.3 s, FizzBee v0.5.4.
+- **Result**: pass, 93 states, 0.3 s, FizzBee v0.5.4.
 - **Left to tests**: the pacing of `lastSeen` (`TestALastSeenIsWrittenAtMostEverySeenEvery`); the contact a real node
-  makes (`TestANodeJoinsFollowsItsNamespaceAndReportsBack`).
+  makes (`TestANodeJoinsFollowsItsNamespaceAndReportsBack`, in `internal/multinode/agent`); the sync every
+  `livenessTick` 5 s, a ticker the tests skip by calling `Sync`.
 
 ## Behavior rows
 
@@ -148,12 +153,12 @@ func (l *Liveness) Sync(ctx context.Context) error
 
 Built ahead of this ADR on the branch of draft PR #1495: `api/types/v1alpha1/workernode.go` (the kind),
 `internal/multinode/liveness.go` (`Liveness`), `handler.go` (`Admit` records the contact), `cluster.go` (runs it).
-This ADR's Decision 3 changed the built code: `Liveness.Run` starts with `assumeReady`.
+This ADR's Decision 3 changed the built code: `Cluster.Run` calls `assumeReady` before the node API serves.
 
 | Scenario | Test |
 |---|---|
 | declared-before-its-machine | `TestAWorkerNodeReadsReadyWhileItsNodePolls` |
-| ready-while-polling | `TestAWorkerNodeReadsReadyWhileItsNodePolls`, `TestANodeJoinsFollowsItsNamespaceAndReportsBack` |
+| ready-while-polling | `TestAWorkerNodeReadsReadyWhileItsNodePolls`, `TestANodeJoinsFollowsItsNamespaceAndReportsBack` (agent) |
 | degraded-when-it-stops | `TestAWorkerNodeReadsReadyWhileItsNodePolls` |
 | last-seen-paced | `TestALastSeenIsWrittenAtMostEverySeenEvery` |
 | control-plane-restart | `TestAControlPlaneThatStartsFlipsNoNodeThatPollsAgain` |
@@ -174,7 +179,8 @@ Done when every test above passes, `just check-specs` passes the spec and its mu
 - An operator sees which nodes run, and automation can declare a node before its machine exists.
 - A node that stops reads Degraded 40 to 45 s after its last request.
 - A control plane's restart flips no node that polls again within 40 s; a node that stopped just before the restart
-  reads Ready up to 40 s after the start.
+  reads Ready up to 40 s after the start. A control plane that cannot read its WorkerNodes at its start assumes no
+  contact, so its nodes read Degraded until they poll again, as without this ADR.
 - A node whose own store keeps refusing writes still reads Ready, since it polls; its log says what fails (routed from
   the ADR-0365 judge).
 

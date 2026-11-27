@@ -22,7 +22,7 @@ options:
 MUTANT = ""
 
 READY_FOR = 2
-T_END = 4
+T_END = 3
 
 action Init:
     clock = 0
