@@ -60,6 +60,8 @@ type appView struct {
 	took   map[string]time.Duration
 	plan   *v1.AppPlan
 	calls  map[v1.ObjectName]*v1.Invocation
+	last   func(fold bool) []string // the last box's builder, which done draws unfolded
+	folded bool
 }
 
 func newAppView(out io.Writer, live bool, now func() time.Time) *appView {
@@ -486,11 +488,12 @@ func table(rows [][]string) string {
 	return strings.Join(lines, "\n")
 }
 
-// drawFitting draws the box that build makes, folded when it is taller than the terminal, so a redraw never moves
-// up past the top of the screen.
+// drawFitting draws the box that build makes, folded when it is taller than the terminal, so a redraw stays on the
+// screen unless the unsettled rows alone are taller than it.
 func (v *appView) drawFitting(build func(fold bool) []string, st viewStyles) error {
 	lines := build(false)
-	if len(strings.Split(strings.Join(lines, "\n"), "\n"))+2 >= v.height() {
+	v.last, v.folded = build, len(strings.Split(strings.Join(lines, "\n"), "\n"))+2 >= v.height()
+	if v.folded {
 		lines = build(true)
 	}
 	return v.draw(lines, st)
@@ -513,8 +516,12 @@ func (v *appView) draw(lines []string, st viewStyles) error {
 	return err
 }
 
-// done leaves the last draw on screen: the next output starts below it.
+// done leaves the last draw on screen, unfolded since no redraw follows it, and the next output starts below it.
 func (v *appView) done() error {
-	v.drawn = 0
-	return nil
+	var err error
+	if v.live && v.folded && v.last != nil {
+		err = v.draw(v.last(false), v.styles())
+	}
+	v.drawn, v.folded = 0, false
+	return err
 }

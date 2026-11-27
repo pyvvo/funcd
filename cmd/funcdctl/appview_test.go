@@ -387,3 +387,47 @@ func TestAppViewRequirementLines(t *testing.T) {
 	require.NoError(t, cli.report(w, a, nil))
 	require.Equal(t, "App/shop requires App/payments: is not Ready (Deploying)\nApp/shop requires App/payments: met\n", out.String())
 }
+
+// A folded box keeps its Lagging rows, which still wait, and the last draw, at done, shows every row again.
+func TestAppViewFoldKeepsLaggingAndUnfoldsAtTheEnd(t *testing.T) {
+	t.Parallel()
+	clk := newViewClock()
+	var out bytes.Buffer
+	v := newAppView(&out, true, clk.now)
+	v.height = func() int { return 12 }
+	a := shopApp()
+	a.Status.Children = append(a.Status.Children, child(v1.KindAddonObject, "net", v1.AppChildLagging, "AwaitingApproval"))
+	require.NoError(t, v.deploy(a, shopRevision(a, clk.t), nil, nil, appParts(a), nil))
+	folded := out.String()
+	requireLines(t, folded, "◐ AddonObject/net", "✓ 2 more ready")
+	require.NoError(t, v.done())
+	last := out.String()[len(folded):]
+	requireLines(t, last, "✓ KVStore/cart", "◐ AddonObject/net")
+	require.NotContains(t, last, "more ready")
+}
+
+// A delete taller than the terminal folds its deleted rows, and its reasons and the App's past-deadline reason reach
+// the terminal escaped.
+func TestAppViewDeleteFoldAndEscapes(t *testing.T) {
+	t.Parallel()
+	clk := newViewClock()
+	var out bytes.Buffer
+	v := newAppView(&out, true, clk.now)
+	v.height = func() int { return 6 }
+	stack := &v1.AddonObject{ObjectMeta: v1.ObjectMeta{Namespace: "default", Name: "net"}}
+	stack.Status.Conditions = readyIs(v1.ConditionFalse, "Deleting\x1b[2J")
+	noted := []v1.ObjectRef{{Kind: v1.KindFunction, Name: "a"}, {Kind: v1.KindFunction, Name: "b"}, {Kind: "InfraStack", Name: "net"}}
+	require.NoError(t, v.remove("shop", noted, map[v1.ObjectRef]v1.Object{noted[2]: stack}, nil))
+	got := out.String()
+	requireLines(t, got, "✓ 2 more deleted")
+	require.Contains(t, got, `Deleting\x1b[2J`)
+	require.NotContains(t, got, "\x1b[2J", "the reason is escaped")
+
+	var past bytes.Buffer
+	a := shopApp()
+	a.Status.Conditions = readyIs(v1.ConditionFalse, "ChildNotReady\x1b[1m")
+	rev := shopRevision(a, clk.t.Add(-10*time.Minute))
+	require.NoError(t, newAppView(&past, true, clk.now).deploy(a, rev, nil, nil, appParts(a), nil))
+	require.Contains(t, past.String(), `ChildNotReady\x1b[1m`)
+	require.NotContains(t, past.String(), "\x1b[1m")
+}
