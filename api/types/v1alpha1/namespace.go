@@ -29,7 +29,7 @@ type NamespaceSpec struct {
 	VolumeBudgetBytes int64 `json:"volumeBudgetBytes,omitempty" minimum:"0" doc:"The same budget as volumeBudget, as a number of bytes. Set volumeBudget or volumeBudgetBytes, not both; 0 means no budget."`
 	// VolumeBudget is the same budget with a binary unit, "4Gi" (ADR-0266); at most one of the two is set.
 	VolumeBudget ByteSize `json:"volumeBudget,omitempty" doc:"The most volume space the namespace's Functions may reserve: each local volume's size from apply until the volume is removed, and each worker's emptyDir while the worker exists. Apply refuses a local volume that does not fit (VolumeBudget), and a worker whose emptyDir does not fit is not created. Set volumeBudget or volumeBudgetBytes, not both; neither, or 0, means no budget."`
-	// Node places the namespace whole on one worker node (FEAT-0002 decision 1); "" ⇒ the local node of an all-in-one.
+	// Node places the namespace whole on one worker node (ADR-0368 Decision 1); "" ⇒ the local node of an all-in-one.
 	Node ObjectName `json:"node,omitempty" doc:"The worker node that runs the namespace: its workers, its edge and its stores. It names a WorkerNode, which may be declared before its machine joins; the namespace then waits for it. Empty means the local node of an all-in-one funcd. The node of a namespace that holds objects cannot change."`
 }
 

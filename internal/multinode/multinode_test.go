@@ -141,6 +141,19 @@ func TestPlacementSkipsWhatAnotherNodeRuns(t *testing.T) {
 	require.Equal(t, []v1.NamespaceName{"there"}, got)
 }
 
+// failingReads is a store whose every read fails.
+type failingReads struct{ store.Store }
+
+func (failingReads) Get(context.Context, v1.GroupVersionKind, v1.NamespaceName, v1.ObjectName) (v1.Object, error) {
+	return nil, fault.Unavailablef("test.store", "the read fails")
+}
+
+func TestAFailedReadOfANamespaceSkipsItOnAControlPlaneAlone(t *testing.T) {
+	st := failingReads{store.New(memory.New())}
+	require.True(t, NewPlacement(st, "local", false).Skip("e1"), "a control plane alone runs no namespace it cannot read")
+	require.False(t, NewPlacement(st, "local", true).Skip("e1"), "an all-in-one's own work goes on")
+}
+
 func TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(memory.New())

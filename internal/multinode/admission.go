@@ -10,7 +10,7 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// namespaceNode checks a Namespace's spec.node (FEAT-0002 decision 1): it names a declared WorkerNode, or the local node,
+// namespaceNode checks a Namespace's spec.node (ADR-0368 Decision 2): it names a declared WorkerNode, or the local node,
 // and a namespace that holds objects keeps its node, since its data stays where it ran.
 type namespaceNode struct {
 	st    store.Store
@@ -71,8 +71,8 @@ func holdsObjects(ctx context.Context, st store.Store, ns v1.NamespaceName) (boo
 	return false, nil
 }
 
-// workerNodeInUse refuses to delete a WorkerNode a Namespace still names (decision 2: removal is declared too, once its
-// namespaces have moved).
+// workerNodeInUse refuses to delete a WorkerNode a Namespace still names (ADR-0368 Decision 2): its removal is declared
+// too, once its namespaces have moved.
 type workerNodeInUse struct{ st store.Store }
 
 func (workerNodeInUse) Name() string           { return "workernode-in-use" }

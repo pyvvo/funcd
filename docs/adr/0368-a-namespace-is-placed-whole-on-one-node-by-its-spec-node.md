@@ -1,0 +1,174 @@
+# ADR-0368: A namespace is placed whole on one node by its spec.node (amends ADR-0064)
+
+- **Status**: Proposed (2026-11-27)
+- **Date**: 2026-11-27
+- **Deciders**: green-0-rabbit
+- **Tags**: multi-node, placement, links
+- **Realizes**: [FEAT-0002/F246](../feat/0002-feat-multi-node.md) (namespaces placed on nodes)
+- **Supersedes (in part)**: [ADR-0064](0064-fn-to-fn-rpc-links.md): its Temporary workaround "Same-node only" and its
+  exit criterion, and the Scope's Out item "the NATS-lattice transport": a link never leaves its node
+- **Relates to**: [ADR-0363](0363-one-funcd-binary-runs-as-the-all-in-one-the-control-plane-alone-or-a-worker-node.md)
+  (the roles) · [ADR-0365](0365-a-worker-node-follows-its-namespaces-through-the-change-log-over-a-link-it-opens.md)
+  (what a node follows) · [ADR-0367](0367-a-workernode-is-declared-by-name-and-reads-ready-while-its-node-polls.md)
+  (declared nodes) · [ADR-0017](0017-scheduler-placement-port.md) (worker placement on one node, unchanged)
+
+## Context & Need
+
+A worker node runs everything its namespaces need (ADR-0363 Decision 4), so the platform must say which node runs each
+namespace. The decider chose on 2026-11-16 (#1483) a placement by hand, with no scheduler: an admin places each
+namespace on one node, and a namespace stays whole there, its workers, edge and stores together (FEAT-0002, *Out of
+scope*: no namespace spread over nodes). ADR-0064 left links same-node only until FEAT-0002 brought a transport to
+another node; a namespace on one node makes that transport unneeded.
+
+Its purpose: `Namespace.spec.node` and `multinode.Placement` tell each process which namespaces it runs, and the
+admission keeps a namespace and its data on the node that holds them.
+
+## Scenarios
+
+- `scenario: place-on-a-node`: Given WorkerNode vm1 joined, When an admin applies Namespace e1 with `spec.node: vm1`
+  and a Function in e1, Then vm1 runs the Function and the control plane starts no worker for it.
+- `scenario: an-undeclared-node`: Given no WorkerNode vm9, When an admin applies a Namespace with `spec.node: vm9`,
+  Then it is refused (400 `which is not declared`).
+- `scenario: waits-for-its-node`: Given WorkerNode vm1 declared and not joined, When a Job is applied in a namespace
+  placed on it, Then the Job waits, and vm1 runs it once it joins.
+- `scenario: keeps-its-node`: Given e1 holds a Function, When an admin changes its `spec.node`, Then it is refused
+  (409 `holds objects`); an empty namespace moves.
+- `scenario: a-node-in-use`: Given e1 placed on vm1, When an admin deletes WorkerNode vm1, Then it is refused (409
+  `still runs namespaces`).
+- `scenario: unplaced`: Given an all-in-one with nodes, When a namespace has no `spec.node`, Then the all-in-one runs
+  it; on `funcd server` its objects wait.
+- `scenario: a-link-stays`: Given Function f1 of e1 on vm1 links f2 of e1, When f1 calls f2, Then vm1's own local API
+  and data plane serve the call.
+- `scenario: a-failed-read`: Given a control plane alone whose store fails a read of a Namespace, When an event of
+  that namespace comes, Then the control plane leaves it, as it leaves every namespace.
+
+## Scope
+
+- **In**: `spec.node`, its admission, which process acts on which namespace, and links on a node.
+- **Out**: a scheduler that places namespaces or Functions on nodes (FEAT-0002, *Out of scope*); a namespace's hosts
+  across nodes (F247); a moved namespace's data, which workload backups carry (F251); where a worker runs on its node
+  (ADR-0017).
+
+## Constraints & Decision drivers
+
+- No scheduler, and no namespace spread over nodes (FEAT-0002).
+- A namespace's data stays on the node that ran it: there is no replication between nodes (FEAT-0002).
+- A namespace placed a moment ago never runs on two nodes.
+
+## Alternatives considered
+
+- **A label selector or a scheduler** that picks a node: FEAT-0002 leaves placement by a scheduler out. Rejected.
+- **A move that carries the data**: no store replicates between nodes, so a move would lose it or copy it by a
+  mechanism the platform does not have. Rejected for "a namespace with objects keeps its node".
+- **A cross-node link transport** (ADR-0064's exit criterion, NATS between nodes): no link leaves its namespace, so no
+  link leaves its node. Rejected; it would be the platform's only traffic between nodes.
+- **A cached placement** in each process: a namespace placed a moment ago could run on its old node. Rejected for a
+  read at each call.
+
+## Decision
+
+1. **spec.node.** A Namespace's `spec.node` names the WorkerNode that runs it whole: its reconcilers, edge, stores and
+   workers. An empty one is the local node of an all-in-one; `funcd server` runs no namespace, so an unplaced one's
+   objects wait there with no phase (ADR-0363 Decision 2).
+2. **Admission.** `spec.node` names a declared WorkerNode (ADR-0367), or the control plane's own node, or the write is
+   400 `which is not declared`; a node that has not joined yet is fine, and the namespace waits for it. A namespace
+   that holds an object keeps its node: a change is 409 `holds objects`, and an empty namespace moves. A WorkerNode that
+   a Namespace names cannot be deleted: 409 `still runs namespaces`. A namespace moves with its data by workload
+   backups: back its stores up, delete its objects, change `spec.node`, apply them again and restore.
+3. **Where a process acts.** A process acts only on the namespaces placed on it: the controller's enqueue, owner GC and
+   the other loops ask `Placement.Skip`, which skips a namespace placed on another node, and on a control plane alone
+   every unplaced one. Placement reads the Namespace at each call. A failed read skips the namespace on a control plane
+   alone, which runs none, and nothing on an all-in-one, whose own work goes on.
+4. **Links stay on their node.** A link stays in its namespace (ADR-0064), and a namespace on its node, so a link call
+   goes through the node's own local API and data plane, and no call crosses machines. This replaces ADR-0064's
+   same-node workaround and its exit criterion: no cross-node link transport is built.
+
+## Design model
+
+None: placement is one field, read at each call, and a namespace changes node only while it holds no object (Decision
+2), so no object runs on two nodes; the record that tells a node it gained or lost a namespace is ADR-0365's feed,
+which its model covers.
+
+## Behavior rows
+
+- **multi-node.md**: "Placing a namespace", "Moving a namespace" and "A control plane alone" (with ADR-0363) cite
+  this ADR's Decisions at acceptance; "Placing a namespace" also names
+  `TestAFailedReadOfANamespaceSkipsItOnAControlPlaneAlone`.
+
+## Temporary workarounds
+
+None.
+
+## Contracts
+
+```yaml
+apiVersion: funcd.io/v1alpha1
+kind: Namespace
+metadata:
+  name: e1
+spec:
+  node: vm1
+```
+
+```go
+// internal/multinode
+func NewPlacement(st store.Store, local v1.ObjectName, localRuns bool) *Placement // localRuns false on funcd server
+func (p *Placement) NodeOf(ctx context.Context, ns v1.NamespaceName) (v1.ObjectName, error) // "" is unplaced
+func (p *Placement) Skip(ns v1.NamespaceName) bool                                         // leave ns to another node
+func (p *Placement) Namespaces(ctx context.Context, node v1.ObjectName) ([]v1.NamespaceName, error)
+```
+
+| Part | Reads | Writes |
+|---|---|---|
+| admission | the Namespace written; WorkerNodes; the namespace's objects | refuses or passes |
+| every process | the Namespace at each call (`Placement`) | nothing |
+
+## Implementation plan
+
+Built ahead of this ADR on the branch of draft PR #1495: `api/types/v1alpha1/namespace.go` (`spec.node`),
+`internal/multinode/placement.go` (`Placement`), `admission.go` (`namespaceNode`, `workerNodeInUse`),
+`pkg/funcd/multinode.go` (`elsewhere`, given to the controller and owner GC), `internal/controlplane/routes_rest.go`
+(the error cases). This ADR's Decision 3 changed the built code: a failed read skips the namespace on a control plane
+alone.
+
+| Scenario | Test |
+|---|---|
+| place-on-a-node | `TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn`, `TestAWorkerNodeRunsTheNamespacePlacedOnIt` |
+| an-undeclared-node | `TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects` |
+| waits-for-its-node | `TestAJobRunsOnTheWorkerNodeItsNamespaceIsPlacedOn` |
+| keeps-its-node | `TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects` |
+| a-node-in-use | `TestAWorkerNodeANamespaceNamesCannotBeDeleted` |
+| unplaced | `TestPlacementSkipsWhatAnotherNodeRuns`, `TestEachRoleRunsItsOwnParts`, `TestAControlPlaneAloneRunsNoNamespace` |
+| a-link-stays | `TestALinkCallStaysOnTheWorkerNodeOfItsNamespace` |
+| a-failed-read | `TestAFailedReadOfANamespaceSkipsItOnAControlPlaneAlone` |
+
+Done when every test above passes and `just ci` is green.
+
+## Review checklist
+
+- [ ] `spec.node` is admitted only when it names a declared WorkerNode or the control plane's own node.
+- [ ] A Namespace holding any object keeps its `spec.node`, and a named WorkerNode cannot be deleted.
+- [ ] Every loop that acts on a namespace's objects on the control plane asks `Placement.Skip`.
+- [ ] `Placement` reads the store at each call; a failed read skips on a control plane alone only.
+- [ ] No code path sends a link call to another node.
+
+## Consequences
+
+- A namespace that needs isolation gets a node of its own, and a node's namespaces run with no scheduler.
+- A namespace's place is fixed while it holds objects: moving it is a backup, a delete, a move and a restore.
+- On an all-in-one whose store fails a read of a Namespace, the all-in-one goes on with that namespace's work, even
+  one placed on a node; a store that fails reads fails the work's own reads too.
+- On `funcd server`, an unplaced namespace's objects show no phase; its Namespace shows no `spec.node`.
+- A newly placed namespace holds no object (Decision 2), and the API ignores the ownerReferences a person sends
+  (ADR-0048), so its node has no child of another's to take (routed from the ADR-0366 judge).
+- At acceptance, ADR-0064 gains its `Superseded in part by` line for its workaround and its Out item.
+
+## Open questions
+
+None.
+
+## References
+
+- [FEAT-0002](../feat/0002-feat-multi-node.md) F246; feature issue #1483; tracker #1493; draft PR #1495.
+- The ADR-0363 judge's routed findings: a failed read of a placement (Decision 3) and an unplaced namespace on
+  `funcd server` (Consequences).

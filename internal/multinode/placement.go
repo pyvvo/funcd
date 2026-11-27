@@ -8,7 +8,7 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// Placement answers where a namespace runs, from its Namespace object's spec.node (FEAT-0002 decision 1): a namespace
+// Placement answers where a namespace runs, from its Namespace object's spec.node (ADR-0368 Decision 1): a namespace
 // stays whole on one node, and an empty spec.node is the local node of an all-in-one. It reads the store at each call,
 // so a namespace placed a moment ago never runs on the wrong node.
 type Placement struct {
@@ -45,14 +45,15 @@ func (p *Placement) Local(node v1.ObjectName) bool { return node == "" || node =
 
 // Skip reports whether this process leaves namespace ns to another node: placed on a node other than the local one,
 // or unplaced on a control plane that runs no namespace. A cluster-scoped object (ns "") is never skipped. A failed
-// read skips nothing, so an all-in-one's work goes on.
+// read skips the namespace on a control plane alone, which runs none, and nothing on an all-in-one, whose own work goes
+// on (ADR-0368 Decision 3).
 func (p *Placement) Skip(ns v1.NamespaceName) bool {
 	if p == nil || ns == "" {
 		return false
 	}
 	node, err := p.NodeOf(context.Background(), ns)
 	if err != nil {
-		return false
+		return !p.localRuns
 	}
 	if node == "" {
 		return !p.localRuns
