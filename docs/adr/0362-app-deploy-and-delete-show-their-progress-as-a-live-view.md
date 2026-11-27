@@ -112,7 +112,7 @@ long; a CI log keeps lines it can read.
    (Decision 4), else no reason, as for a store that an object outside the App holds; ■ kept, for a store that stays.
 4. **Waits on.** `gc.Names(u)` lists every object `u`'s spec names, each once with the field that names it, in field
    order: a Function's or a Job's bindings (`kv`, `sql`, `blob`, `lake`, `addon`, `config`, `job`, `secret`), links
-   and root entries' `ref`, a Workflow's step bindings, a Lake's `blob`, `config` and `secret`, a Route's
+   and root entries' `ref`, as a Lake's and a Site's `buckets[]` entries carry one too, a Workflow's step bindings, a Lake's `blob`, `config` and `secret`, a Route's
    `auth.provider` and its rules' `function`, `site` and static `bucket`, a Site's blob `bucket`, its rules' `bucket`
    and its runtime `configMap`, an EventSource's `bucket` and sql `database`, and a Sensor's dependency `source` and
    its `actions[]`' `workflow` and `function`. A Secret or an OIDCProvider is no App part, so no row waits on one. An `addon` binding names an
