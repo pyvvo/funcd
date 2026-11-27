@@ -1219,16 +1219,13 @@ func (d *devInstance) appRevision() string {
 }
 
 // appEndpoints are the banner's lines for the App: each Route's paths and each Site's URL on the gateway, a line that
-// names no host followed by its network lines, one per LAN address (ADR-0361 Decision 3). A line with a host has none:
-// its rule answers only on that host.
+// names no host on the shown gateway URL, a LAN address's under --lan (ADR-0361 Decision 3, amended 2026-11-27). A line
+// with a host names its host: its rule answers only there.
 func (d *devInstance) appEndpoints() [][2]string {
 	var out [][2]string
 	add := func(name, host, path string) {
 		if host == "" {
-			out = append(out, [2]string{name, d.gatewayURL + path})
-			for _, n := range d.networkURLs {
-				out = append(out, [2]string{"network", n + path})
-			}
+			out = append(out, [2]string{name, d.shownGatewayURL() + path})
 			return
 		}
 		if u, err := neturl.Parse(d.gatewayURL); err == nil {

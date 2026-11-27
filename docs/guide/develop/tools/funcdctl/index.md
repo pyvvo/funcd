@@ -28,8 +28,8 @@ With [`--lan`](spec.md#funcdctl-dev), or `dev.lan: true` in `funcdctl.config.yam
 gateway on every address of the machine, so that a phone or another computer on the same network can open the Functions,
 Routes and Sites that it serves; `--lan=<IP address>` serves the gateway on that one address only. The gateway then
 answers anyone on that network, with no authentication, while the control plane and the S3 endpoint stay on 127.0.0.1.
-Beneath each gateway URL, the banner prints one `network` URL for each IPv4 address that the machine had when dev started,
-and a fixed `--gport` keeps those URLs the same across restarts. A Route or a Site with a host answers only on that host,
-so it gets no `network` URL. With `liveReload: true`, a Site page opened on another device does not reload when the Site
-changes.
+The banner then names each gateway URL on the IPv4 address of the machine's default route when dev started, and a note at
+its bottom names 127.0.0.1 and the machine's other IPv4 addresses, on which the same URLs answer; a fixed `--gport` keeps
+the URLs the same across restarts. A Route or a Site with a host answers only on that host, so its URL keeps the host.
+With `liveReload: true`, a Site page opened on another device does not reload when the Site changes.
 The [Spec](spec.md) tab lists every command with its flags, and marks the ones that only the dev build has.

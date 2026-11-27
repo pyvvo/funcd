@@ -13,6 +13,7 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -98,7 +99,7 @@ func wsOpen(t *testing.T, url, origin string) *websocket.Conn {
 }
 
 // scenario: dev-lan-off — without --lan or dev.lan the gateway refuses a connection on a LAN address, answers on
-// 127.0.0.1, and the banner prints no network line and no LAN warning.
+// 127.0.0.1, and the banner names 127.0.0.1 on its gateway lines, with no note of other addresses and no LAN warning.
 func TestScenarioDevLANOff(t *testing.T) {
 	requireNode(t)
 	t.Parallel()
@@ -109,7 +110,8 @@ func TestScenarioDevLANOff(t *testing.T) {
 	require.Empty(t, inst.networkURLs)
 	got := banner(t, inst)
 	require.Contains(t, got, "serving on localhost · Ctrl-C to stop")
-	require.NotContains(t, got, "network ")
+	require.Contains(t, got, "POST  "+inst.gatewayURL+"/function/api")
+	require.NotContains(t, got, lanNotePrefix)
 	require.NotContains(t, got, devLANWarning)
 }
 
@@ -159,7 +161,7 @@ func TestScenarioDevLANLoopbackKept(t *testing.T) {
 }
 
 // scenario: dev-lan-one-address — with --lan=<a LAN address> the gateway answers on that address, refuses 127.0.0.1,
-// and the banner's title and gateway lines name the address, with the LAN warning.
+// and the banner's title and gateway lines name the address, with the LAN warning and no note of other addresses.
 func TestScenarioDevLANOneAddress(t *testing.T) {
 	requireNode(t)
 	t.Parallel()
@@ -179,11 +181,13 @@ func TestScenarioDevLANOneAddress(t *testing.T) {
 	} {
 		require.Contains(t, got, want)
 	}
+	require.NotContains(t, got, lanNotePrefix)
 }
 
-// scenario: dev-lan-banner — with dev.lan: true in funcdctl.config.yaml and two LAN addresses, the banner puts one
-// network line per address beneath the gateway's line, a Route's line that names no host and a Site's line, none
-// beneath a Route's line with a host, keeps the control and s3 lines on 127.0.0.1, and prints the LAN warning first.
+// scenario: dev-lan-banner — with dev.lan: true in funcdctl.config.yaml and two LAN addresses, the default route's
+// first, the gateway's line, a Route's line that names no host and a Site's line each name the first address once, a
+// Route's line with a host names its host, the control and s3 lines stay on 127.0.0.1, and a note names 127.0.0.1 and
+// the second address before the LAN warning.
 func TestScenarioDevLANBanner(t *testing.T) {
 	t.Parallel()
 	start := devProject(t, map[string]string{devConfigFile: "dev:\n  lan: true\n"})
@@ -211,30 +215,44 @@ func TestScenarioDevLANBanner(t *testing.T) {
 	inst.setGatewayURLs("[::]:8795", func() ([]netip.Addr, error) { return []netip.Addr{lanA, lanB}, nil })
 
 	got := banner(t, inst)
-	order := []string{
+	requireInOrder(t, got,
 		"serving on localhost and the LAN · Ctrl-C to stop",
-		"gateway   http://127.0.0.1:8795",
-		"network   http://192.0.2.10:8795",
-		"network   http://198.51.100.7:8795",
+		"gateway   http://192.0.2.10:8795",
 		"control   http://127.0.0.1:61234",
 		"s3        http://127.0.0.1:61235",
-		"route     http://127.0.0.1:8795/api",
-		"network   http://192.0.2.10:8795/api",
-		"network   http://198.51.100.7:8795/api",
+		"route     http://192.0.2.10:8795/api",
 		"route     http://login.localhost:8795/auth",
-		"site      http://127.0.0.1:8795/site/web",
-		"network   http://192.0.2.10:8795/site/web",
-		"network   http://198.51.100.7:8795/site/web",
+		"site      http://192.0.2.10:8795/site/web",
+		lanNotePrefix+"127.0.0.1:8795 and 198.51.100.7:8795",
 		devLANWarning,
 		"egress is NOT isolated",
-	}
+	)
+	require.Equal(t, 3, strings.Count(got, "http://192.0.2.10:8795"), "one line each for the gateway, the Route and the Site")
+	require.Equal(t, 1, strings.Count(got, "127.0.0.1:8795"), "127.0.0.1 in the note only")
+	require.Equal(t, 1, strings.Count(got, "198.51.100.7"), "the second address in the note only")
+
+	t.Run("folder mode", func(t *testing.T) {
+		t.Parallel()
+		folder := &devInstance{functions: []string{"api"}, controlURL: inst.controlURL, s3Endpoint: inst.s3Endpoint,
+			s3Region: "us-east-1"}
+		folder.setGatewayURLs("0.0.0.0:8795", func() ([]netip.Addr, error) { return []netip.Addr{lanA}, nil })
+		got := banner(t, folder)
+		requireInOrder(t, got, "gateway   http://192.0.2.10:8795", "POST  http://192.0.2.10:8795/function/api",
+			lanNotePrefix+"127.0.0.1:8795", devLANWarning)
+		require.NotContains(t, got, lanNotePrefix+"127.0.0.1:8795 and", "one LAN address: the note names 127.0.0.1 only")
+		require.Equal(t, 1, strings.Count(got, "/function/api"), "one POST line per Function")
+	})
+}
+
+// requireInOrder fails unless got holds each of want, one after the other.
+func requireInOrder(t *testing.T, got string, want ...string) {
+	t.Helper()
 	at := 0
-	for _, want := range order {
-		i := strings.Index(got[at:], want)
-		require.GreaterOrEqual(t, i, 0, "%q after %q in:\n%s", want, got[:at], got)
-		at += i + len(want)
+	for _, w := range want {
+		i := strings.Index(got[at:], w)
+		require.GreaterOrEqual(t, i, 0, "%q after %q in:\n%s", w, got[:at], got)
+		at += i + len(w)
 	}
-	require.Equal(t, 6, strings.Count(got, "network   http://"), "no network line beneath the Route with a host")
 }
 
 // scenario: dev-lan-refused — a value that is not true, false or an IP address stops dev, from the flag with no
@@ -338,13 +356,56 @@ func TestGatewayURLs(t *testing.T) {
 	require.True(t, off)
 }
 
-// lanAddrs lists IPv4 addresses only, none of them loopback.
+// lanAddrs lists IPv4 addresses only, none of them loopback, the default route's first.
 func TestLANAddrs(t *testing.T) {
 	t.Parallel()
 	addrs, err := lanAddrs()
 	require.NoError(t, err)
 	for _, a := range addrs {
 		require.True(t, a.Is4() && !a.IsLoopback(), "%s", a)
+	}
+	if r, err := routeAddr(); err == nil && slices.Contains(addrs, r) {
+		require.Equal(t, r, addrs[0], "the default route's address first")
+	}
+}
+
+// routeFirst moves the route's address first when the list holds it, and keeps the list as it is otherwise.
+func TestRouteFirst(t *testing.T) {
+	t.Parallel()
+	a, b, c := netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("198.51.100.7"), netip.MustParseAddr("203.0.113.9")
+	route := func(r netip.Addr, err error) func() (netip.Addr, error) {
+		return func() (netip.Addr, error) { return r, err }
+	}
+	for name, tc := range map[string]struct {
+		route func() (netip.Addr, error)
+		want  []netip.Addr
+	}{
+		"the third":       {route(c, nil), []netip.Addr{c, a, b}},
+		"the second":      {route(b, nil), []netip.Addr{b, a, c}},
+		"already first":   {route(a, nil), []netip.Addr{a, b, c}},
+		"not in the list": {route(netip.MustParseAddr("10.8.0.2"), nil), []netip.Addr{a, b, c}},
+		"no route":        {route(netip.Addr{}, errors.New("network is unreachable")), []netip.Addr{a, b, c}},
+	} {
+		require.Equal(t, tc.want, routeFirst([]netip.Addr{a, b, c}, tc.route), name)
+	}
+	require.Empty(t, routeFirst(nil, route(a, nil)))
+}
+
+// lanNote names 127.0.0.1 and every LAN address after the first, and is empty while the lines name no LAN address.
+func TestLANNote(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		network []string
+		want    string
+	}{
+		{nil, ""},
+		{[]string{"http://192.0.2.10:8795"}, lanNotePrefix + "127.0.0.1:8795"},
+		{[]string{"http://192.0.2.10:8795", "http://198.51.100.7:8795"}, lanNotePrefix + "127.0.0.1:8795 and 198.51.100.7:8795"},
+		{[]string{"http://192.0.2.10:8795", "http://198.51.100.7:8795", "http://203.0.113.9:8795"},
+			lanNotePrefix + "127.0.0.1:8795, 198.51.100.7:8795 and 203.0.113.9:8795"},
+	} {
+		d := &devInstance{gatewayURL: "http://127.0.0.1:8795", networkURLs: tc.network}
+		require.Equal(t, tc.want, d.lanNote(), "%v", tc.network)
 	}
 }
 
