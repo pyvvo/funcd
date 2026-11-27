@@ -39,7 +39,8 @@ admission keeps a namespace and its data on the node that holds them.
 - `scenario: a-create-racing-a-move`: Given an empty e1 on vm1, When an admin moves it to vm2 while another creates a
   ConfigMap in it, Then the two run one after the other: the move is 409, or the ConfigMap lands after it, on vm2.
 - `scenario: a-forced-group-delete`: Given a ResourceGroup of e1, which vm1 runs, When an admin deletes it with force,
-  Then the control plane waits up to 10 s for vm1 to collect the group's children, then answers.
+  Then each pass waits up to 10 s for vm1 to collect the children of what it deleted; while vm1 is away, the delete
+  answers 409, and can be tried again.
 - `scenario: a-node-in-use`: Given e1 placed on vm1, When an admin deletes WorkerNode vm1, Then it is refused (409
   `still runs namespaces`).
 - `scenario: unplaced`: Given an all-in-one with nodes, When a namespace has no `spec.node`, Then the all-in-one runs
@@ -81,36 +82,40 @@ admission keeps a namespace and its data on the node that holds them.
    node that has not joined yet is fine, and the namespace waits for it. It may name the control plane's own node only
    where that process runs namespaces, else 400 `runs no namespace`, and no WorkerNode takes that name (400). A
    namespace that holds an object keeps its node: a change is 409 `holds objects`, and an empty namespace moves. The
-   change checks that under the namespace's admission lock (ADR-0147), which every create in a namespace takes on a
-   control plane with nodes, so a create and a move run one after the other. A WorkerNode that a Namespace names cannot
-   be deleted: 409 `still runs namespaces`. A namespace moves with its data by workload backups: back its stores up,
-   delete its objects, change `spec.node`, apply them again and restore.
+   change checks that under the namespace's admission lock (ADR-0147), which every create through the API in a
+   namespace takes on a control plane with nodes, so a create and a move run one after the other. A node's write-back
+   takes no lock: it writes only into a namespace placed on it, only children and runs, which an empty namespace does
+   not get, and a late child either makes the move 409 or lands as an orphan that owner GC collects. A WorkerNode
+   that a Namespace names cannot be deleted: 409 `still runs namespaces`. A namespace moves with its data by workload
+   backups: back its stores up, delete its objects, change `spec.node`, apply them again and restore.
 3. **Where a process acts.** A process acts only on the namespaces placed on it: the controller's enqueue, owner GC,
    the JobRun slots, the Route reconciler and the WorkflowRun sweeper ask `Placement.Skip`, which skips a namespace
    placed on another node, and on a control plane alone one placed on its own node, by name or unplaced. Placement
    reads the Namespace at each call, one store read per enqueue, collected object and route pass. A failed read skips
    the namespace on a control plane alone, which runs none, and nothing on an all-in-one, whose own work goes on. A
-   forced delete of a ResourceGroup of a namespace a node runs waits up to `nodeCollects` 10 s, looking every
-   `nodeCollectsPoll` 100 ms, for the node to collect the group's children; it then answers, and the node finishes the
-   collection on its own.
+   forced delete of a ResourceGroup of a namespace a node runs waits, on each of its passes, up to `nodeCollects` 10 s,
+   looking every `nodeCollectsPoll` 100 ms, for the node to collect the children of what the pass deleted; while the
+   node is away, the delete answers 409 and can be tried again.
 4. **Links stay on their node.** A link stays in its namespace (ADR-0064's Scope: no cross-namespace links), and a
-   namespace on its node, so a link call
-   goes through the node's own local API and data plane, and no call crosses machines. This replaces ADR-0064's
-   same-node workaround and its exit criterion: no cross-node link transport is built.
+   namespace on its node, so a link call goes through the node's own local API and data plane, and no call crosses
+   machines. This replaces ADR-0064's same-node workaround and its exit criterion: no cross-node link transport is
+   built.
 
 ## Design model
 
 None: placement is one field, read at each call, and a namespace changes node only while it holds no object, a check
-made under the namespace's admission lock that every create in it takes (ADR-0147, the mechanism reused unchanged), so
-a create and a move run one after the other and no object runs on two nodes. The bounded wait of a forced group
+made under the namespace's admission lock (ADR-0147) that every create through the API in it takes; the lock makes the
+check and the write one step, so no interleaving of a create and a move is left to model, and no object runs on two
+nodes. The bounded wait of a forced group
 delete is one loop with a deadline, and the node learns that it gained or lost a namespace from one record of its
 feed (ADR-0365).
 
 ## Behavior rows
 
-- **multi-node.md**: "Placing a namespace", "Moving a namespace" and "A control plane alone" (with ADR-0363) cite
-  this ADR's Decisions at acceptance; "Placing a namespace" also names
-  `TestAFailedReadOfANamespaceSkipsItOnAControlPlaneAlone`.
+- **multi-node.md**: "Declaring a node" (a WorkerNode under the own node's name is refused), "Placing a namespace"
+  (with 400 `runs no namespace` and `TestAFailedReadOfANamespaceSkipsItOnAControlPlaneAlone`), "Moving a namespace",
+  "A forced ResourceGroup delete in a node's namespace" and "A control plane alone" (with ADR-0363) cite this ADR's
+  Decisions at acceptance.
 
 ## Temporary workarounds
 
@@ -186,7 +191,8 @@ Done when every test above passes and `just ci` is green.
 - On `funcd server`, an unplaced namespace's objects show no phase; its Namespace shows no `spec.node`.
 - A newly placed namespace holds no object (Decision 2), and the API ignores the ownerReferences a person sends
   (ADR-0048), so its node has no child of another's to take (routed from the ADR-0366 judge).
-- At acceptance, ADR-0064 gains its `Superseded in part by` line for its workaround and its Out item.
+- At acceptance, ADR-0064 gains its `Superseded in part by` line for its workaround, its Out item, its Open question
+  and its (−) Consequence.
 
 ## Open questions
 
