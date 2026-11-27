@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.50.0](https://github.com/pyvvo/funcd/compare/v0.49.2...v0.50.0) (2026-11-27)
+
+
+### Features
+
+* **funcdctl:** dev --containers runs funcd's own runtimes in containers, from images funcdctl carries (ADR-0359) ([51748cf](https://github.com/pyvvo/funcd/commit/51748cf0426da0fa01997cfe626107775f240eed))
+
+
+### Bug Fixes
+
+* **funcdctl:** dev links a folder's node_modules by its absolute path, so funcdctl dev . resolves its modules ([51748cf](https://github.com/pyvvo/funcd/commit/51748cf0426da0fa01997cfe626107775f240eed))
+
 ## [0.49.2](https://github.com/pyvvo/funcd/compare/v0.49.1...v0.49.2) (2026-11-25)
 
 
