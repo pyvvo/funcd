@@ -293,17 +293,7 @@ func (a *Agent) syncAll(ctx context.Context) error {
 	for ns := range gone {
 		a.removeNamespace(ctx, ns)
 	}
-	a.mu.Lock()
-	var stale []v1.NamespaceName
-	for ns := range a.keys {
-		if !placed[ns] {
-			stale = append(stale, ns)
-		}
-	}
-	a.mu.Unlock()
-	for _, ns := range stale {
-		a.dropKey(ctx, ns)
-	}
+	a.dropKeysOutside(ctx, placed)
 	// A namespace's master comes before its objects, whose credentials derive from it (decision 8).
 	for ns := range placed {
 		if err := a.fetchKey(ctx, ns); err != nil {

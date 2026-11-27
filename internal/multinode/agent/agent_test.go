@@ -424,6 +424,7 @@ func TestARecordTheNodeCannotDecodeIsSkipped(t *testing.T) {
 	require.Zero(t, s.snapshots.Load(), "and takes no snapshot for it, which would not bring it either")
 }
 
+// oracle: docs/design/multinode/keys.fizz#TheMasterOfANamespaceThatLeftGoes
 func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {
 	ctx := context.Background()
 	r := startCP(t)
@@ -444,8 +445,9 @@ func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {
 	for _, name := range []v1.ObjectName{"e1", "e2", "other"} {
 		ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
 		ns.Name = name
-		if name != "other" {
-			ns.Spec.Node = "vm1"
+		ns.Spec.Node = "vm1"
+		if name == "other" {
+			ns.Spec.Node = "vm2"
 		}
 		_, err = r.cp.Create(ctx, ns)
 		require.NoError(t, err)
@@ -466,7 +468,9 @@ func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {
 	mac.Write([]byte("funcd-namespace-key/v1/" + string(obj.GetObjectMeta().UID)))
 	require.Equal(t, mac.Sum(nil), m1, "a namespace's master derives from the platform's and the namespace's UID")
 	_, err = a.NamespaceMaster("other")
-	require.Error(t, err, "a namespace on no node has no master on this one")
+	require.Error(t, err, "a namespace on another node has no master on this one")
+	_, err = nodeClient(t, r, dir).Key(ctx, "other")
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "and the control plane gives it none")
 	stop()
 
 	a, stop = run()
@@ -481,6 +485,37 @@ func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {
 	})
 	_, err = os.Stat(filepath.Join(dir, "keys", "e2.json"))
 	require.ErrorIs(t, err, fs.ErrNotExist)
+}
+
+// A node that stopped inside its removal of a namespace, after the namespace's local Namespace went and before its
+// master did, drops that master when it starts again, before anything runs.
+// oracle: docs/design/multinode/keys.fizz#NoMasterWithoutItsNamespace
+func TestANodeThatStoppedWhileANamespaceLeftDropsItsMasterAtItsStart(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t)
+	e2 := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+	e2.Name, e2.Spec.Node = "e2", "vm1"
+	_, err := n.cp.Create(ctx, e2)
+	require.NoError(t, err)
+	stop := n.start(t)
+	eventually(t, "the node holds the masters of e1 and e2, and saved its cursor", func() bool {
+		_, e1 := n.agent.NamespaceMaster("e1")
+		_, e2 := n.agent.NamespaceMaster("e2")
+		_, cursor := os.Stat(filepath.Join(n.dir, "cursor"))
+		return e1 == nil && e2 == nil && cursor == nil
+	})
+	stop()
+	require.NoError(t, n.cp.Delete(ctx, v1.KindNamespace.GVK(), "", "e1", ""))
+	require.NoError(t, n.node.Delete(ctx, v1.KindNamespace.GVK(), "", "e1", ""), "the node's removal of e1 stopped here")
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: n.dir, Store: n.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+	require.NoError(t, err)
+	require.NoError(t, a.Prepare(ctx))
+	_, err = a.NamespaceMaster("e1")
+	require.Error(t, err, "the master of a namespace the node no longer holds goes at its start")
+	_, err = os.Stat(filepath.Join(n.dir, "keys", "e1.json"))
+	require.ErrorIs(t, err, fs.ErrNotExist)
+	_, err = a.NamespaceMaster("e2")
+	require.NoError(t, err, "and the master of a namespace it holds stays")
 }
 
 // A node renews its certificate in the last third of its life, and its first call with the new one ends the old one.

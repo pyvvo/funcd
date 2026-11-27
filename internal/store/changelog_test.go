@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -96,7 +97,9 @@ func flip(b []byte) []byte {
 
 func TestChangeLogServesASealedKindDecrypted(t *testing.T) {
 	ctx := context.Background()
-	s, cl := changeLog(t, store.WithEncryptor([]v1.Kind{v1.KindSecret}, flipEncryptor{}))
+	eng := memory.New()
+	s := store.New(eng, store.WithChangeLog(0), store.WithEncryptor([]v1.Kind{v1.KindSecret}, flipEncryptor{}))
+	cl := s.(store.ChangeLog)
 	sec := &v1.Secret{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSecret.GVK().APIVersion(), Kind: v1.KindSecret}}
 	sec.Name, sec.Namespace, sec.ResourceGroup = "token", "default", "rg1"
 	sec.Spec.Data = map[string][]byte{"k": []byte("v")}
@@ -107,6 +110,15 @@ func TestChangeLogServesASealedKindDecrypted(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	require.Nil(t, out[0].Sealed)
+	var stored store.Change
+	require.NoError(t, eng.View(ctx, func(tx store.Txn) error {
+		raw, ok, err := tx.Get("\x00node-changes", fmt.Sprintf("%020d", out[0].Rev))
+		require.True(t, ok)
+		require.NoError(t, json.Unmarshal(raw, &stored))
+		return err
+	}))
+	require.Nil(t, stored.Object, "the record is kept sealed at rest")
+	require.NotEmpty(t, stored.Sealed)
 	var got v1.Secret
 	require.NoError(t, json.Unmarshal(out[0].Object, &got))
 	require.Equal(t, []byte("v"), got.Spec.Data["k"])

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"maps"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -19,6 +20,11 @@ func (a *Agent) Prepare(ctx context.Context) error {
 	if err := a.loadMine(ctx); err != nil {
 		return err
 	}
+	// A node that stopped while a namespace left it may still keep that namespace's master (ADR-0371 Decision 1).
+	a.mu.Lock()
+	mine := maps.Clone(a.mine)
+	a.mu.Unlock()
+	a.dropKeysOutside(ctx, mine)
 	backoff, failing := retryMin, false
 	for a.timeline == "" && ctx.Err() == nil {
 		var err error

@@ -112,3 +112,18 @@ func (a *Agent) dropKey(ctx context.Context, ns v1.NamespaceName) {
 	delete(a.keys, ns)
 	a.mu.Unlock()
 }
+
+// dropKeysOutside drops the master of every namespace that keep does not hold.
+func (a *Agent) dropKeysOutside(ctx context.Context, keep map[v1.NamespaceName]bool) {
+	a.mu.Lock()
+	var stale []v1.NamespaceName
+	for ns := range a.keys {
+		if !keep[ns] {
+			stale = append(stale, ns)
+		}
+	}
+	a.mu.Unlock()
+	for _, ns := range stale {
+		a.dropKey(ctx, ns)
+	}
+}
