@@ -1100,6 +1100,7 @@ This page lists the spec and status fields of App and AppRevision, each with its
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
+| `deadline` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When a pass fails the rollout if a part is still not Ready and no pre-hook call has started: the latest of startedAt, a resume, a hold's release, a pre-hook's end and a lag's end, plus app.upgradeTimeout. A pause or a hold moves it when it ends, so while one lasts it can lie in the past. Unset before the clock starts. |
 | `hooks` | array of [`AppRevision.status.hooks[]`](#apprevisionstatushooks) | The hook calls of this revision in call order, a retried call included. A call that ends during a stop of funcd, a hold or a pause of the App is not recorded and is made again. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |

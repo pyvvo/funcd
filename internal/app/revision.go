@@ -257,6 +257,9 @@ func (r *Reconciler) settle(ctx context.Context, a *v1.App, revs []*v1.AppRevisi
 		ready := childrenReady(vs)
 		if latest.Name != a.Status.CurrentRevision && latest.Status.StartedAt != nil {
 			now, deadline := r.clock.Now(), r.deadline(a, latest)
+			if at := v1.NewTimestamp(deadline); latest.Status.Deadline == nil || !time.Time(*latest.Status.Deadline).Equal(time.Time(at)) {
+				latest.Status.Deadline = &at // published for funcdctl's view (ADR-0362 Decision 5)
+			}
 			switch {
 			case pre != nil && pre.failed:
 				r.failHook(latest, hp.failure)

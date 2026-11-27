@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"slices"
 	"sync"
 	"time"
 
@@ -628,66 +627,4 @@ func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Objec
 		}
 	}
 	return v1.ObjectRef{}, false, nil
-}
-
-// uses reports whether u names obj in one of the fields InUse reads.
-func uses(u, obj v1.Object) bool {
-	name := obj.GetObjectMeta().Name
-	b, workload := bindingsOf(u)
-	switch obj.(type) {
-	case *v1.Function:
-		self := u.GroupVersionKind().Kind == v1.KindFunction && u.GetName() == name
-		return workload && !self && slices.ContainsFunc(b.Links, func(l v1.FunctionLink) bool { return l.Target == name })
-	case *v1.KVStore:
-		return workload && slices.ContainsFunc(b.KV, func(k v1.FunctionKV) bool { return k.Store == name })
-	case *v1.SQLDatabase:
-		return workload && slices.ContainsFunc(b.SQL, func(s v1.FunctionSQL) bool { return s.Database == name })
-	case *v1.AddonObject:
-		return workload && slices.ContainsFunc(b.Addon, func(a v1.FunctionAddon) bool { return a.Object == name })
-	case *v1.Bucket:
-		return usesBucket(u, name)
-	case *v1.ConfigMap:
-		switch o := u.(type) {
-		case *v1.Function, *v1.Job:
-			return slices.Contains(b.Config, name)
-		case *v1.Lake:
-			return slices.Contains(o.Spec.Bindings.Config, name)
-		case *v1.Site:
-			return o.Spec.RuntimeConfig != nil && o.Spec.RuntimeConfig.ConfigMap == name
-		}
-	}
-	return false
-}
-
-// bindingsOf is the bindings of a workload, a Function or a Job, which binds what a Function does (ADR-0347 Decision 1);
-// false for any other kind.
-func bindingsOf(u v1.Object) (v1.FunctionBindings, bool) {
-	switch o := u.(type) {
-	case *v1.Function:
-		return o.Spec.Bindings, true
-	case *v1.Job:
-		return o.Spec.Bindings, true
-	}
-	return v1.FunctionBindings{}, false
-}
-
-// usesBucket reports whether u names the Bucket name in one of the fields InUse reads.
-func usesBucket(u v1.Object, name v1.ObjectName) bool {
-	bound := func(b v1.FunctionBlob) bool { return b.Bucket == name }
-	switch o := u.(type) {
-	case *v1.Function, *v1.Job:
-		b, _ := bindingsOf(o)
-		return slices.ContainsFunc(b.Blob, bound)
-	case *v1.Lake:
-		return slices.ContainsFunc(o.Spec.Bindings.Blob, bound)
-	case *v1.EventSource:
-		return o.Spec.Blob != nil && o.Spec.Blob.Bucket == name
-	case *v1.Route:
-		return slices.ContainsFunc(o.Spec.Rules, func(r v1.RouteRule) bool {
-			return r.Backend.Static != nil && r.Backend.Static.Bucket == name
-		})
-	case *v1.Site:
-		return o.Spec.ServedBucket() == name
-	}
-	return false
 }
