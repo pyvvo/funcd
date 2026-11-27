@@ -214,7 +214,7 @@ func TestTheConfigsCredentialsComeFirst(t *testing.T) {
 	wn := &v1.WorkerNode{TypeMeta: tmeta(v1.KindWorkerNode)}
 	wn.Name = "vm1"
 	_, err = viewer.Apply(ctx, wn)
-	require.Error(t, err, "the config's viewer decides, not the stored admin token of the same text")
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "the config's viewer decides, not the stored admin token of the same text")
 }
 
 func TestAnAPITokenKeptAsAHashWorksUntilItIsMintedAgainOrDeleted(t *testing.T) {
