@@ -11,7 +11,7 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// The liveness pacing (FEAT-0002 F245): a node is Ready while its last poll is under readyFor old; its lastSeen is
+// The liveness pacing (ADR-0367 Decision 2): a node is Ready while its last poll is under readyFor old; its lastSeen is
 // written at most every seenEvery; the statuses are checked every livenessTick.
 const (
 	defaultReadyFor  = 40 * time.Second
@@ -42,6 +42,7 @@ type contact struct {
 	version  string
 	api      int
 	platform string
+	assumed  bool // taken at the control plane's start from a WorkerNode that read Ready, not from a poll
 }
 
 // NewLiveness tracks the nodes of st; zero durations take the defaults.
@@ -72,6 +73,7 @@ func (l *Liveness) Ready(node v1.ObjectName) bool {
 
 // Run writes the WorkerNodes' statuses every livenessTick until ctx ends.
 func (l *Liveness) Run(ctx context.Context) {
+	l.assumeReady(ctx)
 	t := time.NewTicker(livenessTick)
 	defer t.Stop()
 	for {
@@ -83,6 +85,30 @@ func (l *Liveness) Run(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+	}
+}
+
+// assumeReady takes each node whose WorkerNode reads Ready as polled at the control plane's start, so a restart of the
+// control plane flips no node that polls again within readyFor, and holds its name against a join (ADR-0367 Decision 3).
+func (l *Liveness) assumeReady(ctx context.Context) {
+	res, err := l.st.List(ctx, v1.KindWorkerNode.GVK(), store.ListOptions{})
+	if err != nil {
+		l.log.WarnContext(ctx, "node liveness: read the WorkerNodes at start", "error", err)
+		return
+	}
+	now := l.now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, obj := range res.Items {
+		n, ok := obj.(*v1.WorkerNode)
+		if !ok || n.Status.Phase != v1.PhaseReady {
+			continue
+		}
+		if _, polled := l.contacts[n.Name]; polled {
+			continue
+		}
+		s := n.Status
+		l.contacts[n.Name] = contact{at: now, version: s.Version, api: s.NodeAPIVersion, platform: s.Platform, assumed: true}
 	}
 }
 
@@ -119,7 +145,7 @@ func (l *Liveness) apply(n *v1.WorkerNode) bool {
 	}
 	s := &n.Status
 	changed := s.Phase != phase || !hasCondition(s.Conditions, cond, reason)
-	if seen && (changed || now.Sub(time.Time(s.LastSeen)) >= l.seenEvery) {
+	if seen && !c.assumed && (changed || now.Sub(time.Time(s.LastSeen)) >= l.seenEvery) {
 		s.LastSeen, s.Version, s.NodeAPIVersion, s.Platform = v1.NewTimestamp(c.at), c.version, c.api, c.platform
 		changed = true
 	}

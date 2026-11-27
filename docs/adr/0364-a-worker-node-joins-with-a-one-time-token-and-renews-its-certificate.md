@@ -233,9 +233,8 @@ Done when every test above passes, `just check-specs` passes the spec and its mu
 - A node that stays away past its certificate's year joins again, with a new token.
 - Losing the CA under `cluster.dataDir` changes its hash, so every node joins again; its backup is the F251 ADR's.
 - Risk accepted: a certificate is trusted until it ends, a new join or a deleted WorkerNode, with no revocation list.
-- Risk accepted: the 409 reads liveness the control plane keeps in memory, so after its restart a name reads free until
-  its node polls again. A join in that window still needs a token an admin minted, and its certificate ends the
-  running node's.
+- The 409 reads liveness the control plane keeps in memory; after its restart, a node whose WorkerNode read Ready keeps
+  its name for `defaultReadyFor` while it polls again (ADR-0367 Decision 3).
 - Risk accepted: the CA lives `caLifetime` 10 years, and nothing rotates it yet.
 
 ## Open questions
