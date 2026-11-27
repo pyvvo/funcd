@@ -152,7 +152,8 @@ func (c *Cluster) router() router { return router{placement: c.placement, calls:
 
 // Admissions are the multi-node checks of the control plane's write path.
 func (c *Cluster) Admissions() []admission.Admission {
-	return []admission.Admission{namespaceNode{st: c.cfg.Store, local: c.cfg.LocalNode}, workerNodeInUse{st: c.cfg.Store},
+	return []admission.Admission{namespaceNode{st: c.cfg.Store, local: c.cfg.LocalNode, localRuns: c.cfg.LocalRuns},
+		createsWaitForAMove{}, workerNodeName{local: c.cfg.LocalNode}, workerNodeInUse{st: c.cfg.Store},
 		hostOnOneNode{st: c.cfg.Store, placement: c.placement},
 		nodeTooOld{st: c.cfg.Store, placement: c.placement, fields: c.cfg.NodeFields}}
 }

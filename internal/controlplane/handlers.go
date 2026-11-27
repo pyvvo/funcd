@@ -57,6 +57,15 @@ func (h *storeHandlers) lockFor(ctx context.Context, kind v1.Kind, op admission.
 	return h.locks.lock(ctx, ns)
 }
 
+// lockNamespace is the namespace whose admission lock an update takes: a Namespace's own, so a change of its spec.node
+// waits for the creates in it (ADR-0368 Decision 2); the object's namespace otherwise.
+func lockNamespace(kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) v1.NamespaceName {
+	if kind == v1.KindNamespace {
+		return v1.NamespaceName(name)
+	}
+	return ns
+}
+
 // --- the six shared helpers (one authz + admission + store path) ---
 
 func (h *storeHandlers) authorize(ctx context.Context, verb auth.Verb, kind v1.Kind, ns v1.NamespaceName) error {
@@ -259,7 +268,7 @@ func (h *storeHandlers) replaceObjWith(ctx context.Context, kind v1.Kind, ns v1.
 	}
 	stampTypeMeta(obj, kind) // route's kind owns TypeMeta (see createObj)
 	want := meta.ResourceVersion
-	unlock, err := h.lockFor(ctx, kind, admission.Update, ns)
+	unlock, err := h.lockFor(ctx, kind, admission.Update, lockNamespace(kind, ns, name))
 	if err != nil {
 		return nil, err
 	}

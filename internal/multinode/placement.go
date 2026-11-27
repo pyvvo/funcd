@@ -44,7 +44,7 @@ func (p *Placement) NodeOf(ctx context.Context, ns v1.NamespaceName) (v1.ObjectN
 func (p *Placement) Local(node v1.ObjectName) bool { return node == "" || node == p.local }
 
 // Skip reports whether this process leaves namespace ns to another node: placed on a node other than the local one,
-// or unplaced on a control plane that runs no namespace. A cluster-scoped object (ns "") is never skipped. A failed
+// or on the local one, unplaced or by name, on a control plane that runs no namespace. A cluster-scoped object (ns "") is never skipped. A failed
 // read skips the namespace on a control plane alone, which runs none, and nothing on an all-in-one, whose own work goes
 // on (ADR-0368 Decision 3).
 func (p *Placement) Skip(ns v1.NamespaceName) bool {
@@ -55,10 +55,10 @@ func (p *Placement) Skip(ns v1.NamespaceName) bool {
 	if err != nil {
 		return !p.localRuns
 	}
-	if node == "" {
+	if p.Local(node) {
 		return !p.localRuns
 	}
-	return node != p.local
+	return true
 }
 
 // Namespaces are the namespaces placed on node.

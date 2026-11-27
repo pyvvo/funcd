@@ -6,7 +6,8 @@
 - **Tags**: multi-node, placement, links
 - **Realizes**: [FEAT-0002/F246](../feat/0002-feat-multi-node.md) (namespaces placed on nodes)
 - **Supersedes (in part)**: [ADR-0064](0064-fn-to-fn-rpc-links.md): its Temporary workaround "Same-node only" and its
-  exit criterion, and the Scope's Out item "the NATS-lattice transport": a link never leaves its node
+  exit criterion, the Scope's Out item "the NATS-lattice transport", the Open question "Multi-node transport (NATS
+  lattice)" and the (−) Consequence "Same-node only until FEAT-0002": a link never leaves its node
 - **Relates to**: [ADR-0363](0363-one-funcd-binary-runs-as-the-all-in-one-the-control-plane-alone-or-a-worker-node.md)
   (the roles) · [ADR-0365](0365-a-worker-node-follows-its-namespaces-through-the-change-log-over-a-link-it-opens.md)
   (what a node follows) · [ADR-0367](0367-a-workernode-is-declared-by-name-and-reads-ready-while-its-node-polls.md)
@@ -29,10 +30,16 @@ admission keeps a namespace and its data on the node that holds them.
   and a Function in e1, Then vm1 runs the Function and the control plane starts no worker for it.
 - `scenario: an-undeclared-node`: Given no WorkerNode vm9, When an admin applies a Namespace with `spec.node: vm9`,
   Then it is refused (400 `which is not declared`).
+- `scenario: the-control-planes-own-node`: Given `funcd server`, whose own node is `local`, When an admin places a
+  namespace on `local`, or declares a WorkerNode named `local`, Then each is refused (400).
 - `scenario: waits-for-its-node`: Given WorkerNode vm1 declared and not joined, When a Job is applied in a namespace
   placed on it, Then the Job waits, and vm1 runs it once it joins.
 - `scenario: keeps-its-node`: Given e1 holds a Function, When an admin changes its `spec.node`, Then it is refused
   (409 `holds objects`); an empty namespace moves.
+- `scenario: a-create-racing-a-move`: Given an empty e1 on vm1, When an admin moves it to vm2 while another creates a
+  ConfigMap in it, Then the two run one after the other: the move is 409, or the ConfigMap lands after it, on vm2.
+- `scenario: a-forced-group-delete`: Given a ResourceGroup of e1, which vm1 runs, When an admin deletes it with force,
+  Then the control plane waits up to 10 s for vm1 to collect the group's children, then answers.
 - `scenario: a-node-in-use`: Given e1 placed on vm1, When an admin deletes WorkerNode vm1, Then it is refused (409
   `still runs namespaces`).
 - `scenario: unplaced`: Given an all-in-one with nodes, When a namespace has no `spec.node`, Then the all-in-one runs
@@ -68,26 +75,36 @@ admission keeps a namespace and its data on the node that holds them.
 ## Decision
 
 1. **spec.node.** A Namespace's `spec.node` names the WorkerNode that runs it whole: its reconcilers, edge, stores and
-   workers. An empty one is the local node of an all-in-one; `funcd server` runs no namespace, so an unplaced one's
-   objects wait there with no phase (ADR-0363 Decision 2).
-2. **Admission.** `spec.node` names a declared WorkerNode (ADR-0367), or the control plane's own node, or the write is
-   400 `which is not declared`; a node that has not joined yet is fine, and the namespace waits for it. A namespace
-   that holds an object keeps its node: a change is 409 `holds objects`, and an empty namespace moves. A WorkerNode that
-   a Namespace names cannot be deleted: 409 `still runs namespaces`. A namespace moves with its data by workload
-   backups: back its stores up, delete its objects, change `spec.node`, apply them again and restore.
-3. **Where a process acts.** A process acts only on the namespaces placed on it: the controller's enqueue, owner GC and
-   the other loops ask `Placement.Skip`, which skips a namespace placed on another node, and on a control plane alone
-   every unplaced one. Placement reads the Namespace at each call. A failed read skips the namespace on a control plane
-   alone, which runs none, and nothing on an all-in-one, whose own work goes on.
-4. **Links stay on their node.** A link stays in its namespace (ADR-0064), and a namespace on its node, so a link call
+   workers. An empty one, or the control plane's own node by name, is the local node of an all-in-one; `funcd server`
+   runs no namespace, so an unplaced one's objects wait there with no phase (ADR-0363 Decision 2).
+2. **Admission.** `spec.node` names a declared WorkerNode (ADR-0367), or the write is 400 `which is not declared`; a
+   node that has not joined yet is fine, and the namespace waits for it. It may name the control plane's own node only
+   where that process runs namespaces, else 400 `runs no namespace`, and no WorkerNode takes that name (400). A
+   namespace that holds an object keeps its node: a change is 409 `holds objects`, and an empty namespace moves. The
+   change checks that under the namespace's admission lock (ADR-0147), which every create in a namespace takes on a
+   control plane with nodes, so a create and a move run one after the other. A WorkerNode that a Namespace names cannot
+   be deleted: 409 `still runs namespaces`. A namespace moves with its data by workload backups: back its stores up,
+   delete its objects, change `spec.node`, apply them again and restore.
+3. **Where a process acts.** A process acts only on the namespaces placed on it: the controller's enqueue, owner GC,
+   the JobRun slots, the Route reconciler and the WorkflowRun sweeper ask `Placement.Skip`, which skips a namespace
+   placed on another node, and on a control plane alone one placed on its own node, by name or unplaced. Placement
+   reads the Namespace at each call, one store read per enqueue, collected object and route pass. A failed read skips
+   the namespace on a control plane alone, which runs none, and nothing on an all-in-one, whose own work goes on. A
+   forced delete of a ResourceGroup of a namespace a node runs waits up to `nodeCollects` 10 s, looking every
+   `nodeCollectsPoll` 100 ms, for the node to collect the group's children; it then answers, and the node finishes the
+   collection on its own.
+4. **Links stay on their node.** A link stays in its namespace (ADR-0064's Scope: no cross-namespace links), and a
+   namespace on its node, so a link call
    goes through the node's own local API and data plane, and no call crosses machines. This replaces ADR-0064's
    same-node workaround and its exit criterion: no cross-node link transport is built.
 
 ## Design model
 
-None: placement is one field, read at each call, and a namespace changes node only while it holds no object (Decision
-2), so no object runs on two nodes; the record that tells a node it gained or lost a namespace is ADR-0365's feed,
-which its model covers.
+None: placement is one field, read at each call, and a namespace changes node only while it holds no object, a check
+made under the namespace's admission lock that every create in it takes (ADR-0147, the mechanism reused unchanged), so
+a create and a move run one after the other and no object runs on two nodes. The bounded wait of a forced group
+delete is one loop with a deadline, and the node learns that it gained or lost a namespace from one record of its
+feed (ADR-0365).
 
 ## Behavior rows
 
@@ -127,18 +144,23 @@ func (p *Placement) Namespaces(ctx context.Context, node v1.ObjectName) ([]v1.Na
 
 Built ahead of this ADR on the branch of draft PR #1495: `api/types/v1alpha1/namespace.go` (`spec.node`),
 `internal/multinode/placement.go` (`Placement`), `admission.go` (`namespaceNode`, `workerNodeInUse`),
-`pkg/funcd/multinode.go` (`elsewhere`, given to the controller and owner GC), `internal/controlplane/routes_rest.go`
-(the error cases). This ADR's Decision 3 changed the built code: a failed read skips the namespace on a control plane
-alone.
+`pkg/funcd/multinode.go` (`elsewhere`, given to the controller, owner GC, the JobRun slots, the Route reconciler and
+the WorkflowRun sweeper), `internal/gc/gc.go` (`CollectNamespace`), `internal/controlplane/routes_rest.go` (the 409's
+error case) and `handlers.go` (`lockNamespace`). This ADR changed the built code: a failed read skips the namespace on
+a control plane alone; the own node is refused on `funcd server` and as a WorkerNode's name; a change of `spec.node`
+takes its namespace's lock, which every create in it takes (`createsWaitForAMove`).
 
 | Scenario | Test |
 |---|---|
 | place-on-a-node | `TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn`, `TestAWorkerNodeRunsTheNamespacePlacedOnIt` |
 | an-undeclared-node | `TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects` |
+| the-control-planes-own-node | `TestAControlPlaneAloneRunsNoNamespaceOnItsOwnNode`, `TestAWorkerNodeCannotTakeTheControlPlanesOwnName` |
 | waits-for-its-node | `TestAJobRunsOnTheWorkerNodeItsNamespaceIsPlacedOn` |
 | keeps-its-node | `TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects` |
+| a-create-racing-a-move | `TestAMoveAndTheCreatesInItTakeTheNamespacesLock`, `TestANamespacesUpdateTakesTheLockOfTheNamespaceItNames` |
+| a-forced-group-delete | `TestACollectionOfANodesNamespaceWaitsForTheNode` |
 | a-node-in-use | `TestAWorkerNodeANamespaceNamesCannotBeDeleted` |
-| unplaced | `TestPlacementSkipsWhatAnotherNodeRuns`, `TestEachRoleRunsItsOwnParts`, `TestAControlPlaneAloneRunsNoNamespace` |
+| unplaced | `TestPlacementSkipsWhatAnotherNodeRuns`, `TestEachRoleRunsItsOwnParts`, `TestAControlPlaneAloneRunsNoNamespace`, `TestJobRunsOfAnotherNodesNamespaceAreLeftToIt`, `TestSweepLeavesTheRunsOfAnotherNodesNamespace`, `TestARouteOfAnotherNodesNamespaceIsNotServedHere` |
 | a-link-stays | `TestALinkCallStaysOnTheWorkerNodeOfItsNamespace` |
 | a-failed-read | `TestAFailedReadOfANamespaceSkipsItOnAControlPlaneAlone` |
 
@@ -146,9 +168,11 @@ Done when every test above passes and `just ci` is green.
 
 ## Review checklist
 
-- [ ] `spec.node` is admitted only when it names a declared WorkerNode or the control plane's own node.
+- [ ] `spec.node` is admitted only when it names a declared WorkerNode, or the control plane's own node on a process
+      that runs namespaces; no WorkerNode takes the own node's name.
+- [ ] A change of `spec.node` and every create in its namespace take the namespace's admission lock.
 - [ ] A Namespace holding any object keeps its `spec.node`, and a named WorkerNode cannot be deleted.
-- [ ] Every loop that acts on a namespace's objects on the control plane asks `Placement.Skip`.
+- [ ] Each loop Decision 3 names asks `Placement.Skip`.
 - [ ] `Placement` reads the store at each call; a failed read skips on a control plane alone only.
 - [ ] No code path sends a link call to another node.
 
@@ -156,6 +180,7 @@ Done when every test above passes and `just ci` is green.
 
 - A namespace that needs isolation gets a node of its own, and a node's namespaces run with no scheduler.
 - A namespace's place is fixed while it holds objects: moving it is a backup, a delete, a move and a restore.
+- On a control plane with nodes, the creates in one namespace take turns under its lock.
 - On an all-in-one whose store fails a read of a Namespace, the all-in-one goes on with that namespace's work, even
   one placed on a node; a store that fails reads fails the work's own reads too.
 - On `funcd server`, an unplaced namespace's objects show no phase; its Namespace shows no `spec.node`.

@@ -10,15 +10,18 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// namespaceNode checks a Namespace's spec.node (ADR-0368 Decision 2): it names a declared WorkerNode, or the local node,
-// and a namespace that holds objects keeps its node, since its data stays where it ran.
+// namespaceNode checks a Namespace's spec.node (ADR-0368 Decision 2): it names a declared WorkerNode, or the local node
+// of a process that runs namespaces, and a namespace that holds objects keeps its node, since its data stays where it
+// ran. It reads the namespace under its lock, which the creates in it take too (createsWaitForAMove).
 type namespaceNode struct {
-	st    store.Store
-	local v1.ObjectName
+	st        store.Store
+	local     v1.ObjectName
+	localRuns bool
 }
 
 func (namespaceNode) Name() string           { return "namespace-node" }
 func (namespaceNode) Phase() admission.Phase { return admission.Validating }
+func (namespaceNode) ReadsNamespace() bool   { return true }
 func (namespaceNode) Handles(gvk v1.GroupVersionKind, op admission.Operation) bool {
 	return gvk.Kind == v1.KindNamespace && (op == admission.Create || op == admission.Update)
 }
@@ -29,7 +32,10 @@ func (a namespaceNode) Admit(ctx context.Context, req admission.Request) (v1.Obj
 	if !ok {
 		return req.Object, nil
 	}
-	if node := n.Spec.Node; node != "" && node != a.local {
+	switch node := n.Spec.Node; {
+	case node == a.local && !a.localRuns:
+		return nil, fault.Invalidf(op, "spec.node names %s, this control plane, which runs no namespace: place namespace %s on a worker node", node, n.Name)
+	case node != "" && node != a.local:
 		_, err := a.st.Get(ctx, v1.KindWorkerNode.GVK(), "", node)
 		if fault.KindOf(err) == fault.NotFound {
 			return nil, fault.Invalidf(op, "spec.node names WorkerNode %s, which is not declared: apply a WorkerNode named %s first", node, node)
@@ -69,6 +75,37 @@ func holdsObjects(ctx context.Context, st store.Store, ns v1.NamespaceName) (boo
 		}
 	}
 	return false, nil
+}
+
+// createsWaitForAMove makes every create in a namespace take the namespace's admission lock (ADR-0147), which a change
+// of the Namespace's spec.node holds while it checks that the namespace holds no object (ADR-0368 Decision 2), so no
+// object lands on the node a namespace leaves.
+type createsWaitForAMove struct{}
+
+func (createsWaitForAMove) Name() string           { return "namespace-move-lock" }
+func (createsWaitForAMove) Phase() admission.Phase { return admission.Validating }
+func (createsWaitForAMove) ReadsNamespace() bool   { return true }
+func (createsWaitForAMove) Handles(gvk v1.GroupVersionKind, op admission.Operation) bool {
+	return op == admission.Create && gvk.Kind.Namespaced()
+}
+func (createsWaitForAMove) Admit(_ context.Context, req admission.Request) (v1.Object, error) {
+	return req.Object, nil
+}
+
+// workerNodeName refuses a WorkerNode named as the control plane's own node, which would be two nodes under one name
+// (ADR-0368 Decision 2).
+type workerNodeName struct{ local v1.ObjectName }
+
+func (workerNodeName) Name() string           { return "workernode-name" }
+func (workerNodeName) Phase() admission.Phase { return admission.Validating }
+func (workerNodeName) Handles(gvk v1.GroupVersionKind, op admission.Operation) bool {
+	return gvk.Kind == v1.KindWorkerNode && op == admission.Create
+}
+func (a workerNodeName) Admit(_ context.Context, req admission.Request) (v1.Object, error) {
+	if req.Object.GetObjectMeta().Name == a.local {
+		return nil, fault.Invalidf("admission.workernode-name", "WorkerNode %s takes the name of this control plane's own node: name it otherwise", a.local)
+	}
+	return req.Object, nil
 }
 
 // workerNodeInUse refuses to delete a WorkerNode a Namespace still names (ADR-0368 Decision 2): its removal is declared

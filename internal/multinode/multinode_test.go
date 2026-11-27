@@ -176,10 +176,53 @@ func TestAFailedReadOfANamespaceSkipsItOnAControlPlaneAlone(t *testing.T) {
 	require.False(t, NewPlacement(st, "local", true).Skip("e1"), "an all-in-one's own work goes on")
 }
 
+func TestAControlPlaneAloneRunsNoNamespaceOnItsOwnNode(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(memory.New())
+	_, err := st.Create(ctx, namespace("e1", "local"))
+	require.NoError(t, err)
+	req := func(n *v1.Namespace) admission.Request {
+		return admission.Request{Operation: admission.Create, Object: n}
+	}
+	_, err = namespaceNode{st: st, local: "local"}.Admit(ctx, req(namespace("e2", "local")))
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "funcd server refuses a namespace placed on itself")
+	require.ErrorContains(t, err, "runs no namespace")
+	require.True(t, NewPlacement(st, "local", false).Skip("e1"), "and leaves one placed on it by name")
+	_, err = namespaceNode{st: st, local: "local", localRuns: true}.Admit(ctx, req(namespace("e2", "local")))
+	require.NoError(t, err, "an all-in-one runs a namespace placed on itself")
+	require.False(t, NewPlacement(st, "local", true).Skip("e1"))
+}
+
+func TestAWorkerNodeCannotTakeTheControlPlanesOwnName(t *testing.T) {
+	ctx := context.Background()
+	a := workerNodeName{local: "local"}
+	require.True(t, a.Handles(v1.KindWorkerNode.GVK(), admission.Create))
+	_, err := a.Admit(ctx, admission.Request{Operation: admission.Create, Object: workerNode("local")})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "a WorkerNode under the control plane's own name would be a second node")
+	_, err = a.Admit(ctx, admission.Request{Operation: admission.Create, Object: workerNode("vm1")})
+	require.NoError(t, err)
+}
+
+func TestAMoveAndTheCreatesInItTakeTheNamespacesLock(t *testing.T) {
+	c, _ := joinRig(t)
+	reads := func(gvk v1.GroupVersionKind, op admission.Operation) bool {
+		for _, a := range c.Admissions() {
+			if r, ok := a.(admission.NamespaceReading); ok && r.ReadsNamespace() && a.Handles(gvk, op) {
+				return true
+			}
+		}
+		return false
+	}
+	require.True(t, reads(v1.KindNamespace.GVK(), admission.Update), "a change of spec.node checks the namespace under its lock")
+	for _, k := range []v1.Kind{v1.KindConfigMap, v1.KindFunction, v1.KindJobRun} {
+		require.True(t, reads(k.GVK(), admission.Create), "a create of a %s in a namespace takes its lock too", k)
+	}
+}
+
 func TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(memory.New())
-	a := namespaceNode{st: st, local: "local"}
+	a := namespaceNode{st: st, local: "local", localRuns: true}
 	req := func(op admission.Operation, n, old *v1.Namespace) admission.Request {
 		r := admission.Request{Operation: op, GVK: v1.KindNamespace.GVK(), Object: n}
 		if old != nil {
