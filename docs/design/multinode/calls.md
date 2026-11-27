@@ -4,7 +4,7 @@
 
 ```mermaid
 ---
-title: calls (call)
+title: calls (Call.state)
 ---
 stateDiagram-v2
     state "answered" as s0
@@ -14,16 +14,12 @@ stateDiagram-v2
     state "taken" as s4
     state "timedout" as s5
     [*] --> s1
-    s0 --> s0 : Poll, Stop, Tick
-    s1 --> s1 : Poll, Stop, Tick
     s1 --> s2 : Send
     s1 --> s3 : Send
-    s2 --> s2 : Poll, Stop, Tick
-    s3 --> s3 : Stop, Tick
     s3 --> s4 : Poll
     s3 --> s5 : Timeout
     s4 --> s0 : Answer
-    s4 --> s4 : Poll, Stop, Tick
     s4 --> s5 : Timeout
-    s5 --> s5 : Poll, Stop, Tick
+    s5 --> s5 : Answer
+    s2 --> [*]
 ```

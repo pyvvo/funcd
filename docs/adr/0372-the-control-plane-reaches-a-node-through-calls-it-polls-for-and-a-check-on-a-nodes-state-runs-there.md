@@ -25,25 +25,27 @@ own parts, and the checks that read a node's state run on that node.
 
 ## Scenarios
 
-- `scenario: logs-from-the-node`: Given Function f1 of e1 on vm1, When `funcdctl logs f1 -n e1` runs against the
-  control plane, Then the lines come from vm1's logs.
+- `scenario: logs-from-the-node`: Given Function f1 of e1 on vm1, When `funcdctl logs f1 -n e1`, or a read of a run's
+  logs, runs against the control plane, Then the lines come from vm1's logs.
 - `scenario: a-command-on-the-node`: Given a dead letter of e1, When an admin replays it on the control plane, Then
   vm1 replays it.
 - `scenario: offline-at-once`: Given vm1 stopped, When a log read of e1 is asked, Then it is 503 `worker node vm1 of
   namespace e1 is offline`, at once.
 - `scenario: a-node-that-does-not-answer`: Given vm1 took a call, When it does not answer within 10 s, Then the call is
   503 `did not answer within 10s`, and a later answer to it is refused.
-- `scenario: only-its-calls`: Given a call about e2 reaches vm1, which does not run e2, When vm1 answers, Then the
-  answer is 403.
-- `scenario: a-check-on-the-node`: Given KVStore kv1 of e1 on vm1, protected from deletion, When an admin deletes it on
-  the control plane, Then vm1's own check refuses it, as on one host.
-- `scenario: no-check-needed`: Given vm1 offline, When an admin applies a Function of e1 that declares no volume, Then
-  the write passes.
+- `scenario: only-its-calls`: Given vm1 runs e1 and not e2, When a call about e2 reaches vm1, or a hold release or a
+  quarantine return that names e2, Then vm1 answers 403.
+- `scenario: a-check-on-the-node`: Given SQLDatabase db1 of e1 on vm1, protected from deletion, When an admin deletes it
+  on the control plane, Then vm1's own check refuses it, as on one host.
+- `scenario: no-check-needed`: Given vm1 offline, When an admin applies a Function of e1 that declares no volume, or a
+  Restore of e1 that is not in place, Then the write passes.
 - `scenario: needs-an-offline-node`: Given vm1 offline, When an admin deletes kv1, Then the write is 503 at once.
 - `scenario: a-nodes-own-hold`: Given vm1 held after its restore, When an admin asks for the hold of vm1 by its name,
   Then vm1 answers with its own.
 - `scenario: an-ended-certificate`: Given vm1 on NATS whose certificate the control plane no longer takes, with its
   link open, When a call is sent after its first refused request, Then the call fails at once as offline.
+- `scenario: a-renewed-certificate`: Given vm1 on NATS that renewed its certificate, When a late request under the old
+  one is refused, Then calls still go to vm1 under the new one.
 
 ## Scope
 
@@ -79,10 +81,12 @@ own parts, and the checks that read a node's state run on that node.
 2. **Delivery.** On HTTPS, the control plane queues each call; the node long-polls its queue (`GET /node/v1/calls`,
    every queued call at once) and posts each answer (`POST /node/v1/calls/{id}`), which only the node the call went to
    may post. A node with no poll open and none within `callOffline` 3 s is offline. On NATS, a call is a request on
-   `funcd.call.<node>.<serial>`, the certificate of the node's last admitted request; a refused request withdraws it,
-   since a NATS reply passes no admission, and no subscriber is offline. On either driver a call to an offline node
-   fails at once, 503 `worker node <node> of namespace <ns> is offline`; a node gets `CallTimeout` 10 s to answer, else
-   503 `did not answer within 10s`, and an answer after that is refused.
+   `funcd.call.<node>.<serial>`, the serial of the certificate the node's last admitted request came with; a request
+   refused as unauthorized withdraws that serial while it is still the node's, since a NATS reply passes no admission,
+   and no serial or no subscriber is offline. On either driver a call to an offline node fails at once, 503 `worker
+   node <node> of namespace <ns> is offline`, or `worker node <node> is offline` for a call about the node itself; a
+   node gets `CallTimeout` 10 s to answer, else 503 `did not answer within 10s`, and an answer after that is refused on
+   HTTPS and reaches no caller on NATS.
 3. **The node's side.** The agent long-polls its calls and answers each in its own goroutine, from its local parts. It
    answers only a call about itself or about a namespace placed on it: any other is 403.
 4. **Checks before a write.** The five admissions that read a node's state, the deletion protection of a KVStore, a
@@ -104,26 +108,32 @@ own parts, and the checks that read a node's state run on that node.
   | `NoAnswerAfterItsCallEnded` | always | `scenario: a-node-that-does-not-answer` | `TestACallThatTimesOutRefusesItsLateAnswer` |
   | `NoCallWaitsForAnOfflineNode` | always | `scenario: offline-at-once`, `scenario: needs-an-offline-node` | `TestCallsFailAtOnceForAnOfflineNode` |
 
-- **Bounds**: one call, one node that may stop, an offline window of one tick, a timeout of two, four ticks of time, 6
-  actions: the smallest scenario in which every mutant fails. The full space is 276 states; wider (five ticks): pass,
-  436 states, 0.4 s.
-- **Faults**: the node stops for good, once, before or after it takes the call.
-- **Environment**: a poll, the queue and an answer are each one step (the queue's lock); a poll that is open counts as
-  one within the window; the caller's timer fires at its deadline, before time moves on; NATS has the same shape, with
-  no responders as the offline answer.
-- **Mutants**: `no-timeout` fails `NoCallWaitsPastItsTimeout`; `no-drop` fails `NoAnswerAfterItsCallEnded`;
-  `no-offline-check` fails `NoCallWaitsForAnOfflineNode`.
-- **Result**: pass, 169 states, 0.4 s, FizzBee v0.5.4.
+- **Bounds**: one call, one node that may stop, an offline window of one tick shorter than a timeout of two (as 3 s is
+  to 10 s), three ticks of time, 6 actions: the smallest scenario in which every mutant fails (at 5 actions `no-drop`
+  passes, at two ticks `no-timeout` does). Wider (a second call, queued while the first is taken, so one poll takes
+  both and a timeout drops one of two; 8 actions): pass, 1,479 states, 0.5 s.
+- **Faults**: the node stops for good, once, before or after it takes a call.
+- **Environment**: a send, a poll, a drop and an answer are each one step (the queue's lock); a poll that is open
+  counts as one within the window; a caller's timer fires at its deadline, before time moves on; NATS has the same
+  shape, with no responders as the offline answer.
+- **Mutants**: `no-timeout` fails `NoCallWaitsPastItsTimeout`; `no-drop` (a call that timed out stays waiting for its
+  answer) fails `NoAnswerAfterItsCallEnded`; `no-offline-check` fails `NoCallWaitsForAnOfflineNode`.
+- **Result**: pass, 145 states, 0.3 s, FizzBee v0.5.4.
 - **Left to tests**: who may answer (`TestCallsFailAtOnceForAnOfflineNode`,
-  `TestAnAnswerGoesOnlyIntoTheInboxOfTheNodeThatAsked`); a node's 403 for another namespace and the checks on the node
-  (`TestTheNodeCommandsRunOnTheNodeThatRunsTheNamespace`, `TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState`);
-  NATS's offline answers (`TestANodeThatLeavesIsOfflineAtOnce`, `TestANodeWhoseLinkGoesSilentIsOfflineOnceTheLinkEnds`,
-  `TestANodeWhoseCertificateEndedGetsNoCall`).
+  `TestAnAnswerGoesOnlyIntoTheInboxOfTheNodeThatAsked`); a node's 403 for another namespace
+  (`TestANodeAnswersNoCallAboutANamespaceThatDoesNotRunOnIt`) and the checks on the node
+  (`TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState`); NATS's offline answers
+  (`TestANodeThatLeavesIsOfflineAtOnce`, `TestANodeWhoseLinkGoesSilentIsOfflineOnceTheLinkEnds`,
+  `TestANodeWhoseCertificateEndedGetsNoCall`) and its serial guard
+  (`TestALateRequestUnderAReplacedCertificateKeepsTheNodesCalls`). NATS's timeout has no test of its own: its
+  `CallTimeout` is a constant there, and the long poll's timeout test covers the rule.
 
 ## Behavior rows
 
-- **multi-node.md**: the rows on node calls, a write that needs an offline node, the checks before a write and a
-  node's own hold and backup cite this ADR's Decisions at acceptance.
+- **multi-node.md**: "A node call" (once "A log read of a node's namespace", to which this ADR added a call's timeout),
+  "A node command", "A check before a write", "A namespace's hold", "A call to a node on NATS" (which this ADR changed:
+  a refused certificate gets no call), and the reads through a node's queue in "A node's own hold and backup" (ADR-0373
+  holds the rest of that row) cite this ADR's Decisions at acceptance.
 
 ## Temporary workarounds
 
@@ -185,16 +195,17 @@ shortens.
 
 | Scenario | Test |
 |---|---|
-| logs-from-the-node | `TestTheNodeCommandsRunOnTheNodeThatRunsTheNamespace`, the contract's `a-call-reaches-the-node-that-polls` |
+| logs-from-the-node | `TestANodeJoinsFollowsItsNamespaceAndReportsBack`, the contract's `a-call-reaches-the-node-that-polls` |
 | a-command-on-the-node | `TestTheNodeCommandsRunOnTheNodeThatRunsTheNamespace` |
 | offline-at-once | `TestCallsFailAtOnceForAnOfflineNode`, `TestANodeThatLeavesIsOfflineAtOnce` |
 | a-node-that-does-not-answer | `TestACallThatTimesOutRefusesItsLateAnswer` |
-| only-its-calls | `TestTheNodeCommandsRunOnTheNodeThatRunsTheNamespace` |
+| only-its-calls | `TestANodeAnswersNoCallAboutANamespaceThatDoesNotRunOnIt` |
 | a-check-on-the-node | `TestTheChecksBeforeAWriteRunOnTheNodeThatHoldsTheState` |
 | no-check-needed | `TestAWriteThatNeedsAnOfflineNodeIsRefusedAtOnce` |
 | needs-an-offline-node | `TestAWriteThatNeedsAnOfflineNodeIsRefusedAtOnce` |
 | a-nodes-own-hold | `TestANodesOwnHoldAndBackupAnswerByItsName`, `TestANamespacesHoldIsReleasedOnTheNodeThatRunsIt` |
 | an-ended-certificate | `TestANodeWhoseCertificateEndedGetsNoCall` |
+| a-renewed-certificate | `TestALateRequestUnderAReplacedCertificateKeepsTheNodesCalls` |
 
 Done when every test above passes, `just check-specs` passes the spec and its mutants, and `just ci` is green.
 
@@ -202,8 +213,10 @@ Done when every test above passes, `just check-specs` passes the spec and its mu
 
 - [ ] No command that needs a node's state is answered from the control plane's own store for a namespace a node runs.
 - [ ] A call to an offline node fails at once, and every call ends within `CallTimeout`.
-- [ ] On the long poll only the node a call went to may answer it, and on NATS a refused request withdraws its serial.
-- [ ] The agent answers 403 to a call about a namespace not placed on it.
+- [ ] On the long poll only the node a call went to may answer it, and on NATS a request refused as unauthorized
+  withdraws its serial while it is still the node's.
+- [ ] The agent answers 403 to a call about a namespace not placed on it, and to a hold release or a quarantine return
+  that names one.
 - [ ] Only the five node-state checks run on a node, each only when it reads the node's state.
 - [ ] Each oracle test carries its `oracle:` line, and the spec passes with its mutants failing.
 
@@ -212,7 +225,13 @@ Done when every test above passes, `just check-specs` passes the spec and its mu
 - `funcdctl` behaves the same wherever a namespace runs, and an offline node answers at once.
 - On HTTPS a node keeps a second long poll open, for its calls, beside its feed.
 - A write that needs an offline node's check waits for that node, by being refused until it is back.
-- On NATS, a node whose certificate ended gets calls until its next request is refused, at most one feed wait, 25 s.
+- On NATS, a node whose certificate ended gets calls until its next request is refused, at most one long-poll wait,
+  25 s.
+- A call that timed out may still run on the node, which runs each call to its end: a replay, a discard, a volume
+  delete or a hold release answered 503 `did not answer within 10s` can still complete, and a person who retries it
+  runs it again.
+- A hold release across nodes is not atomic: the control plane releases its own namespaces first, then each node's in
+  turn, and stops at the first error with the earlier releases kept.
 
 ## Open questions
 

@@ -14,8 +14,11 @@ import (
 // oracle: docs/design/multinode/calls.fizz#NoCallWaitsForAnOfflineNode
 func TestCallsFailAtOnceForAnOfflineNode(t *testing.T) {
 	calls := newCalls(time.Now)
+	start := time.Now()
 	_, err := calls.do(context.Background(), "vm1", nodeapi.Call{Kind: nodeapi.CallLogs})
 	require.Equal(t, fault.Unavailable, fault.KindOf(err))
+	require.ErrorContains(t, err, "is offline")
+	require.Less(t, time.Since(start), time.Second, "at once, not after the call's timeout")
 	go func() {
 		for {
 			for _, c := range calls.poll(context.Background(), "vm1", time.Second) {

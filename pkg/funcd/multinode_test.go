@@ -507,6 +507,9 @@ func TestAWriteThatNeedsAnOfflineNodeIsRefusedAtOnce(t *testing.T) {
 		{what: "an in-place Restore is checked on the node", method: http.MethodPost, path: e1 + "/restores", token: clusterAdmin,
 			body: `{` + meta("Restore", "r1") + `,"spec":{"backup":"nightly","source":{"credentialsSecret":"creds","identitySecret":"age"},` +
 				`"members":[{"kind":"KVStore","name":"kv1","inPlace":true}]}}`, status: http.StatusServiceUnavailable, detail: "is offline"},
+		{what: "one that is not in place needs nothing of the node", method: http.MethodPost, path: e1 + "/restores", token: clusterAdmin,
+			body: `{` + meta("Restore", "r2") + `,"spec":{"backup":"nightly","source":{"credentialsSecret":"creds","identitySecret":"age"},` +
+				`"members":[{"kind":"KVStore","name":"kv1","as":"kv2"}]}}`, status: http.StatusOK},
 	} {
 		a.run(t, c, base)
 	}

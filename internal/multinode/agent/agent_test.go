@@ -43,6 +43,10 @@ func (fakeLogs) Read(_ context.Context, q logread.Query) ([]logread.Line, error)
 	return []logread.Line{{Body: "hello from " + q.Namespace + "/" + q.Function}}, nil
 }
 
+func (fakeLogs) RunLogs(_ context.Context, ns v1.NamespaceName, run v1.ObjectName, _ logread.Query) ([]logread.Line, error) {
+	return []logread.Line{{Body: "run " + string(run) + " of " + string(ns)}}, nil
+}
+
 func meta(kind v1.Kind) v1.TypeMeta {
 	return v1.TypeMeta{APIVersion: kind.GVK().APIVersion(), Kind: kind}
 }
@@ -57,6 +61,7 @@ func configMap(ns, name, n string) *v1.ConfigMap {
 type rig struct {
 	cp, node store.Store
 	cluster  *multinode.Cluster
+	api      nodeapi.Server
 	cancelCP context.CancelFunc
 	caDir    string // the cluster directory, which keeps the CA across a restart of the control plane
 }
@@ -74,7 +79,7 @@ func startCP(t *testing.T, opts ...func(*multinode.Config)) rig {
 	}
 	cp = cfg.Store
 	caDir := t.TempDir()
-	cluster := newCluster(t, cfg, caDir, "127.0.0.1:0")
+	cluster, api := newClusterAPI(t, cfg, caDir, "127.0.0.1:0")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = cluster.Run(ctx); close(done) }()
@@ -86,11 +91,18 @@ func startCP(t *testing.T, opts ...func(*multinode.Config)) rig {
 	wn.Name = "vm1"
 	_, err := cp.Create(context.Background(), wn)
 	require.NoError(t, err)
-	return rig{cp: cp, node: store.New(memory.New()), cluster: cluster, cancelCP: stop, caDir: caDir}
+	return rig{cp: cp, node: store.New(memory.New()), cluster: cluster, api: api, cancelCP: stop, caDir: caDir}
 }
 
 // newCluster is a control plane of cfg over the HTTPS long poll on addr, with its CA under dir.
 func newCluster(t *testing.T, cfg multinode.Config, dir, addr string) *multinode.Cluster {
+	t.Helper()
+	cluster, _ := newClusterAPI(t, cfg, dir, addr)
+	return cluster
+}
+
+// newClusterAPI is newCluster with the node API's server it serves, to send a call past the control plane's routing.
+func newClusterAPI(t *testing.T, cfg multinode.Config, dir, addr string) (*multinode.Cluster, nodeapi.Server) {
 	t.Helper()
 	ca, err := multinode.LoadOrCreateCA(dir, time.Now())
 	require.NoError(t, err)
@@ -101,7 +113,7 @@ func newCluster(t *testing.T, cfg multinode.Config, dir, addr string) *multinode
 	cfg.CA, cfg.API = ca, api
 	cluster, err := multinode.New(cfg)
 	require.NoError(t, err)
-	return cluster
+	return cluster, api
 }
 
 func (r rig) server() string { return "https://" + r.cluster.Addr() }
@@ -125,7 +137,8 @@ func TestANodeJoinsFollowsItsNamespaceAndReportsBack(t *testing.T) {
 	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, t.TempDir(), "test", "linux/arm64")
 	require.ErrorContains(t, err, "no join token waiting", "a token works once")
 
-	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64"})
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, RunLogs: fakeLogs{},
+		Version: "test", Platform: "linux/arm64"})
 	require.NoError(t, err)
 	actx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -198,6 +211,9 @@ func TestANodeJoinsFollowsItsNamespaceAndReportsBack(t *testing.T) {
 		return err == nil
 	})
 	require.Equal(t, "hello from e1/f", lines[0].Body)
+	lines, err = r.cluster.RunLogs(nil).RunLogs(ctx, "e1", "run1", logread.Query{})
+	require.NoError(t, err)
+	require.Equal(t, "run run1 of e1", lines[0].Body, "and so does a run-log read")
 
 	eventually(t, "the WorkerNode reads Ready", func() bool {
 		obj, err := r.cp.Get(ctx, v1.KindWorkerNode.GVK(), "", "vm1")
@@ -642,6 +658,49 @@ func TestTheNodeCommandsRunOnTheNodeThatRunsTheNamespace(t *testing.T) {
 
 	_, err = dl.List(ctx, "elsewhere")
 	require.Equal(t, fault.Unavailable, fault.KindOf(err), "a namespace this control plane runs has no dead letters here")
+}
+
+// A node answers a call about its own namespaces only, whatever the control plane sends it (ADR-0372 Decision 3).
+func TestANodeAnswersNoCallAboutANamespaceThatDoesNotRunOnIt(t *testing.T) {
+	ctx := context.Background()
+	r := startCP(t)
+	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
+	require.NoError(t, err)
+	fh := &fakeHold{}
+	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
+		Commands: multinode.Commands{DeadLetters: dlmemory.New(), Hold: fh}})
+	require.NoError(t, err)
+	actx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { _ = a.Run(actx); close(done) }()
+	defer func() { stop(); <-done }()
+	for name, node := range map[v1.ObjectName]v1.ObjectName{"e1": "vm1", "e2": "vm2"} {
+		ns := &v1.Namespace{TypeMeta: meta(v1.KindNamespace)}
+		ns.Name, ns.Spec.Node = name, node
+		_, err = r.cp.Create(ctx, ns)
+		require.NoError(t, err)
+	}
+	eventually(t, "vm1 answers a call about e1", func() bool {
+		_, err := r.api.Call(ctx, "vm1", nodeapi.Call{Kind: nodeapi.CallDeadLetters, Namespace: "e1"})
+		return err == nil
+	})
+	_, err = r.api.Call(ctx, "vm1", nodeapi.Call{Kind: nodeapi.CallDeadLetters, Namespace: "e2"})
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a call about a namespace of another node")
+	nss, err := json.Marshal([]v1.NamespaceName{"e1", "e2"})
+	require.NoError(t, err)
+	_, err = r.api.Call(ctx, "vm1", nodeapi.Call{Kind: nodeapi.CallReleaseNamespaces, Namespace: "e1", Body: nss})
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a release that also names a namespace of another node")
+	q, err := json.Marshal(hold.QuarantineReturn{Namespace: "e2"})
+	require.NoError(t, err)
+	_, err = r.api.Call(ctx, "vm1", nodeapi.Call{Kind: nodeapi.CallReturnQuarantined, Namespace: "e1", Body: q})
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a return of data that another node quarantined")
+	fh.mu.Lock()
+	defer fh.mu.Unlock()
+	require.Empty(t, fh.released)
+	require.Empty(t, fh.returned)
 }
 
 func TestANodeChecksTheAPITokensOfTheControlPlaneItself(t *testing.T) {

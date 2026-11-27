@@ -317,6 +317,45 @@ func TestANodeWhoseCertificateEndedGetsNoCall(t *testing.T) {
 	require.Less(t, time.Since(start), time.Second)
 }
 
+// replaced is a stub whose admission refuses the certificate of serial old, as it refuses the certificate a renewal
+// replaced (ADR-0364).
+type replaced struct {
+	stub
+	old atomic.Value
+}
+
+func (r *replaced) Admit(_ context.Context, p nodeapi.Peer) error {
+	if old, _ := r.old.Load().(string); p.Serial == old {
+		return fault.Unauthorizedf("stub.admit", "certificate %s is not the node's current one", p.Serial)
+	}
+	return nil
+}
+
+// A late request under the certificate a renewal replaced is refused, and leaves the node's calls on its new one.
+func TestALateRequestUnderAReplacedCertificateKeepsTheNodesCalls(t *testing.T) {
+	srv, ca := listen(t)
+	h := &replaced{}
+	serve(t, srv, h)
+	oldID := identity(t, ca, "nats://"+srv.Addr(), "vm1")
+	old, err := natsdriver.NewConnector().Dial(oldID)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = old.Close() })
+	renewed, err := natsdriver.NewConnector().Dial(identity(t, ca, "nats://"+srv.Addr(), "vm1"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = renewed.Close() })
+	_, err = renewed.Feed(context.Background(), 0, "t", time.Millisecond)
+	require.NoError(t, err)
+	leaf, err := x509.ParseCertificate(oldID.Certificate.Certificate[0])
+	require.NoError(t, err)
+	h.old.Store(leaf.SerialNumber.Text(16))
+	_, err = old.Feed(context.Background(), 0, "t", time.Millisecond)
+	require.Equal(t, fault.Unauthorized, fault.KindOf(err))
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, err = srv.Call(ctx, "vm1", nodeapi.Call{Kind: nodeapi.CallHoldStatus})
+	require.ErrorIs(t, err, context.DeadlineExceeded, "the call went to the node's new certificate, and waits for its answer")
+}
+
 // silentLink relays a node's connection to the node API, and can go silent: it drops every byte and keeps both
 // connections open, as a link that fails with no reset does.
 type silentLink struct {
