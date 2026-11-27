@@ -1,6 +1,6 @@
 # ADR-0362: funcdctl app deploy and app delete show their progress as a live view
 
-- **Status**: Draft
+- **Status**: Proposed
 - **Date**: 2026-11-27
 - **Deciders**: green-0-rabbit
 - **Tags**: cli, apps
