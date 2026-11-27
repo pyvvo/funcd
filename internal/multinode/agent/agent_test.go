@@ -72,13 +72,17 @@ func startCP(t *testing.T, opts ...func(*multinode.Config)) rig {
 	caDir := t.TempDir()
 	cluster := newCluster(t, cfg, caDir, "127.0.0.1:0")
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go func() { _ = cluster.Run(ctx) }()
+	done := make(chan struct{})
+	go func() { _ = cluster.Run(ctx); close(done) }()
+	// Stopping waits for Run, which returns once its listener is closed, so a control plane restarted on the same port
+	// binds it.
+	stop := func() { cancel(); <-done }
+	t.Cleanup(stop)
 	wn := &v1.WorkerNode{TypeMeta: meta(v1.KindWorkerNode)}
 	wn.Name = "vm1"
 	_, err := cp.Create(context.Background(), wn)
 	require.NoError(t, err)
-	return rig{cp: cp, node: store.New(memory.New()), cluster: cluster, cancelCP: cancel, caDir: caDir}
+	return rig{cp: cp, node: store.New(memory.New()), cluster: cluster, cancelCP: stop, caDir: caDir}
 }
 
 // newCluster is a control plane of cfg over the HTTPS long poll on addr, with its CA under dir.
