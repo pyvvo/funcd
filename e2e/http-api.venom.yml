@@ -117,3 +117,16 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring '"name":"a"'
+
+  - name: a WebSocket upgrade through the Route answers 101 (ADR-0360)
+    steps:
+      # After the 101 curl waits on the open socket until --max-time: the case reads its output, not its exit code.
+      - type: exec
+        script: |
+          curl -sS -i -N --max-time 2 \
+            -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+            -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+            {{.dp}}/api/relay || true
+        info: "relay → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "101 Switching Protocols"

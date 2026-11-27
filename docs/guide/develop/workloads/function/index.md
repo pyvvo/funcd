@@ -1,6 +1,6 @@
 ---
 title: Function
-description: Run a Function, call it, read its status and its logs, call one Function from another, serve HTTP, stream a response, and scale to zero.
+description: Run a Function, call it, read its status and its logs, call one Function from another, serve HTTP, stream a response, take WebSocket connections, and scale to zero.
 ---
 
 ## Usage
@@ -246,6 +246,30 @@ true once the client goes away.
   in the `Last-Event-ID` header, so the app can resume from there. A client that reads the stream with `fetch` must
   reconnect itself.
 
+## Take WebSocket connections
+
+A Function that serves HTTP takes WebSocket connections at its addresses, so both ends send at any time, such as a
+phone remote and a TV page linked by a relay.
+
+- The Function's [`timeout`](spec.md#functionspec) bounds only the handshake. A message holds at most 1 MiB, and a
+  larger one closes its socket with code 1009.
+- An open socket is a call in flight: it keeps its worker from going idle, and at a change of the Function it stays
+  on the old worker, which funcd stops after `runtime.drainGrace`, 30 seconds by default. The socket then ends with
+  no close frame, and the client must reconnect, which reaches the new revision.
+- funcd closes a socket that carries no byte either way for 5 minutes, and a proxy in front may close one sooner, so
+  send a ping or a message about every 30 seconds.
+- With one replica, every socket of the Function meets on its one worker, so a relay can keep its sockets in memory;
+  during a change they sit on two workers until the old one stops.
+
+### TypeScript
+
+A route made with `upgradeWebSocket` from `@funcd-dev/shim/ws` takes a socket, as Hono's own helper does on Node; that
+entry needs Hono, and `@types/ws` for TypeScript. Each event runs in the context of the call that opened the socket:
+`ctx.principal` is who opened it, and `ctx.remainingMs()` is `null`. The example's route `/relay` sends each message to
+every other socket of the route:
+
+::include[../../../../../_repos/funcd-typescript/examples/http-api/src/app.ts#relay]
+
 ## Scale a Function to zero
 
 A Function that sets neither [`replicas`](spec.md#functionspec) nor
@@ -256,8 +280,8 @@ long without a call, and the Function is `Idle` until the next one. This Functio
 ::include[../../../../../api/types/v1alpha1/examples/function/function.yaml#function]
 
 - funcd looks for idle Functions every [`invoke.reclaimInterval`](../../running-funcd/spec.md#funcdconfigyaml), 30
-  seconds by default, so workers can outlive `idleTimeout` by that much. A call in flight, an open stream too, keeps
-  the Function awake.
+  seconds by default, so workers can outlive `idleTimeout` by that much. A call in flight, an open stream or socket
+  too, keeps the Function awake.
 - A call waiting for a worker gets 503 after `invoke.activationTimeout`, 30 seconds by default; the calls that arrive
   during a start share that wait.
 - `minReplicas` above 0 keeps that many workers, and the Function never goes `Idle`. `replicas` above 0 with
@@ -374,4 +398,4 @@ funcd refuses the calls of a `Failed` Function at once with 503. `status.current
   [in Python](https://github.com/pyvvo/funcd-python/tree/main/examples/log-burst): log lines and their count.
 - [fn-to-fn in TypeScript](https://github.com/pyvvo/funcd-typescript/tree/main/examples/fn-to-fn): a call over a link.
 - [http-api in TypeScript](https://github.com/pyvvo/funcd-typescript/tree/main/examples/http-api): HTTP with a web
-  framework.
+  framework, a streamed export and a WebSocket relay.

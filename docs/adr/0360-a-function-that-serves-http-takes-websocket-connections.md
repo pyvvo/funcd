@@ -1,6 +1,6 @@
 # ADR-0360: A Function that serves HTTP takes WebSocket connections with Hono's upgradeWebSocket
 
-- **Status**: Accepted (2026-11-27), by the DR session for the decider, who sent the brief there ("your picks but make
+- **Status**: Reviewing (2026-11-27, implemented); Accepted (2026-11-27), by the DR session for the decider, who sent the brief there ("your picks but make
   it fast"), with the four choices it named confirmed, after two rounds of an independent judge, every finding folded
 - **Date**: 2026-11-27
 - **Deciders**: green-0-rabbit

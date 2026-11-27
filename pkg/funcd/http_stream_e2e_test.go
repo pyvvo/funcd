@@ -204,19 +204,7 @@ func TestHTTPFunctionStreamAtRevisionSwitch(t *testing.T) {
 
 	ref, digest = e.pushStream(t, "v2")
 	e.apply(t, streamFn(ref, digest, 0))
-	var since time.Time
-	require.Eventually(t, func() bool {
-		obj, err := e.c.Get(e.ctx, v1.KindFunction, "default", ticker)
-		if err != nil {
-			return false
-		}
-		st := obj.(*v1.Function).Status
-		if st.ServingRevision != ticker+"-2" || st.DrainingSince == nil {
-			return false
-		}
-		since = time.Time(*st.DrainingSince)
-		return true
-	}, 30*time.Second, 20*time.Millisecond, "the calls switch to v2")
+	since := e.waitSwitch(t, ticker, ticker+"-2")
 	fresh, freshEnd := e.openStream(t, "/function/"+ticker+"/events?gap=100&count=1")
 	got, err := readStream(t, fresh, freshEnd, 10*time.Second)
 	require.ErrorIs(t, err, io.EOF)
@@ -236,6 +224,25 @@ func TestHTTPFunctionStreamAtRevisionSwitch(t *testing.T) {
 		obj, err := e.c.Get(e.ctx, v1.KindFunction, "default", ticker)
 		return err == nil && obj.(*v1.Function).Status.DrainingRevision == ""
 	}, 10*time.Second, 50*time.Millisecond, "v1 drained")
+}
+
+// waitSwitch waits until name's calls switch to revision and returns when the switch happened, status.drainingSince.
+func (e *gcEnv) waitSwitch(t *testing.T, name, revision string) time.Time {
+	t.Helper()
+	var since time.Time
+	require.Eventually(t, func() bool {
+		obj, err := e.c.Get(e.ctx, v1.KindFunction, "default", v1.ObjectName(name))
+		if err != nil {
+			return false
+		}
+		st := obj.(*v1.Function).Status
+		if st.ServingRevision != revision || st.DrainingSince == nil {
+			return false
+		}
+		since = time.Time(*st.DrainingSince)
+		return true
+	}, 30*time.Second, 20*time.Millisecond, "the calls of %s switch to %s", name, revision)
+	return since
 }
 
 func eventData(events []sseEvent) []string {
