@@ -402,7 +402,9 @@ func TestScenarioAddonAppDelete(t *testing.T) {
 		}, cliWithin, 10*time.Millisecond, "the App is deleted")
 		storeDelete(t, e.st, v1.KindAddonObject, "web-auth-login")
 		if !addonFirst {
-			require.Eventually(t, func() bool { return strings.Contains(run.out.String(), "deleted IdentityProvider/web-auth-login\n") },
+			require.Eventually(t, func() bool {
+				return strings.Contains(run.out.String(), "deleted IdentityProvider/web-auth-login after ")
+			},
 				cliWithin, 10*time.Millisecond)
 			select {
 			case <-run.done:
@@ -412,9 +414,9 @@ func TestScenarioAddonAppDelete(t *testing.T) {
 		}
 		storeDelete(t, e.st, v1.KindFunction, "web-auth-login-rauthypasswordpolicy")
 		require.NoError(t, run.wait(t), "addon first: %v", addonFirst)
-		require.Contains(t, run.out.String(), "deleted IdentityProvider/web-auth-login\n", "addon first: %v", addonFirst)
+		require.Contains(t, run.out.String(), "deleted IdentityProvider/web-auth-login after ", "addon first: %v", addonFirst)
 		if !addonFirst {
-			require.Contains(t, run.out.String(), "deleted Function/web-auth-login-rauthypasswordpolicy\n")
+			require.Contains(t, run.out.String(), "deleted Function/web-auth-login-rauthypasswordpolicy after ")
 		}
 	}
 }

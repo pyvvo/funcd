@@ -40,6 +40,7 @@ New words: Parsing, Command, Plugin.
 | `funcdctl logs <kind>/<name>` | Reads a Lake's, a SQLDatabase's or an add-on object's engine; a bare name or `function/<name>` is a Function; another kind of funcd's is refused before any call, and a plural of no engine kind, a settings kind's included, is 404 | none | `a Bucket runs no engine`; 404 | decided | ADR-0342 Decisions 3 and 4, `TestLogsTargetForms`, `TestScenarioEngineLogsNoEngine` |
 | `funcdctl delete` of a held object | An engineless kind's object with `deletion: delete`, past its first pass, is held at its deletion: the DELETE answers 202, again for one held already | none | `deleting InfraStack/<name>`; else `deleted <Kind>/<name>` | decided | ADR-0345 Decision 6, `TestCLIDeleteHeldAddonObject` |
 | `funcdctl app delete` of an App with an engineless part | Waits with no deadline through each held part's destroy, its approval included, as the App's other parts outlive it; `--no-wait` returns at once | until the last destroy's ok | `waiting InfraStack/<name>`, then `deleted …` | decided | ADR-0345 Decision 8 and Consequences, ADR-0217 Decision 9 |
+| `funcdctl app deploy` or `app delete` on a terminal | A box redrawn each second: a row per required App, hook and part with its state, what it waits on and its time, and the deadline; a pipe gets lines, a settled part's ending with its time | each second | `Ready after 14s` | decided | ADR-0362 Decisions 1 to 6, `TestScenarioAppViewDeploy`, `TestScenarioAppViewLines` |
 
 <!-- generated values, do not edit: just behavior-values -->
 <details>

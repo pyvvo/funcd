@@ -229,20 +229,23 @@ func matches(pattern, field string) bool {
 	return pattern == field || pattern == index.ReplaceAllString(field, "[]")
 }
 
-// protected is, per user kind, the fields of Names that InUse reads (ADR-0199 Decision 6): it reads only the first
-// blob binding of a Site, its served Bucket.
-var protected = map[v1.Kind][]string{
-	v1.KindFunction:    workloadFields,
-	v1.KindJob:         workloadFields,
-	v1.KindLake:        {"spec.bindings.blob[].bucket", "spec.bindings.config[]"},
-	v1.KindEventSource: {"spec.blob.bucket"},
-	v1.KindRoute:       {"spec.rules[].backend.static.bucket"},
-	v1.KindSite:        {"spec.bindings.blob[0].bucket", "spec.runtimeConfig.configMap"},
-}
-
-var workloadFields = []string{
-	"spec.bindings.links[].target", "spec.bindings.kv[].store", "spec.bindings.sql[].database",
-	"spec.bindings.addon[].object", "spec.bindings.blob[].bucket", "spec.bindings.config[]",
+// protected is the fields of Names that InUse reads for a user of the kind user (ADR-0199 Decision 6): of a Site, only
+// its first blob binding, its served Bucket.
+func protected(user v1.Kind) []string {
+	switch user {
+	case v1.KindFunction, v1.KindJob:
+		return []string{"spec.bindings.links[].target", "spec.bindings.kv[].store", "spec.bindings.sql[].database",
+			"spec.bindings.addon[].object", "spec.bindings.blob[].bucket", "spec.bindings.config[]"}
+	case v1.KindLake:
+		return []string{"spec.bindings.blob[].bucket", "spec.bindings.config[]"}
+	case v1.KindEventSource:
+		return []string{"spec.blob.bucket"}
+	case v1.KindRoute:
+		return []string{"spec.rules[].backend.static.bucket"}
+	case v1.KindSite:
+		return []string{"spec.bindings.blob[0].bucket", "spec.runtimeConfig.configMap"}
+	}
+	return nil
 }
 
 // uses reports whether u names obj in one of the fields InUse reads; a Function's link to itself is no use.
@@ -251,7 +254,7 @@ func uses(u, obj v1.Object) bool {
 	if kind == v1.KindFunction && user == v1.KindFunction && u.GetName() == name {
 		return false
 	}
-	fields := protected[user]
+	fields := protected(user)
 	return slices.ContainsFunc(Names(u), func(n Name) bool {
 		return n.Ref.Kind == kind && n.Ref.Name == name && slices.ContainsFunc(fields, func(p string) bool { return matches(p, n.Field) })
 	})

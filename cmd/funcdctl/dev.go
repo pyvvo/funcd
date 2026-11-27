@@ -865,11 +865,8 @@ func (a *cli) printBanner(inst *devInstance) error {
 	// The renderer is bound to a.out, so lipgloss auto-disables color when output is piped or captured
 	// (a non-TTY writer → plain text) and colors it on a real terminal.
 	r := lipgloss.NewRenderer(a.out)
-	accent := lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#B694FF"}
-	link := lipgloss.AdaptiveColor{Light: "#0969DA", Dark: "#58A6FF"}
-	okc := lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#3FB950"}
-	dim := lipgloss.AdaptiveColor{Light: "#57606A", Dark: "#8B949E"}
-	warn := lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#E3B341"}
+	p := palette()
+	accent, link, okc, dim, warn := p.accent, p.link, p.ok, p.dim, p.warn
 
 	titleS := r.NewStyle().Bold(true).Foreground(accent)
 	subS := r.NewStyle().Foreground(dim)

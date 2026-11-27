@@ -26,16 +26,18 @@ func partKinds() map[v1.Kind]v1.Object {
 
 // notNames are the ObjectName fields that name no object of the namespace, each with why; a trailing * covers a
 // subtree: a root entry by name is the object's own child, and so is the spec inlined beside it.
-var notNames = map[string]string{
-	"spec.kv[].name": "own child", "spec.buckets[].name": "own child", "spec.sql[].name": "own child",
-	"spec.lakes[].name": "own child", "spec.configMaps[].name": "own child", "spec.lakes[].*": "an own Lake's spec",
-	"spec.kv[].*": "an own store's spec", "spec.buckets[].*": "an own Bucket's spec", "spec.sql[].*": "an own database's spec",
-	"spec.volumes[].name": "a volume, no object", "spec.volumes[].ref": "a volume, no object",
-	"spec.steps[].name": "a step of this Workflow", "spec.steps[].dependsOn[]": "a step of this Workflow",
-	"spec.onFailure": "a step of this Workflow", "spec.on[].name": "a dependency of this Sensor",
-	"spec.on[].event": "an event of the EventSource", "spec.do[].name": "an action of this Sensor",
-	"spec.do[].on": "a dependency of this Sensor", "spec.timer.events[].name": "an event of this EventSource",
-	"spec.blob.events[].name": "an event of this EventSource", "spec.sql.events[].name": "an event of this EventSource",
+func notNames() map[string]string {
+	return map[string]string{
+		"spec.kv[].name": "own child", "spec.buckets[].name": "own child", "spec.sql[].name": "own child",
+		"spec.lakes[].name": "own child", "spec.configMaps[].name": "own child", "spec.lakes[].*": "an own Lake's spec",
+		"spec.kv[].*": "an own store's spec", "spec.buckets[].*": "an own Bucket's spec", "spec.sql[].*": "an own database's spec",
+		"spec.volumes[].name": "a volume, no object", "spec.volumes[].ref": "a volume, no object",
+		"spec.steps[].name": "a step of this Workflow", "spec.steps[].dependsOn[]": "a step of this Workflow",
+		"spec.onFailure": "a step of this Workflow", "spec.on[].name": "a dependency of this Sensor",
+		"spec.on[].event": "an event of the EventSource", "spec.do[].name": "an action of this Sensor",
+		"spec.do[].on": "a dependency of this Sensor", "spec.timer.events[].name": "an event of this EventSource",
+		"spec.blob.events[].name": "an event of this EventSource", "spec.sql.events[].name": "an event of this EventSource",
+	}
 }
 
 // TestNamesCoversEveryField fills every ObjectName field of each part kind's spec, by reflection, and checks that
@@ -52,7 +54,7 @@ func TestNamesCoversEveryField(t *testing.T) {
 			read[index.ReplaceAllString(n.Field, "[]")] = true
 		}
 		for _, f := range fields {
-			_, listed := notNames[f]
+			_, listed := notNames()[f]
 			require.True(t, read[f] || listed || underSubtree(f), "%s: %s is an ObjectName that Names neither reads nor lists in notNames", kind, f)
 			require.False(t, read[f] && listed, "%s: %s is read and listed in notNames", kind, f)
 		}
@@ -64,19 +66,13 @@ func TestNamesCoversEveryField(t *testing.T) {
 
 // underSubtree reports whether field lies under a notNames entry that ends with *.
 func underSubtree(field string) bool {
-	for p := range notNames {
+	for p := range notNames() {
 		if prefix, ok := strings.CutSuffix(p, "*"); ok && strings.HasPrefix(field, prefix) {
 			return true
 		}
 	}
 	return false
 }
-
-var (
-	objectNameType = reflect.TypeFor[v1.ObjectName]()
-	kindType       = reflect.TypeFor[v1.Kind]()
-	rawType        = reflect.TypeFor[json.RawMessage]()
-)
 
 // fill gives v one element per slice, a value per pointer and a distinct name per ObjectName field, and appends the
 // path of each ObjectName field, its indexes as [].
@@ -85,12 +81,12 @@ func fill(v reflect.Value, path string, fields *[]string, depth int) {
 		return
 	}
 	switch {
-	case v.Type() == objectNameType:
+	case v.Type() == reflect.TypeFor[v1.ObjectName]():
 		v.SetString(fmt.Sprintf("n%d", len(*fields)))
 		*fields = append(*fields, path)
-	case v.Type() == kindType:
+	case v.Type() == reflect.TypeFor[v1.Kind]():
 		v.SetString(string(v1.KindFunction))
-	case v.Type() == rawType:
+	case v.Type() == reflect.TypeFor[json.RawMessage]():
 	case v.Kind() == reflect.Pointer:
 		v.Set(reflect.New(v.Type().Elem()))
 		fill(v.Elem(), path, fields, depth+1)

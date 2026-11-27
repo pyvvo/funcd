@@ -1,6 +1,6 @@
 # ADR-0362: funcdctl app deploy and app delete show their progress as a live view
 
-- **Status**: Accepted (2026-11-27), by the decider ("accept, implement it and ship", which confirms the
+- **Status**: Reviewing (2026-11-27, implemented); Accepted (2026-11-27), by the decider ("accept, implement it and ship", which confirms the
   `status.deadline` field and the dry run before each deploy), after three rounds of an independent judge at medium
   effort, every finding folded
 - **Date**: 2026-11-27

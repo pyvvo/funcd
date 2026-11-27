@@ -292,8 +292,8 @@ func TestCLIAppDeployFollowsRevision(t *testing.T) {
 		s.Conditions = readyIs(v1.ConditionTrue, "")
 	})
 	require.NoError(t, run.wait(t))
-	require.Equal(t, "todo-1\nFunction/todo-api Pending Progressing\nApp/todo Ready=False Progressing\n"+
-		"Function/todo-api Ready\nApp/todo Ready=True\n", run.out.String())
+	require.Regexp(t, `^todo-1\nFunction/todo-api Pending Progressing\nApp/todo Ready=False Progressing\n`+
+		`Function/todo-api Ready after \d+s\nApp/todo Ready=True\n$`, run.out.String(), "a settled part's line ends with its time (ADR-0362 Decision 6)")
 }
 
 // ADR-0217 Decision 8: --no-wait returns once applied; a deploy whose spec both the App and its revision n0 hold
@@ -564,7 +564,11 @@ func TestCLIAppDeleteReports(t *testing.T) {
 		"waiting Function/todo-plan-due", "waiting Revision/todo-plan-due-1", "waiting Revision/todo-plan-due-2",
 		"deleted Function/todo-plan-due", "deleted Revision/todo-plan-due-1", "deleted Revision/todo-plan-due-2",
 	} {
-		require.Equal(t, 1, strings.Count(got, want+"\n"), "%q once in:\n%s", want, got)
+		end := "\n"
+		if strings.HasPrefix(want, "deleted ") {
+			end = " after " // a deleted object's line ends with its time (ADR-0362 Decision 6)
+		}
+		require.Equal(t, 1, strings.Count(got, want+end), "%q once in:\n%s", want, got)
 	}
 	require.Equal(t, []string{"kept KVStore/todo-store", "kept Bucket/todo-files"}, lines[len(lines)-2:], got)
 	require.NotContains(t, got, "shared", "a ref store is not the App's")

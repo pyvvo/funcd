@@ -45,7 +45,7 @@ funcdctl app deploy <dir|ref> [flags]
 
 Render an App template, apply the App and wait until its new revision is current or failed.
 
-One command deploys, upgrades and downgrades. Deploy prints the revision it follows and each part whose state changes, and exits 0 once the revision is current; 1 when it fails, when the App's spec changes before it is stamped, or when the App is deleted. The server's app.upgradeTimeout bounds a rollout; an interrupt stops the wait, not the rollout.
+One command deploys, upgrades and downgrades. On a terminal deploy draws a live view: a row per required App, hook and part with its state, what it waits on and its time, and the revision's deadline. Elsewhere it prints the revision it follows and each part whose state changes, a settled part's line ending with its time. It exits 0 once the revision is current; 1 when it fails, when the App's spec changes before it is stamped, or when the App is deleted. The server's app.upgradeTimeout bounds a rollout; an interrupt stops the wait, not the rollout.
 ```
 
 | Flag | Type | Default | Description |

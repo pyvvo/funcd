@@ -80,7 +80,9 @@ Each change of the spec, other than a pause or a resume, makes a new revision; t
 - On a server, `funcdctl app deploy` renders each image with the digest that `app.lock` pins, or that the tag names at
   that deploy when the folder has no lock. A pushed template always holds a lock, so a new build reaches the App through
   a new one, which [`funcdctl app lock`](../../tools/funcdctl/spec.md#funcdctl-app-lock) writes. `funcdctl app deploy`
-  exits with 1 when the new revision fails.
+  exits with 1 when the new revision fails. On a terminal it draws its progress as a live box: a row per required App,
+  hook and part, with its state, what it waits on and the time it takes, and the revision's deadline. In a pipe or a
+  CI log it prints a line per change instead, and a settled part's line ends with its time, such as `after 14s`.
 
 Change `timeout` in `apps/volumes/values/redeploy.yaml` from `31s` to `45s` and save. `funcdctl dev` rolls out
 `volumes-2`, then prints `reloaded in <duration>`:
@@ -289,40 +291,41 @@ parts, revisions and the objects that they own are gone:
   it back with `ref`.
 - Objects named with `ref`, Secrets and Backups stay.
 
-Delete the todo App:
+Delete the todo App. On a terminal the command draws each object as a row of a live box, deleted with its time,
+waiting with its reason, or kept; piped, as here, it prints a line per object:
 
 ```console
-$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token app delete todo
-deleted Function/todo-api
-deleted Function/todo-intake
-deleted Function/todo-migrate
-deleted Function/todo-planner
-deleted Function/todo-warm
-deleted Workflow/todo-plan
-deleted EventSource/todo-plan-timer
-deleted EventSource/todo-uploads
-deleted Sensor/todo-plan-schedule
-deleted Sensor/todo-upload-intake
-deleted Route/todo-api
-deleted Site/todo-web
-deleted KVStore/todo-cache
-deleted KVStore/todo-plans
-deleted Bucket/todo-tmp
-deleted Bucket/todo-web
-deleted ConfigMap/todo-settings-7caf7f1644
-deleted AppRevision/todo-1
-deleted Revision/todo-api-1
-deleted Revision/todo-intake-1
-deleted Revision/todo-migrate-1
-deleted Revision/todo-planner-1
-deleted Revision/todo-warm-1
-deleted Invocation/inv-1d12ef48d5d17449c59e
-deleted Invocation/inv-688fa9ed92cbdc7b74a0
-deleted Function/todo-plan-collect
-deleted Function/todo-plan-rank
-deleted Route/todo-web
-deleted Revision/todo-plan-collect-1
-deleted Revision/todo-plan-rank-2
+$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token app delete todo | cat
+deleted Function/todo-api after 1s
+deleted Function/todo-intake after 1s
+deleted Function/todo-migrate after 1s
+deleted Function/todo-planner after 1s
+deleted Function/todo-warm after 1s
+deleted Workflow/todo-plan after 1s
+deleted EventSource/todo-plan-timer after 1s
+deleted EventSource/todo-uploads after 1s
+deleted Sensor/todo-plan-schedule after 1s
+deleted Sensor/todo-upload-intake after 1s
+deleted Route/todo-api after 1s
+deleted Site/todo-web after 1s
+deleted KVStore/todo-cache after 1s
+deleted KVStore/todo-plans after 1s
+deleted Bucket/todo-tmp after 1s
+deleted Bucket/todo-web after 1s
+deleted ConfigMap/todo-settings-7caf7f1644 after 1s
+deleted AppRevision/todo-1 after 2s
+deleted Revision/todo-api-1 after 2s
+deleted Revision/todo-intake-1 after 2s
+deleted Revision/todo-migrate-1 after 2s
+deleted Revision/todo-planner-1 after 2s
+deleted Revision/todo-warm-1 after 2s
+deleted Invocation/inv-1d12ef48d5d17449c59e after 2s
+deleted Invocation/inv-688fa9ed92cbdc7b74a0 after 2s
+deleted Function/todo-plan-collect after 3s
+deleted Function/todo-plan-rank after 3s
+deleted Route/todo-web after 3s
+deleted Revision/todo-plan-collect-1 after 3s
+deleted Revision/todo-plan-rank-2 after 3s
 kept KVStore/todo-store
 kept Bucket/todo-files
 ```
