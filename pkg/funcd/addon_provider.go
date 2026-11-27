@@ -44,7 +44,7 @@ type addonProvider struct {
 	files      workload.AddonFiles // the engines' files, when the runtime reaches them; nil otherwise
 	engines    provider.Runtime    // the runtime of the objects' engines
 	// calls are the checks of a Function's call of an engine, and masterOf the root of a namespace's proxy tokens
-	// (ADR-0338 Decisions 2 and 3, FEAT-0002 decision 8).
+	// (ADR-0338 Decisions 2 and 3, ADR-0371).
 	calls    *addonsvc.Calls
 	masterOf nsmaster.Source
 	// proxyHost is where the add-on proxy listens, the address workers reach funcd's gateways at. listen binds it at its

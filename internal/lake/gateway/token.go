@@ -115,7 +115,7 @@ type LakeKeys interface {
 // the metastore (for the per-Identity token's two-Get lookup). A nil store ⇒ Function-only resolution.
 type macKeys struct {
 	master     []byte
-	namespaces nsmaster.Source // FEAT-0002 decision 8: each namespace's own master on a worker node; nil ⇒ master
+	namespaces nsmaster.Source // ADR-0371: each namespace's own master on a worker node; nil ⇒ master
 	store      store.Store
 }
 

@@ -17,7 +17,7 @@ import (
 const NamespaceKeyVersion = 1
 
 // NamespaceKeys derives each namespace's master from the control plane's master secret and the namespace's UID
-// (FEAT-0002 decision 8). A node gets only the keys of the namespaces placed on it, so a leaked node exposes no other,
+// (ADR-0371). A node gets only the keys of the namespaces placed on it, so a leaked node exposes no other,
 // and a namespace keeps its key when it moves to another node.
 type NamespaceKeys struct {
 	st     store.Store

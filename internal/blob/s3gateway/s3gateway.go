@@ -53,7 +53,7 @@ type Deps struct {
 	PDP authz.Authorizer
 	// Master is the node master secret keypairs are derived from (ADR-0085). Required.
 	Master []byte
-	// NamespaceMasters, when set, gives each namespace's own master (FEAT-0002 decision 8); nil derives from Master.
+	// NamespaceMasters, when set, gives each namespace's own master (ADR-0371); nil derives from Master.
 	NamespaceMasters nsmaster.Source
 	// KeyPeriod and KeySalt make derived pairs rotate (ADR-0270); a zero KeyPeriod keeps the fixed pair. KeyNow is
 	// the clock (nil: time.Now).

@@ -10,7 +10,7 @@ import (
 	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 )
 
-// FEAT-0002 decision 8: on a worker node a Function's credentials derive from its namespace's master, and while the
+// ADR-0371: on a worker node a Function's credentials derive from its namespace's master, and while the
 // node lacks that master the Function waits.
 func TestAWorkerNodeHoldsAFunctionUntilItsNamespacesMasterArrives(t *testing.T) {
 	t.Parallel()

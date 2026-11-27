@@ -1,4 +1,4 @@
-// Package nsmaster picks the master secret a namespace's credentials derive from (FEAT-0002 decision 8): the platform's
+// Package nsmaster picks the master secret a namespace's credentials derive from (ADR-0371): the platform's
 // own master on an all-in-one funcd, and on a worker node the namespace's own master, which the control plane derives
 // from the platform's and sends only to the node that runs the namespace.
 package nsmaster

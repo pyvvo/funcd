@@ -59,7 +59,7 @@ type admitAll struct{ nodeapi.Handler }
 
 func (admitAll) Admit(context.Context, nodeapi.Peer) error { return nil }
 
-// A node that speaks a node API version this control plane does not serve gets 426, whatever else it sends (decision 12).
+// A node on a node API version this control plane does not serve gets 426, whatever it sends (ADR-0374 Decision 1).
 func TestANodeOnAnotherNodeAPIVersionGets426(t *testing.T) {
 	srv, ca := listen(t)
 	ctx, cancel := context.WithCancel(context.Background())

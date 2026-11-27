@@ -45,7 +45,7 @@ func TestAddonBindingGivesTheProxyEnv(t *testing.T) {
 		return "", fault.Unavailablef("test", "no master of namespace default yet")
 	}
 	_, _, g = addonHook{r}.own(functionWorkload(fn))
-	require.NotNil(t, g, "a worker node without the namespace's master (FEAT-0002 decision 8)")
+	require.NotNil(t, g, "a worker node without the namespace's master (ADR-0371)")
 	require.Equal(t, reasonNamespaceKeyMissing, g.reason)
 }
 

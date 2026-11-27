@@ -602,7 +602,7 @@ func (s *Handler) writeSecret(ctx context.Context, in nodeapi.SecretWrite, out *
 	return nil
 }
 
-// Key is the master of a namespace placed on the node (decision 8).
+// Key is the master of a namespace placed on the node (ADR-0371 Decision 1).
 func (s *Handler) Key(ctx context.Context, node v1.ObjectName, ns v1.NamespaceName) (nodeapi.NamespaceKey, error) {
 	const op = "multinode.keys"
 	if err := s.mustBePlacedOn(ctx, op, ns, node); err != nil {

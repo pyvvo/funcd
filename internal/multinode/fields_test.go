@@ -71,8 +71,8 @@ func specFields() map[string]map[v1.Kind][]string {
 	return out
 }
 
-// A spec field that a release adds is one that a node on an older release drops without a word (decision 12): it needs a
-// node API version of its own, named in nodeFields for each kind and path, unless an older node may ignore it.
+// A spec field that a release adds is one that a node on an older release drops without a word (ADR-0374 Decision 3):
+// it needs a node API version of its own, named in nodeFields for each kind and path, unless older nodes may ignore it.
 func TestANewSpecFieldNamesTheNodeAPIVersionItNeeds(t *testing.T) {
 	const golden = "testdata/node-api-fields.txt"
 	fields := specFields()

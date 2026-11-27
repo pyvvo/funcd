@@ -17,7 +17,7 @@ import (
 // window it was derived in and a per-start Salt; a zero Period gives the fixed pair of DeriveKeypair (funcdctl dev).
 type Deriver struct {
 	Master []byte
-	// NamespaceMasters, when set, gives each namespace's own master (FEAT-0002 decision 8, on a worker node); nil
+	// NamespaceMasters, when set, gives each namespace's own master (ADR-0371, on a worker node); nil
 	// derives every namespace's pairs from Master.
 	NamespaceMasters nsmaster.Source
 	Salt             []byte

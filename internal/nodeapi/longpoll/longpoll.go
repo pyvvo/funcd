@@ -117,7 +117,7 @@ type api struct {
 	calls *calls
 }
 
-// routes are the node API on the API's own stack (decision 9): the join, then the routes of a joined node.
+// routes are the node API on the API's own stack (ADR-0365 Decisions 1 and 2): the join, then a joined node's routes.
 func routes(h nodeapi.Handler, calls *calls, logger *slog.Logger) http.Handler {
 	a := &api{h: h, calls: calls}
 	r := chi.NewRouter()

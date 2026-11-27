@@ -211,7 +211,8 @@ func TestAnAnswerGoesOnlyIntoTheInboxOfTheNodeThatAsked(t *testing.T) {
 	require.NoError(t, err, "and so is a join with the joins' inbox, here with its refusal")
 }
 
-// A node that speaks a node API version this control plane does not serve is refused, whatever it sends (decision 12).
+// A node that speaks a node API version this control plane does not serve is refused, whatever it sends (ADR-0374
+// Decision 1).
 func TestANodeOnAnotherNodeAPIVersionIsRefused(t *testing.T) {
 	srv, ca := listen(t)
 	h := &stub{}

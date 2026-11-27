@@ -10,7 +10,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// onlyE1 is a worker node's namespace masters: it runs namespace e1 alone (FEAT-0002 decision 8).
+// onlyE1 is a worker node's namespace masters: it runs namespace e1 alone (ADR-0371).
 func onlyE1(ns v1.NamespaceName) ([]byte, error) {
 	if ns == "e1" {
 		return []byte("the master of e1"), nil

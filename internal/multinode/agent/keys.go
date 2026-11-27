@@ -14,11 +14,11 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/durable"
 )
 
-// keysDir holds the master of each namespace the node runs, one file each (FEAT-0002 decision 8), so the node derives
+// keysDir holds the master of each namespace the node runs, one file each (ADR-0371), so the node derives
 // their credentials while the control plane is away.
 const keysDir = "keys"
 
-// NamespaceMaster is namespace ns's master on this node, the one the control plane sent for it (FEAT-0002 decision 8):
+// NamespaceMaster is namespace ns's master on this node, the one the control plane sent for it (ADR-0371):
 // the namespace's S3 pairs, lake tokens and SQL engine passwords derive from it, never from the node's own master.
 func (a *Agent) NamespaceMaster(ns v1.NamespaceName) ([]byte, error) {
 	a.mu.Lock()

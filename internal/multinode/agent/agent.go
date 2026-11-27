@@ -294,7 +294,7 @@ func (a *Agent) syncAll(ctx context.Context) error {
 		a.removeNamespace(ctx, ns)
 	}
 	a.dropKeysOutside(ctx, placed)
-	// A namespace's master comes before its objects, whose credentials derive from it (decision 8).
+	// A namespace's master comes before its objects, so they need not wait for it (ADR-0371 Decision 2).
 	for ns := range placed {
 		if err := a.fetchKey(ctx, ns); err != nil {
 			a.log.WarnContext(ctx, "node agent: fetch a namespace's master", "namespace", ns, "error", err)

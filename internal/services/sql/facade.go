@@ -36,7 +36,7 @@ type FacadeDeps struct {
 	Authorizer auth.Authorizer
 	Engines    *Engines
 	Master     []byte
-	// NamespaceMasters, when set, gives each namespace's own master (FEAT-0002 decision 8); nil derives from Master.
+	// NamespaceMasters, when set, gives each namespace's own master (ADR-0371); nil derives from Master.
 	NamespaceMasters nsmaster.Source
 	HTTPClient       *http.Client  // nil ⇒ a node client bounded by CallTimeout
 	CallTimeout      time.Duration // 0 ⇒ DefaultCallTimeout

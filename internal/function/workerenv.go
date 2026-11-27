@@ -322,7 +322,7 @@ func (h lakeHook) own(w workload) (map[string]string, func() map[string]string, 
 	return env, nil, nil
 }
 
-// reasonNamespaceKeyMissing holds a Function while its worker node lacks its namespace's master (FEAT-0002 decision 8):
+// reasonNamespaceKeyMissing holds a Function while its worker node lacks its namespace's master (ADR-0371):
 // its S3 pair, lake token and add-on proxy token come from that master, which the control plane sends to the node.
 const reasonNamespaceKeyMissing = "NamespaceKeyMissing"
 

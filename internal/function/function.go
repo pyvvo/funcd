@@ -183,7 +183,7 @@ type Deps struct {
 	// SAME master the S3 gateway derives keypairs from (loaded once at the compose root). nil/empty ⇒ a
 	// still-derivable but unverifiable token (the proxy holds the real master); the master is never logged.
 	LakeMaster []byte
-	// NamespaceMasters, when set, gives each namespace's own master for its lake tokens (FEAT-0002 decision 8, on a
+	// NamespaceMasters, when set, gives each namespace's own master for its lake tokens (ADR-0371, on a
 	// worker node); nil derives them from LakeMaster.
 	NamespaceMasters nsmaster.Source
 

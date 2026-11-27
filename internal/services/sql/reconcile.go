@@ -53,7 +53,7 @@ type ReconcilerDeps struct {
 	Provider provider.Runtime // OwnerKind SQLDatabase; must implement provider.Volumes
 	Engines  *Engines
 	Master   []byte
-	// NamespaceMasters, when set, gives each namespace's own master (FEAT-0002 decision 8); nil derives from Master.
+	// NamespaceMasters, when set, gives each namespace's own master (ADR-0371); nil derives from Master.
 	NamespaceMasters  nsmaster.Source
 	ImageFor          func(runtime string) string
 	Hold              hold.Gate // nil ⇒ never held
@@ -477,7 +477,7 @@ func (r *Reconciler) Quarantine() quarantine.Store { return r.volumes.Quarantine
 type Prober struct {
 	Engines *Engines
 	Master  []byte
-	// NamespaceMasters, when set, gives each namespace's own master (FEAT-0002 decision 8); nil derives from Master.
+	// NamespaceMasters, when set, gives each namespace's own master (ADR-0371); nil derives from Master.
 	NamespaceMasters nsmaster.Source
 	Volumes          provider.Volumes
 	Client           *http.Client // nil ⇒ a node client with a 5 s timeout

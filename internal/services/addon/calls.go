@@ -173,7 +173,7 @@ func Token(master []byte, ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName)
 
 // TokenCaller is the Function or the Job a proxy token names, read back by its kind, ok false for any other value; a
 // Job's ref carries no run, which the proxy does not need. The namespace that the token claims picks the master, so a
-// claim holds only under that namespace's own (FEAT-0002 decision 8).
+// claim holds only under that namespace's own (ADR-0371).
 func TokenCaller(masterOf nsmaster.Source, token string) (local.Ref, bool) {
 	enc := base64.RawURLEncoding
 	head, sig, found := strings.Cut(token, ".")

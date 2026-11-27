@@ -252,7 +252,7 @@ func TestANamespaceNamesADeclaredNodeAndKeepsItWhileItHoldsObjects(t *testing.T)
 }
 
 // A BackupSchedule's target stays outside the blob store of the node that runs its namespace, not the control plane's
-// (decision 9, ADR-0222 Decision 6).
+// (ADR-0373 Decision 3, ADR-0222 Decision 6).
 func TestABackupSchedulesTargetStaysOutsideItsNodesBlobStore(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(memory.New(), store.WithChangeLog(0))

@@ -222,7 +222,7 @@ type Handler interface {
 	DeleteObject(ctx context.Context, node v1.ObjectName, in ObjectRef) error
 	// Report writes what node reports of itself into its WorkerNode's status.
 	Report(ctx context.Context, node v1.ObjectName, in NodeReport) error
-	// Key is the master of namespace ns, which must be placed on node (decision 8).
+	// Key is the master of namespace ns, which must be placed on node (ADR-0371 Decision 1).
 	Key(ctx context.Context, node v1.ObjectName, ns v1.NamespaceName) (NamespaceKey, error)
 	// Secret makes a workload's write of one key of a Secret, as the control plane's own workloads' are.
 	Secret(ctx context.Context, node v1.ObjectName, in SecretWrite) (SecretAnswer, error)
@@ -420,7 +420,7 @@ type Answer struct {
 	Fault fault.Kind      `json:"fault,omitempty"`
 }
 
-// NamespaceKey is a namespace's master for the credentials derived on its node (FEAT-0002 decision 8), at Version.
+// NamespaceKey is a namespace's master for the credentials derived on its node (ADR-0371), at Version.
 type NamespaceKey struct {
 	Namespace v1.NamespaceName `json:"namespace"`
 	Version   int              `json:"version"`

@@ -147,7 +147,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// (ADR-0270 Decision 5), and a fresh pair needs a fresh engine: Converge replaces one older than its renewal age.
 	if r.derive != nil && len(cs.Spec.Bindings.Blob) > 0 {
 		ns, name := string(cs.Namespace), string(cs.Name)
-		// On a worker node the pair needs the namespace's master (FEAT-0002 decision 8): wait for it before the engine.
+		// On a worker node the pair needs the namespace's master (ADR-0371): wait for it before the engine.
 		if _, _, err := r.derive(v1.KindLake, ns, name); err != nil {
 			return controller.Result{}, err
 		}

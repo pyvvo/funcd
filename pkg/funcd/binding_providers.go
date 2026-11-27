@@ -223,7 +223,7 @@ type blobDeps struct {
 	authz  auth.Authorizer
 	quota  quota.Checker
 	master []byte // the gateway derives every key pair from it (ADR-0085)
-	// masters gives each namespace's own master on a worker node (FEAT-0002 decision 8); nil ⇒ master
+	// masters gives each namespace's own master on a worker node (ADR-0371); nil ⇒ master
 	masters nsmaster.Source
 	prober  *health.Prober
 	ctrl    *controller.Controller

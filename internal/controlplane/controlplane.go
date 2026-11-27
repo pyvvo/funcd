@@ -299,7 +299,7 @@ func NewAPI(r chi.Router, h Handlers) huma.API {
 	return api
 }
 
-// NewInnerAPI builds on r an API of funcd's own processes, such as the node API (FEAT-0002 decision 9), on the same stack
+// NewInnerAPI builds on r an API of funcd's own processes, such as the node API (ADR-0365), on the same stack
 // and with the same errors as NewAPI's. It serves no document of itself.
 func NewInnerAPI(r chi.Router, title, version string) huma.API {
 	return humachi.New(r, apiConfig(title, version))

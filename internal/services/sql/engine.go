@@ -21,7 +21,7 @@ func EnginePassword(master []byte, ns v1.NamespaceName, name v1.ObjectName) stri
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// enginePasswordOf is EnginePassword over the master of ns (FEAT-0002 decision 8).
+// enginePasswordOf is EnginePassword over the master of ns (ADR-0371).
 func enginePasswordOf(master []byte, masters nsmaster.Source, ns v1.NamespaceName, name v1.ObjectName) (string, error) {
 	m, err := masters.Of(master, ns)
 	if err != nil {

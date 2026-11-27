@@ -162,7 +162,7 @@ func oneMaster(master []byte) nsmaster.Source {
 	return func(v1.NamespaceName) ([]byte, error) { return master, nil }
 }
 
-// FEAT-0002 decision 8: on a worker node each namespace's tokens come from its own master, so one namespace's master
+// ADR-0371: on a worker node each namespace's tokens come from its own master, so one namespace's master
 // makes no token that names a workload of another, and a namespace without one names no one.
 func TestAProxyTokenNamesItsCallerOnlyUnderItsNamespacesMaster(t *testing.T) {
 	t.Parallel()

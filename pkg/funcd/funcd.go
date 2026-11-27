@@ -833,7 +833,7 @@ func (p *Platform) buildControlPlane() error {
 	}
 	// FEAT-0002 F248: the API and the edge take the API tokens kept in the metastore too.
 	c.credentials = middleware.ChainCredentials(c.credentials, apitoken.NewCredentials(c.store, nil))
-	// FEAT-0002 decision 8: a worker node derives each namespace's credentials from that namespace's own master.
+	// ADR-0371: a worker node derives each namespace's credentials from that namespace's own master.
 	var masters nsmaster.Source
 	if p.agent != nil {
 		masters = p.agent.NamespaceMaster
