@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.53.0](https://github.com/pyvvo/funcd/compare/v0.52.0...v0.53.0) (2026-11-27)
+
+
+### Features
+
+* **funcdctl:** dev --lan prints each URL once, on the default route's LAN address ([#1603](https://github.com/pyvvo/funcd/issues/1603)) ([85280d3](https://github.com/pyvvo/funcd/commit/85280d3320e04d3640489b8c964cb9ecf20dd74c))
+
 ## [0.52.0](https://github.com/pyvvo/funcd/compare/v0.51.0...v0.52.0) (2026-11-27)
 
 
