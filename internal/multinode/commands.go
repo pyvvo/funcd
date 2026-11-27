@@ -240,7 +240,7 @@ func (r HoldRouter) ReturnQuarantined(ctx context.Context, q hold.QuarantineRetu
 }
 
 // Nodes reads and releases a worker node's own hold and reads its platform backup, by the node's name (F250): each side
-// has its own hold and its own backup (decision 10). The control plane's own node is this process.
+// has its own hold and its own backup (ADR-0373 Decision 3). The control plane's own node is this process.
 type Nodes struct {
 	calls  caller
 	st     store.Store
