@@ -33,7 +33,7 @@ To install another release, set `FUNCDCTL_VERSION`:
 
 <!-- x-release-please-start-version -->
 ```sh
-curl -fsSL https://funcd.dev/install.sh | FUNCDCTL_VERSION=v0.51.0 sh
+curl -fsSL https://funcd.dev/install.sh | FUNCDCTL_VERSION=v0.52.0 sh
 ```
 <!-- x-release-please-end -->
 

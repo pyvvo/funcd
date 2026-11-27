@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.52.0](https://github.com/pyvvo/funcd/compare/v0.51.0...v0.52.0) (2026-11-27)
+
+
+### Features
+
+* **funcdctl:** dev --lan puts the gateway on the LAN (ADR-0361) ([#1598](https://github.com/pyvvo/funcd/issues/1598)) ([887eb67](https://github.com/pyvvo/funcd/commit/887eb67ab595201331850a238ecff22ee47d9a9a))
+
 ## [0.51.0](https://github.com/pyvvo/funcd/compare/v0.50.0...v0.51.0) (2026-11-27)
 
 
