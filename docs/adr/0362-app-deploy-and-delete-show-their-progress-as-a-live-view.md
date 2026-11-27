@@ -5,14 +5,17 @@
   effort, every finding folded
 - **Amended in place**: 2026-11-27, by the decider on [#1606](https://github.com/pyvvo/funcd/issues/1606): the
   delete view's `InUse` names only a user that the GC's protections read, a store's owner is no name, and a box taller
-  than the terminal folds its settled rows until its last draw (Decisions 3 to 5)
+  than the terminal folds its settled rows until its last draw (Decisions 3 to 5); and on
+  [#1610](https://github.com/pyvvo/funcd/issues/1610): the progress line counts a Lagging part apart, the exit names
+  each part that goes on, and `--wait-lagging` waits past the switch (Decisions 2, 6 and 7)
 - **Date**: 2026-11-27
 - **Deciders**: green-0-rabbit
 - **Tags**: cli, apps
 - **Realizes**: [FEAT-0010/F279](../feat/0010-feat-apps.md) (a live view of an App's deploy and delete)
 - **Supersedes (in part)**: [ADR-0217](0217-app-templates-values-and-rendering.md) Decisions 8 and 9 (Decision 9 as
   [ADR-0337](0337-an-app-template-carries-its-add-on.md) amends it), what deploy and delete print while they wait;
-  their waits, refusals and exit codes stay ADR-0217's (Decision 7)
+  their waits, refusals and exit codes stay ADR-0217's, but for the opt-in wait of `--wait-lagging` (Decision 7,
+  amended 2026-11-27)
 - **Relates to**: [ADR-0219](0219-app-requirements.md) (requirements) ·
   [ADR-0214](0214-app-hooks.md) (hooks) · [ADR-0220](0220-dry-run-engine.md) (the plan) ·
   [ADR-0199](0199-app-resource.md) and [ADR-0357](0357-an-app-never-waits-for-its-stacks-and-a-part-waits-for-their-outputs.md)
@@ -50,11 +53,18 @@ long; a CI log keeps lines it can read.
   store kept.
 - `app-view-deadline` — *Given* a rollout whose clock starts, then restarts on a resume, *then* the revision's
   `status.deadline` moves with it, and the view counts down to it.
+- `app-view-lagging` — *Given* an App whose stack part lags at the switch, *when* `funcdctl app deploy` exits there,
+  *then* the progress line reads `<ready>/<parts> ready · 1 lagging`, and the last draw, or a line in a pipe, names the
+  stack with `goes on after this command` and the `funcdctl get` that shows it (amended 2026-11-27).
+- `app-deploy-wait-lagging` — *Given* the same App, *when* `funcdctl app deploy --wait-lagging` runs, *then* it stays
+  past the switch while the stack lags, then while a part that reads its outputs is Pending, and exits 0 once both
+  are Ready (amended 2026-11-27).
 
 ## Scope
 
 - **In**: the output of `app deploy` and `app delete` while they wait, on a terminal and in a pipe; the per-part times
-  and waits-on; the required-App and hook rows; `AppRevisionStatus.deadline`; the docs and the behavior rows.
+  and waits-on; the required-App and hook rows; `AppRevisionStatus.deadline`; deploy's opt-in `--wait-lagging`
+  (amended 2026-11-27); the docs and the behavior rows.
 - **Out**: a dependency graph command (`app graph`, a later card); per-part times kept by the server; `funcdctl dev`'s
   App mode, whose terminal carries the banner and the function logs; `app rollback` and `app retry`, which wait for
   nothing; deploy's wait for its post-hooks, which ADR-0217 Decision 8 names and `waitDeployEvery` does not do (the
@@ -64,7 +74,9 @@ long; a CI log keeps lines it can read.
 ## Constraints & Decision drivers
 
 - The decider, 2026-11-27: option A (the CLI's clock, no per-part server field), by default on a terminal, a new ADR,
-  a row per required App; drawn like the dev banner.
+  a row per required App; drawn like the dev banner. Then, after the frp-bunny demo exited with its stack still
+  applying under `8/8 ready`: B, a Lagging part counted apart and named at the exit, and an opt-in wait for it
+  (amended 2026-11-27).
 - lipgloss v1.1.0 (MIT) and go-isatty are already direct dependencies (`go.mod`; the banner, `cmd/funcdctl/job.go:333`);
   `charmbracelet/x/term` (MIT) is in the module graph through lipgloss, and the terminal's width makes it direct.
 - funcd records a hook call only once it has ended (`recordCall`, `internal/app/hooks.go:418`), so no field says a
@@ -84,6 +96,7 @@ long; a CI log keeps lines it can read.
 | D. bubbletea for the redraw | a full TUI | a new dependency to redraw one box | Rejected: ANSI cursor moves suffice |
 | E. Only with a `--watch` flag | today's output by default | the view the command exists to show stays hidden | Rejected by the decider |
 | F. The deadline computed in the CLI | no API field | it needs `app.upgradeTimeout` and the hold's release, both server-side | Rejected |
+| G. Deploy waits for Lagging parts by default (amended 2026-11-27) | it ends with every part Ready | a stack that waits for its approval holds every deploy with no limit (ADR-0357's reason) | Rejected: opt-in `--wait-lagging` |
 
 ## Decision
 
@@ -96,7 +109,8 @@ long; a CI log keeps lines it can read.
    - the plan line, the counts of create, update and prune parts and of hooks, from a dry-run of the same apply made
      just before it (ADR-0220 Decision 5). When the dry run fails, as on a server with none (ADR-0220 Decision 6), or
      its plan holds a stop, the view draws no plan line and no action, and the stop shows as the App's Ready line;
-   - the progress line, `▰` per settled part and `▱` per other, `<settled>/<parts> ready · <now − startedAt> ·
+   - the progress line, `▰` per Ready or NotStarted part, an amber `▰` per Lagging part and `▱` per other,
+     `<ready>/<parts> ready`, then `· <n> lagging` while a part lags (amended 2026-11-27), then `· <now − startedAt> ·
      deadline in <deadline − now>` (Decision 5), and the App's Ready reason in place of the countdown once the
      deadline has passed;
    - a REQUIRES row per `spec.requires` entry: `App/<name>`, its `status.requires[].version`, the entry's range, and
@@ -110,7 +124,9 @@ long; a CI log keeps lines it can read.
      reason ChildInvalid or ChildNotOwned, ⋯ Pruning; `<Kind>/<name>`, the plan's action or none, the state and
      reason, what it waits on (Decision 4) and its time;
    - the App's Ready line, as today.
-   The last draw stays on screen when the command exits.
+   The last draw stays on screen when the command exits. When parts lag then, it ends with two lines per Lagging part,
+   `◐ <Kind>/<name> goes on after this command` and `funcdctl get <kind> <name> -n <namespace>`, the kind as `get`
+   takes it: an add-on's at its plural, one of funcd's in lower case (amended 2026-11-27).
 3. **The delete view.** The title `● funcd app delete   <app> · <gone> of <noted> gone · <elapsed>`, then a row per
    object that ADR-0217 Decision 9's walk notes, as ADR-0337 amends it: ✓ deleted with its time; ◐ waiting, with its
    own Ready reason when it has one, else `InUse: <Kind>/<name>` for a noted object still present that holds it as
@@ -137,10 +153,14 @@ long; a CI log keeps lines it can read.
    and clears nothing once the revision is final.
 6. **Lines.** Off a terminal, the lines of ADR-0217 Decisions 8 and 9 (as ADR-0337 amends Decision 9), plus ` after <d>` on a part's line when it
    settles, and one `App/<app> requires App/<name>: <text>` line per change of a requirement's state; lipgloss renders
-   no escape there.
-7. **Exits.** This ADR decides no exit: ADR-0217 Decisions 8 and 9 stay the rule, and Decision 8's wait for the
-   post-hooks stays unbuilt, as the `differs` row of `docs/behavior/apps.md` records. Today deploy returns at the
-   switch, so its last draw, which stays on screen, shows a post-hook still due.
+   no escape there. When the command exits while parts lag, one line per Lagging part, `<Kind>/<name> goes on after
+   this command: funcdctl get <kind> <name> -n <namespace>` (amended 2026-11-27).
+7. **Exits.** ADR-0217 Decisions 8 and 9 stay the rule, but for one opt-in wait (amended 2026-11-27): with
+   `--wait-lagging` (new), deploy goes on past the switch until no part is Lagging or Pending, as a part that read a
+   stack's outputs is once written, then exits 0; it exits 0 too when a later revision replaces its own. An interrupt
+   stops that wait, not the stack's run, and `--wait-lagging` with `--no-wait` or `--dry-run` is a usage error.
+   Decision 8's wait for the post-hooks stays unbuilt, as the `differs` row of `docs/behavior/apps.md` records. Today
+   deploy returns at the switch, so its last draw, which stays on screen, shows a post-hook still due.
 
 ## Design model
 
@@ -151,6 +171,7 @@ already computes. No lifecycle, timer or race is added.
 
 - **apps.md**: a new row "The live view of a deploy or a delete" (Decisions 1 to 6); the `waiting` row names the view's
   reasons.
+- **funcdctl.md** (amended 2026-11-27): the rows of a deploy that exits while a part lags and of `--wait-lagging`.
 
 ## Temporary workarounds
 
@@ -174,8 +195,13 @@ func (v *appView) deploy(app *v1.App, rev *v1.AppRevision, plan map[v1.ObjectRef
 // remove draws one poll of a delete: the noted objects, those still present and the stores kept.
 func (v *appView) remove(app v1.ObjectName, noted []v1.ObjectRef, present map[v1.ObjectRef]v1.Object, kept []v1.ObjectRef) error
 
-// done leaves the last draw on screen.
+// done leaves the last draw on screen, naming each part that lags, which goes on after the command (amended
+// 2026-11-27).
 func (v *appView) done() error
+
+// cmd/funcdctl/app.go (amended 2026-11-27): funcdctl app deploy --wait-lagging, a bool, false by default.
+func (a *cli) waitDeployEvery(ctx context.Context, c *sdk.Client, applied *v1.App, n0 int64, ready string,
+	poll time.Duration, v *appView, lagging bool) error
 ```
 
 ```go
@@ -224,6 +250,9 @@ Deadline *Timestamp `json:"deadline,omitempty" doc:"When a pass fails the rollou
   `InUse` answers unchanged over a table of every kind it protects; `Unmet` for each of its answers; the view with a
   failed dry run and with a plan that holds a stop.
 - Docs: the guide's App page (deploy and delete), the behavior rows, the F279 row.
+- (amended 2026-11-27) `app.go`: `--wait-lagging` and its exclusions; `appview.go`: the lagging count and the parts
+  that go on; tests `TestScenarioAppViewLagging`, `TestScenarioAppDeployWaitLagging`; the guide, a behavior row, and
+  `just generate` for the command reference.
 - **Done when** the tests pass, `just ci` is green, the gate passes, and the `app-todo` lane, whose deploy prints to a
   pipe, still passes.
 
@@ -234,8 +263,11 @@ Deadline *Timestamp `json:"deadline,omitempty" doc:"When a pass fails the rollou
 - [ ] `Names` covers every field of Decision 4, the reflection test guards new ones, and `InUse` returns what it
       returned before for every protected kind.
 - [ ] `status.deadline` moves with every input of `deadline`; the view counts down to it.
-- [ ] Every exit as today; a hook is due until its call is recorded; a Lagging part counts as settled and keeps its
-      running time.
+- [ ] Every exit as today; a hook is due until its call is recorded; a Lagging part counts as settled for the exit,
+      apart on the progress line, and keeps its running time (amended 2026-11-27).
+- [ ] The exit names each Lagging part with its `funcdctl get`; `--wait-lagging` waits past the switch until no part
+      is Lagging or Pending, ends when a later revision replaces its own, and is refused with `--no-wait` or
+      `--dry-run` (amended 2026-11-27).
 - [ ] The delete view's `InUse` names only a `gc.Uses` user; no store's owner is a name; a box taller than the
       terminal folds its settled rows, and its last draw shows every row (amended 2026-11-27).
 - [ ] One test per Scenario, named after it; the docs and behavior rows name the view.
@@ -247,7 +279,9 @@ Deadline *Timestamp `json:"deadline,omitempty" doc:"When a pass fails the rollou
 - **Negative**: times are to the second and restart with the CLI; each deploy adds one dry-run admission pass; a row
   names only the first part it waits on; a running hook shows as due; a store an outside object holds waits with no
   reason; deploy still returns at the switch, before its post-hooks; while a large App's box redraws, its settled
-  rows show as one line (amended 2026-11-27).
+  rows show as one line (amended 2026-11-27); with `--wait-lagging`, a stack that waits for its approval holds the
+  command until someone approves or it is interrupted, and a failed run, which lags with no end, until it is
+  interrupted (amended 2026-11-27).
 - **Risks accepted**: a terminal that misreports itself gets escape codes; `TERM=dumb` and a pipe print lines.
 
 ## Open questions
@@ -256,7 +290,8 @@ None.
 
 ## References
 
-- [#1606](https://github.com/pyvvo/funcd/issues/1606), the feature issue (tracker #871), with the decider's choices.
+- [#1606](https://github.com/pyvvo/funcd/issues/1606), the feature issue (tracker #871), with the decider's choices;
+  [#1610](https://github.com/pyvvo/funcd/issues/1610), the amendment's, with the decider's choice of B.
 - The decider's brief, 2026-11-27, with the mockups of the deploy, delete and required-App views (in the session).
 - ADR-0217 Decisions 8 and 9; ADR-0219 Decisions 2 and 3; ADR-0214 Decision 4; ADR-0220 Decision 5.
 - `cmd/funcdctl/app.go:759-994`, `internal/gc/gc.go:592-700`, `internal/app/revision.go:309-334`.

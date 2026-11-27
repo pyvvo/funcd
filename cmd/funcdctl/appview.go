@@ -62,6 +62,8 @@ type appView struct {
 	calls  map[v1.ObjectName]*v1.Invocation
 	last   func(fold bool) []string // the last box's builder, which done draws unfolded
 	folded bool
+	app    *v1.App // the App of a deploy's last poll, whose Lagging parts done names
+	final  bool    // set by done: the last box names the parts that go on after the command
 }
 
 func newAppView(out io.Writer, live bool, now func() time.Time) *appView {
@@ -170,6 +172,7 @@ func actions(plan *v1.AppPlan) map[v1.ObjectRef]v1.PlanAction {
 func (v *appView) deploy(a *v1.App, rev *v1.AppRevision, plan map[v1.ObjectRef]v1.PlanAction,
 	required map[v1.ObjectName]*v1.App, parts map[v1.ObjectRef]v1.Object, hooks map[v1.ObjectName]*v1.Invocation) error {
 	st := v.styles()
+	v.app = a
 	title := st.title.Render("● funcd app deploy") + st.dim.Render(fmt.Sprintf("   %s %s", a.Name, termSafe(a.Spec.Version)))
 	if rev != nil {
 		title += st.dim.Render(" · revision " + string(rev.Name))
@@ -200,12 +203,42 @@ func (v *appView) deploy(a *v1.App, rev *v1.AppRevision, plan map[v1.ObjectRef]v
 		} else {
 			lines = append(lines, table(v.partRows(a, plan, parts, st, fold)))
 		}
-		if r := readyLine(a); r != "" {
+		r := readyLine(a)
+		if r != "" {
 			lines = append(lines, "", st.dim.Render("App/"+string(a.Name)+" "+termSafe(r)))
+		}
+		if lag := goesOn(a); v.final && len(lag) > 0 {
+			if r == "" {
+				lines = append(lines, "")
+			}
+			for _, p := range lag {
+				lines = append(lines, st.warn.Render("◐")+" "+p.id+" goes on after this command", "  "+st.link.Render(p.get))
+			}
 		}
 		return lines
 	}
 	return v.drawFitting(build, st)
+}
+
+// lagPart is a part that lags when the command exits, and the funcdctl get that shows it.
+type lagPart struct{ id, get string }
+
+// goesOn lists a's Lagging parts, each with the get that shows it, its kind as funcdctl get takes it: an add-on's at
+// its plural, one of funcd's in lower case (ADR-0362 Decisions 2 and 6, amended 2026-11-27).
+func goesOn(a *v1.App) []lagPart {
+	var out []lagPart
+	for _, c := range a.Status.Children {
+		if c.State != v1.AppChildLagging {
+			continue
+		}
+		kind := strings.ToLower(string(c.Kind))
+		if c.Kind.Validate() != nil {
+			kind = v1.AddonPlural(string(c.Kind))
+		}
+		out = append(out, lagPart{id: termSafe(string(c.Kind) + "/" + string(c.Name)),
+			get: termSafe(fmt.Sprintf("funcdctl get %s %s -n %s", kind, c.Name, a.Namespace))})
+	}
+	return out
 }
 
 // planCounts is the plan line: its create, update and prune parts, and its hooks.
@@ -226,18 +259,25 @@ func settled(c v1.AppChild) bool {
 	return c.State == v1.AppChildReady || c.State == v1.AppChildNotStarted || c.State == v1.AppChildLagging
 }
 
-// progress is the progress line: ▰ per settled part, the time since startedAt and the deadline, or the App's Ready
-// reason once the deadline has passed.
+// progress is the progress line: ▰ per Ready or NotStarted part, an amber ▰ per Lagging one, counted apart (amended
+// 2026-11-27), the time since startedAt and the deadline, or the App's Ready reason once the deadline has passed.
 func (v *appView) progress(a *v1.App, rev *v1.AppRevision, st viewStyles) string {
 	children := slices.DeleteFunc(slices.Clone(a.Status.Children), func(c v1.AppChild) bool { return c.State == v1.AppChildPruning })
-	n := 0
+	ready, lagging := 0, 0
 	for _, c := range children {
-		if settled(c) {
-			n++
+		switch c.State {
+		case v1.AppChildReady, v1.AppChildNotStarted:
+			ready++
+		case v1.AppChildLagging:
+			lagging++
 		}
 	}
-	bar := st.ok.Render(strings.Repeat("▰", n)) + st.muted.Render(strings.Repeat("▱", len(children)-n))
-	line := fmt.Sprintf("%s  %d/%d ready", bar, n, len(children))
+	bar := st.ok.Render(strings.Repeat("▰", ready)) + st.warn.Render(strings.Repeat("▰", lagging)) +
+		st.muted.Render(strings.Repeat("▱", len(children)-ready-lagging))
+	line := fmt.Sprintf("%s  %d/%d ready", bar, ready, len(children))
+	if lagging > 0 {
+		line += st.dim.Render(" · ") + st.warn.Render(fmt.Sprintf("%d lagging", lagging))
+	}
 	if rev == nil || rev.Status.StartedAt == nil {
 		return line
 	}
@@ -516,11 +556,24 @@ func (v *appView) draw(lines []string, st viewStyles) error {
 	return err
 }
 
-// done leaves the last draw on screen, unfolded since no redraw follows it, and the next output starts below it.
+// done leaves the last draw on screen, unfolded since no redraw follows it, and naming each part that lags, which
+// goes on after the command; off a terminal it prints a line per such part. The next output starts below it.
 func (v *appView) done() error {
+	var lag []lagPart
+	if v.app != nil {
+		lag = goesOn(v.app)
+	}
 	var err error
-	if v.live && v.folded && v.last != nil {
+	switch {
+	case v.live && v.last != nil && (v.folded || len(lag) > 0):
+		v.final = true
 		err = v.draw(v.last(false), v.styles())
+	case !v.live:
+		for _, p := range lag {
+			if _, err = fmt.Fprintf(v.out, "%s goes on after this command: %s\n", p.id, p.get); err != nil {
+				break
+			}
+		}
 	}
 	v.drawn, v.folded = 0, false
 	return err

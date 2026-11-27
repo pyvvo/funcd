@@ -295,8 +295,8 @@ func TestAppViewRequiresWaitOnlyBeforeTheStart(t *testing.T) {
 	require.NotContains(t, waiting.String(), "KVStore/cart  ", "no part row of the previous revision")
 }
 
-// A Lagging part counts as settled, as the server counts it, and keeps its running time; past the deadline the
-// progress line names the App's Ready reason.
+// A Lagging part counts apart from the ready ones and keeps its running time; past the deadline the progress line
+// names the App's Ready reason.
 func TestAppViewLaggingAndPastTheDeadline(t *testing.T) {
 	t.Parallel()
 	clk := newViewClock()
@@ -310,8 +310,50 @@ func TestAppViewLaggingAndPastTheDeadline(t *testing.T) {
 	clk.add(6 * time.Minute)
 	require.NoError(t, v.deploy(a, rev, nil, nil, appParts(a), nil))
 	got := out.String()
-	requireLines(t, got, "3/7 ready", "◐ AddonObject/net", "Lagging", "AwaitingApproval", "6m0s…")
+	requireLines(t, got, "2/7 ready · 1 lagging", "◐ AddonObject/net", "Lagging", "AwaitingApproval", "6m0s…")
 	requireLines(t, got, "· ChildNotReady")
+}
+
+// scenario: app-view-lagging — a deploy that exits while parts lag counts them apart on the progress line, and its
+// last draw, or a line in a pipe, names each with the funcdctl get that shows it: an add-on kind at its plural, a
+// kind of funcd's in lower case. No draw before the last names them.
+func TestScenarioAppViewLagging(t *testing.T) {
+	t.Parallel()
+	lagging := func() *v1.App {
+		a := &v1.App{ObjectMeta: v1.ObjectMeta{Namespace: "edge", Name: "tunnel"}, Spec: v1.AppSpec{Version: "0.1.0"}}
+		a.Status.CurrentRevision = "shop-7"
+		a.Status.Children = []v1.AppChild{
+			child(v1.KindBucket, "state", v1.AppChildReady, ""),
+			child("InfraStack", "stack", v1.AppChildLagging, "Progressing"),
+			child(v1.KindFunction, "hello", v1.AppChildNotStarted, ""),
+			child(v1.KindFunction, "reader", v1.AppChildLagging, "SecretKeyMissing: Secret/outputs FRP_TOKEN"),
+		}
+		a.Status.Conditions = readyIs(v1.ConditionUnknown, "NotStarted")
+		return a
+	}
+	clk := newViewClock()
+
+	var live bytes.Buffer
+	v := newAppView(&live, true, clk.now)
+	a := lagging()
+	require.NoError(t, v.deploy(a, shopRevision(a, clk.t), nil, nil, appParts(a), nil))
+	polled := live.String()
+	requireLines(t, polled, "2/4 ready · 2 lagging", "◐ InfraStack/stack", "Lagging Progressing", "App/tunnel Ready=Unknown NotStarted")
+	require.NotContains(t, polled, "goes on", "a poll's draw names no part that goes on")
+	require.NoError(t, v.done())
+	requireLines(t, live.String()[len(polled):], "2/4 ready · 2 lagging", "App/tunnel Ready=Unknown NotStarted",
+		"◐ InfraStack/stack goes on after this command", "funcdctl get infrastacks stack -n edge",
+		"◐ Function/reader goes on after this command", "funcdctl get function reader -n edge")
+
+	var pipe bytes.Buffer
+	pv := newAppView(&pipe, false, clk.now)
+	w := &deployWatch{children: map[string]string{}, requires: map[v1.ObjectName]string{}, times: pv.clock}
+	require.NoError(t, (&cli{out: &pipe}).show(t.Context(), nil, w, pv, lagging(), nil))
+	require.NoError(t, pv.done())
+	requireLines(t, pipe.String(), "App/tunnel Ready=Unknown NotStarted\n",
+		"InfraStack/stack goes on after this command: funcdctl get infrastacks stack -n edge\n",
+		"Function/reader goes on after this command: funcdctl get function reader -n edge\n")
+	require.NotContains(t, pipe.String(), "\x1b")
 }
 
 // A hook whose last call failed shows ✗ failed.

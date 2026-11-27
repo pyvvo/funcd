@@ -1140,7 +1140,7 @@ func (s *devAppSession) follow(ctx context.Context, a *cli, c *sdk.Client, app *
 	fctx, cancel := context.WithCancel(ctx)
 	s.cancelFollow = cancel
 	go func() {
-		if err := a.waitDeployEvery(fctx, c, app, r.n0, r.ready, devFollowPoll, nil); err != nil {
+		if err := a.waitDeployEvery(fctx, c, app, r.n0, r.ready, devFollowPoll, nil, false); err != nil {
 			if fctx.Err() == nil {
 				s.logger.Warn("the new revision did not become current; save a fix, or run funcdctl app retry", "error", err)
 			}
