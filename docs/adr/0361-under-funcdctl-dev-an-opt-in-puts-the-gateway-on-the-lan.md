@@ -50,9 +50,10 @@ A *LAN address* is an IPv4 address of one of the machine's interfaces that is up
   a Route on host `login.localhost` and a Site `web`, and two LAN addresses at start, *when* dev prints its banner,
   *then* the gateway's line, the `/api` line and the Site's line each have one network line per address beneath
   them, the `login.localhost` line has none, the control and s3 lines name 127.0.0.1, and the LAN warning is printed.
-- `dev-lan-refused` — *When* dev starts with `--lan=tv.local`, with `dev.lan: 3`, or with `--lan 192.168.1.20` (a
-  space), *then* it refuses to start: the first two name the value and what the option takes, and the third says to
-  write `--lan=192.168.1.20`.
+- `dev-lan-refused` — *When* dev starts, in a directory with no `funcdctl.config.yaml`, with `--lan=tv.local` or with
+  `--lan 192.168.1.20` (a space), a directory after it or not, or with `dev.lan: 3` in that file, *then* it refuses to
+  start: `tv.local` and `3` are named with what the option takes, and the space form is told to write
+  `--lan=192.168.1.20`.
 
 ## Scope
 
@@ -103,26 +104,29 @@ A *LAN address* is an IPv4 address of one of the machine's interfaces that is up
 
 1. **The opt-in.** `--lan` and its key `dev.lan`, off by default, in both modes. `--lan` alone and `dev.lan: true`
    put the gateway on every address of the machine; `--lan=<IP address>` and `dev.lan: <IP address>`, IPv4 or IPv6,
-   on that address only; `--lan=false` and `dev.lan: false` are the default. Any other value is refused before
-   anything starts, naming it. When `--lan` is given with no value and dev's directory argument reads as an IP
-   address and is no directory, dev refuses to start and names `--lan=<that address>`. A flag replaces the key (ADR-0254 Decision 3), and
-   a change of `dev.lan` while dev runs prints that a restart applies it (Decision 6). `--gport` keeps its meaning, so
-   a fixed `--gport` gives a phone the same URL at each start.
+   on that address only; `--lan=false` and `dev.lan: false` are the default, both read as `""`. Any other value is
+   refused before anything starts, naming it. The flag is checked before dev reads `funcdctl.config.yaml`, so with or
+   without one, and before its arguments are counted: when `--lan` is given with no value and the first argument
+   reads as an IP address and is no directory, dev refuses to start and names `--lan=<that address>`, whether or not
+   a directory follows. A flag replaces the key (ADR-0254 Decision 3), and a change of `dev.lan` while dev runs prints
+   that a restart applies it (Decision 6). `--gport` keeps its meaning, so a fixed `--gport` gives a phone the same
+   URL at each start.
 2. **Only the gateway leaves loopback** (supersedes in part ADR-0125 Decision 1). The data plane listens on
    `gatewayListen(lan, gport)` through `funcd.WithDataPlaneAddr`: `127.0.0.1:<gport>` without the opt-in, as today,
-   `:<gport>` on every address, `<address>:<gport>` on one. The control plane, the S3 frontend, the live reload stream
-   and each dev container worker's local API keep their 127.0.0.1 binds, and dev adds no authenticator. On the LAN
-   the gateway serves what it serves on loopback, with no token: every Function's address, every Route and Site, an
-   add-on object's Route, and a Route with a host too, since a client sets its own `Host` header. A Route with an
-   `oidc` stance still asks for a sign-in (ADR-0335).
+   `:<gport>` on every address, and `net.JoinHostPort(<address>, <gport>)` on one, which brackets an IPv6 address.
+   The control plane, the S3 frontend, the live reload stream and each dev container worker's local API keep their
+   127.0.0.1 binds, and dev adds no authenticator. On the LAN the gateway serves what it serves on loopback, with no
+   token: every Function's address, every Route and Site, an add-on object's Route, and a Route with a host too, since
+   a client sets its own `Host` header. A Route with an `oidc` stance still asks for a sign-in (ADR-0335).
 3. **The banner.** The gateway's URL is on 127.0.0.1 without the opt-in and on every address, else on the one
-   address given. On every address, each URL on the
-   gateway that the banner prints today gets one *network* line beneath it per LAN address found at start, in the
-   order `net.Interfaces` lists them: the gateway's line, each Function's `POST` line in folder mode, and in App mode
-   each Route's and Site's line that names no host. A line with a host gets none, since that rule answers only on its
-   host (ADR-0110 Decision 1). While the gateway listens on an address other than a loopback one, the banner warns
-   `⚠ the gateway is reachable from the LAN without authentication: anyone on the network can call every Function,
-   Route and Site`, above the egress warning. The control, s3 and reload lines keep 127.0.0.1.
+   address given. On every address, each URL on the gateway that the banner prints today gets one *network* line
+   beneath it per LAN address found at start, in the order `net.Interfaces` lists them: the gateway's line, each
+   Function's `POST` line in folder mode, and in App mode each Route's and Site's line that names no host. A line with
+   a host gets none, since that rule answers only on its host (ADR-0110 Decision 1). While the gateway listens off
+   loopback, as `platformconfig.IsLoopbackAddr` judges the bound address (the check `checkDevTokenBind` makes), the
+   title reads `serving on localhost and the LAN` in place of `serving on localhost`, and the banner warns `⚠ the
+   gateway is reachable from the LAN without authentication: anyone on the network can call every Function, Route
+   and Site`, above the egress warning. The control, s3 and reload lines keep 127.0.0.1.
 
 ## Design model
 
@@ -149,12 +153,13 @@ const devLANAll = "true"
 // checkLAN refuses a value of --lan or dev.lan (name says which) other than "", "false", devLANAll or an IP address.
 func checkLAN(op, name, value string) error
 
-// gatewayListen is the data plane's listen address for a checked lan value and gport (0 takes a free port).
+// gatewayListen is the data plane's listen address for a checked lan value and gport (0 takes a free port), one
+// address joined with net.JoinHostPort.
 func gatewayListen(lan string, gport int) string
 
 // gatewayURLs are the banner's base URLs for the address the data plane bound: local on 127.0.0.1 when it answers
 // there, else on its own address; network, one per address that lan returns, only when bound is unspecified; and
-// offLoopback, whether bound is not a loopback address.
+// offLoopback, !platformconfig.IsLoopbackAddr(bound.String()).
 func gatewayURLs(bound netip.AddrPort, lan func() ([]netip.Addr, error)) (local string, network []string, offLoopback bool, err error)
 
 // lanAddrs are the IPv4 addresses of the machine's up interfaces, loopback ones left out, in net.Interfaces' order.
@@ -164,6 +169,10 @@ func lanAddrs() ([]netip.Addr, error)
 type devLANKey string
 
 func (k *devLANKey) UnmarshalYAML(n *yamlv3.Node) error
+
+// lanArgs is dev's cobra Args: with --lan's value devLANAll, a first argument that reads as an IP address and is no
+// directory is refused, naming --lan=<it>; then cobra.MaximumNArgs(1).
+func lanArgs(cmd *cobra.Command, args []string) error
 ```
 
 `devConfig` gains `lan string`, checked (`""`, `devLANAll` or an IP address; `false` reads as `""`), and the seam
@@ -182,6 +191,7 @@ dev:
 The banner's lines it adds, with one LAN address:
 
 ```text
+● funcd dev   serving on localhost and the LAN · Ctrl-C to stop
 gateway   http://127.0.0.1:8795       invoke functions
 network   http://192.168.1.20:8795
 route     http://127.0.0.1:8795/api
@@ -197,13 +207,12 @@ route     http://login.localhost:8795/
 ## Implementation plan
 
 - `cmd/funcdctl/devlan.go` (new): the Contracts' functions and type.
-- `cmd/funcdctl/dev.go`: the flag and its usage; `devConfig.lan`; `devPlatformOptions` passes `gatewayListen` to
-  `funcd.WithDataPlaneAddr` when `lan` or `gport` is set; `startPlatform` fills `gatewayURL`, `networkURLs` and
-  `offLoopback` from `gatewayURLs(p.DataPlaneAddr())`; `printBanner` prints the lines and the warning; the `Long`
-  text's key list gains `lan`.
+- `cmd/funcdctl/dev.go`: the flag and its usage; `Args: lanArgs`; `devConfig.lan`; `devPlatformOptions` passes
+  `gatewayListen` to `funcd.WithDataPlaneAddr` when `lan` or `gport` is set; `startPlatform` fills `gatewayURL`,
+  `networkURLs` and `offLoopback` from `gatewayURLs(p.DataPlaneAddr())`; `printBanner` prints the title, the lines and
+  the warning; the `Long` text's key list gains `lan`.
 - `cmd/funcdctl/devconfig.go`: `lan` in `devFileKeyNames`, `changedDevKeys` and the merge, the flag winning;
-  `checkLAN` for the key and the flag; the refusal of a directory argument that reads as an IP address after a bare
-  `--lan`, in `resolveDevRun`.
+  `checkLAN` for the key, and for the flag in `resolveDevRun` before it reads the file, with `false` read as `""`.
 - `cmd/funcdctl/dev_app.go`: `appEndpoints` gives each host-less line its network lines.
 - Tests, in `cmd/funcdctl/dev_lan_test.go`, one per Scenario and named after it (`TestScenarioDevLANOff`, …):
   - `dev-lan-every-address` runs the http-api example of funcd-typescript, at its pinned version, read with
@@ -211,7 +220,9 @@ route     http://login.localhost:8795/
     dependency;
   - the reachability scenarios dial a real LAN address of the host and skip, naming why, when the host has none;
   - `dev-lan-banner` injects two addresses through `findLAN`;
-  - unit tests of `checkLAN`, `gatewayListen`, `gatewayURLs` and the key's decoding, with every value of Decision 1.
+  - `dev-lan-refused` runs its flag cases with no `funcdctl.config.yaml`, `--lan 192.168.1.20 ./app` among them;
+  - unit tests of `checkLAN`, `gatewayListen`, `gatewayURLs`, `lanArgs` and the key's decoding, with every value of
+    Decision 1, an IPv6 address among them.
 - Docs: the funcdctl page of the guide (`--lan` beside `--containers`), the App page's "Run it locally" and the
   networking page's dev bullets; `scripts/agent/d just generate` for the Spec page; the behavior rows; the F278 row.
 - **Done when** the scenario and unit tests pass, `just ci` is green and the gate passes.
@@ -219,14 +230,15 @@ route     http://login.localhost:8795/
 ## Review checklist
 
 - [ ] Without the opt-in the data plane binds `127.0.0.1:<gport>` as before; `--lan` and `dev.lan: true` bind
-      `:<gport>`; `--lan=<IP>` binds that address.
+      `:<gport>`; `--lan=<IP>` binds that address, an IPv6 one in brackets.
 - [ ] The control plane, the S3 frontend, the live reload stream and the container workers' local API keep their
       127.0.0.1 binds; dev adds no authenticator.
 - [ ] A network line per LAN address beneath the gateway's line, each `POST` line and each host-less Route and Site
-      line, none beneath a line with a host; the warning only while the gateway listens off loopback.
-- [ ] `checkLAN` refuses every other value, for the flag and for the key; a bare `--lan` before a directory argument
-      that reads as an IP address and is no directory is refused, naming `--lan=<address>`; a changed `dev.lan` prints
-      the restart line.
+      line, none beneath a line with a host; the title and the warning change only while the gateway listens off
+      loopback, by `platformconfig.IsLoopbackAddr`.
+- [ ] `checkLAN` refuses every other value, for the flag with or without a file and for the key; `lanArgs` refuses
+      a bare `--lan` before a first argument that reads as an IP address and is no directory, naming
+      `--lan=<address>`, a second argument or not; a changed `dev.lan` prints the restart line.
 - [ ] One test per Scenario, named after it; the WebSocket relays through a LAN address.
 - [ ] The Spec page, the guide and the behavior rows name the opt-in and what it exposes.
 
