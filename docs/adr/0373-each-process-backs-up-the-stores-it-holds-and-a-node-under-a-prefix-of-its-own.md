@@ -73,6 +73,9 @@ of the control plane or of a node, brings that process back without taking the o
   point at a target or a credential of its own.
 - **The node's masters in its backup**: a leaked backup would hold the credentials of its namespaces. Rejected; the
   control plane holds them and sends them again (ADR-0371).
+- **A new or restored node store that also sends the runs it made that the control plane lacks**: it would bring back
+  the runs a person deleted after the node's backup. Rejected: the control plane's state wins for a new store
+  (Decision 4), at the cost of the runs the node made and had not sent when its store is replaced.
 - **The cluster CA in the control plane's backup**: a leaked backup would hold the key that signs every node, for a
   restore that a new token per node also covers. Rejected (Decision 5).
 
@@ -96,11 +99,12 @@ of the control plane or of a node, brings that process back without taking the o
 4. **Restores.** A machine joins under a node's name first, then restores that node from its prefix; one that has not
    joined restores from the target's root, which is the control plane's. A node whose store is new or restored takes its
    namespaces whole, with the children it made that the control plane holds, before anything runs, and waits for the
-   control plane (ADR-0365 Decision 6). A node whose control plane was restored runs its workloads and follows nothing
-   while the control plane is held; after the release it sends the runs it made since, its platform starts again on the
-   restored state, and data no object names goes into its quarantine (ADR-0288). What ended on the control plane stays
-   ended there, and a run that its node's restore paused shows paused there until a person resumes it
-   (ADR-0206 Decision 7).
+   control plane (ADR-0365 Decision 6); it keeps no run the control plane lacks, so a run the node made and had not sent
+   is lost when its store is replaced, as when its control plane was away or was restored to a point before that run. A
+   node whose control plane was restored runs its workloads and follows nothing while the control plane is held; after
+   the release it sends the runs it made since, its platform starts again on the restored state, and data no object
+   names goes into its quarantine (ADR-0288). What ended on the control plane stays ended there, and a run that its
+   node's restore paused shows paused there until a person resumes it (ADR-0206 Decision 7).
 5. **The cluster CA stays out of the backup.** It lives under `cluster.dataDir`, on the control plane's machine. A
    control plane restored without that directory has a new CA, so every node joins again with a new token (ADR-0364).
 
@@ -126,14 +130,16 @@ of the control plane or of a node, brings that process back without taking the o
   control plane restored from a backup from before the run, held, then released.
 - **Environment**: each side's write is one step; a restore changes the control plane's timeline, which the node's
   cursor names, so the node sees the restore at its next request after the release; a held control plane refuses its
-  nodes' requests.
+  nodes' requests; a stop inside `Prepare` leaves the cursor as it was, its `restored` mark or no timeline, so
+  `Prepare` runs again at the next start (feed.fizz's cursor save, `TestATornCursorReadsAsNone`).
 - **Mutants**: `no-adopt-children` and `loops-before-prepare` fail `NothingRunsBeforeTheTakeWhole`;
   `follow-while-held` fails `NoNodeRunsOnAHeldState`; `no-keep-end` fails `AnEndedRunStaysEnded`;
   `no-keep-pause-on-node` fails `ThePauseStaysOnTheNode`; `no-keep-pause-on-cp` and `no-push-made` fail the liveness
   assertions.
-- **Result**: pass, 73 states, 0.3 s, FizzBee v0.5.4. A run the node made is lost when the node's own store is
-  replaced while its control plane is restored to a point before that run, before the node sent it: the node takes
-  the restored state whole (Decision 4). The assertions leave that case out, and the Consequences accept it.
+- **Result**: pass, 73 states, 0.3 s, FizzBee v0.5.4. A run the node made and had not sent its control plane is lost
+  when the node's own store is replaced, here with the control plane restored to a point before that run: the node
+  takes the control plane's state whole (Decision 4). The assertions leave that case out, and the Consequences accept
+  it.
 - **Left to tests**: the backup itself, the prefix and the held boot, one process each (ADR-0206's own tests and
   `TestAReplacedNodeComesBackFromItsBackup`); the quarantine of data no object names (ADR-0288, with its model).
 
@@ -209,8 +215,9 @@ Done when every test above passes, `just check-specs` passes, and `just ci` is g
 - One target serves a whole platform; each node fills its own part of it. With one credential for all, every machine
   can write and delete every process's generations, so a compromised node can destroy the control plane's recovery
   point; a node that names its own target, or a credential that reaches its prefix only, keeps its part apart.
-- Risk accepted: a run a node made is lost when the node's own store is replaced while its control plane is restored
-  to a point before that run, before the node sent it again: the node takes the restored state whole.
+- Risk accepted: a run a node made and had not sent its control plane, as while the control plane was away or after
+  its restore to a point before that run, is lost when the node's own store is replaced: a new store takes the control
+  plane's state whole.
 - Risk accepted: a control plane whose machine is lost with its `cluster.dataDir` comes back with a new CA, and every
   node joins again, with a new token each.
 

@@ -147,9 +147,9 @@ func TestANodeThatJoinsAgainKeepsTheRunsItMade(t *testing.T) {
 	onCP(t, n, v1.KindConfigMap, "dropped", "a child reaches the control plane", anyConfigMap)
 	stop()
 	require.NoError(t, n.node.Delete(ctx, v1.KindConfigMap.GVK(), "e1", "dropped", ""))
-	n.cancelCP() // a new control plane process knows no node that polled a moment ago
+	n.cancelCP() // a new control plane process, on a machine rebuilt without its cluster directory: a new CA
 	n.cluster = newCluster(t, multinode.Config{Store: n.cp, LocalNode: "local", LocalRuns: true, Master: []byte(cpMaster)},
-		n.caDir, "127.0.0.1:0")
+		t.TempDir(), "127.0.0.1:0")
 	cpctx, stopCP := context.WithCancel(ctx)
 	defer stopCP()
 	go func() { _ = n.cluster.Run(cpctx) }()
