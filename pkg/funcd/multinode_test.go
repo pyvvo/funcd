@@ -161,6 +161,34 @@ func TestAControlPlaneAloneRunsNoNamespace(t *testing.T) {
 	require.Empty(t, obj.(*v1.KVStore).Status.Phase)
 }
 
+// An App's Route on a host that a namespace on another node holds is refused, as a direct Route is (ADR-0369 Decision 2).
+func TestAnAppsRouteOnAnotherNodesHostIsRefused(t *testing.T) {
+	ctx := context.Background()
+	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))),
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0"}))
+	admin, err := sdk.New("http://"+cp.Addr(), sdk.WithToken(clusterAdmin))
+	require.NoError(t, err)
+	wn := &v1.WorkerNode{TypeMeta: tmeta(v1.KindWorkerNode)}
+	wn.Name = "vm1"
+	_, err = admin.Apply(ctx, wn)
+	require.NoError(t, err)
+	ns := &v1.Namespace{TypeMeta: tmeta(v1.KindNamespace)}
+	ns.Name, ns.Spec.Node = "a", "vm1"
+	_, err = admin.Apply(ctx, ns)
+	require.NoError(t, err)
+	rules := []v1.RouteRule{{Path: "/", Backend: v1.RouteBackend{Function: "f"}}}
+	theirs := &v1.Route{TypeMeta: tmeta(v1.KindRoute)}
+	theirs.Name, theirs.Namespace, theirs.ResourceGroup, theirs.Spec = "r", "a", "rg1", v1.RouteSpec{Host: "shop.example.com", Rules: rules}
+	_, err = admin.Apply(ctx, theirs)
+	require.NoError(t, err)
+	shop := &v1.App{TypeMeta: tmeta(v1.KindApp)}
+	shop.Name, shop.Namespace, shop.ResourceGroup = "shop", "b", "rg1"
+	shop.Spec.Routes = []v1.AppRoute{{Name: "web", RouteSpec: v1.RouteSpec{Host: "shop.example.com", Rules: rules}}}
+	_, err = admin.Apply(ctx, shop)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "belongs to worker node vm1", "an App's part passes the host check")
+}
+
 func TestAnAPITokenKeptAsAHashWorksUntilItIsMintedAgainOrDeleted(t *testing.T) {
 	cp := runPlatform(t, funcd.WithStore(store.New(memory.New())))
 	base := "http://" + cp.Addr()

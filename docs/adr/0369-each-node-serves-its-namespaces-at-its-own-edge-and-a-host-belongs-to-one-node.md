@@ -25,13 +25,16 @@ each host on one node.
 
 ## Scenarios
 
-- `scenario: served-by-its-node`: Given Function f1 of e1, placed on vm1, with `spec.ingress.host: shop.example.com`,
-  When a client calls shop.example.com at vm1's edge, Then vm1's worker answers, and the control plane's edge has no
-  route for it.
+- `scenario: served-by-its-node`: Given a Route of e1, placed on vm1, on host shop.example.com, When a client calls
+  shop.example.com at vm1's edge, Then vm1's worker answers, and the control plane's edge has no route for it.
 - `scenario: shared-on-one-node`: Given namespaces a and b both on vm1, When both claim shop.example.com, Then both
   claims pass and vm1's edge shares the host as one edge does.
 - `scenario: refused-on-another-node`: Given a claims shop.example.com on vm1, When a namespace on vm2, or on the
   control plane's own node, claims it, Then the write is 409 `belongs to worker node vm1`.
+- `scenario: an-app-part`: Given a claims shop.example.com on vm1, When an App in a namespace on another node declares
+  a Route on it, Then the App is refused (409), as the Route would be.
+- `scenario: another-nodes-namespace-host`: Given e1 on vm1, When a namespace on vm2 claims `e1.<server.baseDomain>`,
+  e1's own host, Then the write is 409 `own host of namespace e1`.
 - `scenario: the-namespace-host`: Given a namespace on any node, When an object claims no host, Then it takes its
   namespace's own host, which only its node answers, and no check applies.
 - `scenario: a-nodes-own-route`: Given vm1's reconciler makes a Route for a parent that passed the check, When vm1
@@ -57,6 +60,10 @@ each host on one node.
   each edge would answer the whole host. Rejected; a gateway in front does it.
 - **The check at the edge, at the first request**: a conflict would show to callers instead of to the person who
   applied the claim. Rejected for an admission at apply time.
+- **A lock keyed by host** around the check and its write, in the style of the namespace locks (ADR-0147), with an App
+  taking its parts' hosts in order: it would close the race of two claims at the same moment, at the cost of a new
+  lock key on the admission pipeline, a change of the API's write order (a partial supersession of ADR-0147 Decision
+  1) and a model, for a window of two admins applying one host within one admission pass. Rejected.
 
 ## Decision
 
@@ -64,18 +71,23 @@ each host on one node.
    and the control plane's edge only the namespaces it runs itself, none on `funcd server` (ADR-0363 Decision 2). A
    namespace's own host (ADR-0240) is answered by its node only.
 2. **A host belongs to one node.** A write that claims a host, a Route's `spec.host` or the `spec.ingress.host` of a
-   Function, a Site, a Lake or an add-on object, is refused with 409 when a namespace on another node, the control
-   plane's own node counting as one, claims the same host; the host is compared in the edge's spelling (lower case, no
-   port, no trailing dot). Namespaces on one node share a host under one edge's rules.
+   Function, a Site, a Lake or an add-on object, written directly or declared as an App's part, is refused with 409
+   when a namespace on another node, the control plane's own node counting as one, claims the same host. A disabled
+   claim counts. A namespace's own host, under the control plane's `server.baseDomain`, which the nodes are meant to
+   share (ADR-0240), belongs to the node that runs that namespace, so another node's claim on it is 409 too. The host
+   is compared in the edge's spelling (`router.CanonicalHost`). Namespaces on one node share a host under one edge's
+   rules.
 3. **Only people's writes are checked.** The check is an admission on the control plane's API (`host-on-one-node`). A
    Route that a node's reconciler makes goes back unchecked (ADR-0366), since the parent it derives from passed the
    check.
 
 ## Design model
 
-None: the check is one admission over the claims stored when it runs. Its one race is accepted below: two writes that
-claim one host at the same moment, for namespaces on two nodes, can both pass, since namespaces never wait on each other
-(ADR-0147).
+None, though the check meets one of ADR-0272's triggers: two writes that check and then write claims shared across
+namespaces race. This ADR adds no guard against that race, so there is no assertion for a model to check: two claims
+of one host for namespaces on two nodes, applied at the same moment, can both pass. ADR-0147's criterion would mark
+such a check, but its lock is per namespace and the claims cross namespaces; the lock that would close the race is
+the one Alternatives rejects. The race is accepted in Consequences.
 
 ## Behavior rows
 
@@ -111,14 +123,17 @@ spec:
 ## Implementation plan
 
 Built ahead of this ADR on the branch of draft PR #1495: `internal/multinode/hosts.go` (`hostClaim`,
-`hostOnOneNode`), registered by `internal/multinode/cluster.go`; each node's edge is its own funcd's, fed by the
-namespaces placed on it (ADR-0365).
+`hostOnOneNode`), given to the API's part admissions by `Cluster.HostAdmission` (`pkg/funcd/funcd.go`); each node's edge
+is its own funcd's, fed by the namespaces placed on it (ADR-0365). This ADR changed the built code: an App's parts and
+a namespace's own host pass the check, and `hostClaim` takes the router's `CanonicalHost`.
 
 | Scenario | Test |
 |---|---|
-| served-by-its-node | `TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn`, `TestAWorkerNodeRunsTheNamespacePlacedOnIt` |
+| served-by-its-node | `TestAFunctionRunsOnTheWorkerNodeItsNamespaceIsPlacedOn`, `TestARouteOfAnotherNodesNamespaceIsNotServedHere` |
 | shared-on-one-node | `TestAHostBelongsToOneNode` |
 | refused-on-another-node | `TestAHostBelongsToOneNode` |
+| an-app-part | `TestAnAppsRouteOnAnotherNodesHostIsRefused`, `TestAnAppsPartsPassTheHostCheck` |
+| another-nodes-namespace-host | `TestANamespacesOwnHostBelongsToItsNode` |
 | the-namespace-host | `TestAHostBelongsToOneNode` |
 | a-nodes-own-route | `TestANodesOwnRouteGoesBackUnchecked` |
 
@@ -127,7 +142,9 @@ Done when every test above passes and `just ci` is green.
 ## Review checklist
 
 - [ ] The control plane's edge has no route for a namespace placed on a node.
-- [ ] Every kind that claims a host at the edge is in `hostKinds`, and `hostClaim` uses the edge's spelling.
+- [ ] Every kind that claims a host at the edge is in `hostKinds`, checked written directly or as an App's part, and
+      `hostClaim` uses the router's `CanonicalHost`.
+- [ ] A claim on a namespace's own host is refused when another node runs that namespace.
 - [ ] A claim is refused only when the other namespace runs on another node, the control plane's own node included.
 - [ ] A node's write-back runs no admission.
 
@@ -136,7 +153,8 @@ Done when every test above passes and `just ci` is green.
 - A request goes straight to the node that runs its namespace; a node's outage takes only its own hosts down.
 - Sharing a host across nodes takes a gateway in front of them, with its own rules.
 - Risk accepted: two claims of one host for namespaces on two nodes, applied at the same moment, can both pass; both
-  nodes then answer the host where DNS sends its clients, until a person deletes one claim.
+  nodes then answer the host where DNS sends its clients, until a person deletes one claim. Nothing signals it: both
+  claims read Ready.
 
 ## Open questions
 

@@ -14,6 +14,8 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/app"
+	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/nodeapi"
@@ -364,7 +366,9 @@ func TestAHostBelongsToOneNode(t *testing.T) {
 		return err
 	}
 	require.NoError(t, admit(route("b", "r", "shop.example.com")), "namespaces on one node share a host")
-	require.Equal(t, fault.Conflict, fault.KindOf(admit(route("c", "r", "shop.example.com:443"))), "another node may not claim it")
+	err = admit(route("c", "r", "shop.example.com:443"))
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "another node may not claim it")
+	require.ErrorContains(t, err, "belongs to worker node vm1")
 	require.Equal(t, fault.Conflict, fault.KindOf(admit(route("d", "r", "shop.example.com"))), "nor the control plane's own node")
 	require.NoError(t, admit(route("c", "r", "other.example.com")))
 	require.NoError(t, admit(route("c", "r", "")), "the namespace host is the node's own")
@@ -373,6 +377,55 @@ func TestAHostBelongsToOneNode(t *testing.T) {
 	require.True(t, a.Handles(v1.KindAddonObject.GVK(), admission.Create))
 	_, err = a.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindAddonObject.GVK(), Object: login})
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "an add-on object's ingress claims its host too")
+}
+
+func TestANamespacesOwnHostBelongsToItsNode(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(memory.New())
+	for _, n := range []*v1.Namespace{namespace("e1", "vm1"), namespace("c", "vm2"), namespace("d", "")} {
+		_, err := st.Create(ctx, n)
+		require.NoError(t, err)
+	}
+	a := hostOnOneNode{st: st, placement: NewPlacement(st, "local", true), base: "example.com"}
+	admit := func(r *v1.Route) error {
+		_, err := a.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindRoute.GVK(), Object: r})
+		return err
+	}
+	err := admit(route("c", "r", "E1.example.com"))
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "a namespace on another node may not claim e1's own host")
+	require.ErrorContains(t, err, "own host of namespace e1")
+	require.Equal(t, fault.Conflict, fault.KindOf(admit(route("d", "r", "api.e1.example.com"))), "nor the control plane's own node")
+	require.NoError(t, admit(route("e1", "r", "e1.example.com")), "e1 claims its own host")
+}
+
+// reader adapts store.Store to admission.StoreReader, as the control plane's wiring does.
+type reader struct{ s store.Store }
+
+func (r reader) List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error) {
+	res, err := r.s.List(ctx, gvk, store.ListOptions{Namespace: ns})
+	if err != nil {
+		return nil, err
+	}
+	return res.Items, nil
+}
+
+func TestAnAppsPartsPassTheHostCheck(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(memory.New())
+	for _, n := range []*v1.Namespace{namespace("a", "vm1"), namespace("b", "vm2")} {
+		_, err := st.Create(ctx, n)
+		require.NoError(t, err)
+	}
+	_, err := st.Create(ctx, route("a", "r", "shop.example.com"))
+	require.NoError(t, err)
+	c := &Cluster{cfg: Config{Store: st}, placement: NewPlacement(st, "local", true)}
+	parts := func(admission.StoreReader) []admission.Admission { return []admission.Admission{c.HostAdmission()} }
+	shop := &v1.App{TypeMeta: tm(v1.KindApp), ObjectMeta: v1.ObjectMeta{Name: "shop", Namespace: "b", ResourceGroup: "rg1"},
+		Spec: v1.AppSpec{Routes: []v1.AppRoute{{Name: "web", RouteSpec: v1.RouteSpec{Host: "shop.example.com",
+			Rules: []v1.RouteRule{{Path: "/", Backend: v1.RouteBackend{Function: "f"}}}}}}}}
+	_, err = app.NewAdmission(parts, reader{st}).Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindApp.GVK(),
+		Object: shop, Identity: auth.Identity{Subject: "dev", Role: auth.RoleDeveloper}})
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "an App's Route on a host another node holds is refused, as a direct one is")
 }
 
 func TestASpecFieldANodeIsTooOldForIsRefused(t *testing.T) {

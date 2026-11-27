@@ -39,6 +39,7 @@ type Config struct {
 	Held       func() bool    // the control plane is held after its restore, so no node follows it; nil ⇒ never
 	Version    string         // the control plane's release, which no node may be newer than; "" ⇒ this binary's
 	NodeFields FieldVersions  // the spec fields a newer node API brings; nil ⇒ this release's
+	BaseDomain string         // server.baseDomain, under which each namespace has its own host (ADR-0240)
 	Now        func() time.Time
 }
 
@@ -154,8 +155,13 @@ func (c *Cluster) router() router { return router{placement: c.placement, calls:
 func (c *Cluster) Admissions() []admission.Admission {
 	return []admission.Admission{namespaceNode{st: c.cfg.Store, local: c.cfg.LocalNode, localRuns: c.cfg.LocalRuns},
 		createsWaitForAMove{}, workerNodeName{local: c.cfg.LocalNode}, workerNodeInUse{st: c.cfg.Store},
-		hostOnOneNode{st: c.cfg.Store, placement: c.placement},
 		nodeTooOld{st: c.cfg.Store, placement: c.placement, fields: c.cfg.NodeFields}}
+}
+
+// HostAdmission is the check that a host belongs to one node (ADR-0369 Decision 2). It is one of the API's part
+// admissions, so an App's parts pass it as a direct write of each does.
+func (c *Cluster) HostAdmission() admission.Admission {
+	return hostOnOneNode{st: c.cfg.Store, placement: c.placement, base: c.cfg.BaseDomain}
 }
 
 // MintJoinToken mints a one-time join token for the declared WorkerNode node, valid for ttl (0 ⇒ an hour), and keeps

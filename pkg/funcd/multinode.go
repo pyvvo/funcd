@@ -126,7 +126,7 @@ func (p *Platform) newCluster(o *ClusterOptions, st store.Store, local v1.Object
 		return nil, err
 	}
 	cl, err := multinode.New(multinode.Config{Store: st, Logger: p.logger, CA: ca, API: api, LocalNode: local,
-		LocalRuns: !o.Alone, Master: master, Secrets: p.secrets.facade, Held: p.heldByRestore})
+		LocalRuns: !o.Alone, Master: master, Secrets: p.secrets.facade, Held: p.heldByRestore, BaseDomain: p.cfg.baseDomain})
 	if err != nil {
 		_ = api.Close()
 		return nil, err

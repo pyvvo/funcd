@@ -1278,7 +1278,7 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewRestoreInPlaceAdmission(c.authorizer, r, c.hold),
 		)
 		if p.cluster != nil { // FEAT-0002 F250: a node runs the checks that read its own state
-			all = p.cluster.Forward(all)
+			all = append(p.cluster.Forward(all), p.cluster.HostAdmission()) // ADR-0369: App parts claim hosts too
 		}
 		return all
 	}

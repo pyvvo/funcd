@@ -2,12 +2,11 @@ package multinode
 
 import (
 	"context"
-	"net"
-	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	edge "github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -37,10 +36,7 @@ func hostClaim(obj v1.Object) string {
 			h = o.Spec.Ingress.Host
 		}
 	}
-	if host, _, err := net.SplitHostPort(h); err == nil {
-		h = host
-	}
-	return strings.TrimSuffix(strings.ToLower(strings.Trim(h, "[]")), ".")
+	return edge.CanonicalHost(h)
 }
 
 // hostOnOneNode refuses a namespace's claim on a host that a namespace on another node holds (ADR-0369 Decision 2): a
@@ -49,6 +45,7 @@ func hostClaim(obj v1.Object) string {
 type hostOnOneNode struct {
 	st        store.Store
 	placement *Placement
+	base      string // server.baseDomain, under which each namespace has its own host
 }
 
 func (hostOnOneNode) Name() string           { return "host-on-one-node" }
@@ -74,6 +71,17 @@ func (a hostOnOneNode) Admit(ctx context.Context, req admission.Request) (v1.Obj
 	mine, err := a.node(ctx, ns)
 	if err != nil {
 		return nil, err
+	}
+	// A namespace's own host (ADR-0240) belongs to the node that runs that namespace.
+	if owner := edge.NamespaceOfHost(host, a.base); owner != "" && owner != ns {
+		at, err := a.node(ctx, owner)
+		if err != nil {
+			return nil, err
+		}
+		if at != mine {
+			return nil, fault.Conflictf("admission.host-on-one-node",
+				"host %s is the own host of namespace %s, which %s runs: a host belongs to one node", host, owner, describeNode(at))
+		}
 	}
 	for _, k := range hostKinds {
 		res, err := a.st.List(ctx, k.GVK(), store.ListOptions{})
