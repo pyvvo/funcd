@@ -157,7 +157,9 @@ export async function handle(event) { return { image: "1.1.0", event }; }`)
 		require.Equal(t, "todo-3", lines[0], out)
 		pending := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "Function/todo-api Pending Progressing") })
 		require.Positive(t, pending, out)
-		require.Contains(t, lines[pending+1:], "Function/todo-api Ready", out)
+		require.True(t, slices.ContainsFunc(lines[pending+1:], func(l string) bool {
+			return strings.HasPrefix(l, "Function/todo-api Ready after ") // a settled part's line ends with its time (ADR-0362 Decision 6)
+		}), out)
 		obj, _ := tpl.get(t, v1.KindApp, "todo")
 		app := obj.(*v1.App)
 		require.Equal(t, v1.ObjectName("todo-3"), app.Status.CurrentRevision)
@@ -203,6 +205,12 @@ func TestScenarioAppDeleteReports(t *testing.T) {
 	out, err = tpl.cli("app", "delete", "todo", "-n", "team-a")
 	require.NoError(t, err, out)
 	lines := strings.Split(strings.TrimSpace(out), "\n")
+	require.True(t, slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, " after ") }), out)
+	for i, l := range lines {
+		if strings.HasPrefix(l, "deleted ") {
+			lines[i], _, _ = strings.Cut(l, " after ") // a deleted object's line ends with its time (ADR-0362 Decision 6)
+		}
+	}
 	for _, want := range []string{
 		"deleted Function/todo-api", "deleted Function/todo-plan-due", "deleted Workflow/todo-plan", "deleted Site/todo-web",
 		"deleted Route/todo-api", "deleted Route/todo-web", "deleted EventSource/todo-plan-timer",
