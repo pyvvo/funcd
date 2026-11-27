@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/pyvvo/funcd/internal/provider/docker"
 	"github.com/pyvvo/funcd/internal/provider/nerdctl"
 	fnruntime "github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/embedimg"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -73,8 +75,12 @@ func devAddonOptions(ctx context.Context, stateDir string, cfg devConfig, inst *
 	inst.cleanup = append(inst.cleanup, rt.StopAll)
 	images := devWorkers(ctx, rt, key, inst.logger)
 	inst.cleanup = append(inst.cleanup, func() { _ = images.Close() })
+	own, err := devOwnImages(ctx, cfg, rt, images, inst.logger)
+	if err != nil {
+		return nil, nil, err
+	}
 	return []funcd.Option{funcd.WithAddonRuntime(rt), funcd.WithAnyAddonRegistry(),
-		funcd.WithAddonsFollowingCurrent()}, images, nil
+		funcd.WithAddonsFollowingCurrent(), funcd.WithOwnRuntimeImages(own)}, images, nil
 }
 
 // devWorkers runs the session's workers on an Addon's runtime on the engine that runs its add-on engines (ADR-0346
@@ -98,6 +104,67 @@ func devWorkers(ctx context.Context, addons devAddonRuntime, key string, logger 
 		return fnruntime.NoImages(says(err))
 	}
 	return w
+}
+
+// devOwnImages makes dev's engine hold the images that funcdctl carries for funcd's own runtimes under --containers,
+// loading each one the engine lacks, and names them (ADR-0359 Decisions 3 and 4); nil without --containers. Dev refuses
+// to start when the workers cannot run in containers, when the engine runs another platform than the images', and
+// when funcdctl carries the committed placeholders.
+func devOwnImages(ctx context.Context, cfg devConfig, addons devAddonRuntime, images fnruntime.Runtime,
+	logger *slog.Logger) (map[v1.RuntimeName]string, error) {
+	const op = "funcdctl dev --containers"
+	if !cfg.containers {
+		return nil, nil
+	}
+	if ir, ok := images.(fnruntime.ImageRunner); ok {
+		if runs, why := ir.RunsImages(); !runs {
+			return nil, fault.Unavailablef(op, "the workers cannot run in containers: %s", why)
+		}
+	}
+	var eng docker.Engine
+	switch a := addons.(type) {
+	case *docker.Runtime:
+		eng = a.Engine()
+	case *nerdctl.Runtime:
+		eng = a.Engine()
+	default:
+		return nil, fault.Unavailablef(op, "dev found no container engine to run the workers on")
+	}
+	return loadOwnImages(ctx, eng, embedimg.WorkerTar, logger)
+}
+
+// loadOwnImages is devOwnImages on the engine eng, with tars the embedded images, a parameter so a test can hand it
+// images of its own.
+func loadOwnImages(ctx context.Context, eng docker.Engine, tars func(string) (io.Reader, string, bool),
+	logger *slog.Logger) (map[v1.RuntimeName]string, error) {
+	const op = "funcdctl dev --containers"
+	p, err := eng.Platform(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if want := v1.OCIPlatform("linux/" + goruntime.GOARCH); p != want {
+		return nil, fault.Invalidf(op, "the engine runs %s, and this funcdctl carries images for %s", p, want)
+	}
+	out := map[v1.RuntimeName]string{}
+	for _, rt := range []v1.RuntimeName{"nodejs22", "python314"} {
+		tar, ref, ok := tars(string(rt))
+		if !ok {
+			return nil, fault.Invalidf(op, "this funcdctl carries no %s image: it was built without just build-worker-images", rt)
+		}
+		has, err := eng.HasImage(ctx, ref)
+		if err != nil {
+			return nil, err
+		}
+		if !has {
+			t0 := time.Now()
+			if err := eng.Load(ctx, tar); err != nil {
+				return nil, fault.Wrapf(err, fault.KindOf(err), op, "load the %s image", rt)
+			}
+			logger.Info("loaded a runtime image", "runtime", rt, "ref", ref, "took", time.Since(t0).String())
+		}
+		out[rt] = ref
+	}
+	return out, nil
 }
 
 // devSessionKey is the session's key (ADR-0334 Decision 6): the first 16 hex digits of the sha256 of the state dir's

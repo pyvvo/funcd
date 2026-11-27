@@ -343,9 +343,9 @@ nothing. `funcdctl dev` also stops at its start, before it serves the App, on it
 | `values do not match valuesSchema`, followed by the value at fault | Give a value that the template's `valuesSchema` accepts, in a values file that `-f` names. |
 | A message that names a file of the template that funcdctl cannot read | Fix `app.yaml` or that file of `resources`. |
 | A message that names a file and an entry, such as `resources/files.yaml: functions[0]` | Fix that entry of the file. |
-| `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
-| `no python interpreter found for the python handler` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
-| `cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON)` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
+| `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. With Docker or nerdctl, `funcdctl dev --containers` needs no Node.js. |
+| `no python interpreter found for the python handler` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. With Docker or nerdctl, `funcdctl dev --containers` needs no Python. |
+| `cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON)` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. With Docker or nerdctl, `funcdctl dev --containers` needs no Python. |
 | `App todo declares Secret todo-api-keys with key TODO_API_TOKEN; set it in the shell or under dev.env in funcdctl.config.yaml` | Set the key in the environment, or in a source that [Run it locally](#run-it-locally) lists. |
 | `no build of images.<key> in the --build folders <dirs>; name it with --build <key>=<path>` | Write the build in one of those folders, or name it with `--build <key>=<path>`. When `funcdctl.config.yaml` names `watch` commands, `funcdctl dev` waits for the build instead of stopping. |
 | `App todo requires App todo-shared ^1.0.0: funcdctl dev does not run an App that requires another yet` | Run the App on a funcd server with `funcdctl app deploy`. |

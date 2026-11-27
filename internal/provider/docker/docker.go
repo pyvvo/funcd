@@ -111,6 +111,11 @@ type Engine interface {
 	Inspect(ctx context.Context, name string) (c Container, ok bool, err error)
 	// Pull makes image present, pulling it with no credentials when it is not.
 	Pull(ctx context.Context, image string) error
+	// HasImage reports whether the engine holds the image ref (ADR-0359 Decision 4).
+	HasImage(ctx context.Context, ref string) (bool, error)
+	// Load loads the images of tar, an image tar as docker save writes it, under the references it names (ADR-0359
+	// Decision 4).
+	Load(ctx context.Context, tar io.Reader) error
 	// Run creates and starts a container from spec.
 	Run(ctx context.Context, spec RunSpec) error
 	// Stop sends the container its stop signal and kills it after grace; nil when it is stopped or gone.
@@ -155,10 +160,10 @@ type Volume struct {
 	Labels map[string]string
 }
 
-// RunSpec is a container to run (Decision 2): Port, when set, published on 127.0.0.1 at a free port, each of Mounts with
-// no copy-up, no restart policy, the stop signal SIGTERM and StopGrace before a kill. The image's own user runs it, its
-// entrypoint or Cmd, which replaces the whole of it. A worker (ADR-0346 Decisions 4 and 5) runs on the host's network or
-// with ExtraHosts, within NanoCPUs and MemoryBytes when they are set.
+// RunSpec is a container to run (Decision 2): Port, when set, published on 127.0.0.1 at a free port, each of Mounts a
+// volume with no copy-up or a bind of a host directory, no restart policy, the stop signal SIGTERM and StopGrace before a
+// kill. The image's own user runs it, its entrypoint or Cmd, which replaces the whole of it. A worker (ADR-0346
+// Decisions 4 and 5) runs on the host's network or with ExtraHosts, within NanoCPUs and MemoryBytes when they are set.
 type RunSpec struct {
 	Name        string
 	Image       string
@@ -184,10 +189,12 @@ type Helper struct {
 	HostNetwork bool
 }
 
-// Mount is a volume mounted at an absolute path, read-only when ReadOnly is set.
+// Mount is a volume mounted at an absolute path, read-only when ReadOnly is set; with Bind set, the host directory Bind
+// is mounted there instead (ADR-0359 Decision 5).
 type Mount struct {
 	Volume, Target string
 	ReadOnly       bool
+	Bind           string
 }
 
 // Runtime is the add-on runtime of one dev session over an Engine.
@@ -1223,6 +1230,38 @@ func labelFilter(labels map[string]string) string {
 	return string(b)
 }
 
+func (e *engineAPI) HasImage(ctx context.Context, ref string) (bool, error) {
+	code, _, err := e.send(ctx, http.MethodGet, "/images/"+ref+"/json", nil, nil)
+	switch code {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	}
+	return false, err
+}
+
+func (e *engineAPI) Load(ctx context.Context, tar io.Reader) error {
+	const op = "docker.Load"
+	resp, err := e.do(ctx, http.MethodPost, "/images/load", url.Values{"quiet": {"1"}}, tar, "application/x-tar")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes))
+		return engineError("POST /images/load", resp.StatusCode, b)
+	}
+	msg, err := streamError(resp.Body)
+	if err != nil {
+		return fault.Wrapf(err, fault.Unavailable, op, "read the load's answer")
+	}
+	if msg != "" {
+		return fault.Invalidf(op, "load an image: %s", msg)
+	}
+	return nil
+}
+
 func (e *engineAPI) Platform(ctx context.Context) (v1.OCIPlatform, error) {
 	_, b, err := e.send(ctx, http.MethodGet, "/version", nil, nil)
 	if err != nil {
@@ -1298,11 +1337,7 @@ func (e *engineAPI) Inspect(ctx context.Context, name string) (Container, bool, 
 
 func (e *engineAPI) Pull(ctx context.Context, image string) error {
 	const op = "docker.Pull"
-	code, _, err := e.send(ctx, http.MethodGet, "/images/"+image+"/json", nil, nil)
-	switch {
-	case code == http.StatusOK:
-		return nil
-	case code != http.StatusNotFound:
+	if has, err := e.HasImage(ctx, image); has || err != nil {
 		return err
 	}
 	resp, err := e.do(ctx, http.MethodPost, "/images/create", url.Values{"fromImage": {image}}, nil, "")
@@ -1318,18 +1353,30 @@ func (e *engineAPI) Pull(ctx context.Context, image string) error {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes))
 		return pullErr(engineError("POST /images/create", resp.StatusCode, b).Error())
 	}
-	dec := json.NewDecoder(resp.Body)
+	msg, err := streamError(resp.Body)
+	if err != nil {
+		return fault.Wrapf(err, fault.Unavailable, op, "read the pull of %s", image)
+	}
+	if msg != "" {
+		return pullErr(msg)
+	}
+	return nil
+}
+
+// streamError reads an engine's stream of JSON messages to its end and returns the first error one holds, "" for none.
+func streamError(r io.Reader) (string, error) {
+	dec := json.NewDecoder(r)
 	for {
 		var m struct {
 			Error string `json:"error"`
 		}
 		if err := dec.Decode(&m); errors.Is(err, io.EOF) {
-			return nil
+			return "", nil
 		} else if err != nil {
-			return fault.Wrapf(err, fault.Unavailable, op, "read the pull of %s", image)
+			return "", err
 		}
 		if m.Error != "" {
-			return pullErr(m.Error)
+			return m.Error, nil
 		}
 	}
 }
@@ -1364,22 +1411,28 @@ type createHostConfig struct {
 }
 
 type mountBody struct {
-	Type          string `json:"Type"`
-	Source        string `json:"Source"`
-	Target        string `json:"Target"`
-	ReadOnly      bool   `json:"ReadOnly,omitempty"`
-	VolumeOptions struct {
-		NoCopy bool `json:"NoCopy"`
-	} `json:"VolumeOptions"`
+	Type          string         `json:"Type"`
+	Source        string         `json:"Source"`
+	Target        string         `json:"Target"`
+	ReadOnly      bool           `json:"ReadOnly,omitempty"`
+	VolumeOptions *volumeOptions `json:"VolumeOptions,omitempty"`
 }
 
-// volumeMounts are ms as the Engine API mounts volumes: with no copy-up (Decision 3).
-func volumeMounts(ms []Mount) []mountBody {
+type volumeOptions struct {
+	NoCopy bool `json:"NoCopy"`
+}
+
+// mountBodies are ms as the Engine API mounts them: a volume with no copy-up (Decision 3), a Bind as a bind, which takes
+// no volume options.
+func mountBodies(ms []Mount) []mountBody {
 	out := make([]mountBody, 0, len(ms))
 	for _, m := range ms {
-		b := mountBody{Type: "volume", Source: m.Volume, Target: m.Target, ReadOnly: m.ReadOnly}
-		b.VolumeOptions.NoCopy = true
-		out = append(out, b)
+		if m.Bind != "" {
+			out = append(out, mountBody{Type: "bind", Source: m.Bind, Target: m.Target, ReadOnly: m.ReadOnly})
+			continue
+		}
+		out = append(out, mountBody{Type: "volume", Source: m.Volume, Target: m.Target, ReadOnly: m.ReadOnly,
+			VolumeOptions: &volumeOptions{NoCopy: true}})
 	}
 	return out
 }
@@ -1418,7 +1471,7 @@ func (e *engineAPI) Run(ctx context.Context, spec RunSpec) error {
 		body.ExposedPorts = map[string]struct{}{port: {}}
 		body.HostConfig.PortBindings = map[string][]portBinding{port: {{HostIP: "127.0.0.1"}}}
 	}
-	body.HostConfig.Mounts = volumeMounts(spec.Mounts)
+	body.HostConfig.Mounts = mountBodies(spec.Mounts)
 	body.HostConfig.ExtraHosts = spec.ExtraHosts
 	body.HostConfig.NanoCPUs, body.HostConfig.Memory = spec.NanoCPUs, spec.MemoryBytes
 	id, err := e.create(ctx, spec.Name, body)
@@ -1543,7 +1596,7 @@ func (e *engineAPI) helperContainer(ctx context.Context, h Helper, argv []string
 		return "", err
 	}
 	body := createBody{Image: h.Image, Cmd: argv, Labels: h.Labels}
-	body.HostConfig.Mounts = volumeMounts(h.Mounts)
+	body.HostConfig.Mounts = mountBodies(h.Mounts)
 	if h.HostNetwork {
 		body.HostConfig.NetworkMode = "host"
 	}

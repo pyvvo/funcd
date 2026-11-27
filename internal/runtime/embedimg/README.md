@@ -37,12 +37,21 @@ extensions by checksum) and the build writes no time of its own (`SOURCE_DATE_EP
 `gzip -n`), so a rebuild of the same commit on the same architecture gives byte-identical tars, given Docker's
 containerd image store and BuildKit 0.13 or later (`rewrite-timestamp` needs both).
 
+## funcdctl's copy of the worker images (ADR-0359)
+
+`just build-worker-images` (`scripts/build-worker-images.sh`, which `build-runtime-images` runs first) builds the
+`nodejs22` and `python314` images, gives each a second reference, `funcd/runtime-<runtime>:dev-<12 hex digits of its
+image ID>`, saves both references in its tar, and writes that reference to `nodejs22.ref` / `python314.ref`. The
+committed `.ref` files are empty, the placeholders' mark. The fat `-tags dev` funcdctl reads the two tars through
+`WorkerTar`, which reads no other image, so it embeds neither the DuckDB nor the rqlite image; under
+`funcdctl dev --containers` it loads a tar only when the engine lacks its reference.
+
 ## Keeping the working tree clean after a build (`skip-worktree`)
 
 `build-runtime-images` **overwrites** the committed placeholders with real 30–100 MB tars, which
 would otherwise leave the working tree permanently dirty and risk a `git commit -a` staging a
 build artifact. To prevent that, the recipe first runs `just embedimg-pin`, which sets git's
-**`skip-worktree`** bit on the three `*.tar` files: git then ignores the local overwrite, so
+**`skip-worktree`** bit on the `*.tar` and `*.ref` files: git then ignores the local overwrite, so
 `git status`/`git commit` never see it and you never have to `git checkout` the tars after a lane
 run. The index keeps the placeholder blob, so commits and the `check-hygiene` guard are unaffected.
 

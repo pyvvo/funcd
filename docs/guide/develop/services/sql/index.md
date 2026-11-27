@@ -260,9 +260,9 @@ Functions that bind the database. `funcdctl logs sqldatabase/notes-db -n default
 
 | Error | Action |
 | --- | --- |
-| `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
-| `no python interpreter found for the python handler` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. Under `uv run`, uv puts its environment's `python3` first. |
-| `cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON)` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
+| `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. With Docker or nerdctl, `funcdctl dev --containers` needs no Node.js. |
+| `no python interpreter found for the python handler` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. Under `uv run`, uv puts its environment's `python3` first. With Docker or nerdctl, `funcdctl dev --containers` needs no Python. |
+| `cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON)` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. With Docker or nerdctl, `funcdctl dev --containers` needs no Python. |
 | `the folder holds a SQL database, but this funcdctl has no SQL engine` | Install the [dev build of funcdctl](../../../get-started/install.md), which includes the SQL engine, or build the engine as the message says. |
 
 ## Run it locally

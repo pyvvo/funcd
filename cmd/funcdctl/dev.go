@@ -83,7 +83,8 @@ func (a *cli) devCmd() *cobra.Command {
 			"beside resources/ runs as an App template instead: dev pushes each image's build, renders the " +
 			"template as funcdctl app deploy does and applies the App, then again on each save.\n\n" +
 			"A " + devConfigFile + " in the current directory holds what dev is run with: its dev keys are these " +
-			"flags in camelCase (dir, values, build, hooks, apply, persist, persistTo, gport, s3port, cport), plus env and " +
+			"flags in camelCase (dir, values, build, hooks, apply, persist, persistTo, gport, s3port, cport, containers), plus " +
+			"env and " +
 			"envFile for the values of a declared Secret no document defines, platform for runtime.handOutSettle, " +
 			"eventing.blobPollInterval and funclog.segmentMaxAge, and addons.runtime, docker or containerd, the container " +
 			"engine that runs the add-ons' engines, Docker first when it is unset. A flag given here replaces its key, and " +
@@ -140,6 +141,9 @@ func (a *cli) devCmd() *cobra.Command {
 		"keep the App's preApply and postApply hooks, called on each new revision (App mode)")
 	cmd.Flags().StringArrayVar(&cfg.apply, "apply", nil,
 		"a file of resource documents applied before the App, again when it changes (App mode; repeatable)")
+	cmd.Flags().BoolVar(&cfg.containers, "containers", false,
+		"run the workers of nodejs22 and python314 in containers on the engine dev runs add-ons on, from the images "+
+			"funcdctl carries, so the host needs no Node or Python")
 	cmd.Flags().BoolVar(&cfg.printEnv, "print-env", false,
 		"print the dev S3 credentials as `export …` lines and exit (no server); pair with a fixed --s3port. "+
 			"Use: eval \"$(funcdctl dev <dir> --s3port 3006 --print-env)\"")
@@ -149,12 +153,13 @@ func (a *cli) devCmd() *cobra.Command {
 // devConfig carries the `funcdctl dev` flags that shape the substrate (ADR-0125 Decision 7). The zero value is the
 // ephemeral in-memory default; persist opts into durable-local drivers.
 type devConfig struct {
-	persist   bool   // swap memory store/KV/blob for durable-local Badger + fileblob
-	persistTo string // the --persist state dir (empty ⇒ devPersistDir)
-	gport     int    // fixed gateway (data-plane) port; 0 ⇒ a random free port
-	s3port    int    // fixed S3-frontend port; 0 ⇒ a random free port
-	cport     int    // fixed control-plane port (apply / workflow run); 0 ⇒ a random free port
-	printEnv  bool   // print the dev S3 creds as `export …` lines and exit (no server)
+	persist    bool   // swap memory store/KV/blob for durable-local Badger + fileblob
+	persistTo  string // the --persist state dir (empty ⇒ devPersistDir)
+	gport      int    // fixed gateway (data-plane) port; 0 ⇒ a random free port
+	s3port     int    // fixed S3-frontend port; 0 ⇒ a random free port
+	cport      int    // fixed control-plane port (apply / workflow run); 0 ⇒ a random free port
+	containers bool   // run funcd's own runtimes in containers on the engine dev runs add-ons on (ADR-0359)
+	printEnv   bool   // print the dev S3 creds as `export …` lines and exit (no server)
 	// App mode (ADR-0253): the template's values files, where its builds are, whether its hooks stay, and the files of
 	// resource documents applied beside it.
 	values []string
@@ -784,8 +789,15 @@ func deliverBuild(op string, b devBuild, bundleDir, folderDir string) error {
 		if werr := os.WriteFile(dst, data, 0o600); werr != nil {
 			return fault.Wrapf(werr, fault.Internal, op, "copy the build into its bundle")
 		}
-		if nm := filepath.Join(folderDir, "node_modules"); dirExists(nm) {
-			_ = os.Symlink(nm, filepath.Join(bundleDir, "node_modules"))
+		// The link names the folder's node_modules by its absolute path: dev may hold the folder as ".", and a relative
+		// link would name itself in the bundle; a kept bundle's earlier link is replaced (ADR-0125: deps come from the
+		// author's local node_modules).
+		if nm, aerr := filepath.Abs(filepath.Join(folderDir, "node_modules")); aerr == nil && dirExists(nm) {
+			link := filepath.Join(bundleDir, "node_modules")
+			if fi, lerr := os.Lstat(link); lerr == nil && fi.Mode()&fs.ModeSymlink != 0 {
+				_ = os.Remove(link)
+			}
+			_ = os.Symlink(nm, link)
 		}
 	}
 	contractPath := filepath.Join(bundleDir, devContractFile)
@@ -1100,11 +1112,17 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 			needNode = true
 		}
 	}
-	shimOpts, shimCleanup, sherr := devShimOptions(ctx, op, needPython, needNode)
-	if sherr != nil {
-		return nil, sherr
+	// Under --containers the workers of funcd's own runtimes run from funcdctl's images: dev looks up no interpreter
+	// and extracts no shim (ADR-0359 Decision 2).
+	var shimOpts []funcd.Option
+	if !cfg.containers {
+		so, shimCleanup, sherr := devShimOptions(ctx, op, needPython, needNode)
+		if sherr != nil {
+			return nil, sherr
+		}
+		shimOpts = so
+		inst.cleanup = append(inst.cleanup, shimCleanup)
 	}
-	inst.cleanup = append(inst.cleanup, shimCleanup)
 
 	// The process driver and the lake engine save what they start in the state dir and reap what a crashed run
 	// left there before anything starts (ADR-0167).

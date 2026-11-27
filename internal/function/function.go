@@ -124,6 +124,9 @@ type Deps struct {
 	Resolver ArtifactResolver
 	// Platforms (ADR-0145) lists an artifact digest's platforms for the placement gate. nil → no gate.
 	Platforms PlatformResolver
+	// OwnImages are the images that funcd's own runtimes run from on a worker runtime that runs images, under
+	// funcdctl dev's --containers (ADR-0359 Decision 1). nil → every own runtime runs on the process driver.
+	OwnImages map[v1.RuntimeName]string
 	// Inspector reads a Job's image contract by digest into its status.contract (ADR-0347 Decision 2). nil → none is
 	// read, so a run's input is left unchecked.
 	Inspector ContractInspector
@@ -302,8 +305,9 @@ type Reconciler struct {
 	shimByFamily      map[string][]string // runtime-family prefix → shim command (ADR-0049)
 	endpointMode      EndpointMode
 	imageFor          func(string) string
-	resolver          ArtifactResolver  // nil → no digest resolution (ADR-0035)
-	platformsOf       PlatformResolver  // nil → no platform gate (ADR-0145)
+	resolver          ArtifactResolver // nil → no digest resolution (ADR-0035)
+	platformsOf       PlatformResolver // nil → no platform gate (ADR-0145)
+	ownImages         map[v1.RuntimeName]string
 	inspector         ContractInspector // nil → a Job's contract is not read (ADR-0347 Decision 2)
 	httpClient        *http.Client
 	contracts         contracts // each artifact's compiled contract (ADR-0303)
@@ -449,7 +453,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		return nil, fault.Invalidf(op, "validator is required")
 	// In process mode (EndpointLoopback) the shim is launched via ShimCommand; in container
 	// mode (EndpointNetnsFixedPort) the shim is the curated image's entrypoint, so no command.
-	case d.Materializer != nil && d.EndpointMode == EndpointLoopback && len(d.ShimCommand) == 0:
+	case d.Materializer != nil && d.EndpointMode == EndpointLoopback && len(d.ShimCommand) == 0 && len(d.OwnImages) == 0:
 		return nil, fault.Invalidf(op, "ShimCommand is required when a Materializer is set in process mode")
 	case d.Materializer != nil && d.EndpointMode == EndpointNetnsFixedPort && d.ImageFor == nil:
 		return nil, fault.Invalidf(op, "ImageFor is required when a Materializer is set in container mode")
@@ -531,7 +535,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
 		logMaxRecordBytes: d.LogMaxRecordBytes, defaultResources: d.DefaultResources,
 		materializer: d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
-		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms, inspector: d.Inspector,
+		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms, ownImages: d.OwnImages, inspector: d.Inspector,
 		httpClient:        httpx.NodeClient(cmp.Or(d.ProbeTimeout, probeTimeout)),
 		probeTimeout:      cmp.Or(d.ProbeTimeout, probeTimeout),
 		secrets:           d.Secrets,

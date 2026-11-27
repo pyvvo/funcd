@@ -233,7 +233,7 @@ These errors stop a command before any server answers:
 
 | Error | Action |
 | --- | --- |
-| `no node interpreter found for the node handler` | `funcdctl dev` found no Node.js for the examples' Functions. Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
+| `no node interpreter found for the node handler` | `funcdctl dev` found no Node.js for the examples' Functions. Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. With Docker or nerdctl, `funcdctl dev --containers` needs no Node.js. |
 | `manifest is invalid (<kind> "<name>")`, followed by the field and the rule it breaks, such as `spec.rules[0].path "api" must begin with '/'` | `funcdctl apply` checks each Route and EgressPolicy before it sends it. Correct the field that the message names, as the [Spec](spec.md) tab describes it. |
 | `manifest is invalid`, followed by `spec.rules[0].backend must set exactly one of function, static or site` | Give the rule one backend. |
 | `manifest is invalid`, followed by `spec.rules[0].to must set at least one of domains/cidrs` | List a domain or a CIDR in the rule's `to`. |

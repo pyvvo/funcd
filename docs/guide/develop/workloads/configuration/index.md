@@ -117,7 +117,7 @@ flags of its banner.
 
 | Error | Action |
 | --- | --- |
-| `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
+| `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. With Docker or nerdctl, `funcdctl dev --containers` needs no Node.js. |
 | `no build of "<name>"` | Build the Function, and name its build `<name>.mjs`, after the Function, in the folder or its `dist` folder. The message names the paths that it looked at. |
 
 ## Run it locally

@@ -526,3 +526,42 @@ func TestQuarantineMoveAndExpireTakeTurns(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, es, 1, "the sweep waited for the move")
 }
+
+// ADR-0359 Decision 4: HasImage asks the Engine API for the image, and Load sends the tar to POST /images/load and fails
+// on an error the engine streams back.
+func TestEngineHasImageAndLoad(t *testing.T) {
+	t.Parallel()
+	const ref = "funcd/runtime-nodejs22:dev-0123456789ab"
+	loaded := make(chan string, 1)
+	serve := func(stream string) *engineAPI {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/images/"+ref+"/json":
+				_, _ = io.WriteString(w, `{}`)
+			case r.Method == http.MethodGet:
+				http.Error(w, `{"message":"No such image"}`, http.StatusNotFound)
+			case r.Method == http.MethodPost && r.URL.Path == "/images/load":
+				b, _ := io.ReadAll(r.Body)
+				loaded <- r.Header.Get("Content-Type") + " " + string(b)
+				_, _ = io.WriteString(w, stream)
+			}
+		}))
+		t.Cleanup(srv.Close)
+		return &engineAPI{http: srv.Client(), base: srv.URL}
+	}
+	ctx := context.Background()
+	e := serve(`{"stream":"Loaded image: ` + ref + `\n"}`)
+	has, err := e.HasImage(ctx, ref)
+	require.NoError(t, err)
+	require.True(t, has)
+	has, err = e.HasImage(ctx, "funcd/runtime-nodejs22:dev-ffffffffffff")
+	require.NoError(t, err)
+	require.False(t, has, "an image the engine lacks is no error")
+	require.NoError(t, e.Load(ctx, strings.NewReader("a tar")))
+	require.Equal(t, "application/x-tar a tar", <-loaded)
+
+	err = serve(`{"errorDetail":{"message":"unexpected EOF"},"error":"unexpected EOF"}`).Load(ctx, strings.NewReader("half a tar"))
+	<-loaded
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, "unexpected EOF")
+}

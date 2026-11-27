@@ -323,3 +323,31 @@ func TestProcessModeSpecsSetNoImage(t *testing.T) {
 		require.NotEmpty(t, s.Command, "%s runs a shim command", s.Name)
 	}
 }
+
+// ADR-0359 Decision 1: under funcdctl dev's --containers, with no shim registered, a worker on funcd's own runtimes runs
+// its runtime's image in the container shape; a pooled Function runs solo there, a pool host beside it or not; and
+// another Node runtime, with no image, fails RuntimeUnavailable saying why.
+func TestDevOwnRuntimeWorker(t *testing.T) {
+	t.Parallel()
+	const nodeImage = "funcd/runtime-nodejs22:dev-0123456789ab"
+	h := newShimHarness(t, http.StatusOK, false, withNodePool, onDevImages(true, "", "funcd.host", &socketLog{}),
+		func(d *function.Deps) {
+			// as under --containers, where dev registers no shim (ADR-0359 Decision 2)
+			d.ShimCommand, d.OwnImages = nil, map[v1.RuntimeName]string{"nodejs22": nodeImage}
+		})
+	h.create(t, "api", func(*v1.Function) {})
+	h.create(t, "pooled", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w1" })
+	h.create(t, "older", func(fn *v1.Function) { fn.Spec.Runtime = "nodejs20" })
+	for _, name := range []v1.ObjectName{"api", "pooled"} {
+		h.reconcile(t, string(name))
+		h.requireReady(t, string(name))
+		spec := h.rt.specOf(runtime.NewInstanceID("default", name, name+"-1", 0))
+		require.Equal(t, nodeImage, spec.Image, "%s runs its runtime's image", name)
+		require.Empty(t, spec.Command, "%s: the image's shim is its entrypoint", name)
+		require.Equal(t, "8080", spec.Env["FUNCD_PORT"], name)
+		require.NotContains(t, spec.Env, "FUNCD_INVOKE_SOCKET", name)
+	}
+	h.reconcile(t, "older")
+	h.requireUnavailable(t, "older", `runtime "nodejs20" is not available on this node: no image is set for it, and its `+
+		`workers run in containers (ADR-0359 Decision 1)`)
+}

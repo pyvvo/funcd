@@ -25,11 +25,13 @@ import (
 type accessIndex struct{ owned, grants map[v1.ObjectName][]string }
 
 // pooled reports, with no I/O, whether fn runs in a pool worker: it declares a worker id and a pool host serves its
-// runtime family (ADR-0050).
+// runtime family (ADR-0050), and its runtime does not run from an image in a container, where every Function runs solo
+// (ADR-0173 Decision 2, ADR-0359 Decision 1).
 func (r *Reconciler) pooled(fn *v1.Function) bool {
 	// A Function with a volume runs solo: no other Function may reach its volume, and a pool host mounts none (ADR-0262
 	// Decision 9).
-	return fn.Spec.Pooling.Worker != "" && r.poolHostFor(fn.Spec.Runtime) != nil && len(fn.Spec.Volumes) == 0
+	return fn.Spec.Pooling.Worker != "" && r.poolHostFor(fn.Spec.Runtime) != nil && len(fn.Spec.Volumes) == 0 &&
+		r.ownImage(fn.Spec.Runtime) == ""
 }
 
 // accessIn lists the namespace's KVStores, Buckets, SQLDatabases, Secrets, RolesAssignments, EgressPolicies and Policies once

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -112,6 +113,9 @@ type workers struct {
 	platform v1.OCIPlatform
 	logger   *slog.Logger
 	probe    *http.Client
+	// home is the user's home directory with its links resolved, "" when there is none: what an engine in a VM sees of
+	// this host, at the same path (ADR-0359 Decision 5).
+	home string
 	// follows ends every follow of a worker's output at Close.
 	follows  context.Context //nolint:containedctx // the driver's own: a follow outlives the Start that began it
 	unfollow context.CancelFunc
@@ -126,7 +130,8 @@ type workers struct {
 type worker struct {
 	spec      containerrt.WorkerSpec
 	name      string
-	run       int // the Starts so far: what a read of an earlier run finds changes nothing
+	binds     []Mount // the bundle's links to directories the engine sees, bound read-only (ADR-0359 Decision 5)
+	run       int     // the Starts so far: what a read of an earlier run finds changes nothing
 	state     containerrt.State
 	pid       int
 	port      int
@@ -148,9 +153,9 @@ var (
 
 // NewWorkers runs the Function and Job workers of funcdctl dev's session key on eng (ADR-0346 Decision 4), nerdctl's
 // through the same Engine: each one a container from its spec's image, its bundle copied into a volume of its own
-// through the helper and mounted read-only, its output read through the engine's log follow. It removes the key's
-// leftover workers, their containers and volumes, and finds how a worker reaches funcd (Decision 5) and the engine's
-// platform before it returns.
+// through the helper and mounted read-only, each directory its bundle links to that the engine sees bound read-only
+// (ADR-0359 Decision 5), its output read through the engine's log follow. It removes the key's leftover workers, their
+// containers and volumes, and finds how a worker reaches funcd (Decision 5) and the engine's platform before it returns.
 func NewWorkers(ctx context.Context, eng Engine, key string, logger *slog.Logger) (containerrt.Runtime, error) {
 	return newWorkers(ctx, eng, key, logger, findNet)
 }
@@ -169,7 +174,7 @@ func newWorkers(ctx context.Context, eng Engine, key string, logger *slog.Logger
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "find how a worker reaches funcd")
 	}
-	w.net = n
+	w.net, w.home = n, homeDir()
 	if n.refused == "" {
 		if w.platform, err = eng.Platform(ctx); err != nil {
 			return nil, fault.Wrapf(err, fault.KindOf(err), op, "read the container engine's platform")
@@ -177,6 +182,29 @@ func newWorkers(ctx context.Context, eng Engine, key string, logger *slog.Logger
 	}
 	w.follows, w.unfollow = context.WithCancel(context.Background())
 	return w, nil
+}
+
+// homeDir is the user's home directory with its links resolved, "" when there is none to read.
+func homeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if home, err = filepath.EvalSymlinks(home); err != nil {
+		return ""
+	}
+	return home
+}
+
+// sees reports whether the engine sees dir, a host directory with its links resolved, at its own path, so a worker
+// binds it (ADR-0359 Decision 5): an engine on the host's network sees every path, and one in a VM the user's home
+// directory, which colima and Lima share at the same path.
+func (w *workers) sees(dir string) bool {
+	if w.net.host {
+		return true
+	}
+	_, ok := under(w.home, dir)
+	return w.home != "" && ok
 }
 
 // RunsImages is false, naming why, on an engine whose workers could not reach funcd (ADR-0346 Decision 5).
@@ -226,8 +254,8 @@ func (w *workers) helper(name string, mounts ...Mount) Helper {
 }
 
 // Create pulls spec's image and copies its bundle, the one read-only mount a worker takes, into the worker's volume
-// through the helper; a worker on the host's network gets its run volume too. An exited instance of the same kind is
-// replaced with its container and volumes (ADR-0142).
+// through the helper, but for the directories it binds; a worker on the host's network gets its run volume too. An
+// exited instance of the same kind is replaced with its container and volumes (ADR-0142).
 func (w *workers) Create(ctx context.Context, spec containerrt.WorkerSpec) (containerrt.Instance, error) {
 	const op = "docker.workers.Create"
 	switch {
@@ -261,11 +289,12 @@ func (w *workers) Create(ctx context.Context, spec containerrt.WorkerSpec) (cont
 	if err := w.eng.Pull(pctx, spec.Image); err != nil {
 		return containerrt.Instance{}, fault.Wrapf(containerrt.ErrImageUnavailable, fault.NotFound, op, "%v", err)
 	}
-	if err := w.prepare(ctx, spec, name); err != nil {
+	binds, err := w.prepare(ctx, spec, name)
+	if err != nil {
 		_ = w.discard(context.WithoutCancel(ctx), name)
 		return containerrt.Instance{}, fault.Wrapf(err, fault.KindOf(err), op, "prepare the volumes of worker %s", id)
 	}
-	inst := &worker{spec: spec, name: name, state: containerrt.StateCreated, createdAt: time.Now()}
+	inst := &worker{spec: spec, name: name, binds: binds, state: containerrt.StateCreated, createdAt: time.Now()}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.instances[id] = inst
@@ -273,29 +302,35 @@ func (w *workers) Create(ctx context.Context, spec containerrt.WorkerSpec) (cont
 }
 
 // prepare creates name's volumes: its bundle's, filled with the mount's folder through the helper, and on the host's
-// network its run volume.
-func (w *workers) prepare(ctx context.Context, spec containerrt.WorkerSpec, name string) error {
+// network its run volume. It returns the bundle's binds at their paths in the worker.
+func (w *workers) prepare(ctx context.Context, spec containerrt.WorkerSpec, name string) ([]Mount, error) {
+	var binds []Mount
 	if len(spec.Mounts) == 1 {
 		if err := w.createVolume(ctx, name, spec); err != nil {
-			return err
+			return nil, err
 		}
 		pr, pw := io.Pipe()
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			pw.CloseWithError(tarTree(spec.Mounts[0].Source, pw))
+			var err error
+			binds, err = tarTree(spec.Mounts[0].Source, pw, w.sees)
+			pw.CloseWithError(err)
 		}()
 		err := w.eng.WriteTar(ctx, w.helper(name, Mount{Volume: name, Target: helperRoot}), helperRoot, 0, 0, pr)
 		_ = pr.Close()
 		<-done
 		if err != nil {
-			return err
+			return nil, err
+		}
+		for i := range binds {
+			binds[i].Target = path.Join(spec.Mounts[0].Target, binds[i].Target)
 		}
 	}
 	if w.net.host {
-		return w.createVolume(ctx, name+runSuffix, spec)
+		return binds, w.createVolume(ctx, name+runSuffix, spec)
 	}
-	return nil
+	return binds, nil
 }
 
 func (w *workers) createVolume(ctx context.Context, name string, spec containerrt.WorkerSpec) error {
@@ -305,53 +340,150 @@ func (w *workers) createVolume(ctx context.Context, name string, spec containerr
 }
 
 // tarTree writes the files under dir to out as a tar, owned by root and readable by any user, so the image's user reads
-// them in the read-only bundle.
-func tarTree(dir string, out io.Writer) error {
-	tw := tar.NewWriter(out)
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || p == dir {
+// them in the read-only bundle. A link is resolved as the OS resolves it (ADR-0359 Decision 5), as dev's folder builds
+// and a folder's node_modules are links to the host's files: one that resolves inside dir stays a link, relative to its
+// own directory; one that resolves outside to a directory that sees reports, whose links stay in it, is written as an
+// empty directory, the mount point of the read-only bind it returns at the link's path in dir; any other is replaced by
+// a copy of what it names, a file or a directory, in which no link is bound. A loop of links fails, naming the link.
+// Other kinds of file are left out.
+func tarTree(dir string, out io.Writer, sees func(dir string) bool) ([]Mount, error) {
+	root, err := filepath.EvalSymlinks(dir)
+	if err == nil {
+		tw := tar.NewWriter(out)
+		t := &treeTar{tw: tw, root: root, sees: sees}
+		if err = t.dir(dir, "", map[string]bool{root: true}, true); err == nil {
+			return t.binds, tw.Close()
+		}
+	}
+	if fault.KindOf(err) == fault.Invalid {
+		return nil, err
+	}
+	return nil, fault.Wrapf(err, fault.Internal, "docker.tarTree", "archive the bundle %s", dir)
+}
+
+// treeTar writes one bundle's tar; root is the bundle's directory with its links resolved, and binds the binds so far.
+type treeTar struct {
+	tw    *tar.Writer
+	root  string
+	sees  func(dir string) bool
+	binds []Mount
+}
+
+// dir writes the entries of the directory src under the tar's directory name ("" for the bundle's root); open holds
+// the resolved directories being written, so a link back to one of them is a loop, and bind is false within the copy of
+// a directory a link names.
+func (t *treeTar) dir(src, name string, open map[string]bool, bind bool) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := t.entry(filepath.Join(src, e.Name()), path.Join(name, e.Name()), open, bind); err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil {
-			return err
+	}
+	return nil
+}
+
+func (t *treeTar) entry(p, name string, open map[string]bool, bind bool) error {
+	info, err := os.Lstat(p)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		real, rerr := filepath.EvalSymlinks(p)
+		if rerr != nil {
+			return fault.Invalidf("docker.tarTree", "the build's link %s names nothing it can read: %v", name, rerr)
 		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		h := &tar.Header{Name: filepath.ToSlash(rel), ModTime: info.ModTime(), Mode: 0o644}
-		switch {
-		case d.IsDir():
-			h.Typeflag, h.Name, h.Mode = tar.TypeDir, h.Name+"/", 0o755
-		case d.Type()&fs.ModeSymlink != 0:
-			if h.Linkname, err = os.Readlink(p); err != nil {
-				return err
+		if in, ok := under(t.root, real); ok {
+			link, lerr := filepath.Rel(filepath.Dir(filepath.FromSlash(name)), filepath.FromSlash(in))
+			if lerr != nil {
+				return lerr
 			}
-			h.Typeflag = tar.TypeSymlink
-		case d.Type().IsRegular():
-			h.Typeflag, h.Size = tar.TypeReg, info.Size()
-			if info.Mode()&0o111 != 0 {
-				h.Mode = 0o755
-			}
-		default:
-			return nil
+			return t.tw.WriteHeader(&tar.Header{Typeflag: tar.TypeSymlink, Name: name, Linkname: filepath.ToSlash(link),
+				ModTime: info.ModTime(), Mode: 0o777})
 		}
-		if err := tw.WriteHeader(h); err != nil || h.Typeflag != tar.TypeReg {
+		if info, err = os.Stat(real); err != nil {
 			return err
 		}
-		f, err := os.Open(p) //nolint:gosec // a file of the worker's own bundle
+		if info.IsDir() && bind && t.sees(real) && linksStayIn(real) {
+			t.binds = append(t.binds, Mount{Bind: real, Target: name, ReadOnly: true})
+			return t.tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: name + "/", ModTime: info.ModTime(), Mode: 0o755})
+		}
+		p, bind = real, false
+	}
+	h := &tar.Header{Name: name, ModTime: info.ModTime(), Mode: 0o644}
+	switch {
+	case info.IsDir():
+		real, rerr := filepath.EvalSymlinks(p)
+		if rerr != nil {
+			return rerr
+		}
+		if open[real] {
+			return fault.Invalidf("docker.tarTree", "the build's link %s loops back to a directory that holds it", name)
+		}
+		h.Typeflag, h.Name, h.Mode = tar.TypeDir, name+"/", 0o755
+		if err := t.tw.WriteHeader(h); err != nil {
+			return err
+		}
+		open[real] = true
+		defer delete(open, real)
+		return t.dir(p, name, open, bind)
+	case info.Mode().IsRegular():
+		h.Typeflag, h.Size = tar.TypeReg, info.Size()
+		if info.Mode()&0o111 != 0 {
+			h.Mode = 0o755
+		}
+		if err := t.tw.WriteHeader(h); err != nil {
+			return err
+		}
+		f, err := os.Open(p) //nolint:gosec // a file of the worker's own bundle, or one its build links to
 		if err != nil {
 			return err
 		}
 		defer func() { _ = f.Close() }()
-		_, err = io.Copy(tw, f)
+		_, err = io.Copy(t.tw, f)
 		return err
-	})
-	if err != nil {
-		return fault.Wrapf(err, fault.Internal, "docker.tarTree", "archive the bundle %s", dir)
 	}
-	return tw.Close()
+	return nil
+}
+
+// linksStayIn reports whether no link among the entries of dir, a directory with its links resolved, or among those of
+// an @scope directory in it, resolves outside dir: the two levels where npm and yarn workspaces and npm link put theirs,
+// which a bind would leave naming nothing in the container (ADR-0359 Decision 5). A link that names nothing names
+// nothing on the host either.
+func linksStayIn(dir string) bool {
+	return linksIn(dir, dir, true)
+}
+
+func linksIn(root, dir string, scopes bool) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		p := filepath.Join(dir, e.Name())
+		switch {
+		case e.Type()&fs.ModeSymlink != 0:
+			if real, err := filepath.EvalSymlinks(p); err == nil {
+				if _, ok := under(root, real); !ok {
+					return false
+				}
+			}
+		case scopes && e.IsDir() && strings.HasPrefix(e.Name(), "@") && !linksIn(root, p, false):
+			return false
+		}
+	}
+	return true
+}
+
+// under is p's path relative to root, slash-separated, when p lies under root; both have their links resolved.
+func under(root, p string) (string, bool) {
+	rel, err := filepath.Rel(root, p)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 // Start runs the worker's container from its spec: the image's entrypoint, or its Command, with FUNCD_LOG_STDOUT, so the
@@ -370,7 +502,7 @@ func (w *workers) Start(ctx context.Context, id containerrt.InstanceID) error {
 		w.mu.Unlock()
 		return nil
 	}
-	spec, name, hook := inst.spec, inst.name, w.outputs
+	spec, name, binds, hook := inst.spec, inst.name, inst.binds, w.outputs
 	w.mu.Unlock()
 
 	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
@@ -379,7 +511,7 @@ func (w *workers) Start(ctx context.Context, id containerrt.InstanceID) error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "remove the earlier run of worker %s", id)
 	}
-	run := w.runSpec(spec, name)
+	run := w.runSpec(spec, name, binds)
 	if w.net.host {
 		// The port file of an earlier run is gone before this one starts, and its folder takes any user's file.
 		if _, err := w.exec(ctx, w.helper(name, Mount{Volume: name + runSuffix, Target: helperRoot}), "sh", "-c",
@@ -414,8 +546,8 @@ func (w *workers) Start(ctx context.Context, id containerrt.InstanceID) error {
 	return nil
 }
 
-// runSpec is the container of spec named name.
-func (w *workers) runSpec(spec containerrt.WorkerSpec, name string) RunSpec {
+// runSpec is the container of spec named name, its bundle's binds mounted after its volume.
+func (w *workers) runSpec(spec containerrt.WorkerSpec, name string, binds []Mount) RunSpec {
 	env := maps.Clone(spec.Env)
 	if env == nil {
 		env = map[string]string{}
@@ -424,7 +556,7 @@ func (w *workers) runSpec(spec containerrt.WorkerSpec, name string) RunSpec {
 	run := RunSpec{Name: name, Image: spec.Image, Cmd: spec.Command, Env: env, Labels: w.labels(spec), StopGrace: stopGrace,
 		NanoCPUs: int64(spec.Limits.CPUs * 1e9), MemoryBytes: spec.Limits.MemoryBytes}
 	if len(spec.Mounts) == 1 {
-		run.Mounts = append(run.Mounts, Mount{Volume: name, Target: spec.Mounts[0].Target, ReadOnly: true})
+		run.Mounts = append(append(run.Mounts, Mount{Volume: name, Target: spec.Mounts[0].Target, ReadOnly: true}), binds...)
 	}
 	if w.net.host {
 		run.HostNetwork = true
@@ -729,7 +861,7 @@ func (w *workers) Exec(ctx context.Context, id containerrt.InstanceID, cmd []str
 	if !ok {
 		return fault.NotFoundf(op, "instance %q not found", id)
 	}
-	mounts := w.runSpec(inst.spec, inst.name).Mounts
+	mounts := w.runSpec(inst.spec, inst.name, inst.binds).Mounts
 	if _, err := w.exec(ctx, w.helper(inst.name, mounts...), cmd...); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "exec %v", cmd)
 	}

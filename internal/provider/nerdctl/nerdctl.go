@@ -6,6 +6,7 @@ package nerdctl
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -82,7 +83,8 @@ func cliError(ctx context.Context, args []string, stderr string, err error) erro
 	switch low := strings.ToLower(stderr); {
 	case ctx.Err() != nil:
 		return fault.Wrapf(err, fault.Unavailable, op, "%s did not end: %s", call, msg)
-	case strings.Contains(low, "no such container"), strings.Contains(low, "no such object"), strings.Contains(low, "not found"):
+	case strings.Contains(low, "no such container"), strings.Contains(low, "no such object"), strings.Contains(low, "no such image"),
+		strings.Contains(low, "not found"):
 		return fault.Wrapf(err, fault.NotFound, op, "%s: %s", call, msg)
 	case strings.Contains(low, "is in use"):
 		return fault.Wrapf(err, fault.Conflict, op, "%s: %s", call, msg)
@@ -146,6 +148,24 @@ func lines(b []byte) []string {
 		}
 	}
 	return out
+}
+
+// HasImage runs nerdctl image inspect: false when nerdctl names no such image (ADR-0359 Decision 4).
+func (c cli) HasImage(ctx context.Context, ref string) (bool, error) {
+	_, err := c.run(ctx, nil, "image", "inspect", ref)
+	switch {
+	case err == nil:
+		return true, nil
+	case fault.KindOf(err) == fault.NotFound:
+		return false, nil
+	}
+	return false, err
+}
+
+// Load runs nerdctl load with tar on its standard input (ADR-0359 Decision 4).
+func (c cli) Load(ctx context.Context, tar io.Reader) error {
+	_, err := c.run(ctx, tar, "load")
+	return err
 }
 
 // Platform is nerdctl's own platform: it runs beside containerd, in the VM when the engine is in one.
@@ -233,10 +253,13 @@ func (c cli) Run(ctx context.Context, spec docker.RunSpec) error {
 	args = append(args, labelArgs("--label", spec.Labels)...)
 	for _, m := range spec.Mounts {
 		// nerdctl's releases take no volume-nocopy, so the engine mounts the volume's own directory as a bind, which
-		// never copies the image's files up (ADR-0334 Decision 3).
-		dir, err := c.mountpoint(ctx, m.Volume)
-		if err != nil {
-			return err
+		// never copies the image's files up (ADR-0334 Decision 3); a Bind is a host directory already.
+		dir := m.Bind
+		if dir == "" {
+			var err error
+			if dir, err = c.mountpoint(ctx, m.Volume); err != nil {
+				return err
+			}
 		}
 		mount := "type=bind,source=" + dir + ",target=" + m.Target
 		if m.ReadOnly {
@@ -369,7 +392,7 @@ func helperArgs(h docker.Helper, interactive bool) []string {
 	}
 	args = append(args, labelArgs("--label", h.Labels)...)
 	for _, m := range h.Mounts {
-		v := m.Volume + ":" + m.Target
+		v := cmp.Or(m.Bind, m.Volume) + ":" + m.Target
 		if m.ReadOnly {
 			v += ":ro"
 		}

@@ -12,7 +12,9 @@ name: Release binaries
 #     ADR-0125): embeds the process-runtime platform (~60 MB) + the per-arch DuckDB+Quack lake
 #     engine (~130 MB) fetched by scripts/fetch-lake-engine.sh, and the per-arch rqlited SQL engine
 #     (~12 MB, ADR-0237) built by the build-sql-engine job. Both engines are subprocesses, never linked,
-#     so the client stays CGO_ENABLED=0.
+#     so the client stays CGO_ENABLED=0. It also embeds the linux/<arch> nodejs22 and python314 images
+#     (~75 MB) that `funcdctl dev --containers` runs workers from (ADR-0359), built by the build-worker-images
+#     job with scripts/build-worker-images.sh on a Linux runner of that arch.
 #
 # rqlited needs cgo and has no macOS release, so build-sql-engine builds it with scripts/build-sql-engine.sh on a
 # native runner per target: linux in the rqlite image's Docker builder stage on a Linux runner of that arch, darwin
@@ -80,8 +82,42 @@ jobs:
           name: sql-engine-${{ matrix.os }}-${{ matrix.arch }}
           path: internal/sql/embedengine/rqlited.gz
 
+  build-worker-images:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build the worker images for linux/${{ matrix.arch }}
+        run: scripts/build-worker-images.sh "${{ matrix.arch }}"
+
+      - name: Upload the images
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: worker-images-${{ matrix.arch }}
+          path: |
+            internal/runtime/embedimg/nodejs22.tar
+            internal/runtime/embedimg/nodejs22.ref
+            internal/runtime/embedimg/python314.tar
+            internal/runtime/embedimg/python314.ref
+
   build-funcdctl:
-    needs: build-sql-engine
+    needs:
+      - build-sql-engine
+      - build-worker-images
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -111,6 +147,12 @@ jobs:
         with:
           name: sql-engine-${{ matrix.os }}-${{ matrix.arch }}
           path: internal/sql/embedengine
+
+      - name: Download the worker images
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: worker-images-${{ matrix.arch }}
+          path: internal/runtime/embedimg
 
       - name: Build funcdctl (thin + fat -tags dev) for ${{ matrix.os }}/${{ matrix.arch }}
         run: |
