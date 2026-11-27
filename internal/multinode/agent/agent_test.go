@@ -107,6 +107,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	require.Eventually(t, cond, 10*time.Second, 20*time.Millisecond, what)
 }
 
+// oracle: docs/design/multinode/join.fizz#ATokenJoinsOnce
 func TestANodeJoinsFollowsItsNamespaceAndReportsBack(t *testing.T) {
 	ctx := context.Background()
 	r := startCP(t)
@@ -325,6 +326,7 @@ func TestANodeKeepsTheMastersOfItsNamespacesOnly(t *testing.T) {
 }
 
 // A node renews its certificate in the last third of its life, and its first call with the new one ends the old one.
+// oracle: docs/design/multinode/join.fizz#TheOldCertificateEndsAtTheNewOnesFirstRequest
 func TestANodeRenewsItsCertificateBeforeItEnds(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)

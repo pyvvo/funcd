@@ -1,0 +1,182 @@
+---
+# A worker node's join and the renewal of its certificate (ADR-0364, FEAT-0002 F242). An admin mints a join token for
+# the declared node: the control plane keeps the token's hash and its end in the WorkerNode's status, and a new mint
+# replaces a token not used yet. A token may be copied to a second machine, and both may join with it. A join is
+# refused while the node of that name polls; otherwise one conditional write checks the token, uses it up, and makes a
+# new certificate the node's current one. A joined machine polls with its certificate. In the last third of the
+# certificate's life it renews: the control plane keeps the new certificate beside the current one, and the first
+# request with the new one makes it the current one, which ends the old one. A request sent with the old certificate
+# just before the renewal may arrive after it. Time passes in ticks. Every action is atomic. Environment: the status
+# write is conditional on the version it read (writeNodeStatus retries a conflict), so a join's checks and its write
+# are one step; liveness reads Ready while the node polled since the last tick; TLS refuses a certificate past its end.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 12
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant no-use-up: ATokenJoinsOnce
+# mutant no-end-check: NoJoinWithATokenPastItsEnd
+# mutant keep-old-tokens: NoJoinWithAReplacedToken
+# mutant no-ready-check: NoJoinOverAPollingNode
+# mutant renew-replaces: NoRequestRefusedMidRenewal
+# mutant keep-old-cert: TheOldCertificateEndsAtTheNewOnesFirstRequest
+# mutant no-cert-end: NoRequestWithACertificatePastItsEnd
+
+# no-use-up: a join leaves its token waiting. no-end-check: a join takes a token past its end. keep-old-tokens: a mint
+# keeps the unused token beside the new one. no-ready-check: a join goes on while the node polls. renew-replaces: a
+# renewal makes the new certificate the current one at once. keep-old-cert: the first request with the new certificate
+# keeps the old one accepted. no-cert-end: a request is admitted with a certificate past its end.
+MUTANT = ""
+
+TTL = 2
+LIFE = 3
+RENEW_AT = 2
+T_END = 4
+
+action Init:
+    clock = 0
+    phase = "declared"
+    pending = {}
+    minted = 0
+    held = {0: 0, 1: 0}
+    used = []
+    current = 0
+    renewed = 0
+    retired = []
+    certEnd = {}
+    signed = 0
+    wallet = {0: 0, 1: 0}
+    inflight = 0
+    promoted = True
+    polled = False
+    joinedTwice = False
+    lateJoin = False
+    replacedJoin = False
+    joinOverPolling = False
+    refusedMidRenewal = False
+    retiredAdmitted = False
+    expiredAdmitted = False
+
+atomic action Mint:
+    require minted < 2
+    minted += 1
+    if MUTANT != "keep-old-tokens":
+        pending = {}
+    pending[minted] = clock + TTL
+    m = oneof [0, 1]
+    held[m] = minted
+
+atomic action CopyToken:
+    require held[0] != held[1]
+    m = oneof [0, 1]
+    require held[m] != 0
+    held[1 - m] = held[m]
+
+atomic action Join:
+    m = oneof [0, 1]
+    t = held[m]
+    require t in pending
+    ready = polled
+    if MUTANT != "no-ready-check":
+        require not ready
+    late = clock > pending[t]
+    if MUTANT != "no-end-check":
+        require not late
+    if t in used:
+        joinedTwice = True
+    if late:
+        lateJoin = True
+    if t != minted:
+        replacedJoin = True
+    if ready:
+        joinOverPolling = True
+    used.append(t)
+    if MUTANT != "no-use-up":
+        pending.pop(t)
+    held[m] = 0
+    signed += 1
+    current = signed
+    renewed = 0
+    certEnd[signed] = clock + LIFE
+    wallet[m] = signed
+    inflight = 0
+    promoted = True
+    phase = "joined"
+
+atomic action Poll:
+    m = oneof [0, 1]
+    c = wallet[m]
+    require c != 0
+    expired = clock > certEnd[c]
+    if MUTANT != "no-cert-end":
+        require not expired
+    require c == current or c == renewed
+    if expired:
+        expiredAdmitted = True
+    if c in retired:
+        retiredAdmitted = True
+    if c == renewed:
+        old = current
+        current = renewed
+        renewed = 0
+        retired.append(old)
+        if MUTANT == "keep-old-cert":
+            renewed = old
+        promoted = True
+        phase = "joined"
+    polled = True
+
+atomic action Renew:
+    m = oneof [0, 1]
+    c = wallet[m]
+    require c != 0 and c == current and renewed == 0
+    require clock >= certEnd[c] - LIFE + RENEW_AT and clock <= certEnd[c]
+    signed += 1
+    certEnd[signed] = clock + LIFE
+    if MUTANT == "renew-replaces":
+        current = signed
+    else:
+        renewed = signed
+    inflight = c
+    wallet[m] = signed
+    promoted = False
+    phase = "renewing"
+
+atomic action InflightArrives:
+    require inflight != 0
+    c = inflight
+    inflight = 0
+    valid = clock <= certEnd[c]
+    ok = (c == current or c == renewed) and valid
+    if valid and not ok and not promoted:
+        refusedMidRenewal = True
+    if ok and c in retired:
+        retiredAdmitted = True
+
+atomic fair action Tick:
+    require clock < T_END
+    clock += 1
+    polled = False
+
+always assertion ATokenJoinsOnce:
+    return not joinedTwice
+
+always assertion NoJoinWithATokenPastItsEnd:
+    return not lateJoin
+
+always assertion NoJoinWithAReplacedToken:
+    return not replacedJoin
+
+always assertion NoJoinOverAPollingNode:
+    return not joinOverPolling
+
+always assertion NoRequestRefusedMidRenewal:
+    return not refusedMidRenewal
+
+always assertion TheOldCertificateEndsAtTheNewOnesFirstRequest:
+    return not retiredAdmitted
+
+always assertion NoRequestWithACertificatePastItsEnd:
+    return not expiredAdmitted
