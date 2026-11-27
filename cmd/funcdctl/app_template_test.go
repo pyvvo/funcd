@@ -720,10 +720,18 @@ func TestAppDeployWaitLaggingEndsWhenReplaced(t *testing.T) {
 	require.NoError(t, run.wait(t))
 }
 
-// Without --wait-lagging, a piped deploy exits at the switch and names the stack that goes on; --wait-lagging is
-// refused with --no-wait or --dry-run.
+// scenario: app-view-lagging, through the command — without --wait-lagging, deploy exits at the switch while the
+// stack lags, and names it: on a terminal in its last draw, in a pipe as a line; --wait-lagging is refused with
+// --no-wait or --dry-run.
 func TestAppDeployExitsWhileAPartLags(t *testing.T) {
 	t.Parallel()
+	lc, _, lst := newTestServer(t)
+	live := startLiveCLI(t, lc, "app", "deploy", deployTemplate(t, "1.0.0"), "-n", "team-a")
+	lagAtSwitch(t, lst, waitApplied(t, lc, "1.0.0"))
+	require.NoError(t, live.wait(t))
+	requireLines(t, live.out.String(), "1/2 ready · 1 lagging", "◐ InfraStack/todo-stack goes on after this command",
+		"funcdctl get infrastacks todo-stack -n team-a")
+
 	c, _, st := newTestServer(t)
 	run := startCLI(t, c, "app", "deploy", deployTemplate(t, "1.0.0"), "-n", "team-a")
 	lagAtSwitch(t, st, waitApplied(t, c, "1.0.0"))
