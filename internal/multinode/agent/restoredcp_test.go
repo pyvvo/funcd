@@ -41,6 +41,8 @@ func anyKVStore(*v1.KVStore) bool { return true }
 
 // A control plane restored to a point before what its node holds: the node keeps it all and follows nothing while the
 // control plane is held, then starts again on the restored state, with the runs it made since.
+// oracle: docs/design/multinode/restore.fizz#NoNodeRunsOnAHeldState
+// oracle: docs/design/multinode/restore.fizz#TheControlPlaneHoldsTheNodesRun
 func TestANodeOutlivesTheRestoreOfItsControlPlane(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)

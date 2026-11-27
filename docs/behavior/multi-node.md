@@ -14,10 +14,9 @@ stateDiagram-v2
     Ready --> [*] : deleted, once no Namespace names it
 ```
 
-The machine is a WorkerNode's phase, which the control plane writes from its node's polls; it never dials a node. A
-namespace's own objects follow their kinds' chapters, on the node that runs them. Each row holds on both drivers, HTTPS and
-NATS, and names an answer that differs. A node's workers: [Workers](workers.md). Its backups: [Disaster
-recovery](disaster-recovery.md).
+The machine is a WorkerNode's phase, written from its node's polls; the control plane never dials a node. A namespace's
+own objects follow their kinds' chapters, on the node that runs them. Each row holds on both drivers and names an answer
+that differs. A node's workers: [Workers](workers.md). Its backups: [Disaster recovery](disaster-recovery.md).
 
 | Where | What happens | Time | You see | Status | Source |
 |---|---|---|---|---|---|
@@ -57,11 +56,11 @@ recovery](disaster-recovery.md).
 | The node's own API | It answers reads, and the release of the node's own hold and quarantine: the control plane holds the node's namespaces, so another write there would be undone | none | 405 `this is a worker node` | accepted | `TestAWorkerNodeRunsTheNamespacePlacedOnIt` |
 | A namespace's master | Derived from the control plane's master and the namespace's UID. A node keeps only its own namespaces' masters, under cluster.dataDir, and derives their S3 pairs, SQL passwords, lake and add-on tokens from them | none | `NamespaceKeyMissing` until it arrives | decided | decider 2026-11-16, #1486, `TestANodeKeepsTheMastersOfItsNamespacesOnly` |
 | Secrets on a node | Kept encrypted at rest; with no `secrets.encryptionKeyFile` the node makes its own key under cluster.dataDir, and losing it with the store loses nothing, since the control plane holds every Secret | none | none | decided | decider 2026-11-16, #1486, `TestAWorkerNodeKeepsItsSecretsEncryptedWithAKeyOfItsOwn` |
-| A node's backups | A worker node backs up its own stores under nodes/<name>/ of backup.target and kvstore.backup.target, with no Secret and naming no key, as its `funcd upgrade` does; its restore asks for none | none | none | decided | decider 2026-11-16, #1488, `TestAWorkerNodeBacksUpUnderItsOwnPrefix`, `TestAWorkerNodesPreUpgradeGenerationHoldsNoSecret` |
-| A node's backup status | A node reports its platform backup to its WorkerNode's status.backup at its start, then when it changes | checked every `selfEvery` 5m | the WorkerNode's `status.backup` | decided | decider 2026-11-16, #1488, `TestANodeReportsItsBackupInItsWorkerNode` |
+| A node's backups | A worker node backs up its own stores under nodes/<name>/ of backup.target and kvstore.backup.target, with no Secret, naming no key, as its `funcd upgrade` does; its restore asks for none | none | none | decided | decider 2026-11-16, #1488, `TestAWorkerNodeBacksUpUnderItsOwnPrefix`, `TestAWorkerNodesPreUpgradeGenerationHoldsNoSecret` |
+| A node's backup status | A node reports its platform backup to its WorkerNode's status.backup at its start, then when it changes; a target it cannot list shows as its last failure | checked every `selfEvery` 5m | the WorkerNode's `status.backup` | decided | decider 2026-11-16, #1488, `TestANodeReportsItsBackupInItsWorkerNode` |
 | A node whose store is new or restored | Before anything runs, a boot reclaim included, it takes its namespaces whole with the children it made, credentials' Secrets too, and waits for the control plane | none | `waits for the control plane's snapshot` | decided | decider 2026-11-16, #1488, `TestAReplacedNodeComesBackFromItsBackup`, `TestANodeThatLostItsMetastoreKeepsItsData` |
 | A restored node's runs | A run its restore paused shows paused on the control plane until a person resumes it; a run, a Backup or a Restore that ended there stays ended, whatever the node's older copy says | none | `spec.paused` | decided | ADR-0206 Decision 7, `TestARunTheRestoreOfItsNodePausedWaitsForAPerson`, `TestWhatEndedStaysEndedAfterItsNodesRestore` |
-| A restored control plane | While it is held, its nodes run on and follow nothing. After the release each starts again on the restored state, with the runs it made since; the data of what the backup lacks goes into its quarantine | `retryMax` 5 s after the release | 503 `is held after its restore` | decided | ADR-0206, ADR-0288, `TestARestoredControlPlaneLosesNoDataOfItsNodes` |
+| A restored control plane | While it is held, its nodes run on and follow nothing; after the release each starts again on the restored state, with the runs it made since, and data the backup lacks goes into quarantine | `retryMax` 5 s after the release | 503 `is held after its restore` | decided | ADR-0206, ADR-0288, `TestARestoredControlPlaneLosesNoDataOfItsNodes` |
 | A snapshot on a running node | The runs and records it made go to the control plane first, so it loses none; it then reports every status and child again. A metastore's backup leaves the change log out | none | `synced from a snapshot` | accepted | `TestARunTheNodeMadeOutlivesASnapshot`, `TestANodeReportsEverythingAgainAfterASnapshot`, `TestASnapshotLeavesTheChangeLogOut` |
 | The control plane away | The node runs its namespaces from its own store; changes, status and node calls wait until the control plane answers | none | `node agent: feed` | decided | decider 2026-11-16, #1480 |
 | The node API's driver | `cluster.driver` picks it: `https`, a long poll, or `nats`, core NATS embedded in funcd, with no JetStream. A node takes the driver of the URL it joins | none | `node API listening` | decided | decider 2026-11-26, #1495, `TestScenarioNATSPassesTheNodeAPIContract`, `TestAWorkerNodeRunsTheNamespacePlacedOnItOverNATS` |

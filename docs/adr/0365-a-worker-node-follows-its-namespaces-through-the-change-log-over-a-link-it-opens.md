@@ -141,7 +141,8 @@ ADRs (F244, F245, F248 to F252).
 - **Left to tests**: which records concern a node (`TestAWriteWakesOnlyTheNodesItConcerns`,
   `TestANodeGetsTheAPITokensAndTheNamespacesThatConcernIt`); each driver's wire (`nodeapicontract`, and the NATS tests
   of permissions, chunks and silent links); a torn cursor, which reads as none (`TestATornCursorReadsAsNone`); a record
-  the node cannot decode, skipped with no snapshot (`TestARecordTheNodeCannotDecodeIsSkipped`).
+  the node cannot decode, skipped with no snapshot (`TestARecordTheNodeCannotDecodeIsSkipped`); a restore of the node's
+  store or of its control plane, which ADR-0373's [`restore.fizz`](../design/multinode/restore.fizz) models.
 
 ## Behavior rows
 

@@ -860,33 +860,53 @@ type fakeBackup runner.Status
 
 func (f fakeBackup) Status(context.Context) (runner.Status, error) { return runner.Status(f), nil }
 
+// unlisted is a platform backup whose target's listing fails: it gives its last status with the error, as runner.Status
+// does.
+type unlisted runner.Status
+
+func (f unlisted) Status(context.Context) (runner.Status, error) {
+	return runner.Status(f), fault.Unavailablef("runner.Status", "list the backup target: connection refused")
+}
+
 func TestANodeReportsItsBackupInItsWorkerNode(t *testing.T) {
-	ctx := context.Background()
-	r := startCP(t)
-	token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
-	require.NoError(t, err)
-	dir := t.TempDir()
-	_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
-	require.NoError(t, err)
 	last := v1.NewTimestamp(time.Date(2026, 11, 17, 3, 0, 0, 0, time.UTC))
-	a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test", Platform: "linux/arm64",
-		Commands: multinode.Commands{BlobStore: "s3://node-blobs", Backup: fakeBackup{LastSuccessTime: &last, RPORisk: true}}})
-	require.NoError(t, err)
-	actx, stop := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() { _ = a.Run(actx); close(done) }()
-	defer func() { stop(); <-done }()
-	eventually(t, "the WorkerNode shows the node's backup", func() bool {
-		obj, err := r.cp.Get(ctx, v1.KindWorkerNode.GVK(), "", "vm1")
-		if err != nil {
-			return false
-		}
-		b := obj.(*v1.WorkerNode).Status.Backup
-		return b != nil && b.RPORisk && b.LastSuccessTime != nil && time.Time(*b.LastSuccessTime).Equal(time.Time(last))
-	})
-	obj, err := r.cp.Get(ctx, v1.KindWorkerNode.GVK(), "", "vm1")
-	require.NoError(t, err)
-	require.Equal(t, "s3://node-blobs", obj.(*v1.WorkerNode).Status.BlobStore)
+	since := func(b *v1.NodeBackup) bool {
+		return b.LastSuccessTime != nil && time.Time(*b.LastSuccessTime).Equal(time.Time(last))
+	}
+	for name, c := range map[string]struct {
+		backup multinode.Backups
+		shows  func(*v1.NodeBackup) bool
+	}{
+		"its backup's status": {fakeBackup{LastSuccessTime: &last, RPORisk: true}, func(b *v1.NodeBackup) bool { return b.RPORisk && since(b) }},
+		"a target it fails to list": {unlisted{LastSuccessTime: &last}, func(b *v1.NodeBackup) bool {
+			return strings.Contains(b.LastFailure, "list the backup target") && since(b)
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			r := startCP(t)
+			token, _, err := r.cluster.MintJoinToken(ctx, "vm1", 0)
+			require.NoError(t, err)
+			dir := t.TempDir()
+			_, err = agent.Join(ctx, longpoll.NewConnector(), r.server(), token, dir, "test", "linux/arm64")
+			require.NoError(t, err)
+			a, err := agent.New(agent.Config{Connector: longpoll.NewConnector(), Dir: dir, Store: r.node, Logs: fakeLogs{}, Version: "test",
+				Platform: "linux/arm64", Commands: multinode.Commands{BlobStore: "s3://node-blobs", Backup: c.backup}})
+			require.NoError(t, err)
+			actx, stop := context.WithCancel(ctx)
+			done := make(chan struct{})
+			go func() { _ = a.Run(actx); close(done) }()
+			defer func() { stop(); <-done }()
+			eventually(t, "the WorkerNode shows the node's blob store and backup", func() bool {
+				obj, err := r.cp.Get(ctx, v1.KindWorkerNode.GVK(), "", "vm1")
+				if err != nil {
+					return false
+				}
+				s := obj.(*v1.WorkerNode).Status
+				return s.BlobStore == "s3://node-blobs" && s.Backup != nil && c.shows(s.Backup)
+			})
+		})
+	}
 }
 
 func TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers(t *testing.T) {

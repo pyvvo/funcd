@@ -377,11 +377,11 @@ func (a *Agent) reportSelf(ctx context.Context) {
 	report := nodeapi.NodeReport{BlobStore: a.cfg.Commands.BlobStore}
 	if b := a.cfg.Commands.Backup; b != nil {
 		st, err := b.Status(ctx)
-		if err != nil {
-			a.log.WarnContext(ctx, "node agent: read the backup status", "error", err)
-			return
-		}
 		nb := multinode.NodeBackup(st)
+		if err != nil { // a target the node fails to list shows, with the last status it had (ADR-0373 Decision 3)
+			a.log.WarnContext(ctx, "node agent: read the backup status", "error", err)
+			nb.LastFailure = err.Error()
+		}
 		report.Backup = &nb
 	}
 	b, err := json.Marshal(report)

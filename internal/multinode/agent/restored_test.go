@@ -69,6 +69,7 @@ func anyConfigMap(*v1.ConfigMap) bool { return true }
 
 // A node that starts with another store than the one its saved revision is of follows nothing from that revision: its
 // store is new, or restored to an older point, so it takes its namespaces whole, with the children it made.
+// oracle: docs/design/multinode/restore.fizz#NothingRunsBeforeTheTakeWhole
 func TestANodeWithANewStoreTakesItsNamespacesAgain(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)
@@ -152,6 +153,8 @@ func workflowRun(name v1.ObjectName) *v1.WorkflowRun {
 }
 
 // A run that the restore of its node paused (ADR-0206 Decision 7) stays paused on both sides until a person resumes it.
+// oracle: docs/design/multinode/restore.fizz#ThePauseStaysOnTheNode
+// oracle: docs/design/multinode/restore.fizz#ThePauseShows
 func TestARunTheRestoreOfItsNodePausedWaitsForAPerson(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)
@@ -179,6 +182,7 @@ func TestARunTheRestoreOfItsNodePausedWaitsForAPerson(t *testing.T) {
 
 // What ended stays ended: a node restored to a point before the end takes the control plane's end, and what its own
 // restore or its start made of the older status never replaces it.
+// oracle: docs/design/multinode/restore.fizz#AnEndedRunStaysEnded
 func TestWhatEndedStaysEndedAfterItsNodesRestore(t *testing.T) {
 	ctx := context.Background()
 	n := joinNode(t)

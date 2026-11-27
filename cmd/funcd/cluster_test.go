@@ -134,6 +134,18 @@ func TestAJoinedNodeRestoresFromItsOwnPrefix(t *testing.T) {
 
 // The pre-upgrade generation of a joined node goes under the node's own prefix too, not at the root of the target, which is
 // the control plane's.
+// A worker node makes its nodes/<name>/ part of a file:// target that exists, and leaves a target that is not there, as a
+// disk that is not mounted, for backup.Open to refuse.
+func TestANodeMakesItsPartOfAFileTargetThatExists(t *testing.T) {
+	root := t.TempDir()
+	var cfg config.Config
+	cfg.Backup.Target = "file://" + filepath.ToSlash(filepath.Join(root, "nodes", "vm1"))
+	cfg.Kvstore.Backup.Target = "file://" + filepath.ToSlash(filepath.Join(root, "unmounted", "nodes", "vm1"))
+	require.NoError(t, roleNode.makeTargets(cfg))
+	require.DirExists(t, filepath.Join(root, "nodes", "vm1"))
+	require.NoDirExists(t, filepath.Join(root, "unmounted"))
+}
+
 func TestAJoinedNodesUpgradeWritesUnderItsOwnPrefix(t *testing.T) {
 	target := t.TempDir()
 	n := newNode(t, upgradeKey(), backupYAML(target))
