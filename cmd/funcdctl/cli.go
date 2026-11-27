@@ -32,6 +32,7 @@ type cli struct {
 	conn   *pflag.FlagSet // the root's persistent --server and --token
 	client *sdk.Client    // non-nil → injected (tests); else built from conn on demand
 	images template.ImageResolver
+	live   func(io.Writer) bool // nil: liveTerminal decides; a test draws the App view into a buffer
 }
 
 // defaultServer is the control plane a command reaches when neither --server nor $FUNCD_SERVER names one.
@@ -48,14 +49,18 @@ func newRootCmdWith(out io.Writer, client *sdk.Client) *cobra.Command {
 
 // newRootCmdFor is newRootCmdWith reading image registries through images.
 func newRootCmdFor(out io.Writer, client *sdk.Client, images template.ImageResolver) *cobra.Command {
-	a := &cli{out: out, client: client, images: images}
+	return newRootCmdOf(&cli{out: out, client: client, images: images})
+}
+
+// newRootCmdOf builds the tree over a.
+func newRootCmdOf(a *cli) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "funcdctl",
 		Short:         "funcd control-plane CLI (kubectl-style)",
 		SilenceUsage:  true, // funcd's api/fault error is printed once by main, not cobra's usage dump
 		SilenceErrors: true,
 	}
-	root.SetOut(out)
+	root.SetOut(a.out)
 	a.conn = root.PersistentFlags()
 	a.conn.String("server", "", "control-plane base URL ($FUNCD_SERVER, else "+defaultServer+")")
 	a.conn.String("token", "", "bearer token for the authenticated control plane ($FUNCD_TOKEN)")

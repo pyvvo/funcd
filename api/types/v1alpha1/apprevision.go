@@ -44,6 +44,8 @@ type AppRevisionStatus struct {
 	// rollout deadline (ADR-0212 Decision 6) needs it (ADR-0219 Decision 3), and counts from the end of a part's wait
 	// too (ADR-0357 Decision 3).
 	StartedAt *Timestamp `json:"startedAt,omitempty" doc:"When the rollout started: when the revision was created, or, when it waited for required Apps, once they were all met; unset while it waits. The rollout fails if it is not complete app.upgradeTimeout after the latest of this time, a resume of the App, the release of a hold, the end of the last pre-hook call and the end of a part's wait, the App's status.lagEndedAt, unless a pre-hook call is running."`
+	// Deadline publishes the reconciler's deadline for funcdctl's view (ADR-0362 Decision 5).
+	Deadline *Timestamp `json:"deadline,omitempty" doc:"When a pass fails the rollout if a part is still not Ready and no pre-hook call has started: the latest of startedAt, a resume, a hold's release, a pre-hook's end and a lag's end, plus app.upgradeTimeout. A pause or a hold moves it when it ends, so while one lasts it can lie in the past. Unset before the clock starts."`
 	// Hooks records every hook call of the revision, retries included, in call order (ADR-0214 Decision 6).
 	Hooks []AppHookCall `json:"hooks,omitempty" doc:"The hook calls of this revision in call order, a retried call included. A call that ends during a stop of funcd, a hold or a pause of the App is not recorded and is made again."`
 }

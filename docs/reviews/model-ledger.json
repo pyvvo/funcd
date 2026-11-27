@@ -15583,5 +15583,35 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0361-implementation-claude-opus-5-5.md",
     "notes": "pass 0/0/0. Build/vet both builds, lint 0 issues, all 14 ADR-0361 tests pass under -race with none skipped (host has a LAN address; WebSocket relay over the LAN), package tests pass in both builds, check-behavior/check-hygiene/Spec page clean; mutant (bare --lan on loopback) killed. Routed: repo-wide just ci and gate to the PR gate; PR carries Fixes #1597."
+  },
+  {
+    "date": "2026-11-27",
+    "adr": "0362",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 3,
+    "minors": 3,
+    "model_attributed": 6,
+    "dod_passed": 12,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0362-implementation-claude-opus-5-5.md",
+    "notes": "changes-requested; deadline, Names/uses (InUse unchanged), box, waits-on, clocks, hooks, delete view and lines hold, 23 of 35 mutants die (1 equivalent); Major 1 (model): the plan's dry run runs after the apply, so one reconciler pass empties the plan; Major 2 (model): a ChildNotOwned or namesake stop, which carries an action, is drawn as a plan, and its test uses a shape the Planner never sends; Major 3 (model): the box prints reasons and versions without termSafe; Minor 1 (model): done() returns no error, unlike the Contract; Minor 2 (model): the required-App wait keys on Unmet, not startedAt; Minor 3 (model): 11 mutants survive (Lagging, SQL InUse, requires lines, TERM=dumb, live wiring); routed (adr): behavior row in funcdctl.md as apps.md is at its 16 KiB cap, Names' owner and Route fields read as InUse and waits-on, box height unbounded"
+  },
+  {
+    "date": "2026-11-27",
+    "adr": "0362",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 14,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0362-implementation-claude-opus-5-5-2.md",
+    "notes": "pass (round 2, b2b062e0); round 1's 3 Majors and 3 Minors fixed and pinned: dry run before the apply (B1 and B2 die), any reason marks a stop, termSafe in the box, done() error, the wait keyed on startedAt; all 33 rerun round-1 mutants die, 47 of 53 in all; routed points settled (owners no Names, delete InUse via gc.Uses, tall boxes fold); Minor 1 (model): the InUse and fold departures from Decisions 2 and 3 are unrecorded (no differs row) and the last draw folds too; Minor 2 (model): the delete reason's termSafe and Lagging kept out of the fold are untested; routed (adr): the decider may amend Decisions 2 and 3 in place"
   }
 ]

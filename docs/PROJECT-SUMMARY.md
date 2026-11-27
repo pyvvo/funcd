@@ -392,8 +392,8 @@ sequenceDiagram
 
 ## Build status (V1)
 
-The V1 build slate is complete and past it: **ADR-0001…0361** decided, **348 Implemented** (34 accepted as the
-roadmap's tier-0 build items; the rest — incl. ADR-0034…0361 — are follow-ons refining or extending
+The V1 build slate is complete and past it: **ADR-0001…0362** decided, **349 Implemented** (34 accepted as the
+roadmap's tier-0 build items; the rest — incl. ADR-0034…0362 — are follow-ons refining or extending
 existing feature rows), **0 roadmap items remaining**. Not Implemented: ADR-0000 (the process ADR), ADR-0216
 (App tests, Accepted, F119 deferred), the two DR addenda ADR-0227/0228 (Accepted; they record code already
 on main) the AI gateway epoch's ADR-0280…0285 (FEAT-0015, Accepted) and the artifact supply chain's ADR-0298/0299 (FEAT-0017, Accepted). The exit-criterion path is proven end-to-end — a
@@ -865,3 +865,4 @@ All are **Implemented** unless the recap says *superseded*.
 | [ADR-0359 — Under funcdctl dev, an opt-in runs funcd's own runtimes in containers, from images funcdctl carries (amends ADR-0346)](adr/0359-under-funcdctl-dev-an-opt-in-runs-funcds-own-runtimes-in-containers.md) | **Implemented.** funcd's runtimes in containers under dev. Realizes F276. | <ol><li>The opt-in</li><li>No runtime on the host</li><li>The images funcdctl carries</li><li>Loading</li><li>Builds in a container</li><li>Platform and logs</li><li>The release</li></ol> |
 | [ADR-0360 — A Function that serves HTTP takes WebSocket connections with Hono's upgradeWebSocket](adr/0360-a-function-that-serves-http-takes-websocket-connections.md) | **Implemented.** WebSocket in Functions that serve HTTP. Amends ADR-0243. Realizes F277. | <ol><li>`upgradeWebSocket`</li><li>The shim takes the socket with `@hono/node-server`</li><li>The message cap</li><li>What funcd does, unchanged</li></ol> |
 | [ADR-0361 — Under funcdctl dev, an opt-in puts the gateway on the LAN, and every other listener stays on loopback](adr/0361-under-funcdctl-dev-an-opt-in-puts-the-gateway-on-the-lan.md) | **Implemented.** Dev's gateway on the LAN. Amends ADR-0125. Realizes F278. | <ol><li>The opt-in</li><li>Only the gateway leaves loopback</li><li>The banner</li></ol> |
+| [ADR-0362 — funcdctl app deploy and app delete show their progress as a live view](adr/0362-app-deploy-and-delete-show-their-progress-as-a-live-view.md) | **Implemented.** A live view of an App's deploy and delete. Amends ADR-0217, ADR-0337. Realizes F279. | <ol><li>Where it shows</li><li>The deploy view</li><li>The delete view</li><li>Waits on</li><li>Times and the deadline</li><li>Lines</li><li>Exits</li></ol> |

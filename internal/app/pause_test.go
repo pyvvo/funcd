@@ -258,3 +258,31 @@ func TestAppNeverPausedHasNoPausedCondition(t *testing.T) {
 	_, ok := h.app().Status.Conditions.Get("Paused")
 	require.False(t, ok)
 }
+
+// scenario: app-view-deadline (ADR-0362 Decision 5) — the revision publishes the reconciler's deadline: startedAt plus
+// the timeout, written again only when a resume moves it, and kept once the revision is final.
+func TestScenarioAppViewDeadline(t *testing.T) {
+	h := newHarness(t, nil, func(d *app.Deps) { d.UpgradeTimeout = 20 * time.Second })
+	h.install(todoApp(nil))
+	h.edit(setImage("oci-layout://never-starts:2"))
+	h.reconcile()
+	rev := h.rev(2)
+	require.NotNil(t, rev.Status.Deadline)
+	require.Equal(t, v1.NewTimestamp(time.Time(*rev.Status.StartedAt).Add(20*time.Second)), *rev.Status.Deadline)
+	h.clk.Advance(time.Second)
+	h.reconcile()
+	require.Equal(t, rev.ResourceVersion, h.rev(2).ResourceVersion, "an unchanged deadline writes nothing")
+
+	h.edit(pause(true))
+	h.reconcile()
+	h.clk.Advance(30 * time.Second)
+	h.edit(pause(false))
+	resumed := h.clk.Now()
+	h.reconcile()
+	want := v1.NewTimestamp(resumed.Add(20 * time.Second))
+	require.Equal(t, want, *h.rev(2).Status.Deadline, "a resume moves the deadline")
+	h.clk.Advance(20 * time.Second)
+	h.reconcile()
+	require.Equal(t, v1.PhaseFailed, h.rev(2).Status.Phase)
+	require.Equal(t, want, *h.rev(2).Status.Deadline, "kept once the revision is final")
+}

@@ -55,7 +55,7 @@ func (r *Reconciler) requirements(ctx context.Context, a *v1.App) (requires, err
 		if dep != nil {
 			s.Version = dep.Spec.Version
 		}
-		what := unmet(e, dep)
+		what := Unmet(e, dep)
 		s.Met = what == ""
 		if !s.Met && rq.unmet == "" {
 			rq.unmet = fmt.Sprintf("App/%s %s; %s needs %s", e.App, what, a.Name, cmp.Or(e.Version, "any version"))
@@ -65,9 +65,10 @@ func (r *Reconciler) requirements(ctx context.Context, a *v1.App) (requires, err
 	return rq, nil
 }
 
-// unmet is what keeps e from being met by the required App dep, checked in Decision 2's order, "" when it is met: dep
-// exists, matches e at its spec.version and serves that version Ready.
-func unmet(e v1.AppRequirement, dep *v1.App) string {
+// Unmet is what keeps e from being met by the required App dep, checked in Decision 2's order, "" when it is met: dep
+// exists, matches e at its spec.version and serves that version Ready. funcdctl's view shows it per requirement
+// (ADR-0362 Decision 2).
+func Unmet(e v1.AppRequirement, dep *v1.App) string {
 	switch {
 	case dep == nil:
 		return "does not exist"

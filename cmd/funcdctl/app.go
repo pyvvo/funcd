@@ -20,6 +20,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	appctl "github.com/pyvvo/funcd/internal/app"
 	"github.com/pyvvo/funcd/internal/app/template"
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/gc"
@@ -498,8 +499,10 @@ func (a *cli) appDeployCmd() *cobra.Command {
 		Use:   "deploy <dir|ref>",
 		Short: "Render an App template, apply the App and wait until its new revision is current or failed",
 		Long: "Render an App template, apply the App and wait until its new revision is current or failed.\n\n" +
-			"One command deploys, upgrades and downgrades. Deploy prints the revision it follows and each part whose " +
-			"state changes, and exits 0 once the revision is current; 1 when it fails, when the App's spec changes " +
+			"One command deploys, upgrades and downgrades. On a terminal deploy draws a live view: a row per required App, " +
+			"hook and part with its state, what it waits on and its time, and the revision's deadline. Elsewhere it prints " +
+			"the revision it follows and each part whose state changes, a settled part's line ending with its time. It " +
+			"exits 0 once the revision is current; 1 when it fails, when the App's spec changes " +
 			"before it is stamped, or when the App is deleted. The server's app.upgradeTimeout bounds a rollout; an " +
 			"interrupt stops the wait, not the rollout.",
 		Args: cobra.ExactArgs(1),
@@ -534,7 +537,20 @@ func (a *cli) deploy(ctx context.Context, c *sdk.Client, t *template.Template, i
 		s      *deployStart
 		answer v1.Object
 		err    error
+		v      *appView
 	)
+	if !dryRun && !noWait {
+		v = newAppView(a.out, a.liveView(), time.Now)
+		if v.live {
+			// The plan line's dry run, before the apply: once the revision is stamped, a plan says nothing changes
+			// (ADR-0362 Decision 2). A failed dry run draws no plan line.
+			if _, planned, err := applyRendered(ctx, c, t, in, true); err == nil {
+				if p, ok := planned.(*v1.App); ok {
+					v.plan = p.Status.Plan
+				}
+			}
+		}
+	}
 	for attempt := 1; ; attempt++ {
 		s, answer, err = applyRendered(ctx, c, t, in, dryRun)
 		if err == nil || fault.KindOf(err) != fault.Conflict || attempt == applyAttempts {
@@ -561,7 +577,15 @@ func (a *cli) deploy(ctx context.Context, c *sdk.Client, t *template.Template, i
 	if noWait {
 		return nil
 	}
-	return a.waitDeploy(ctx, c, s.applied, s.n0, s.ready)
+	return a.waitDeploy(ctx, c, s.applied, s.n0, s.ready, v)
+}
+
+// liveView reports whether the App view draws live: on a terminal, or as a test sets it.
+func (a *cli) liveView() bool {
+	if a.live != nil {
+		return a.live(a.out)
+	}
+	return liveTerminal(a.out)
 }
 
 // deployAddon readies the template's Addon before the App (ADR-0337 Decision 2) and reports whether the App goes on.
@@ -756,14 +780,21 @@ func followed(revs []*v1.AppRevision, spec v1.AppSpec, n0, latest int64) (*v1.Ap
 // it prints the revision's name and each child whose state or reason changed; it prints the App's Ready condition
 // whenever it changes from ready, the one read before the apply, so a wait for a stamp (a hold, a paused App) is
 // visible too.
-func (a *cli) waitDeploy(ctx context.Context, c *sdk.Client, applied *v1.App, n0 int64, ready string) error {
-	return a.waitDeployEvery(ctx, c, applied, n0, ready, deployPoll)
+func (a *cli) waitDeploy(ctx context.Context, c *sdk.Client, applied *v1.App, n0 int64, ready string, v *appView) error {
+	return a.waitDeployEvery(ctx, c, applied, n0, ready, deployPoll, v)
 }
 
-// waitDeployEvery is waitDeploy reading the App every poll; funcdctl dev follows a revision at a shorter pace.
-func (a *cli) waitDeployEvery(ctx context.Context, c *sdk.Client, applied *v1.App, n0 int64, ready string, poll time.Duration) error {
+// waitDeployEvery is waitDeploy reading the App every poll; funcdctl dev follows a revision at a shorter pace and
+// passes no view, so it prints the plain lines. A live view draws each poll; a view off a terminal times the lines.
+func (a *cli) waitDeployEvery(ctx context.Context, c *sdk.Client, applied *v1.App, n0 int64, ready string, poll time.Duration, v *appView) error {
 	const op = "funcdctl app deploy"
-	w := &deployWatch{children: map[string]string{}, ready: ready}
+	w := &deployWatch{children: map[string]string{}, ready: ready, requires: map[v1.ObjectName]string{}}
+	if v != nil {
+		defer func() { _ = v.done() }()
+		if !v.live {
+			w.times = v.clock
+		}
+	}
 	for first := true; ; first = false {
 		if !first {
 			if err := sleepCtx(ctx, poll); err != nil {
@@ -798,7 +829,7 @@ func (a *cli) waitDeployEvery(ctx context.Context, c *sdk.Client, applied *v1.Ap
 				return fault.Conflictf(op, "App %s's spec changed before a revision of this deploy was stamped", app.Name)
 			}
 		}
-		if err := a.report(w, app, rev); err != nil {
+		if err := a.show(ctx, c, w, v, app, rev); err != nil {
 			return err
 		}
 		switch {
@@ -812,16 +843,47 @@ func (a *cli) waitDeployEvery(ctx context.Context, c *sdk.Client, applied *v1.Ap
 	}
 }
 
-// deployWatch is what a deploy has printed: the revision it follows, each child's state and the App's Ready.
+// deployWatch is what a deploy has printed: the revision it follows, each child's state, each requirement's state
+// and the App's Ready. times, when set, times each child and ends a settled child's line with it (ADR-0362
+// Decision 6); funcdctl dev sets none.
 type deployWatch struct {
 	following v1.ObjectName
 	children  map[string]string
+	requires  map[v1.ObjectName]string
 	ready     string
+	times     func(id string, done bool) string
+	required  map[v1.ObjectName]*v1.App
 }
 
-// report prints what changed since the last poll: the followed revision and its children, when rev is set, then the
-// App's Ready condition.
+// show shows one poll: the live view's draw, else the lines, which read the required Apps when they are timed.
+func (a *cli) show(ctx context.Context, c *sdk.Client, w *deployWatch, v *appView, app *v1.App, rev *v1.AppRevision) error {
+	if v != nil && v.live {
+		return v.poll(ctx, c, app, rev)
+	}
+	if w.times != nil && len(app.Spec.Requires) > 0 {
+		var err error
+		if w.required, err = requiredApps(ctx, c, app); err != nil {
+			return err
+		}
+	}
+	return a.report(w, app, rev)
+}
+
+// report prints what changed since the last poll: each requirement whose state changed, when the lines are timed,
+// then the followed revision and its children, when rev is set, then the App's Ready condition.
 func (a *cli) report(w *deployWatch, app *v1.App, rev *v1.AppRevision) error {
+	if w.times != nil {
+		for _, e := range app.Spec.Requires {
+			state := cmp.Or(appctl.Unmet(e, w.required[e.App]), "met")
+			if w.requires[e.App] == state {
+				continue
+			}
+			w.requires[e.App] = state
+			if err := a.writef("App/%s requires App/%s: %s\n", app.Name, e.App, termSafe(state)); err != nil {
+				return err
+			}
+		}
+	}
 	if rev != nil {
 		if rev.Name != w.following {
 			w.following = rev.Name
@@ -832,11 +894,19 @@ func (a *cli) report(w *deployWatch, app *v1.App, rev *v1.AppRevision) error {
 		for _, ch := range app.Status.Children {
 			id := string(ch.Kind) + "/" + string(ch.Name)
 			state := strings.TrimSpace(string(ch.State) + " " + ch.Reason)
+			var after string
+			if w.times != nil {
+				if done := ch.State == v1.AppChildReady || ch.State == v1.AppChildNotStarted; done {
+					after = " after " + w.times(id, true)
+				} else {
+					w.times(id, false)
+				}
+			}
 			if w.children[id] == state {
 				continue
 			}
 			w.children[id] = state
-			if err := a.writef("%s %s\n", id, termSafe(state)); err != nil {
+			if err := a.writef("%s %s%s\n", id, termSafe(state), after); err != nil {
 				return err
 			}
 		}
@@ -920,19 +990,30 @@ func (a *cli) deleteApp(ctx context.Context, c *sdk.Client, ns v1.NamespaceName,
 	if noWait {
 		return nil
 	}
-	if err := a.waitTreeGone(ctx, c, ns, tree); err != nil {
+	v := newAppView(a.out, a.liveView(), time.Now)
+	defer func() { _ = v.done() }()
+	all, err := a.waitTreeGone(ctx, c, ns, name, tree, v)
+	if err != nil {
 		return err
 	}
+	var kept []v1.ObjectRef
 	for _, s := range stores {
 		_, err := c.Get(ctx, s.Kind, ns, s.Name)
 		switch {
 		case err == nil:
+			kept = append(kept, s)
+			if v.live {
+				continue
+			}
 			if err := a.writef("kept %s/%s\n", s.Kind, s.Name); err != nil {
 				return err
 			}
 		case fault.KindOf(err) != fault.NotFound:
 			return err
 		}
+	}
+	if v.live {
+		return v.remove(name, all, nil, kept)
 	}
 	return nil
 }
@@ -958,39 +1039,59 @@ func ownStores(app *v1.App) []v1.ObjectRef {
 	return stores
 }
 
-// waitTreeGone walks the tree every deployPoll, noting new descendants, prints each noted object as it goes and,
-// once each, what a poll that removed nothing still found, until none is left.
-func (a *cli) waitTreeGone(ctx context.Context, c *sdk.Client, ns v1.NamespaceName, tree *appTree) error {
+// waitTreeGone walks the tree every deployPoll, noting new descendants, until none is left, and returns every object
+// it noted. A live view draws each object deleted or waiting with its reason; off a terminal it prints each noted
+// object as it goes, ending "after <d>", and, once each, what a poll that removed nothing still found (ADR-0362
+// Decisions 3 and 6). Each object's time counts from the delete.
+func (a *cli) waitTreeGone(ctx context.Context, c *sdk.Client, ns v1.NamespaceName, name v1.ObjectName, tree *appTree, v *appView) ([]v1.ObjectRef, error) {
 	waiting := map[treeKey]bool{}
+	var all []v1.ObjectRef
 	for len(tree.noted) > 0 {
 		if err := sleepCtx(ctx, deployPoll); err != nil {
-			return err
+			return nil, err
 		}
 		present, err := tree.walk(ctx, c, ns)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		var left []treeKey
+		here := map[v1.ObjectRef]v1.Object{}
 		for _, k := range tree.noted {
-			if present[k.ref()] == k.uid {
+			id := string(k.kind) + "/" + string(k.name)
+			if _, timed := v.since[id]; !timed {
+				v.since[id] = v.start
+			}
+			if !slices.Contains(all, k.ref()) {
+				all = append(all, k.ref())
+			}
+			if o, ok := present[k.ref()]; ok && o.GetObjectMeta().UID == k.uid {
 				left = append(left, k)
-			} else if err := a.writef("deleted %s/%s\n", k.kind, k.name); err != nil {
-				return err
+				here[k.ref()] = o
+			} else if !v.live {
+				if err := a.writef("deleted %s after %s\n", id, v.clock(id, true)); err != nil {
+					return nil, err
+				}
 			}
 		}
 		removed := len(left) < len(tree.noted)
 		tree.noted = left
+		if v.live {
+			if err := v.remove(name, all, here, nil); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		for _, k := range left {
 			if removed || waiting[k] {
 				continue
 			}
 			waiting[k] = true
 			if err := a.writef("waiting %s/%s\n", k.kind, k.name); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
-	return nil
+	return all, nil
 }
 
 // treeKinds are the child kinds gc.Pairs reaches from App, Secret excluded, in the order the pairs list them.
@@ -1052,11 +1153,11 @@ func addonKinds(app *v1.App) []v1.Kind {
 }
 
 // walk lists each kind of the tree in the namespace, each add-on kind at its plural, notes every object a noted owner
-// controls until no new owner appears, and returns the UID of each object present. An owner is known by the kind its
-// children's references name.
-func (t *appTree) walk(ctx context.Context, c *sdk.Client, ns v1.NamespaceName) (map[v1.ObjectRef]v1.UID, error) {
+// controls until no new owner appears, and returns each object present. An owner is known by the kind its children's
+// references name.
+func (t *appTree) walk(ctx context.Context, c *sdk.Client, ns v1.NamespaceName) (map[v1.ObjectRef]v1.Object, error) {
 	var objs []v1.Object
-	present := map[v1.ObjectRef]v1.UID{}
+	present := map[v1.ObjectRef]v1.Object{}
 	for _, k := range slices.Concat(t.kinds, t.addons) {
 		list, err := c.List(ctx, k, ns)
 		if fault.KindOf(err) == fault.NotFound && slices.Contains(t.addons, k) {
@@ -1067,7 +1168,7 @@ func (t *appTree) walk(ctx context.Context, c *sdk.Client, ns v1.NamespaceName) 
 		}
 		for _, o := range list {
 			m := o.GetObjectMeta()
-			present[v1.ObjectRef{Kind: k, Name: m.Name}] = m.UID
+			present[v1.ObjectRef{Kind: k, Name: m.Name}] = o
 		}
 		objs = append(objs, list...)
 	}
