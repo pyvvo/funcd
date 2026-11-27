@@ -857,10 +857,10 @@ const (
 )
 
 // printBanner prints a formatted list of every service `funcdctl dev` exposes (Decision 6): the gateway (invoke
-// functions), with its URLs on the LAN under --lan (ADR-0361), the S3 endpoint (inspect blob) + the dev keypair, the
-// embedded lake engine when a lake is bound, and the loaded workflow — closing with the LAN warning while the gateway
-// listens off loopback, and the honest fidelity note that egress is NOT isolated in dev (scenario:
-// dev-egress-not-isolated).
+// functions), its URLs on a LAN address under --lan (ADR-0361), the S3 endpoint (inspect blob) + the dev keypair, the
+// embedded lake engine when a lake is bound, and the loaded workflow — closing with the note of the other addresses
+// and the LAN warning while the gateway listens off loopback, and the honest fidelity note that egress is NOT isolated
+// in dev (scenario: dev-egress-not-isolated).
 func (a *cli) printBanner(inst *devInstance) error {
 	// The renderer is bound to a.out, so lipgloss auto-disables color when output is piped or captured
 	// (a non-TTY writer → plain text) and colors it on a real terminal.
@@ -876,8 +876,9 @@ func (a *cli) printBanner(inst *devInstance) error {
 	headerS := r.NewStyle().Bold(true).Foreground(accent)
 	nameS := r.NewStyle().Foreground(okc).Width(9)
 	// The URL column fits the longest service URL, so an address --lan gives never wraps.
+	gateway := inst.shownGatewayURL()
 	urlWidth := 26
-	for _, u := range []string{inst.gatewayURL, inst.controlURL, inst.s3Endpoint} {
+	for _, u := range []string{gateway, inst.controlURL, inst.s3Endpoint} {
 		urlWidth = max(urlWidth, len(u)+1)
 	}
 	svcURLS := r.NewStyle().Foreground(link).Width(urlWidth)
@@ -899,10 +900,7 @@ func (a *cli) printBanner(inst *devInstance) error {
 		titleS.Render("● funcd dev") + subS.Render("   "+serving+" · Ctrl-C to stop"),
 		"",
 		headerS.Render("SERVICES"),
-		svc("gateway", inst.gatewayURL, "invoke functions"),
-	}
-	for _, n := range inst.networkURLs {
-		lines = append(lines, nameS.Render("network")+" "+urlS.Render(n))
+		svc("gateway", gateway, "invoke functions"),
 	}
 	lines = append(lines,
 		svc("control", inst.controlURL, "apply · workflow run — funcdctl --server <url> --token "+funcd.DevToken),
@@ -924,9 +922,7 @@ func (a *cli) printBanner(inst *devInstance) error {
 	} else {
 		lines = append(lines, "", headerS.Render("FUNCTIONS"))
 		for _, fn := range inst.functions {
-			for _, base := range slices.Concat([]string{inst.gatewayURL}, inst.networkURLs) {
-				lines = append(lines, descS.Render("POST")+"  "+urlS.Render(base+"/function/"+fn))
-			}
+			lines = append(lines, descS.Render("POST")+"  "+urlS.Render(gateway+"/function/"+fn))
 		}
 	}
 
@@ -959,6 +955,9 @@ func (a *cli) printBanner(inst *devInstance) error {
 	}
 
 	lines = append(lines, "")
+	if note := inst.lanNote(); note != "" {
+		lines = append(lines, descS.Render(note))
+	}
 	if inst.offLoopback {
 		lines = append(lines, warnS.Render(devLANWarning))
 	}
@@ -1036,8 +1035,9 @@ type devInstance struct {
 	platform   *funcd.Platform
 	client     *sdk.Client
 	gatewayURL string // the data-plane base URL functions are invoked at (POST <url>/function/<name>)
-	// networkURLs are the gateway's base URLs on the LAN addresses found at start, printed beneath each gateway URL,
-	// and offLoopback says the gateway listens off loopback, which the banner's title and warning name (ADR-0361).
+	// networkURLs are the gateway's base URLs on the LAN addresses found at start, the default route's first: the
+	// banner's lines name the first and its note the rest. offLoopback says the gateway listens off loopback, which the
+	// banner's title and warning name (ADR-0361).
 	networkURLs []string
 	offLoopback bool
 	controlURL  string   // the control-plane base URL (funcdctl --server: apply, workflow run)
