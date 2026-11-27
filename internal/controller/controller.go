@@ -55,7 +55,7 @@ type Deps struct {
 	// RetryBackoffMax caps the failed-reconcile and re-Watch retry (controller.retryBackoffMax, ADR-0163); 0 ⇒
 	// maxBackoff.
 	RetryBackoffMax time.Duration
-	// Skip drops every request of a namespace that a worker node runs (FEAT-0002 decision 1); nil skips none.
+	// Skip drops every request of a namespace that a worker node runs (ADR-0368 Decision 3); nil skips none.
 	Skip func(v1.NamespaceName) bool
 }
 

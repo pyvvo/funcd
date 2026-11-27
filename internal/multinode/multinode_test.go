@@ -3,6 +3,7 @@ package multinode
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"maps"
 	"slices"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/gc"
+	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
@@ -139,6 +141,26 @@ func TestPlacementSkipsWhatAnotherNodeRuns(t *testing.T) {
 	got, err := aio.Namespaces(ctx, "vm1")
 	require.NoError(t, err)
 	require.Equal(t, []v1.NamespaceName{"there"}, got)
+}
+
+func TestANodesOwnRouteGoesBackUnchecked(t *testing.T) {
+	ctx := context.Background()
+	c, _ := joinRig(t)
+	st := c.cfg.Store
+	for _, n := range []*v1.Namespace{namespace("a", ""), namespace("b", "vm1")} {
+		_, err := st.Create(ctx, n)
+		require.NoError(t, err)
+	}
+	_, err := st.Create(ctx, route("a", "r", "shop.example.com"))
+	require.NoError(t, err)
+	mine := route("b", "r", "shop.example.com")
+	mine.OwnerReferences = []v1.OwnerReference{{UID: "u-f1", ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Namespace: "b", Name: "f"}}}
+	raw, err := json.Marshal(mine)
+	require.NoError(t, err)
+	require.NoError(t, c.handler.PutObject(ctx, "vm1", nodeapi.ObjectWrite{Kind: v1.KindRoute, Object: raw}),
+		"a Route the node's reconciler made goes back with no host check: its parent passed one")
+	_, err = st.Get(ctx, v1.KindRoute.GVK(), "b", "r")
+	require.NoError(t, err)
 }
 
 // failingReads is a store whose every read fails.
@@ -277,18 +299,19 @@ func TestAJoinTokenNeedsADeclaredNodeAndABoundedLife(t *testing.T) {
 	require.Equal(t, HashSecret(parsed.Secret), obj.(*v1.WorkerNode).Status.PendingJoin.TokenHash, "only the hash is kept")
 }
 
+func route(ns, name, host string) *v1.Route {
+	r := &v1.Route{TypeMeta: tm(v1.KindRoute)}
+	r.Name, r.Namespace, r.ResourceGroup, r.Spec.Host = v1.ObjectName(name), v1.NamespaceName(ns), "rg1", host
+	r.Spec.Rules = []v1.RouteRule{{Path: "/", Backend: v1.RouteBackend{Function: "f"}}}
+	return r
+}
+
 func TestAHostBelongsToOneNode(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(memory.New())
 	for _, n := range []*v1.Namespace{namespace("a", "vm1"), namespace("b", "vm1"), namespace("c", "vm2"), namespace("d", "")} {
 		_, err := st.Create(ctx, n)
 		require.NoError(t, err)
-	}
-	route := func(ns, name, host string) *v1.Route {
-		r := &v1.Route{TypeMeta: tm(v1.KindRoute)}
-		r.Name, r.Namespace, r.ResourceGroup, r.Spec.Host = v1.ObjectName(name), v1.NamespaceName(ns), "rg1", host
-		r.Spec.Rules = []v1.RouteRule{{Path: "/", Backend: v1.RouteBackend{Function: "f"}}}
-		return r
 	}
 	_, err := st.Create(ctx, route("a", "r", "Shop.Example.COM."))
 	require.NoError(t, err)

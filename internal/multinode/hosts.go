@@ -43,7 +43,7 @@ func hostClaim(obj v1.Object) string {
 	return strings.TrimSuffix(strings.ToLower(strings.Trim(h, "[]")), ".")
 }
 
-// hostOnOneNode refuses a namespace's claim on a host that a namespace on another node holds (FEAT-0002 decision 6): a
+// hostOnOneNode refuses a namespace's claim on a host that a namespace on another node holds (ADR-0369 Decision 2): a
 // host belongs to one node, where the namespaces share it under the edge's own rules, so two nodes never answer it.
 // Sharing a host across nodes is a gateway's job, in front of them.
 type hostOnOneNode struct {
