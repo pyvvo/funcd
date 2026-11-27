@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/pyvvo/funcd/internal/nodeapi"
 	"github.com/pyvvo/funcd/internal/nodeapi/longpoll"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 // joinedNode is a worker node vm1 of r, with the namespace e1 placed on it, whose agent a test stops and starts again.
@@ -185,6 +187,25 @@ func TestARunMadeDuringASnapshotStays(t *testing.T) {
 	defer n.startVia(t, s)()
 	onCP(t, n, v1.KindJobRun, "late", "a run the node made during its snapshot reaches the control plane", anyJobRun)
 	onNode(t, n, v1.KindJobRun, "late", "and stays on the node", anyJobRun)
+}
+
+// oracle: docs/design/multinode/writeback.fizz#ADeletedRunCanComeBack
+func TestARunAPersonDeletedWhileItsNodeWasBehindComesBack(t *testing.T) {
+	ctx := context.Background()
+	n := joinNode(t, func(c *multinode.Config) { c.Store = store.New(memory.New(), store.WithChangeLog(1)) })
+	stop := n.start(t)
+	_, err := n.node.Create(ctx, jobRun("r1", "report"))
+	require.NoError(t, err)
+	onCP(t, n, v1.KindJobRun, "r1", "the run reaches the control plane", anyJobRun)
+	stop()
+	require.NoError(t, n.cp.Delete(ctx, v1.KindJobRun.GVK(), "e1", "r1", ""))
+	for i := range 1100 { // past a compaction, which runs every 1024 revisions
+		_, err := n.cp.Create(ctx, configMap("other", "c"+strconv.Itoa(i), "1"))
+		require.NoError(t, err)
+	}
+	defer n.start(t)()
+	onCP(t, n, v1.KindJobRun, "r1", "a node that restarted behind the change log writes the run back, and the control "+
+		"plane, which keeps no record of the delete, takes it again (accepted, ADR-0366)", anyJobRun)
 }
 
 func anyJobRun(*v1.JobRun) bool { return true }
@@ -431,6 +452,18 @@ func TestANodesLateWriteChangesNothingOfAnotherObject(t *testing.T) {
 	require.NoError(t, err)
 	ref = nodeapi.ObjectRef{Kind: v1.KindAddonObject, Namespace: "e1", Name: "net", UID: obj.GetObjectMeta().UID}
 	require.Equal(t, fault.Forbidden, fault.KindOf(client.DeleteObject(ctx, ref)), "an object a person wrote and did not delete")
+
+	person, err := n.cp.Create(ctx, configMap("e1", "settings", "1"))
+	require.NoError(t, err)
+	forged := owned(configMap("e1", "settings", "2"), person)
+	forged.UID = person.GetObjectMeta().UID
+	raw, err = json.Marshal(forged)
+	require.NoError(t, err)
+	require.Equal(t, fault.Forbidden, fault.KindOf(client.PutObject(ctx, nodeapi.ObjectWrite{Kind: v1.KindConfigMap, Object: raw})),
+		"an object a person wrote, sent as a child the node owns")
+	got, err := n.cp.Get(ctx, v1.KindConfigMap.GVK(), "e1", "settings")
+	require.NoError(t, err)
+	require.Equal(t, "1", got.(*v1.ConfigMap).Spec.Data["n"], "keeps the person's spec")
 }
 
 func TestANodeGetsTheAPITokensAndTheNamespacesThatConcernIt(t *testing.T) {

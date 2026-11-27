@@ -535,21 +535,29 @@ func (s *Handler) DeleteObject(ctx context.Context, node v1.ObjectName, in nodea
 	if err := s.mustBePlacedOn(ctx, op, in.Namespace, node); err != nil {
 		return err
 	}
-	cur, err := s.cfg.Store.Get(ctx, in.Kind.GVK(), in.Namespace, in.Name)
-	if fault.KindOf(err) == fault.NotFound || err == nil && cur.GetObjectMeta().UID != in.UID {
-		return nil
-	}
-	if err != nil {
+	for range 5 {
+		cur, err := s.cfg.Store.Get(ctx, in.Kind.GVK(), in.Namespace, in.Name)
+		if fault.KindOf(err) == fault.NotFound || err == nil && cur.GetObjectMeta().UID != in.UID {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		m := cur.GetObjectMeta()
+		if !WrittenBack(in.Kind, len(m.OwnerReferences) > 0) && m.DeletionTime == nil {
+			return fault.Forbiddenf(op, "%s %s was written by a person, not by worker node %s", in.Kind, in.Name, node)
+		}
+		// The delete is conditional on the version read, so it never takes an object made again under the name since.
+		err = s.cfg.Store.Delete(store.WithOrigin(ctx, node), in.Kind.GVK(), in.Namespace, in.Name, m.ResourceVersion)
+		switch fault.KindOf(err) {
+		case fault.NotFound:
+			return nil
+		case fault.Conflict:
+			continue
+		}
 		return err
 	}
-	if m := cur.GetObjectMeta(); !WrittenBack(in.Kind, len(m.OwnerReferences) > 0) && m.DeletionTime == nil {
-		return fault.Forbiddenf(op, "%s %s was written by a person, not by worker node %s", in.Kind, in.Name, node)
-	}
-	err = s.cfg.Store.Delete(store.WithOrigin(ctx, node), in.Kind.GVK(), in.Namespace, in.Name, "")
-	if fault.KindOf(err) == fault.NotFound {
-		err = nil
-	}
-	return err
+	return fault.Conflictf(op, "%s %s kept changing", in.Kind, in.Name)
 }
 
 // SecretWriter writes one key of a Secret as a workload that binds it (ADR-0327): the platform's secret service.

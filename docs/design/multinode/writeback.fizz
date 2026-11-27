@@ -2,17 +2,20 @@
 # What a worker node writes back (ADR-0366, FEAT-0002 F244). The node runs object O, which a person made on the control
 # plane, and writes O's status back by O's uid; the control plane keeps the decision a person recorded in that status
 # (an approval). A person may delete O and make it again under its name, with a new uid, while a status write of the old
-# one is in flight. The node makes run R with no owner, at any time, and writes it back whole. Before a snapshot it writes
-# back what it made, and takes the snapshot only once that is done; the snapshot then removes from the node what the
-# control plane does not hold, but what the node made since it wrote back. The node deletes child C, which it
-# owns, and sends the delete again at each pass until the control plane takes it. One write back fails at most, and
-# the pass after it sends again. Every action is atomic. Environment: the control plane's status write is
-# conditional on the version it read (Status retries a conflict), one step here; the feed brings the control plane's O
-# to the node in one step; the node forgets what it wrote back of a copy it removes.
+# one is in flight. The node makes run R with no owner, at any time, and writes it back whole, which the control plane
+# creates when it does not hold it; the node remembers what it wrote back, in memory, until a restart or a snapshot. A
+# person may delete R on the control plane; the feed then deletes the node's copy, unless the node falls behind and
+# takes a snapshot first, and the node sends the delete of a run it wrote back, as of every object it writes whole.
+# Before a snapshot the node writes back what it made and does not remember writing, and takes the snapshot only once
+# that is done; the snapshot then removes from the node what the control plane does not hold, but what the node made
+# since it wrote back. A delete the node sends is sent again at each pass until the control plane takes it. One write
+# back fails at most, and the pass after it sends again. Every action is atomic. Environment: the control plane's status
+# write is conditional on the version it read (Status retries a conflict), one step here; the feed brings the control
+# plane's O to the node in one step; the node forgets what it wrote back of a copy it removes.
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
-  max_actions: 18
+  max_actions: 20
   crash_on_yield: false
 ---
 # diagram: phase
@@ -47,16 +50,18 @@ action Init:
     rLocal = False
     rCP = False
     rListed = False
-    cLocal = True
-    cCP = True
-    unsent = False
+    rSent = False
+    rDeleted = False
+    pendingDelete = False
+    runDeleteUnsent = False
+    restarted = False
     snaps = 0
     fails = 0
     statusOnAnother = False
     decisionLost = False
 
 atomic action Reconcile:
-    require nStatus < 2
+    require nStatus < 1
     nStatus += 1
 
 atomic fair action PushStatus:
@@ -111,7 +116,7 @@ atomic action MakeRun:
     rLocal = True
 
 atomic fair action PushRun:
-    require rLocal and not rCP and phase == "follow"
+    require rLocal and not rSent and phase == "follow"
     failed = False
     if fails < FAILS:
         failed = any [False, True]
@@ -119,17 +124,51 @@ atomic fair action PushRun:
         fails += 1
         return
     rCP = True
+    rSent = True
+
+atomic action PersonDeletesRun:
+    require rCP and not rDeleted
+    rCP = False
+    rDeleted = True
+    pendingDelete = True
+
+atomic fair action FeedDeletesRun:
+    require pendingDelete and phase == "follow"
+    pendingDelete = False
+    rLocal = False
+    rSent = False
+    runDeleteUnsent = True
+
+atomic fair action SendRunDelete:
+    require runDeleteUnsent
+    failed = False
+    if fails < FAILS:
+        failed = any [False, True]
+    if failed:
+        fails += 1
+        if MUTANT == "no-resend":
+            runDeleteUnsent = False
+        return
+    runDeleteUnsent = False
+    rCP = False
+
+atomic action NodeRestarts:
+    require not restarted
+    restarted = True
+    rSent = False
+    sent = -1
 
 atomic action StartSnapshot:
     require phase == "follow" and snaps < 1
     snaps += 1
+    pendingDelete = False
     phase = "push-made"
 
 atomic fair action PushMade:
     require phase == "push-made"
     rListed = rLocal
     ok = True
-    if rLocal and not rCP:
+    if rLocal and not rSent:
         failed = False
         if fails < FAILS:
             failed = any [False, True]
@@ -138,6 +177,7 @@ atomic fair action PushMade:
             ok = False
         else:
             rCP = True
+            rSent = True
     if ok or MUTANT == "snapshot-despite-a-failed-push":
         phase = "snapshot"
 
@@ -148,27 +188,10 @@ atomic fair action Snapshot:
     if nUID != cpUID:
         nUID = cpUID
         nStatus = 0
-        sent = 0
     nDecision = cpDecision
+    rSent = False
+    sent = -1
     phase = "follow"
-
-atomic action DeleteChild:
-    require cLocal
-    cLocal = False
-    unsent = True
-
-atomic fair action SendDelete:
-    require unsent
-    failed = False
-    if fails < FAILS:
-        failed = any [False, True]
-    if failed:
-        fails += 1
-        if MUTANT == "no-resend":
-            unsent = False
-        return
-    cCP = False
-    unsent = False
 
 always assertion NoStatusOnAnotherObject:
     return not statusOnAnother
@@ -177,12 +200,13 @@ always assertion APersonsDecisionStays:
     return not decisionLost
 
 always assertion NoRunIsLost:
-    return not rMade or rLocal or rCP
+    return not rMade or rDeleted or rLocal or rCP
+
+exists assertion ADeletedRunCanComeBack:
+    return rDeleted and rCP
 
 eventually always assertion TheControlPlaneConverges:
-    if rMade and not rCP:
-        return False
-    if not cLocal and cCP:
+    if rLocal != rCP:
         return False
     if nUID == cpUID and nStatus != cpStatus:
         return False

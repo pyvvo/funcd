@@ -140,7 +140,7 @@ func (a *Agent) pushMade(ctx context.Context) (map[string]bool, error) {
 }
 
 // refusals are the control plane's answers that refuse a node's write for good: the write goes no further.
-var refusals = []fault.Kind{fault.Invalid, fault.Forbidden, fault.Conflict} //nolint:gochecknoglobals // a constant list
+var refusals = []fault.Kind{fault.Invalid, fault.Forbidden, fault.Conflict, fault.PayloadTooLarge} //nolint:gochecknoglobals // a constant list
 
 // push writes one local change back, once: the pushed map keeps what the control plane already has. The error is the
 // control plane's answer, or the link's.

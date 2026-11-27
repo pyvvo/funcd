@@ -37,8 +37,8 @@ Its purpose: the agent's report loop and the node API's `Status`, `PutObject`, `
   it whole, under the same uid.
 - `scenario: a-run-back`: Given vm1 starts a JobRun with no owner, When it does, Then the control plane holds it whole,
   and takes only its status after that; one under a name another run holds there gives way to that run.
-- `scenario: only-its-kinds`: Given vm1, When it writes back a Policy, or an object a person wrote, Then the control
-  plane refuses it (403).
+- `scenario: only-its-kinds`: Given vm1, When it writes back a Policy, or sends a ConfigMap a person wrote as a child
+  it owns, Then the control plane refuses it (403) and the person's spec stays.
 - `scenario: a-delete-back`: Given vm1 deleted child f1-00001 and the control plane did not take the delete, When the
   next pass comes, Then vm1 sends it again until it is taken; at its next start, vm1 deletes there each child it no
   longer holds.
@@ -48,6 +48,9 @@ Its purpose: the agent's report loop and the node API's `Status`, `PutObject`, `
   back what it had made, Then the run stays on vm1 and reaches the control plane after the snapshot.
 - `scenario: after-a-snapshot`: Given vm1 took a snapshot, When it is done, Then vm1 writes back every status and child
   again.
+- `scenario: a-run-deleted-while-behind`: Given a run vm1 made and wrote back, When a person deletes it on the control
+  plane while vm1 is stopped behind the change log, Then vm1 writes it back at its start, and the control plane takes it
+  again (accepted: Consequences).
 
 ## Scope
 
@@ -74,7 +77,11 @@ Its purpose: the agent's report loop and the node API's `Status`, `PutObject`, `
 - **A snapshot's prune removes every object the control plane lacks**, as first built: a run made during the snapshot,
   or one whose write back failed just before, was lost. Rejected (Decision 5).
 - **A snapshot never prunes what a node made**: a run a person deleted on the control plane while its node was behind
-  the change log would come back. Rejected.
+  the change log would stay on the node for good, even when the node remembers it wrote it back. Rejected; the prune
+  removes such a run while the node remembers, and a node that does not (a restart, a run changed since) writes it back
+  (Consequences).
+- **A record of deleted runs on the control plane**, so that a node never writes one back: it would end the case
+  above, at the cost of a store of deletes and its retention. Left for the decider (Consequences).
 
 ## Decision
 
@@ -88,23 +95,28 @@ Its purpose: the agent's report loop and the node API's `Status`, `PutObject`, `
    UID (ADR-0347 Decision 3), a person's decision on a preview (ADR-0348 Decisions 3 and 5), and an end it recorded
    (ADR-0206 Decision 7). The result passes the kind's validation, or the write is refused. A status write writes no
    change-log record (ADR-0365 Decision 3).
-3. **Whole objects.** `PutObject` creates or replaces a child the node owns, under the node's uid. An object the node
-   makes with no owner is created once, whole, and after that only its status changes, with the pause of a WorkflowRun
-   its node's restore paused (ADR-0206 Decision 7); one under a name another object holds is 409, and the node takes
-   that object through its feed. An object a person wrote is 403. `DeleteObject` deletes, by uid, an object the node
-   writes back whole, or one whose deletion the control plane holds until the node ends it (ADR-0345 Decision 6); an
-   object of another uid under the name stays. These writes carry the node as their origin, so its feed leaves them
-   out. A child is the node's, as its reconciler derives it: the snapshot leaves it out, and an edit made to it on the
-   control plane lasts until the node writes it again.
+3. **Whole objects.** `PutObject` creates or replaces a child the node owns, under the node's uid. An object of a
+   `madeKinds` kind with no owner is created once, whole, when the control plane does not hold it, and after that only
+   its status changes, with the pause of a WorkflowRun its node's restore paused (ADR-0206 Decision 7); this holds for a
+   run a person made through the API too. One under a name another object holds is 409, and the node takes that object
+   through its feed. An object of any other kind that a person wrote is 403, whatever the node sends. `DeleteObject`
+   deletes, by uid and on the version it read, an object the node writes back whole, or one whose deletion the control
+   plane holds until the node ends it (ADR-0345 Decision 6); an object of another uid under the name stays. These
+   writes carry the node as their origin, so its feed leaves them out. A child is the node's, as its reconciler derives
+   it, and the API ignores the ownerReferences a person sends (ADR-0048), so only an edit reaches one from the control
+   plane: the feed brings the edit to the node's copy, where it lasts until the node's reconciler writes the child
+   again, while a snapshot leaves children out, and the node's next write replaces the edit.
 4. **The node's side.** The agent watches every namespaced kind of its store and writes each change back once: the
-   status, or the whole object without its resourceVersion, as last written. A pass every `resyncEvery` 30 s writes
+   status, or the whole object, unless what it wrote last, kept in memory, has the same content but for the
+   resourceVersion. A pass every `resyncEvery` 30 s writes
    again what failed and sends again each delete the control plane did not take. At its start and after a snapshot it
    deletes on the control plane each child the control plane holds and the node no longer does (`Children`); after a
    snapshot it writes back everything again.
 5. **Before a snapshot.** On a store that is neither new nor restored (ADR-0365 Decision 6), the node writes back
-   every object it made with no owner, and takes the snapshot only once each went through or the control plane refused
-   it (400, 403 or 409); any other failure leaves the snapshot to its next try. The snapshot's prune then removes what
-   the control plane does not hold, but the objects the node made since that write back, which the next pass sends.
+   every object it made with no owner and does not remember writing, and takes the snapshot only once each went through
+   or the control plane refused it (400, 403, 409 or 413); any other failure leaves the snapshot to its next try. The
+   snapshot's prune then removes what the control plane does not hold, but the objects the node made since that write
+   back, which the next pass sends.
 
 ## Design model
 
@@ -117,30 +129,37 @@ Its purpose: the agent's report loop and the node API's `Status`, `PutObject`, `
   | `NoStatusOnAnotherObject` | always | `scenario: a-late-status` | `TestANodesLateWriteChangesNothingOfAnotherObject` |
   | `APersonsDecisionStays` | always | `scenario: a-persons-decision` | `TestAPersonsDecisionOnARunReachesItsNode` |
   | `NoRunIsLost` | always | `scenario: the-runs-before-a-snapshot`, `scenario: a-run-during-a-snapshot` | `TestASnapshotWaitsForTheRunsTheNodeMade`, `TestARunMadeDuringASnapshotStays`, `TestARunTheNodeMadeOutlivesASnapshot` |
+  | `ADeletedRunCanComeBack` | exists | `scenario: a-run-deleted-while-behind` | `TestARunAPersonDeletedWhileItsNodeWasBehindComesBack` |
   | `TheControlPlaneConverges` | eventually always | `scenario: status-back`, `scenario: a-delete-back` | `TestADeleteTheControlPlaneDidNotTakeIsSentAgain`, `TestANodeJoinsFollowsItsNamespaceAndReportsBack` |
 
-- **Bounds**: one object, which a person approves and makes again once; statuses up to two; one run; one child; one
-  snapshot; one failed write back; 18 actions: the smallest scenario in which every mutant fails, and the first that
-  every path completes in. Wider (two failed writes, 22 actions): pass, 28,872 states, 10.4 s.
-- **Faults**: one write back fails: of a status, of a run, of a delete, or before the snapshot.
+- **Bounds**: one object, which a person approves and makes again once, with one status; one run, which a person may
+  delete; one node restart; one snapshot; one failed write back; 20 actions: the smallest scenario in which every
+  mutant fails, and the first that every path completes in. Wider (two failed writes, 24 actions): pass, 55,696
+  states, 22.9 s.
+- **Faults**: one write back fails: of a status, of a run, of a delete, or before the snapshot; the node restarts once
+  and forgets what it wrote back.
 - **Environment**: the control plane's status write is conditional on the version it read (`Status` retries a
-  conflict), one step here; the feed brings the control plane's object to the node in one step; the node forgets what
-  it wrote back of a copy it removes (its watch's delete event).
+  conflict), one step here; the feed brings the control plane's object, and a person's delete of the run, to the node
+  in one step; the node forgets what it wrote back of a copy it removes (its watch's delete event), and sends the
+  delete of a run it writes whole.
 - **Mutants**: `no-uid-check` fails `NoStatusOnAnotherObject`; `no-keep-decisions` fails `APersonsDecisionStays`;
   `snapshot-despite-a-failed-push` and `prune-what-came-since` fail `NoRunIsLost`; `no-resend` fails
-  `TheControlPlaneConverges`.
-- **Result**: pass, 18,774 states, 6.5 s, FizzBee v0.5.4.
+  `TheControlPlaneConverges`. `ADeletedRunCanComeBack` records an accepted cost, so no mutant guards it: a record of
+  deletes would end it, and the spec would then fail it.
+- **Result**: pass, 36,526 states, 14.5 s, FizzBee v0.5.4.
 - **Left to tests**: the kinds a node writes back (`TestANodeWritesBackOnlyTheKindsItsReconcilersMake`,
-  `TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers`); a run under a name another holds
+  `TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers`); a person's object sent as a child
+  (`TestANodesLateWriteChangesNothingOfAnotherObject`); a run under a name another holds
   (`TestARunThatANodeStartsReachesTheControlPlane`); the children a node no longer holds
   (`TestAChildTheNodeNoLongerHoldsGoesFromTheControlPlane`); the writes after a snapshot
   (`TestANodeReportsEverythingAgainAfterASnapshot`).
 
 ## Behavior rows
 
-- **multi-node.md**: "Status and children back", "A delete the control plane did not take", "A person's decision on a
-  JobRun" and "A snapshot on a running node" (now with `TestASnapshotWaitsForTheRunsTheNodeMade` and
-  `TestARunMadeDuringASnapshotStays`) cite this ADR's Decisions at acceptance.
+- **multi-node.md**: "Status and children back", "A node's late write", "A delete the control plane did not take", "A
+  person's decision on a JobRun" and "A snapshot on a running node" (now with `TestASnapshotWaitsForTheRunsTheNodeMade`
+  and `TestARunMadeDuringASnapshotStays`) cite this ADR's Decisions at acceptance; a row "A run deleted while its node
+  was behind" for the accepted cost, with `TestARunAPersonDeletedWhileItsNodeWasBehindComesBack`.
 
 ## Temporary workarounds
 
@@ -200,9 +219,10 @@ func KeepPause(to, from v1.Object)              // a WorkflowRun's pause from th
 Built ahead of this ADR on the branch of draft PR #1495: `internal/multinode/writeback.go` (`childKinds`,
 `madeKinds`, `WrittenBack`), `handler.go` (`Status`, `PutObject`, `DeleteObject`, `Children`), `copies.go`
 (`KeepDecisions`, `KeepPause`); `internal/multinode/agent/report.go` (`report`, `push`, `pushMade`, the deletes),
-`children.go` (`dropChildren`), `agent.go` (`syncAll`) and `copies.go` (`prune`). This ADR's Decision 5 changed the
-built code: `pushMade` returns what failed, `syncAll` takes no snapshot after such a failure, and `prune` spares what
-the node made since.
+`children.go` (`dropChildren`), `agent.go` (`syncAll`) and `copies.go` (`prune`). This ADR changed the built code:
+`pushMade` returns the keys it holds and an error on a write the control plane did not refuse, `syncAll` takes no
+snapshot after such an error, `prune` spares what the node made since, and `DeleteObject` deletes on the version it
+read.
 
 | Scenario | Test |
 |---|---|
@@ -211,11 +231,12 @@ the node made since.
 | a-persons-decision | `TestAPersonsDecisionOnARunReachesItsNode` |
 | a-child-back | `TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers`, `TestANodeWritesBackOnlyTheKindsItsReconcilersMake` |
 | a-run-back | `TestARunThatANodeStartsReachesTheControlPlane`, `TestAJobRunsOnTheWorkerNodeItsNamespaceIsPlacedOn` |
-| only-its-kinds | `TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers` |
+| only-its-kinds | `TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers`, `TestANodesLateWriteChangesNothingOfAnotherObject` |
 | a-delete-back | `TestADeleteTheControlPlaneDidNotTakeIsSentAgain`, `TestAChildTheNodeNoLongerHoldsGoesFromTheControlPlane` |
 | the-runs-before-a-snapshot | `TestASnapshotWaitsForTheRunsTheNodeMade`, `TestARunTheNodeMadeOutlivesASnapshot` |
 | a-run-during-a-snapshot | `TestARunMadeDuringASnapshotStays` |
 | after-a-snapshot | `TestANodeReportsEverythingAgainAfterASnapshot` |
+| a-run-deleted-while-behind | `TestARunAPersonDeletedWhileItsNodeWasBehindComesBack` |
 
 Done when every test above passes, `just check-specs` passes the spec and its mutants, and `just ci` is green.
 
@@ -225,7 +246,8 @@ Done when every test above passes, `just check-specs` passes the spec and its mu
       that the namespace is placed on the node.
 - [ ] `Status` and `DeleteObject` act on the object of the uid the node names, and a status write keeps what
       `KeepDecisions` keeps and writes no change-log record.
-- [ ] `PutObject` refuses a kind `WrittenBack` does not name and an object a person wrote, and creates a run once.
+- [ ] `PutObject` refuses a kind `WrittenBack` does not name and an object of another kind that a person wrote, and
+      creates a run once; `DeleteObject` deletes on the version it read.
 - [ ] A failed write back is sent again at the next pass, and a delete until the control plane takes it.
 - [ ] `syncAll` takes no snapshot while `pushMade` returns an error, and `prune` spares an object made since.
 - [ ] Each oracle test carries its `oracle:` line, and the spec passes with its mutants failing.
@@ -237,7 +259,16 @@ Done when every test above passes, `just check-specs` passes the spec and its mu
 - A snapshot waits until the runs the node made reach the control plane, so a node whose link fails takes none.
 - A node writes back every status and child again at its start and after each snapshot, since what it wrote back is
   kept in memory.
-- A child edited on the control plane takes the node's version again at its next write.
+- A child edited on the control plane takes the node's version again at the node's next write of it.
+- A run the control plane refused (400, 403 or 413) leaves the node at its next snapshot; one under a taken name (409)
+  gives way to the other.
+- Risk accepted: a run a person deleted on the control plane while its node was behind the change log comes back when
+  the node writes it back without remembering it did (after a restart, or a change of the run since); it must be
+  deleted again. No run lost (the decider's rule 24) was chosen over this, and a record of deletes would end it.
+- Risk accepted (the decider's D5, as #1495 states it): a node's writes back are checked by the kind's validation
+  alone, with no admission and no quota, and the owner a child names is not checked to exist. So a compromised node can
+  add objects of the written-back kinds in the namespaces it runs, past their quotas, and start JobRuns there under any
+  `startedBy`; it cannot write a Policy, a Role, a RolesAssignment or an Identity.
 
 ## Open questions
 
