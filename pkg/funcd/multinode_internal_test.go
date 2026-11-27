@@ -3,6 +3,8 @@ package funcd
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -23,7 +25,7 @@ func TestAnAddonObjectRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	cp := startAddonPlatform(t, newAddonRuntime(t), WithStore(store.New(memory.New(), store.WithChangeLog(0))),
-		WithCluster(ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true}))
+		WithCluster(ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0"}))
 	wn := &v1.WorkerNode{TypeMeta: tmeta(v1.KindWorkerNode)}
 	wn.Name = "vm1"
 	cp.apply(t, cp.admin, wn)
@@ -93,4 +95,41 @@ func TestAnAddonObjectRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond, "a deleted object's engine stops on the node")
 	_, err = node.p.cfg.store.Get(ctx, v1.KindAddonObject.GVK(), "e1", "login")
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
+}
+
+// A worker node's own API answers reads, the release of its own hold and the return of its quarantine, and refuses every
+// other request with the problem document the API's router answers a method it does not allow with (ADR-0363 Decision 5).
+func TestAWorkerNodesOwnAPIAnswersReadsAndItsHoldOnly(t *testing.T) {
+	h := readOnly(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	const fns = "/apis/funcd.io/v1alpha1/namespaces/e1/functions"
+	const reads, holds = "GET, HEAD, OPTIONS", "GET, HEAD, OPTIONS, POST"
+	for _, tc := range []struct {
+		method, path, allow string
+	}{
+		{http.MethodGet, fns, ""},
+		{http.MethodHead, fns, ""},
+		{http.MethodOptions, fns, ""},
+		{http.MethodPost, holdReleasePath, ""},
+		{http.MethodPost, quarantineReturnPath, ""},
+		{http.MethodPost, fns, reads},
+		{http.MethodPut, fns + "/f", reads},
+		{http.MethodPatch, fns + "/f", reads},
+		{http.MethodDelete, fns + "/f", reads},
+		{http.MethodPut, holdReleasePath, holds},
+		{http.MethodDelete, quarantineReturnPath, holds},
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if tc.allow == "" {
+			require.Equal(t, http.StatusOK, rec.Code, "%s %s", tc.method, tc.path)
+			continue
+		}
+		require.Equal(t, http.StatusMethodNotAllowed, rec.Code, "%s %s", tc.method, tc.path)
+		require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+		require.Equal(t, tc.allow, rec.Header().Get("Allow"), "the methods %s takes", tc.path)
+		var p fault.Problem
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p))
+		require.Equal(t, fault.Problem{Type: "about:blank", Title: "Method Not Allowed", Status: http.StatusMethodNotAllowed,
+			Detail: "this is a worker node: its namespaces are written on the control plane"}, p)
+	}
 }

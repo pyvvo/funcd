@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/multinode/agent"
 	"github.com/pyvvo/funcd/internal/nodeapi"
@@ -59,7 +60,7 @@ func runsTheNamespacePlacedOnIt(t *testing.T, driver string, conn nodeapi.Connec
 	t.Helper()
 	ctx := context.Background()
 	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))),
-		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", Driver: driver, LocalRuns: true}))
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", Driver: driver}))
 	admin, err := sdk.New("http://"+cp.Addr(), sdk.WithToken(clusterAdmin))
 	require.NoError(t, err)
 
@@ -131,12 +132,21 @@ func runsTheNamespacePlacedOnIt(t *testing.T, driver string, conn nodeapi.Connec
 		"a WorkerNode a namespace names cannot be deleted")
 }
 
+// A platform has one role: a control plane that worker nodes join, or a worker node, never both (ADR-0363 Decision 1).
+func TestAPlatformIsAControlPlaneOrAWorkerNodeNotBoth(t *testing.T) {
+	_, err := funcd.New(funcd.InMemory(), funcd.WithCredentials(funcd.Credential{Token: clusterAdmin, Role: "admin"}),
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0"}),
+		funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: t.TempDir(), Version: "test"}))
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, "not both")
+}
+
 // TestAControlPlaneAloneRunsNoNamespace starts funcd server's platform: it serves the API and the node API, opens no data
 // plane, and leaves an unplaced namespace's objects waiting for a node (FEAT-0002 F241).
 func TestAControlPlaneAloneRunsNoNamespace(t *testing.T) {
 	ctx := context.Background()
 	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))),
-		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0"}))
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", Alone: true}))
 	require.Empty(t, cp.DataPlaneAddr())
 	require.NotEmpty(t, cp.ClusterAddr())
 	admin, err := sdk.New("http://"+cp.Addr(), sdk.WithToken(clusterAdmin))
@@ -200,7 +210,7 @@ func placedOnANode(t *testing.T) (admin *sdk.Client, cp, node *funcd.Platform, c
 	cpWorkers, nodeWorkers = newFakeWorkers(), newFakeWorkers()
 	cp = runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))), funcd.WithRuntime(cpWorkers),
 		funcd.WithRuntimeShim("node", "shim.mjs"),
-		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true}))
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0"}))
 	admin, err := sdk.New("http://"+cp.Addr(), sdk.WithToken(clusterAdmin))
 	require.NoError(t, err)
 	wn := &v1.WorkerNode{TypeMeta: tmeta(v1.KindWorkerNode)}
@@ -335,7 +345,7 @@ func TestAJobRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
 	ctx := context.Background()
 	nodeWorkers := newFakeWorkers()
 	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))), funcd.WithRuntimeShim("node", "shim.mjs"),
-		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true}))
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0"}))
 	admin, err := sdk.New("http://"+cp.Addr(), sdk.WithToken(clusterAdmin))
 	require.NoError(t, err)
 	wn := &v1.WorkerNode{TypeMeta: tmeta(v1.KindWorkerNode)}
@@ -407,7 +417,7 @@ func TestAJobRunsOnTheWorkerNodeItsNamespaceIsPlacedOn(t *testing.T) {
 // whose check reads the node's state answers 503 at once, and the others go through (FEAT-0002 F250).
 func TestAWriteThatNeedsAnOfflineNodeIsRefusedAtOnce(t *testing.T) {
 	cp := runPlatform(t, funcd.WithStore(store.New(memory.New(), store.WithChangeLog(0))),
-		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true}))
+		funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0"}))
 	base := "http://" + cp.Addr()
 	c := answersClient()
 	const api = "/apis/funcd.io/v1alpha1"
@@ -448,7 +458,7 @@ func TestAWriteThatNeedsAnOfflineNodeIsRefusedAtOnce(t *testing.T) {
 
 // asCluster makes an answers platform a control plane that worker nodes join, on loopback (FEAT-0002).
 func asCluster(t *testing.T) funcd.Option {
-	return funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0", LocalRuns: true})
+	return funcd.WithCluster(funcd.ClusterOptions{Dir: t.TempDir(), ListenAddr: "127.0.0.1:0"})
 }
 
 // placeOnOfflineNode places namespace e1 of e, an asCluster platform, on worker node vm1, which never joins: a write

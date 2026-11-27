@@ -1,9 +1,11 @@
 package funcd
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
@@ -28,12 +30,23 @@ const (
 // written on the control plane, and a write here would be undone by the next change the node follows.
 func readOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ofHold := r.Method == http.MethodPost && (r.URL.Path == holdReleasePath || r.URL.Path == quarantineReturnPath)
+		holdPath := r.URL.Path == holdReleasePath || r.URL.Path == quarantineReturnPath
 		switch {
-		case ofHold, r.Method == http.MethodGet, r.Method == http.MethodHead, r.Method == http.MethodOptions:
+		case holdPath && r.Method == http.MethodPost, r.Method == http.MethodGet, r.Method == http.MethodHead,
+			r.Method == http.MethodOptions:
 			next.ServeHTTP(w, r)
 		default:
-			http.Error(w, "this is a worker node: its namespaces are written on the control plane", http.StatusMethodNotAllowed)
+			// The problem document the API's own router answers a method it does not allow with (installRouterErrors),
+			// and the methods this path takes.
+			allow := "GET, HEAD, OPTIONS"
+			if holdPath {
+				allow += ", POST"
+			}
+			w.Header().Set("Allow", allow)
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_ = json.NewEncoder(w).Encode(fault.Problem{Type: "about:blank", Title: http.StatusText(http.StatusMethodNotAllowed),
+				Status: http.StatusMethodNotAllowed, Detail: "this is a worker node: its namespaces are written on the control plane"})
 		}
 	})
 }
@@ -113,7 +126,7 @@ func (p *Platform) newCluster(o *ClusterOptions, st store.Store, local v1.Object
 		return nil, err
 	}
 	cl, err := multinode.New(multinode.Config{Store: st, Logger: p.logger, CA: ca, API: api, LocalNode: local,
-		LocalRuns: o.LocalRuns, Master: master, Secrets: p.secrets.facade, Held: p.heldByRestore})
+		LocalRuns: !o.Alone, Master: master, Secrets: p.secrets.facade, Held: p.heldByRestore})
 	if err != nil {
 		_ = api.Close()
 		return nil, err
@@ -132,7 +145,7 @@ func (p *Platform) heldByRestore() bool {
 }
 
 // controlPlaneAlone reports whether this process is the control plane of worker nodes and runs no namespace itself.
-func (p *Platform) controlPlaneAlone() bool { return p.cfg.cluster != nil && !p.cfg.cluster.LocalRuns }
+func (p *Platform) controlPlaneAlone() bool { return p.cfg.cluster != nil && p.cfg.cluster.Alone }
 
 // elsewhere reports whether a worker node runs namespace ns (FEAT-0002): a control plane that worker nodes join leaves the
 // namespace's objects, its runs, its Routes and its children to that node.

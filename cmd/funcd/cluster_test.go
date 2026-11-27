@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +15,46 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
 )
+
+// Each role's parts (ADR-0363 Decisions 1 to 4): the address funcd server listens on for nodes when its config sets none,
+// whether a role serves the node API, and so keeps the change log, whether it runs workers, its platform option, and
+// whether its control plane runs alone.
+func TestEachRoleRunsItsOwnParts(t *testing.T) {
+	listening := config.Config{}
+	listening.Cluster.ListenAddr = "127.0.0.1:7443"
+	for _, tc := range []struct {
+		name                           string
+		r                              role
+		cfg                            config.Config
+		addr                           string
+		serves, workers, option, alone bool
+	}{
+		{"all-in-one", roleAll, config.Config{}, "", false, true, false, false},
+		{"all-in-one with nodes", roleAll, listening, "127.0.0.1:7443", true, true, true, false},
+		{"control plane alone", roleServer, config.Config{}, defaultClusterAddr, true, false, true, true},
+		{"worker node", roleNode, config.Config{}, "", false, true, true, false},
+	} {
+		cfg := tc.r.prepare(tc.cfg)
+		require.Equal(t, tc.addr, cfg.Cluster.ListenAddr, tc.name)
+		require.Equal(t, tc.serves, tc.r.servesNodes(cfg), tc.name)
+		require.Equal(t, tc.workers, tc.r.runsWorkers(), tc.name)
+		require.Equal(t, tc.option, tc.r.option(cfg) != nil, tc.name)
+		require.Equal(t, tc.alone, tc.r.clusterOptions(cfg).Alone, tc.name)
+	}
+	require.Equal(t, "0.0.0.0:7443", defaultClusterAddr)
+}
+
+// funcd server runs no namespace, so it takes no container runtime and no shim whatever runtime.mode says, and starts
+// on a machine with no containerd (ADR-0363 Decision 2).
+func TestAControlPlaneAloneTakesNoContainerRuntime(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Runtime.Mode = "containerd"
+	cfg.Storage.DataDir = t.TempDir()
+	opts, closeRuntime, err := roleServer.executionOptions(context.Background(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	defer func() { _ = closeRuntime() }()
+	require.Len(t, opts, 1, "one runtime that starts no worker, and no shim")
+}
 
 func TestAWorkerNodeKeepsItsSecretsEncryptedWithAKeyOfItsOwn(t *testing.T) {
 	var cfg config.Config

@@ -507,6 +507,9 @@ func (c *config) validate() error {
 		return fault.Invalidf(op, "gateway is required")
 	case c.credentials == nil:
 		return fault.Invalidf(op, "control-plane credentials are required (use WithCredentials, WithDevAuth or a preset)")
+	case c.cluster != nil && c.nodeAgent != nil:
+		return fault.Invalidf(op, "a platform is a control plane that worker nodes join or a worker node, not both: "+
+			"WithCluster and WithNodeAgent cannot be combined (ADR-0363)")
 	}
 	if err := c.checkDevTokenBind(); err != nil {
 		return err

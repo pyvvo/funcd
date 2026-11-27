@@ -189,10 +189,15 @@ func (r role) option(cfg config.Config) funcd.Option {
 	case r == roleNode:
 		return funcd.WithNodeAgent(funcd.NodeAgentOptions{Dir: cfg.Cluster.DataDir, Version: version.Get().Version})
 	case r.servesNodes(cfg):
-		return funcd.WithCluster(funcd.ClusterOptions{Dir: cfg.Cluster.DataDir, ListenAddr: cfg.Cluster.ListenAddr,
-			Driver: cfg.Cluster.Driver, Hosts: cfg.Cluster.Hosts, LocalRuns: r == roleAll})
+		return funcd.WithCluster(r.clusterOptions(cfg))
 	}
 	return nil
+}
+
+// clusterOptions is the node API of a control plane: alone on funcd server, beside its own namespaces on the all-in-one.
+func (r role) clusterOptions(cfg config.Config) funcd.ClusterOptions {
+	return funcd.ClusterOptions{Dir: cfg.Cluster.DataDir, ListenAddr: cfg.Cluster.ListenAddr, Driver: cfg.Cluster.Driver,
+		Hosts: cfg.Cluster.Hosts, Alone: r == roleServer}
 }
 
 // newServerCmd is `funcd server`: the control plane alone, which worker nodes join (FEAT-0002 F241).

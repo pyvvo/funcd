@@ -1215,7 +1215,8 @@ type ClusterOptions struct {
 	ListenAddr string   // the node API's address
 	Driver     string   // the node API's driver: "https" (the default, also for "") or "nats"
 	Hosts      []string // the names and addresses the node API's certificate covers
-	LocalRuns  bool     // false on a control plane alone (funcd server), which runs no namespace itself
+	Alone      bool     // true on a control plane alone (funcd server), which runs no namespace itself; the zero value
+	// keeps the all-in-one's own namespaces
 }
 
 // WithCluster makes the platform a control plane that worker nodes join (FEAT-0002): it serves the node API on
