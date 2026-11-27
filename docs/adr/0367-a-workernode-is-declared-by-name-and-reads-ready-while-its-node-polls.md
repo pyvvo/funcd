@@ -99,7 +99,8 @@ condition, which `funcdctl get workernodes` shows, and which the join reads to k
 - **Result**: pass, 93 states, 0.3 s, FizzBee v0.5.4.
 - **Left to tests**: the pacing of `lastSeen` (`TestALastSeenIsWrittenAtMostEverySeenEvery`); the contact a real node
   makes (`TestANodeJoinsFollowsItsNamespaceAndReportsBack`, in `internal/multinode/agent`); the sync every
-  `livenessTick` 5 s, a ticker the tests skip by calling `Sync`.
+  `livenessTick` 5 s, a ticker the tests skip by calling `Sync`; that `Cluster.Run` assumes the contacts before the node
+  API serves, an order in one function that review checks.
 
 ## Behavior rows
 
@@ -141,7 +142,8 @@ const (
 func NewLiveness(st store.Store, log *slog.Logger, now func() time.Time, readyFor, seenEvery time.Duration) *Liveness
 func (l *Liveness) Seen(node v1.ObjectName, version string, api int, platform string) // a contact, from Admit
 func (l *Liveness) Ready(node v1.ObjectName) bool                                     // the join's guard
-func (l *Liveness) Run(ctx context.Context)                                           // the start, then a sync per tick
+func (l *Liveness) Run(ctx context.Context)                                           // a sync per tick
+func (c *Cluster) Run(ctx context.Context) error                                      // assumes the Ready nodes, then serves
 func (l *Liveness) Sync(ctx context.Context) error
 ```
 

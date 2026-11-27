@@ -105,9 +105,6 @@ func (l *Liveness) assumeReady(ctx context.Context) {
 		if !ok || n.Status.Phase != v1.PhaseReady {
 			continue
 		}
-		if _, polled := l.contacts[n.Name]; polled {
-			continue
-		}
 		s := n.Status
 		l.contacts[n.Name] = contact{at: now, version: s.Version, api: s.NodeAPIVersion, platform: s.Platform, assumed: true}
 	}
