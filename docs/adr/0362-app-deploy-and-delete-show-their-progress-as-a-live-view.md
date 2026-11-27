@@ -3,6 +3,9 @@
 - **Status**: Implemented (2026-11-27), review passed in its second round ([report](../reviews/adr-0362-implementation-claude-opus-5-5-2.md)); Reviewing (2026-11-27, implemented); Accepted (2026-11-27), by the decider ("accept, implement it and ship", which confirms the
   `status.deadline` field and the dry run before each deploy), after three rounds of an independent judge at medium
   effort, every finding folded
+- **Amended in place**: 2026-11-27, by the decider on [#1606](https://github.com/pyvvo/funcd/issues/1606): the
+  delete view's `InUse` names only a user that the GC's protections read, a store's owner is no name, and a box taller
+  than the terminal folds its settled rows until its last draw (Decisions 3 to 5)
 - **Date**: 2026-11-27
 - **Deciders**: green-0-rabbit
 - **Tags**: cli, apps
@@ -110,22 +113,26 @@ long; a CI log keeps lines it can read.
    The last draw stays on screen when the command exits.
 3. **The delete view.** The title `● funcd app delete   <app> · <gone> of <noted> gone · <elapsed>`, then a row per
    object that ADR-0217 Decision 9's walk notes, as ADR-0337 amends it: ✓ deleted with its time; ◐ waiting, with its
-   own Ready reason when it has one, else `InUse: <Kind>/<name>` for a noted object still present that names it
-   (Decision 4), else no reason, as for a store that an object outside the App holds; ■ kept, for a store that stays.
+   own Ready reason when it has one, else `InUse: <Kind>/<name>` for a noted object still present that holds it as
+   the GC's deletion protections read it, `gc.Uses` (amended 2026-11-27), else no reason, as for a store that an
+   object outside the App holds; ■ kept, for a store that stays.
 4. **Waits on.** `gc.Names(u)` lists every object `u`'s spec names, each once with the field that names it, in field
    order: a Function's or a Job's bindings (`kv`, `sql`, `blob`, `lake`, `addon`, `config`, `job`, `secret`), links
    and root entries' `ref`, as a Lake's and a Site's `buckets[]` entries carry one too, a Workflow's step bindings, a Lake's `blob`, `config` and `secret`, a Route's
    `auth.provider` and its rules' `function`, `site` and static `bucket`, a Site's blob `bucket`, its rules' `bucket`
    and its runtime `configMap`, an EventSource's `bucket` and sql `database`, and a Sensor's dependency `source` and
    its `actions[]`' `workflow` and `function`. A Secret or an OIDCProvider is no App part, so no row waits on one. An `addon` binding names an
-   AddonObject by name, which the view matches to the App's add-on part of that name. A row waits on the first part of
-   the App that `u` names and that is not settled. `uses` keeps its own set of kinds and fields, read through `Names`,
-   so `InUse` answers as before.
+   AddonObject by name, which the view matches to the App's add-on part of that name. A store's owner, of a
+   SQLDatabase, a Bucket prefix or a KV table, is whom it serves, not what it waits on, so it is no name (amended
+   2026-11-27). A row waits on the first part of the App that `u` names and that is not settled. `gc.Uses`, exported
+   for the delete view, keeps its own set of kinds and fields, read through `Names`, so `InUse` answers as before.
 5. **Times and the deadline.** A part is settled when it is Ready, NotStarted or Lagging, as the App's Ready, switch
    and deadline count it (ADR-0357 Decision 1); on delete, when it is gone. Its time runs on the CLI's clock from the
    first poll that sees it unsettled to the first that sees it Ready, NotStarted or gone, so a Lagging row keeps ◐,
    its reason and a running time. `…` marks a running time, `–` a part the plan leaves alone. Rows are cut to the
-   terminal's width, so a redraw moves up exactly the lines it drew. `AppRevisionStatus.deadline` (new) is
+   terminal's width, so a redraw moves up exactly the lines it drew. A box taller than the terminal folds its Ready
+   and NotStarted rows, on delete its deleted ones, into one line, `✓ <n> more ready`, while it redraws; its last
+   draw, which stays on screen, shows every row (amended 2026-11-27). `AppRevisionStatus.deadline` (new) is
    `deadline`'s result: the reconciler writes it with `startedAt` and again each time an input of `deadline` moves it,
    and clears nothing once the revision is final.
 6. **Lines.** Off a terminal, the lines of ADR-0217 Decisions 8 and 9 (as ADR-0337 amends Decision 9), plus ` after <d>` on a part's line when it
@@ -183,6 +190,9 @@ type Name struct {
 // Names lists the objects u's spec names, each once, in field order (Decision 4).
 func Names(u v1.Object) []Name
 
+// Uses reports whether u names obj in one of the fields InUse reads, its deletion protections (amended 2026-11-27).
+func Uses(u, obj v1.Object) bool
+
 // internal/app
 
 // Unmet is why dep does not meet e, "" when it does, in ADR-0219 Decision 2's order.
@@ -226,6 +236,8 @@ Deadline *Timestamp `json:"deadline,omitempty" doc:"When a pass fails the rollou
 - [ ] `status.deadline` moves with every input of `deadline`; the view counts down to it.
 - [ ] Every exit as today; a hook is due until its call is recorded; a Lagging part counts as settled and keeps its
       running time.
+- [ ] The delete view's `InUse` names only a `gc.Uses` user; no store's owner is a name; a box taller than the
+      terminal folds its settled rows, and its last draw shows every row (amended 2026-11-27).
 - [ ] One test per Scenario, named after it; the docs and behavior rows name the view.
 
 ## Consequences
@@ -234,7 +246,8 @@ Deadline *Timestamp `json:"deadline,omitempty" doc:"When a pass fails the rollou
   times; the server's deadline is visible.
 - **Negative**: times are to the second and restart with the CLI; each deploy adds one dry-run admission pass; a row
   names only the first part it waits on; a running hook shows as due; a store an outside object holds waits with no
-  reason; deploy still returns at the switch, before its post-hooks.
+  reason; deploy still returns at the switch, before its post-hooks; while a large App's box redraws, its settled
+  rows show as one line (amended 2026-11-27).
 - **Risks accepted**: a terminal that misreports itself gets escape codes; `TERM=dumb` and a pipe print lines.
 
 ## Open questions
