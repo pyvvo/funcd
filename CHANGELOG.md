@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.0](https://github.com/pyvvo/funcd/compare/v0.54.0...v0.55.0) (2026-11-27)
+
+
+### Features
+
+* **funcdctl:** app deploy counts a lagging part apart, names it at the exit, and --wait-lagging waits for it ([#1611](https://github.com/pyvvo/funcd/issues/1611)) ([e07f511](https://github.com/pyvvo/funcd/commit/e07f511343883bac5f5a05324ddab65e1fe46a39))
+
 ## [0.54.0](https://github.com/pyvvo/funcd/compare/v0.53.0...v0.54.0) (2026-11-27)
 
 
