@@ -118,6 +118,54 @@ func renew(t *testing.T, c *Cluster) string {
 	return serialOf(t, resp.Certificate)
 }
 
+// recreating is a control plane's store that deletes the object named name and makes it again under the name, with
+// another uid, just before its first delete of it, as a person who deletes and applies it again at that moment would.
+type recreating struct {
+	store.Store
+	store.ChangeLog
+	name v1.ObjectName
+	done bool
+}
+
+func (r *recreating) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	if name == r.name && !r.done {
+		r.done = true
+		obj, err := r.Store.Get(ctx, gvk, ns, name)
+		if err != nil {
+			return err
+		}
+		if err := r.Store.Delete(ctx, gvk, ns, name, ""); err != nil {
+			return err
+		}
+		m := obj.GetObjectMeta()
+		m.UID, m.ResourceVersion = "", ""
+		if _, err := r.Store.Create(ctx, obj); err != nil {
+			return err
+		}
+	}
+	return r.Store.Delete(ctx, gvk, ns, name, rv)
+}
+
+func TestANodesDeleteNeverTakesAnObjectMadeAgainUnderTheName(t *testing.T) {
+	ctx := context.Background()
+	clk := &clock{now: time.Now()}
+	st := store.New(memory.New(), store.WithChangeLog(0))
+	_, err := st.Create(ctx, workerNode("vm1"))
+	require.NoError(t, err)
+	_, err = st.Create(ctx, namespace("e1", "vm1"))
+	require.NoError(t, err)
+	run := &v1.JobRun{TypeMeta: tm(v1.KindJobRun)}
+	run.Name, run.Namespace, run.ResourceGroup, run.Spec.Job = "r1", "e1", "rg1", "report"
+	made, err := st.Create(ctx, run)
+	require.NoError(t, err)
+	c := clusterOn(t, &recreating{Store: st, ChangeLog: st.(store.ChangeLog), name: "r1"}, clk)
+	ref := nodeapi.ObjectRef{Kind: v1.KindJobRun, Namespace: "e1", Name: "r1", UID: made.GetObjectMeta().UID}
+	require.NoError(t, c.handler.DeleteObject(ctx, "vm1", ref))
+	again, err := st.Get(ctx, v1.KindJobRun.GVK(), "e1", "r1")
+	require.NoError(t, err, "the run made again under the name between the read and the delete stays")
+	require.NotEqual(t, made.GetObjectMeta().UID, again.GetObjectMeta().UID)
+}
+
 // oracle: docs/design/multinode/join.fizz#NoJoinWithATokenPastItsEnd
 func TestAJoinTokenPastItsEndIsRefused(t *testing.T) {
 	c, clk := joinRig(t)

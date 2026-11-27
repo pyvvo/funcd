@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -49,4 +50,36 @@ func TestADeleteTheControlPlaneDidNotTakeIsSentAgain(t *testing.T) {
 	require.Len(t, cp.asked, 3, "once it was taken, it is not sent again")
 	want := nodeapi.ObjectRef{Kind: v1.KindJobRun, Namespace: "e1", Name: "report-1", UID: "u1"}
 	require.Equal(t, []nodeapi.ObjectRef{want, want, want}, cp.asked)
+}
+
+// refusingPuts is a node API client whose control plane answers each whole write with an error of kind.
+type refusingPuts struct {
+	nodeapi.Client
+	kind fault.Kind
+}
+
+func (r refusingPuts) PutObject(context.Context, nodeapi.ObjectWrite) error {
+	return fault.Wrapf(errors.New("refused"), r.kind, "test", "the control plane answers %s", r.kind)
+}
+
+func TestAWriteBackTheControlPlaneRefusesLetsTheSnapshotGoOn(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(memory.New())
+	run := &v1.JobRun{TypeMeta: v1.TypeMeta{APIVersion: v1.KindJobRun.GVK().APIVersion(), Kind: v1.KindJobRun}}
+	run.Name, run.Namespace, run.ResourceGroup, run.Spec.Job = "big", "e1", "rg1", "report"
+	_, err := st.Create(ctx, run)
+	require.NoError(t, err)
+	agentOf := func(kind fault.Kind) *Agent {
+		a := &Agent{cfg: Config{Store: st}, log: slog.New(slog.DiscardHandler), mine: map[v1.NamespaceName]bool{"e1": true},
+			pushed: map[string]string{}, unsent: map[string]nodeapi.ObjectRef{}}
+		a.id.Store(&identity{name: "vm1", client: refusingPuts{kind: kind}})
+		return a
+	}
+	for _, kind := range []fault.Kind{fault.Invalid, fault.Forbidden, fault.Conflict, fault.PayloadTooLarge} {
+		made, err := agentOf(kind).pushMade(ctx)
+		require.NoError(t, err, "a run the control plane refuses (%s) lets the snapshot go on", kind)
+		require.True(t, made[key(v1.KindJobRun, "e1", "big")])
+	}
+	_, err = agentOf(fault.Unavailable).pushMade(ctx)
+	require.Equal(t, fault.Unavailable, fault.KindOf(err), "one that did not reach it holds the snapshot back")
 }

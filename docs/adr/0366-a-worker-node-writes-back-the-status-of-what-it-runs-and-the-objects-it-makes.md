@@ -133,9 +133,9 @@ Its purpose: the agent's report loop and the node API's `Status`, `PutObject`, `
   | `TheControlPlaneConverges` | eventually always | `scenario: status-back`, `scenario: a-delete-back` | `TestADeleteTheControlPlaneDidNotTakeIsSentAgain`, `TestANodeJoinsFollowsItsNamespaceAndReportsBack` |
 
 - **Bounds**: one object, which a person approves and makes again once, with one status; one run, which a person may
-  delete; one node restart; one snapshot; one failed write back; 20 actions: the smallest scenario in which every
-  mutant fails, and the first that every path completes in. Wider (two failed writes, 24 actions): pass, 55,696
-  states, 22.9 s.
+  delete; one node restart; one snapshot; one failed write back; 19 actions: the smallest scenario in which every
+  mutant fails, and the first that every path completes in. Wider (two failed writes, 23 actions): pass, 55,696
+  states, 21.8 s.
 - **Faults**: one write back fails: of a status, of a run, of a delete, or before the snapshot; the node restarts once
   and forgets what it wrote back.
 - **Environment**: the control plane's status write is conditional on the version it read (`Status` retries a
@@ -144,12 +144,14 @@ Its purpose: the agent's report loop and the node API's `Status`, `PutObject`, `
   delete of a run it writes whole.
 - **Mutants**: `no-uid-check` fails `NoStatusOnAnotherObject`; `no-keep-decisions` fails `APersonsDecisionStays`;
   `snapshot-despite-a-failed-push` and `prune-what-came-since` fail `NoRunIsLost`; `no-resend` fails
-  `TheControlPlaneConverges`. `ADeletedRunCanComeBack` records an accepted cost, so no mutant guards it: a record of
-  deletes would end it, and the spec would then fail it.
-- **Result**: pass, 36,526 states, 14.5 s, FizzBee v0.5.4.
+  `TheControlPlaneConverges`. `ADeletedRunCanComeBack` records an accepted cost, so no mutant guards it; the base run
+  fails when no path reaches it, so a record of deletes would fail the spec.
+- **Result**: pass, 36,526 states, 13.6 s, FizzBee v0.5.4.
 - **Left to tests**: the kinds a node writes back (`TestANodeWritesBackOnlyTheKindsItsReconcilersMake`,
   `TestTheObjectsANodeMakesReachTheControlPlaneAndNoOthers`); a person's object sent as a child
-  (`TestANodesLateWriteChangesNothingOfAnotherObject`); a run under a name another holds
+  (`TestANodesLateWriteChangesNothingOfAnotherObject`); a delete on the version read
+  (`TestANodesDeleteNeverTakesAnObjectMadeAgainUnderTheName`); the refusals that let a snapshot go on
+  (`TestAWriteBackTheControlPlaneRefusesLetsTheSnapshotGoOn`); a run under a name another holds
   (`TestARunThatANodeStartsReachesTheControlPlane`); the children a node no longer holds
   (`TestAChildTheNodeNoLongerHoldsGoesFromTheControlPlane`); the writes after a snapshot
   (`TestANodeReportsEverythingAgainAfterASnapshot`).

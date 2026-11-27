@@ -15,7 +15,7 @@
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
-  max_actions: 20
+  max_actions: 19
   crash_on_yield: false
 ---
 # diagram: phase
