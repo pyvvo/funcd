@@ -27,6 +27,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -83,8 +84,8 @@ func (a *cli) devCmd() *cobra.Command {
 			"beside resources/ runs as an App template instead: dev pushes each image's build, renders the " +
 			"template as funcdctl app deploy does and applies the App, then again on each save.\n\n" +
 			"A " + devConfigFile + " in the current directory holds what dev is run with: its dev keys are these " +
-			"flags in camelCase (dir, values, build, hooks, apply, persist, persistTo, gport, s3port, cport, containers), plus " +
-			"env and " +
+			"flags in camelCase (dir, values, build, hooks, apply, persist, persistTo, gport, s3port, cport, containers, " +
+			"lan), plus env and " +
 			"envFile for the values of a declared Secret no document defines, platform for runtime.handOutSettle, " +
 			"eventing.blobPollInterval and funclog.segmentMaxAge, and addons.runtime, docker or containerd, the container " +
 			"engine that runs the add-ons' engines, Docker first when it is unset. A flag given here replaces its key, and " +
@@ -92,7 +93,7 @@ func (a *cli) devCmd() *cobra.Command {
 			"For an App template the file also takes watch, a list of name, run and dir: dev starts each command, waits " +
 			"for the builds they write and keeps their output in log files; and liveReload: true, which reloads open " +
 			"Site pages after a Site change.",
-		Args: cobra.MaximumNArgs(1),
+		Args: lanArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, _, rerr := resolveDevRun("funcdctl dev", ".", args, cmd.Flags(), &cfg)
 			if rerr != nil {
@@ -141,6 +142,10 @@ func (a *cli) devCmd() *cobra.Command {
 		"keep the App's preApply and postApply hooks, called on each new revision (App mode)")
 	cmd.Flags().StringArrayVar(&cfg.apply, "apply", nil,
 		"a file of resource documents applied before the App, again when it changes (App mode; repeatable)")
+	cmd.Flags().StringVar(&cfg.lan, "lan", "",
+		"serve the gateway on every address too, with no authentication, or with --lan=<IP address> on that one "+
+			"address only; the control plane and the S3 frontend stay on 127.0.0.1")
+	cmd.Flags().Lookup("lan").NoOptDefVal = devLANAll
 	cmd.Flags().BoolVar(&cfg.containers, "containers", false,
 		"run the workers of nodejs22 and python314 in containers on the engine dev runs add-ons on, from the images "+
 			"funcdctl carries, so the host needs no Node or Python")
@@ -160,6 +165,10 @@ type devConfig struct {
 	cport      int    // fixed control-plane port (apply / workflow run); 0 ⇒ a random free port
 	containers bool   // run funcd's own runtimes in containers on the engine dev runs add-ons on (ADR-0359)
 	printEnv   bool   // print the dev S3 creds as `export …` lines and exit (no server)
+	// lan is --lan or dev.lan (ADR-0361): "" on loopback, devLANAll on every address, else one IP address. findLAN lists
+	// the LAN addresses the banner prints; nil is lanAddrs, and a test passes its own.
+	lan     string
+	findLAN func() ([]netip.Addr, error)
 	// App mode (ADR-0253): the template's values files, where its builds are, whether its hooks stay, and the files of
 	// resource documents applied beside it.
 	values []string
@@ -847,10 +856,11 @@ const (
 	devReloadPoll = 300 * time.Millisecond
 )
 
-// printBanner prints a formatted list of every localhost service `funcdctl dev` exposes (Decision 6):
-// the gateway (invoke functions), the S3 endpoint (inspect blob) + the dev keypair, the embedded
-// lake engine when a lake is bound, and the loaded workflow — closing with the honest fidelity
-// note that egress is NOT isolated in dev (scenario: dev-egress-not-isolated).
+// printBanner prints a formatted list of every service `funcdctl dev` exposes (Decision 6): the gateway (invoke
+// functions), with its URLs on the LAN under --lan (ADR-0361), the S3 endpoint (inspect blob) + the dev keypair, the
+// embedded lake engine when a lake is bound, and the loaded workflow — closing with the LAN warning while the gateway
+// listens off loopback, and the honest fidelity note that egress is NOT isolated in dev (scenario:
+// dev-egress-not-isolated).
 func (a *cli) printBanner(inst *devInstance) error {
 	// The renderer is bound to a.out, so lipgloss auto-disables color when output is piped or captured
 	// (a non-TTY writer → plain text) and colors it on a real terminal.
@@ -865,7 +875,12 @@ func (a *cli) printBanner(inst *devInstance) error {
 	subS := r.NewStyle().Foreground(dim)
 	headerS := r.NewStyle().Bold(true).Foreground(accent)
 	nameS := r.NewStyle().Foreground(okc).Width(9)
-	svcURLS := r.NewStyle().Foreground(link).Width(26)
+	// The URL column fits the longest service URL, so an address --lan gives never wraps.
+	urlWidth := 26
+	for _, u := range []string{inst.gatewayURL, inst.controlURL, inst.s3Endpoint} {
+		urlWidth = max(urlWidth, len(u)+1)
+	}
+	svcURLS := r.NewStyle().Foreground(link).Width(urlWidth)
 	urlS := r.NewStyle().Foreground(link)
 	descS := r.NewStyle().Foreground(dim)
 	warnS := r.NewStyle().Foreground(warn).Bold(true)
@@ -876,14 +891,23 @@ func (a *cli) printBanner(inst *devInstance) error {
 		return nameS.Render(n) + " " + svcURLS.Render(u) + " " + descS.Render(d)
 	}
 
+	serving := "serving on localhost"
+	if inst.offLoopback {
+		serving += " and " + inst.lanTitle()
+	}
 	lines := []string{
-		titleS.Render("● funcd dev") + subS.Render("   serving on localhost · Ctrl-C to stop"),
+		titleS.Render("● funcd dev") + subS.Render("   "+serving+" · Ctrl-C to stop"),
 		"",
 		headerS.Render("SERVICES"),
 		svc("gateway", inst.gatewayURL, "invoke functions"),
+	}
+	for _, n := range inst.networkURLs {
+		lines = append(lines, nameS.Render("network")+" "+urlS.Render(n))
+	}
+	lines = append(lines,
 		svc("control", inst.controlURL, "apply · workflow run — funcdctl --server <url> --token "+funcd.DevToken),
 		svc("s3", inst.s3Endpoint, "inspect blob · aws s3 ls s3://<bucket>/"),
-	}
+	)
 	if len(inst.lakes) > 0 {
 		lines = append(lines, svc("lake", "embedded duckdb+quack",
 			"serves: "+strings.Join(inst.lakes, ", ")+" · DuckLake over blob"))
@@ -900,7 +924,9 @@ func (a *cli) printBanner(inst *devInstance) error {
 	} else {
 		lines = append(lines, "", headerS.Render("FUNCTIONS"))
 		for _, fn := range inst.functions {
-			lines = append(lines, descS.Render("POST")+"  "+urlS.Render(inst.gatewayURL+"/function/"+fn))
+			for _, base := range slices.Concat([]string{inst.gatewayURL}, inst.networkURLs) {
+				lines = append(lines, descS.Render("POST")+"  "+urlS.Render(base+"/function/"+fn))
+			}
 		}
 	}
 
@@ -932,7 +958,11 @@ func (a *cli) printBanner(inst *devInstance) error {
 		lines = append(lines, keyS.Render("export "+kv[0]+"=")+kv[1])
 	}
 
-	lines = append(lines, "", warnS.Render("⚠ egress is NOT isolated in dev — this is not where you validate confidentiality"))
+	lines = append(lines, "")
+	if inst.offLoopback {
+		lines = append(lines, warnS.Render(devLANWarning))
+	}
+	lines = append(lines, warnS.Render("⚠ egress is NOT isolated in dev — this is not where you validate confidentiality"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return a.writef("\n%s\n\n", boxS.Render(content))
@@ -1005,12 +1035,16 @@ func (s *devLogStyler) format(l funcd.LogLine) string {
 type devInstance struct {
 	platform   *funcd.Platform
 	client     *sdk.Client
-	gatewayURL string   // the data-plane base URL functions are invoked at (POST <url>/function/<name>)
-	controlURL string   // the control-plane base URL (funcdctl --server: apply, workflow run)
-	functions  []string // the Functions dev runs: each Function, then each Workflow image step's
-	workflows  []string // the folder's Workflows
-	lakes      []string // the Lakes the embedded duckdb+quack engine serves; nil if none
-	images     *devImages
+	gatewayURL string // the data-plane base URL functions are invoked at (POST <url>/function/<name>)
+	// networkURLs are the gateway's base URLs on the LAN addresses found at start, printed beneath each gateway URL,
+	// and offLoopback says the gateway listens off loopback, which the banner's title and warning name (ADR-0361).
+	networkURLs []string
+	offLoopback bool
+	controlURL  string   // the control-plane base URL (funcdctl --server: apply, workflow run)
+	functions   []string // the Functions dev runs: each Function, then each Workflow image step's
+	workflows   []string // the folder's Workflows
+	lakes       []string // the Lakes the embedded duckdb+quack engine serves; nil if none
+	images      *devImages
 	// artifactDir, when set, runs the parts from the OCI images dev pushed, pulled into it (App mode, ADR-0253).
 	artifactDir string
 	// app is the App dev deployed (App mode); the banner names it, its Routes and its Sites instead of the Functions.
@@ -1081,7 +1115,7 @@ func (a *cli) startPlatform(ctx context.Context, op string, folder *devFolder, p
 			return nil, nerr
 		}
 		inst.platform = p
-		inst.gatewayURL = "http://" + p.DataPlaneAddr()
+		inst.setGatewayURLs(p.DataPlaneAddr(), cfg.findLAN)
 		inst.controlURL = "http://" + p.Addr()
 
 		runCtx, cancelRun := context.WithCancel(ctx)
@@ -1203,12 +1237,12 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 
 	// Fixed listen ports for reproducible URLs (--gport / --s3port / --cport); 0 keeps the ephemeral free
 	// port. These override InMemory()'s 127.0.0.1:0 (control plane + data plane); the S3 port is applied in
-	// devS3Options.
+	// devS3Options. --lan moves only the gateway off loopback (ADR-0361 Decision 2).
 	if perr := checkFixedPorts(op, cfg); perr != nil {
 		return nil, perr
 	}
-	if cfg.gport != 0 {
-		opts = append(opts, funcd.WithDataPlaneAddr(fmt.Sprintf("127.0.0.1:%d", cfg.gport)))
+	if cfg.gport != 0 || cfg.lan != "" {
+		opts = append(opts, funcd.WithDataPlaneAddr(gatewayListen(cfg.lan, cfg.gport)))
 	}
 	if cfg.cport != 0 {
 		opts = append(opts, funcd.WithListenAddr(fmt.Sprintf("127.0.0.1:%d", cfg.cport)))

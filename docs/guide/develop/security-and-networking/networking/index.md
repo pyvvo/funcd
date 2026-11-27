@@ -243,7 +243,8 @@ These errors stop a command before any server answers:
 ## Run it locally
 
 - `funcdctl dev` serves its folder's Routes on `--gport`, in the namespace `default` only, so a hostless Route answers
-  on every host.
+  on every host. It listens on 127.0.0.1, unless [`--lan`](../../tools/funcdctl/index.md) puts the gateway on the
+  machine's network addresses as well.
 - Its edge has no authenticator, so `authenticated` rules answer 401.
 - It controls no outbound connection: an EgressPolicy is applied but changes nothing, and the banner warns
   `⚠ egress is NOT isolated in dev`.

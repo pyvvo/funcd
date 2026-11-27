@@ -45,7 +45,7 @@ F137 comes first: a Job runs on any runtime that serves Jobs, Node and Python fr
 on 2026-11-23). F138, F139, F140, F257, F270 and F271 build on F137, and F270 and F276 also on F139. F141, the InfraStack add-on, builds on
 F137, F138, F139, F143, F257, F270 and F271, and brings the OpenTofu runtime that F142 had planned inside funcd. F143 is
 independent of the Jobs. F144 builds on F141, and F145 on F141 and F144. F138 also needs F147, F148 and F149 from
-FEAT-0008, and F151 from FEAT-0007 builds on F140. F150 is an idea, not built in this epoch.
+FEAT-0008, and F151 from FEAT-0007 builds on F140. F150 is an idea, not built in this epoch. F278 builds on no other row.
 
 ```mermaid
 flowchart TB
@@ -56,6 +56,7 @@ flowchart TB
     F137 --> F271["F271 Jobs in Apps"]
     F139 --> F270["F270 Engineless add-on kinds"]
     F139 --> F276["F276 funcd's runtimes in containers under dev"]
+    F278["F278 Dev's gateway on the LAN"]
     F147["F147 People as principals<br/>FEAT-0008"] --> F148["F148 Policies on control-plane actions<br/>FEAT-0008"]
     F147 --> F149["F149 Who changed an object<br/>FEAT-0008"]
     F148 --> F138
@@ -89,6 +90,7 @@ flowchart TB
 | F270 | **Engineless add-on kinds**: an add-on's kind may run no engine: a Function of the namespace reconciles its objects, called with them on every change and on a resync, and each object's status follows its answer, as a settings kind's Function does ([ADR-0341](../adr/0341-a-function-applies-a-targets-settings.md)). **Why**: some add-ons manage something outside funcd, such as a cloud stack through Jobs (F141), and an engine per object would only wait. | F137 · F139 · [ADR-0332](../adr/0332-an-admin-registers-add-ons-built-outside-funcd.md) · [ADR-0341](../adr/0341-a-function-applies-a-targets-settings.md) | [ADR-0345](../adr/0345-a-function-reconciles-an-engineless-kind-and-a-deletion-waits-for-its-destroy.md) | implemented |
 | F271 | **Jobs in Apps**: an App declares Jobs next to its Functions, so an App template carries the Jobs its parts need, such as one per stack. **Why**: an App is the unit an owner installs, upgrades and removes, and the InfraStack add-on's template holds one Job per stack (F141). | F137 · [ADR-0199](../adr/0199-app-resource.md) (the App) · [ADR-0337](../adr/0337-an-app-template-carries-its-add-on.md) | [ADR-0350](../adr/0350-an-app-declares-jobs-as-it-declares-functions.md) | implemented |
 | F276 | **funcd's runtimes in containers under dev**: on an opt-in, `funcdctl dev` runs the Functions and Jobs of funcd's own runtimes, Node and Python, in containers on the engine it runs add-ons on, so a developer's machine needs no Node or Python and dev downloads nothing for them. Tracked in #1585. **Why**: installing and keeping the right Node and Python is the first step before anything runs, and a container runs the runtime image that a server runs (decided on 2026-11-26) | F139 ([ADR-0346](../adr/0346-under-funcdctl-dev-a-worker-on-an-addons-runtime-runs-on-devs-container-engine.md)) | [ADR-0359](../adr/0359-under-funcdctl-dev-an-opt-in-runs-funcds-own-runtimes-in-containers.md) | implemented |
+| F278 | **Dev's gateway on the LAN**: on an opt-in, off by default, `funcdctl dev` serves its gateway on the developer's network as well as on loopback, so a phone on the same Wi-Fi opens a dev App's Sites and Routes, WebSocket included. Its control plane and S3 frontend stay on loopback, and its banner names the network URLs and warns that the gateway answers there without authentication. Tracked in #1597. **Why**: a dev App with a TV page and a phone remote ran a TCP forwarder of its own to reach the gateway, and every App that wants a phone would need one (decided on 2026-11-27) | [ADR-0125](../adr/0125-funcdctl-dev-local-run.md) (funcdctl dev) · [ADR-0254](../adr/0254-funcdctl-dev-config-file.md) (its config file) | [ADR-0361](../adr/0361-under-funcdctl-dev-an-opt-in-puts-the-gateway-on-the-lan.md) | implemented |
 
 ### In other epochs, needed here
 
@@ -193,6 +195,7 @@ real containerd in a Lima lane, and each feature passes its checks:
   object's status follows its answer.
 - **F271**: an App with a Job installs, upgrades and removes it with its other parts.
 - **F276**: under the opt-in, a Function on Node, one on Python and a Job run in containers on a machine with no Node or Python, and a saved change is served from a new container.
+- **F278**: under the opt-in, a call and a WebSocket reach a dev Function on the machine's LAN address, while the control plane and the S3 frontend answer on loopback only; without it, the gateway answers on loopback only.
 - **F147 to F149 and F151**, in their epochs, pass the checks their ADRs set, and F138's checks pass on top of them.
 
 ## Out of scope (tracked elsewhere)
