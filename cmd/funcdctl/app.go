@@ -494,7 +494,7 @@ func (a *cli) printApp(app *v1.App, asJSON bool) error {
 
 func (a *cli) appDeployCmd() *cobra.Command {
 	var f templateFlags
-	var noWait, dryRun bool
+	var noWait, dryRun, waitLagging bool
 	cmd := &cobra.Command{
 		Use:   "deploy <dir|ref>",
 		Short: "Render an App template, apply the App and wait until its new revision is current or failed",
@@ -504,7 +504,10 @@ func (a *cli) appDeployCmd() *cobra.Command {
 			"the revision it follows and each part whose state changes, a settled part's line ending with its time. It " +
 			"exits 0 once the revision is current; 1 when it fails, when the App's spec changes " +
 			"before it is stamped, or when the App is deleted. The server's app.upgradeTimeout bounds a rollout; an " +
-			"interrupt stops the wait, not the rollout.",
+			"interrupt stops the wait, not the rollout.\n\n" +
+			"A Lagging part, such as a stack whose run waits for its approval, holds no rollout: deploy exits at the " +
+			"switch and names each part that goes on, with the funcdctl get that shows it. With --wait-lagging it waits " +
+			"past the switch until no part is Lagging or Pending.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := a.sdkClient()
@@ -515,19 +518,27 @@ func (a *cli) appDeployCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return a.deploy(cmd.Context(), c, t, in, noWait, dryRun)
+			return a.deploy(cmd.Context(), c, t, in, deployWait{noWait: noWait, dryRun: dryRun, lagging: waitLagging})
 		},
 	}
 	f.bind(cmd)
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return once the App is applied")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "admit the App and store nothing; print what the deploy would do and wait for nothing")
+	cmd.Flags().BoolVar(&waitLagging, "wait-lagging", false, "after the switch, wait until no part is Lagging or Pending, such as a stack whose run waits for its approval")
+	cmd.MarkFlagsMutuallyExclusive("no-wait", "wait-lagging")
+	cmd.MarkFlagsMutuallyExclusive("dry-run", "wait-lagging")
 	return cmd
 }
+
+// deployWait is how far a deploy waits: not at all with noWait or dryRun, past the switch for its Lagging and Pending
+// parts with lagging (ADR-0362 Decision 7, amended 2026-11-27).
+type deployWait struct{ noWait, dryRun, lagging bool }
 
 // deploy renders and applies the App unless the stored spec already equals it, retrying a conflict, then follows
 // its revision (ADR-0217 Decision 8). A dry run applies it with sdk.DryRun even when the spec is equal, prints the
 // answer and waits for nothing (ADR-0220 Decision 7).
-func (a *cli) deploy(ctx context.Context, c *sdk.Client, t *template.Template, in template.RenderInput, noWait, dryRun bool) error {
+func (a *cli) deploy(ctx context.Context, c *sdk.Client, t *template.Template, in template.RenderInput, wait deployWait) error {
+	noWait, dryRun := wait.noWait, wait.dryRun
 	if t.Addon != nil {
 		if ok, err := a.deployAddon(ctx, c, t.Addon, in.Namespace, dryRun); err != nil || !ok {
 			return err
@@ -577,7 +588,7 @@ func (a *cli) deploy(ctx context.Context, c *sdk.Client, t *template.Template, i
 	if noWait {
 		return nil
 	}
-	return a.waitDeploy(ctx, c, s.applied, s.n0, s.ready, v)
+	return a.waitDeploy(ctx, c, s.applied, s.n0, s.ready, v, wait.lagging)
 }
 
 // liveView reports whether the App view draws live: on a terminal, or as a test sets it.
@@ -779,14 +790,14 @@ func followed(revs []*v1.AppRevision, spec v1.AppSpec, n0, latest int64) (*v1.Ap
 // waitDeploy follows the revision that holds the applied spec until it is current or failed. Once it follows one,
 // it prints the revision's name and each child whose state or reason changed; it prints the App's Ready condition
 // whenever it changes from ready, the one read before the apply, so a wait for a stamp (a hold, a paused App) is
-// visible too.
-func (a *cli) waitDeploy(ctx context.Context, c *sdk.Client, applied *v1.App, n0 int64, ready string, v *appView) error {
-	return a.waitDeployEvery(ctx, c, applied, n0, ready, deployPoll, v)
+// visible too. With lagging it goes on past the switch while a part is Lagging or Pending.
+func (a *cli) waitDeploy(ctx context.Context, c *sdk.Client, applied *v1.App, n0 int64, ready string, v *appView, lagging bool) error {
+	return a.waitDeployEvery(ctx, c, applied, n0, ready, deployPoll, v, lagging)
 }
 
 // waitDeployEvery is waitDeploy reading the App every poll; funcdctl dev follows a revision at a shorter pace and
 // passes no view, so it prints the plain lines. A live view draws each poll; a view off a terminal times the lines.
-func (a *cli) waitDeployEvery(ctx context.Context, c *sdk.Client, applied *v1.App, n0 int64, ready string, poll time.Duration, v *appView) error {
+func (a *cli) waitDeployEvery(ctx context.Context, c *sdk.Client, applied *v1.App, n0 int64, ready string, poll time.Duration, v *appView, lagging bool) error {
 	const op = "funcdctl app deploy"
 	w := &deployWatch{children: map[string]string{}, ready: ready, requires: map[v1.ObjectName]string{}}
 	if v != nil {
@@ -795,6 +806,7 @@ func (a *cli) waitDeployEvery(ctx context.Context, c *sdk.Client, applied *v1.Ap
 			w.times = v.clock
 		}
 	}
+	switched := false
 	for first := true; ; first = false {
 		if !first {
 			if err := sleepCtx(ctx, poll); err != nil {
@@ -835,7 +847,12 @@ func (a *cli) waitDeployEvery(ctx context.Context, c *sdk.Client, applied *v1.Ap
 		switch {
 		case rev == nil:
 		case app.Status.CurrentRevision == rev.Name:
-			return nil
+			if !lagging || !slices.ContainsFunc(app.Status.Children, stillWaits) {
+				return nil
+			}
+			switched = true
+		case switched:
+			return nil // a later revision replaced this one after its switch
 		case rev.Status.Phase == v1.PhaseFailed:
 			c := failedCondition(rev)
 			return fault.Conflictf(op, "AppRevision %s failed: %s: %s", rev.Name, c.Reason, c.Message)
@@ -855,10 +872,19 @@ type deployWatch struct {
 	required  map[v1.ObjectName]*v1.App
 }
 
+// stillWaits is a part that --wait-lagging waits for past the switch: one that lags, or one Pending, as a part is once
+// its wait ends and it is written (ADR-0362 Decision 7, amended 2026-11-27).
+func stillWaits(c v1.AppChild) bool {
+	return c.State == v1.AppChildLagging || c.State == v1.AppChildPending
+}
+
 // show shows one poll: the live view's draw, else the lines, which read the required Apps when they are timed.
 func (a *cli) show(ctx context.Context, c *sdk.Client, w *deployWatch, v *appView, app *v1.App, rev *v1.AppRevision) error {
 	if v != nil && v.live {
 		return v.poll(ctx, c, app, rev)
+	}
+	if v != nil {
+		v.app = app // done names the parts that lag at the exit (ADR-0362 Decision 6, amended 2026-11-27)
 	}
 	if w.times != nil && len(app.Spec.Requires) > 0 {
 		var err error

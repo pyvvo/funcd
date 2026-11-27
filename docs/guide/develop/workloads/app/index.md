@@ -83,6 +83,9 @@ Each change of the spec, other than a pause or a resume, makes a new revision; t
   exits with 1 when the new revision fails. On a terminal it draws its progress as a live box: a row per required App,
   hook and part, with its state, what it waits on and the time it takes, and the revision's deadline. In a pipe or a
   CI log it prints a line per change instead, and a settled part's line ends with its time, such as `after 14s`.
+  A `Lagging` part, such as a stack whose run waits for its approval, holds no rollout: deploy exits at the switch,
+  counts the part apart (`7/8 ready · 1 lagging`) and names it with the `funcdctl get` that shows it. With
+  `--wait-lagging` it waits until no part is `Lagging` or `Pending`.
 
 Change `timeout` in `apps/volumes/values/redeploy.yaml` from `31s` to `45s` and save. `funcdctl dev` rolls out
 `volumes-2`, then prints `reloaded in <duration>`:

@@ -46,6 +46,8 @@ funcdctl app deploy <dir|ref> [flags]
 Render an App template, apply the App and wait until its new revision is current or failed.
 
 One command deploys, upgrades and downgrades. On a terminal deploy draws a live view: a row per required App, hook and part with its state, what it waits on and its time, and the revision's deadline. Elsewhere it prints the revision it follows and each part whose state changes, a settled part's line ending with its time. It exits 0 once the revision is current; 1 when it fails, when the App's spec changes before it is stamped, or when the App is deleted. The server's app.upgradeTimeout bounds a rollout; an interrupt stops the wait, not the rollout.
+
+A Lagging part, such as a stack whose run waits for its approval, holds no rollout: deploy exits at the switch and names each part that goes on, with the funcdctl get that shows it. With --wait-lagging it waits past the switch until no part is Lagging or Pending.
 ```
 
 | Flag | Type | Default | Description |
@@ -56,6 +58,7 @@ One command deploys, upgrades and downgrades. On a terminal deploy draws a live 
 | `--no-wait` | bool | `false` | return once the App is applied |
 | `--resource-group` | string |  | resource group (default: the App's name, or the stored App's group) |
 | `-f`, `--values` | stringArray | `[]` | a values file; repeat it to merge files in order |
+| `--wait-lagging` | bool | `false` | after the switch, wait until no part is Lagging or Pending, such as a stack whose run waits for its approval |
 
 ## `funcdctl app history`
 

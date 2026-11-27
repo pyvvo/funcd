@@ -660,6 +660,91 @@ func TestScenarioAppViewDeployLive(t *testing.T) {
 	requireLines(t, got, "\x1b[", "✓ Function/todo-api", "create", "App/todo Ready=True")
 }
 
+// lagAtSwitch makes revision 1 of App todo current, with its Function Ready and its stack Lagging.
+func lagAtSwitch(t *testing.T, st store.Store, app *v1.App) {
+	t.Helper()
+	seedAppRevision(t, st, "todo", app.UID, 1, app.Spec, v1.PhaseReady)
+	setAppStatus(t, st, func(s *v1.AppStatus) {
+		s.LatestRevision, s.CurrentRevision = "todo-1", "todo-1"
+		s.Children = []v1.AppChild{
+			{Kind: v1.KindFunction, Name: "todo-api", State: v1.AppChildReady},
+			{Kind: "InfraStack", Name: "todo-stack", State: v1.AppChildLagging, Reason: "AwaitingApproval"},
+		}
+		s.Conditions = readyIs(v1.ConditionTrue, "")
+	})
+}
+
+// polledPast waits until the command has printed want twice, from two draws a second apart, and has not returned.
+func polledPast(t *testing.T, run *cliRun, want string) {
+	t.Helper()
+	require.Eventually(t, func() bool { return strings.Count(run.out.String(), want) >= 2 }, cliWithin,
+		10*time.Millisecond, "deploy polls past the switch")
+	select {
+	case <-run.done:
+		require.FailNow(t, "deploy returned while a part still waits", run.out.String())
+	default:
+	}
+}
+
+// scenario: app-deploy-wait-lagging — with --wait-lagging, app deploy stays past the switch while the stack lags, then
+// while the part that read its outputs is Pending, and exits 0 once both are Ready, naming no part that goes on.
+func TestScenarioAppDeployWaitLagging(t *testing.T) {
+	t.Parallel()
+	c, _, st := newTestServer(t)
+	run := startLiveCLI(t, c, "app", "deploy", deployTemplate(t, "1.0.0"), "-n", "team-a", "--wait-lagging")
+	lagAtSwitch(t, st, waitApplied(t, c, "1.0.0"))
+	polledPast(t, run, "1 lagging")
+	setAppStatus(t, st, func(s *v1.AppStatus) {
+		s.Children[1].State, s.Children[1].Reason = v1.AppChildReady, ""
+		s.Children = append(s.Children, v1.AppChild{Kind: v1.KindFunction, Name: "todo-reader", State: v1.AppChildPending, Reason: "Progressing"})
+	})
+	polledPast(t, run, "Pending Progressing")
+	setAppStatus(t, st, func(s *v1.AppStatus) { s.Children[2].State, s.Children[2].Reason = v1.AppChildReady, "" })
+	require.NoError(t, run.wait(t))
+	got := run.out.String()
+	requireLines(t, got, "◐ InfraStack/todo-stack", "Lagging AwaitingApproval", "✓ InfraStack/todo-stack", "3/3 ready",
+		"✓ Function/todo-reader")
+	require.NotContains(t, got, "goes on")
+}
+
+// With --wait-lagging, a later revision that replaces the deploy's own after its switch ends the wait.
+func TestAppDeployWaitLaggingEndsWhenReplaced(t *testing.T) {
+	t.Parallel()
+	c, _, st := newTestServer(t)
+	run := startLiveCLI(t, c, "app", "deploy", deployTemplate(t, "1.0.0"), "-n", "team-a", "--wait-lagging")
+	app := waitApplied(t, c, "1.0.0")
+	lagAtSwitch(t, st, app)
+	polledPast(t, run, "1 lagging")
+	seedAppRevision(t, st, "todo", app.UID, 2, renderedSpec(t, "2.0.0"), v1.PhaseReady)
+	setAppStatus(t, st, func(s *v1.AppStatus) { s.LatestRevision, s.CurrentRevision = "todo-2", "todo-2" })
+	require.NoError(t, run.wait(t))
+}
+
+// scenario: app-view-lagging, through the command — without --wait-lagging, deploy exits at the switch while the
+// stack lags, and names it: on a terminal in its last draw, in a pipe as a line; --wait-lagging is refused with
+// --no-wait or --dry-run.
+func TestAppDeployExitsWhileAPartLags(t *testing.T) {
+	t.Parallel()
+	lc, _, lst := newTestServer(t)
+	live := startLiveCLI(t, lc, "app", "deploy", deployTemplate(t, "1.0.0"), "-n", "team-a")
+	lagAtSwitch(t, lst, waitApplied(t, lc, "1.0.0"))
+	require.NoError(t, live.wait(t))
+	requireLines(t, live.out.String(), "1/2 ready · 1 lagging", "◐ InfraStack/todo-stack goes on after this command",
+		"funcdctl get infrastacks todo-stack -n team-a")
+
+	c, _, st := newTestServer(t)
+	run := startCLI(t, c, "app", "deploy", deployTemplate(t, "1.0.0"), "-n", "team-a")
+	lagAtSwitch(t, st, waitApplied(t, c, "1.0.0"))
+	require.NoError(t, run.wait(t))
+	requireLines(t, run.out.String(), "todo-1\n", "InfraStack/todo-stack Lagging AwaitingApproval\n",
+		"InfraStack/todo-stack goes on after this command: funcdctl get infrastacks todo-stack -n team-a\n")
+
+	for _, other := range []string{"--no-wait", "--dry-run"} {
+		err := execApp(&bytes.Buffer{}, nil, "app", "deploy", deployTemplate(t, "1.0.0"), "--wait-lagging", other)
+		require.ErrorContains(t, err, "none of the others can be", other)
+	}
+}
+
 // scenario: app-view-delete, through the command — on a terminal, app delete draws each noted object deleted with its
 // time, and the stores kept in the last draw.
 func TestScenarioAppViewDeleteLive(t *testing.T) {
