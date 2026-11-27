@@ -15,8 +15,8 @@
 
 ## Context & Need
 
-A node's workers read their Secrets and the credentials funcd derives for them (S3 pairs, SQL engine passwords, lake
-tokens and add-on proxy tokens) on the node, also while the control plane is away. An all-in-one derives them all from
+A node's workers read their Secrets and the credentials funcd derives for them (S3 pairs, SQL engine passwords and
+change-feed tokens, lake tokens and add-on proxy tokens) on the node, also while the control plane is away. An all-in-one derives them all from
 its own master; a node that held that master could derive every namespace's. The decider chose on 2026-11-16 (D8,
 #1486) a master per namespace, derived on the control plane, of which a node holds only its own namespaces', and a
 node's Secrets encrypted at rest with a key of its own.
@@ -73,11 +73,12 @@ Its purpose: a leaked node exposes only the namespaces it runs, and a namespace 
    after each feed answer while one is missing. It keeps it whole in `cluster.dataDir/keys/<ns>.json`, a 0600 file as
    `master.key` is, and removes the file when the namespace leaves it; at its start, before anything runs, it removes
    the master of every namespace whose local Namespace it does not hold, so a node that stopped during a removal keeps
-   none. The node derives the namespace's S3 pairs, SQL engine passwords, lake tokens and add-on proxy tokens from it,
-   never from its own master; an all-in-one derives every namespace's from its own master, as before. A namespace
+   none. The node derives the namespace's S3 pairs, SQL engine passwords and change-feed tokens, lake tokens and add-on
+   proxy tokens from it, never from its own master; an all-in-one derives every namespace's from its own master, as before. A namespace
    keeps its master on any node, since its UID does not change.
-2. **Waiting for it.** A Function whose namespace's master the node lacks waits Pending, reason `NamespaceKeyMissing`;
-   a SQL or Lake engine waits by failing its reconcile until the master arrives.
+2. **Waiting for it.** A Function whose namespace's master the node lacks waits Pending, reason `NamespaceKeyMissing`,
+   and a Job with S3, Lake or add-on bindings is not Ready, with the same reason; a JobRun that starts meanwhile fails
+   its start with that reason's message. A SQL or Lake engine waits by failing its reconcile until the master arrives.
 3. **Secrets on a node.** A node holds the Secrets of its namespaces only, which its feed brings (ADR-0365 Decision 4).
    When the control plane encrypts Secrets (`secrets.encryptionKeyFile`, ADR-0022), a Secret's change-log record is
    sealed at rest by the same encryptor, and the feed serves it decrypted over the node's mTLS link. The node's store
