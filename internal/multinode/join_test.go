@@ -130,7 +130,7 @@ type recreating struct {
 func (r *recreating) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	if name == r.name && !r.done {
 		r.done = true
-		obj, err := r.Store.Get(ctx, gvk, ns, name)
+		obj, err := r.Get(ctx, gvk, ns, name)
 		if err != nil {
 			return err
 		}
@@ -139,7 +139,7 @@ func (r *recreating) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.
 		}
 		m := obj.GetObjectMeta()
 		m.UID, m.ResourceVersion = "", ""
-		if _, err := r.Store.Create(ctx, obj); err != nil {
+		if _, err := r.Create(ctx, obj); err != nil {
 			return err
 		}
 	}
