@@ -14,6 +14,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/services/sql/engineargs"
 )
 
@@ -37,7 +38,9 @@ const userObjectsQuery = "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE
 type Backups struct {
 	Engines *Engines
 	Master  []byte
-	Client  *http.Client // nil ⇒ a node client with no timeout, bounded by each call's context; share one
+	// NamespaceMasters, when set, gives each namespace's own master (ADR-0371); nil derives from Master.
+	NamespaceMasters nsmaster.Source
+	Client           *http.Client // nil ⇒ a node client with no timeout, bounded by each call's context; share one
 }
 
 func (b Backups) client() *http.Client {
@@ -65,7 +68,11 @@ func (b Backups) request(ctx context.Context, method, addr, path string, query u
 	if body != nil {
 		req.Header.Set("Content-Type", "application/octet-stream")
 	}
-	req.SetBasicAuth(engineargs.User, EnginePassword(b.Master, ns, name))
+	pw, err := enginePasswordOf(b.Master, b.NamespaceMasters, ns, name)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(engineargs.User, pw)
 	// The transport error names the engine's address, so it is not wrapped (ADR-0233 Decision 4).
 	resp, err := b.client().Do(req)
 	if err != nil {
@@ -199,7 +206,11 @@ func (b Backups) HasTables(ctx context.Context, ns v1.NamespaceName, name v1.Obj
 	ctx, cancel := context.WithTimeout(ctx, hasTablesTimeout)
 	defer cancel()
 	stmt, _ := json.Marshal(userObjectsQuery)
-	res, err := call(ctx, b.client(), addr, EnginePassword(b.Master, ns, name), "/db/query", url.Values{}, []json.RawMessage{stmt})
+	pw, err := enginePasswordOf(b.Master, b.NamespaceMasters, ns, name)
+	if err != nil {
+		return false, err
+	}
+	res, err := call(ctx, b.client(), addr, pw, "/db/query", url.Values{}, []json.RawMessage{stmt})
 	if err != nil {
 		return false, err
 	}

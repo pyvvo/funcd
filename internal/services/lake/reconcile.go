@@ -147,8 +147,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// (ADR-0270 Decision 5), and a fresh pair needs a fresh engine: Converge replaces one older than its renewal age.
 	if r.derive != nil && len(cs.Spec.Bindings.Blob) > 0 {
 		ns, name := string(cs.Namespace), string(cs.Name)
+		// On a worker node the pair needs the namespace's master (ADR-0371): wait for it before the engine.
+		if _, _, err := r.derive(v1.KindLake, ns, name); err != nil {
+			return controller.Result{}, err
+		}
 		spec.IssueEnv = func() map[string]string {
-			access, secret := r.derive(v1.KindLake, ns, name)
+			access, secret, err := r.derive(v1.KindLake, ns, name)
+			if err != nil {
+				return nil // the master left between the check and the start: the engine gets no pair
+			}
 			return map[string]string{"AWS_ACCESS_KEY_ID": access, "AWS_SECRET_ACCESS_KEY": secret}
 		}
 		if r.renewalAge != nil {

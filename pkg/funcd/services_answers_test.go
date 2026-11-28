@@ -101,7 +101,8 @@ func TestBucketAnswersMatrix(t *testing.T) {
 	mem, err := gocloud.Open(ctx, "mem://")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mem.Close() })
-	e := newAnswerEnv(t, funcd.WithBlob(mem))
+	e := newAnswerEnv(t, funcd.WithBlob(mem), asCluster(t))
+	placeOnOfflineNode(t, e)
 	for _, b := range []*v1.Bucket{bucketFixture("b", "raw"), bucketFixture("bound", "p", "q"),
 		bucketFixture("full", "p", "q"), bucketFixture("cataloged", "p", "q")} {
 		create(t, e.c, e.api, b)
@@ -158,6 +159,10 @@ func TestBucketAnswersMatrix(t *testing.T) {
 				token: answersDev, detail: catalog}},
 		},
 	)
+	away := bucketFixture("away", "raw")
+	away.Namespace = "e1"
+	rows = append(rows, offlineRow("deleteBucket", e, func(t *testing.T, e *answerEnv) { create(t, e.c, e.api, away) },
+		ask{what: "a Bucket whose worker node is offline", method: http.MethodDelete, path: "/apis/funcd.io/v1alpha1/namespaces/e1/buckets/away"}))
 	runMatrix(t, rows)
 }
 
@@ -223,7 +228,8 @@ func TestSQLAnswersMatrix(t *testing.T) {
 		}),
 		"failing": engineAt(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }),
 	}}
-	e := newAnswerEnv(t, funcd.WithSQLProviderRuntime(engines))
+	e := newAnswerEnv(t, funcd.WithSQLProviderRuntime(engines), asCluster(t))
+	placeOnOfflineNode(t, e)
 	for _, d := range []*v1.SQLDatabase{sqlFixture("db"), sqlFixture("bound"), sqlFixture("tables"), sqlFixture("silent"),
 		sqlFixture("failing"), sqlFixture("pending")} {
 		create(t, e.c, e.api, d)
@@ -278,13 +284,19 @@ func TestSQLAnswersMatrix(t *testing.T) {
 				token: answersDev, detail: "the engine answered 503"}},
 		},
 	)
+	away := sqlFixture("away")
+	away.Namespace = "e1"
+	rows = append(rows, offlineRow("deleteSQLDatabase", e, func(t *testing.T, e *answerEnv) { create(t, e.c, e.api, away) },
+		ask{what: "a database whose worker node is offline", method: http.MethodDelete,
+			path: "/apis/funcd.io/v1alpha1/namespaces/e1/sqldatabases/away"}))
 	runMatrix(t, rows)
 }
 
 // The answers of the Lake feature's operations, one row per case of each.
 func TestLakeAnswersMatrix(t *testing.T) {
 	t.Parallel()
-	e := newAnswerEnv(t)
+	e := newAnswerEnv(t, asCluster(t))
+	placeOnOfflineNode(t, e)
 	create(t, e.c, e.api, lakeFixture("lake"))
 
 	const lakes = "/apis/funcd.io/v1alpha1/namespaces/default/lakes"
@@ -305,6 +317,11 @@ func TestLakeAnswersMatrix(t *testing.T) {
 			{op: "replaceLake", when: "missing from spec.buckets", on: e, ask: ask{what: "a binding to an undeclared Bucket",
 				method: http.MethodPut, path: lakes + "/lake", token: answersDev, body: undeclared("lake"), detail: notDeclared}},
 		},
+		hostRows(t, e, "Lake", "lakes", "lake", func(name v1.ObjectName, host string) string {
+			l := lakeFixture(name)
+			l.Spec.Ingress = &v1.Ingress{Host: host}
+			return jsonOf(t, l)
+		}),
 	)
 	runMatrix(t, rows)
 }

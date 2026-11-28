@@ -59,6 +59,25 @@ func ToProblem(err error) Problem {
 	return p
 }
 
+// KindOfProblem is the Kind a Problem names, ToProblem's inverse: by its type URI, else by its status, else Internal. A
+// client of one of funcd's own HTTP APIs hands an error on with the kind it had where it happened.
+func KindOfProblem(p Problem) Kind {
+	for k, info := range kindProblem {
+		if info.typeURI == p.Type {
+			return k
+		}
+	}
+	if p.Status == http.StatusUnprocessableEntity {
+		return Invalid
+	}
+	for k, info := range kindProblem {
+		if info.status == p.Status {
+			return k
+		}
+	}
+	return Internal
+}
+
 // detailOf is the detail of err's problem. A 4xx is the caller's to correct, so it keeps the whole text. A 500 carries
 // the operation and its message, the part ADR-0002 calls safe to surface, or a fixed text when it has no message. Any
 // other 5xx also keeps the faults of its own kind beneath it, which name a state a caller reads (ADR-0169's "is Failed

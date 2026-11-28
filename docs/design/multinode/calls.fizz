@@ -1,0 +1,103 @@
+---
+# A node call (ADR-0372, FEAT-0002 F250). The control plane sends calls to a node, which it never dials: on the long
+# poll it queues each call for the node's next poll, and a node with no poll open and none within OFFLINE ticks is
+# offline, so a call to it fails at once. A poll takes every queued call at once; the node answers each call it took,
+# later, or never if it stops. A caller waits TIMEOUT ticks at most, then drops its call, so an answer that comes after
+# finds no call waiting and is refused. Time passes in ticks; every action is atomic. Environment: a send, a poll, a drop
+# and an answer are each one step under the queue's lock; a poll that is open counts as one within OFFLINE
+# (calls.online); a caller's timer fires at its deadline, before time moves on; NATS has the same shape, with no
+# responders as the offline answer.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 6
+  crash_on_yield: false
+---
+# diagram: Call.state
+# mutant no-timeout: NoCallWaitsPastItsTimeout
+# mutant no-drop: NoAnswerAfterItsCallEnded
+# mutant no-offline-check: NoCallWaitsForAnOfflineNode
+
+# no-timeout: a caller waits for its answer however long it takes. no-drop: a call that timed out stays waiting for its
+# answer, so a late answer reaches it. no-offline-check: a call to an offline node is queued anyway.
+MUTANT = ""
+
+CALLS = 1
+OFFLINE = 1
+TIMEOUT = 2
+T_END = 3
+
+role Call:
+    action Init:
+        self.state = "none"
+        self.sentAt = 0
+        self.offlineAtSend = False
+        self.taken = False
+        self.waiting = False
+
+    atomic action Send:
+        require self.state == "none"
+        self.sentAt = clock
+        offline = clock - lastPoll > OFFLINE
+        self.offlineAtSend = offline
+        if offline and MUTANT != "no-offline-check":
+            self.state = "offline"
+        else:
+            self.state = "queued"
+            self.waiting = True
+
+    atomic action Answer:
+        require running and self.taken
+        self.taken = False
+        if not self.waiting:
+            return
+        self.waiting = False
+        if self.state == "taken":
+            self.state = "answered"
+        else:
+            lateAnswer = True
+
+    atomic fair action Timeout:
+        require self.state in ["queued", "taken"] and clock - self.sentAt >= TIMEOUT
+        if MUTANT == "no-timeout":
+            return
+        self.state = "timedout"
+        if MUTANT != "no-drop":
+            self.waiting = False
+
+atomic fair action Tick:
+    require clock < T_END
+    if MUTANT != "no-timeout":
+        for c in calls:
+            require not (c.state in ["queued", "taken"] and clock - c.sentAt >= TIMEOUT)
+    clock += 1
+
+atomic action Poll:
+    require running
+    lastPoll = clock
+    for c in calls:
+        if c.state == "queued":
+            c.state = "taken"
+            c.taken = True
+
+atomic action Stop:
+    require running
+    running = False
+
+action Init:
+    clock = 0
+    running = True
+    lastPoll = 0
+    lateAnswer = False
+    calls = []
+    for i in range(CALLS):
+        calls.append(Call(id=i))
+
+always assertion NoCallWaitsPastItsTimeout:
+    return all([not (c.state in ["queued", "taken"] and clock - c.sentAt > TIMEOUT) for c in calls])
+
+always assertion NoAnswerAfterItsCallEnded:
+    return not lateAnswer
+
+always assertion NoCallWaitsForAnOfflineNode:
+    return all([not (c.offlineAtSend and c.state in ["queued", "taken", "answered"]) for c in calls])

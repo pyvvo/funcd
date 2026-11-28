@@ -64,6 +64,8 @@ type RunsConfig struct {
 	Client        *http.Client
 	// Egress is the egress gateway's worker index (ADR-0117 §5), nil while egress is off.
 	Egress EgressIndex
+	// Skip leaves the runs of a namespace that a worker node runs to that node (FEAT-0002); nil skips none.
+	Skip func(v1.NamespaceName) bool
 }
 
 // EgressIndex is the part of the egress gateway's worker index that a run's executor writes, *egress.MemoryWorkerIndex:
@@ -96,6 +98,9 @@ func (r *Reconciler) Runs(cfg RunsConfig) *JobRunReconciler {
 	}
 	if cfg.Enqueue == nil {
 		cfg.Enqueue = func(controller.Request) {}
+	}
+	if cfg.Skip == nil {
+		cfg.Skip = func(v1.NamespaceName) bool { return false }
 	}
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{Transport: activator.DeadlineTransport(httpx.NodeTransport())}
@@ -464,16 +469,15 @@ func waitsForSlot(run *v1.JobRun) bool {
 // time then name, so a Job at its limit holds no other back. A run of a held namespace, a cancelled or rejected run, one
 // that waits for a person and one whose Job changed UID take none.
 func (j *JobRunReconciler) slotFor(ctx context.Context, run *v1.JobRun) (string, error) {
-	l, err := j.r.store.List(ctx, v1.KindJobRun.GVK(), store.ListOptions{})
+	runs, err := j.ownRuns(ctx)
 	if err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), "function.jobRunSlots", "list the runs")
 	}
 	running, total := map[jobKey]int{}, 0
 	var waiting []*v1.JobRun
-	for _, o := range l.Items {
-		other, ok := o.(*v1.JobRun)
+	for _, other := range runs {
 		switch {
-		case !ok || other.Status.Phase.Ended():
+		case other.Status.Phase.Ended():
 		case holdsSlot(other):
 			running[jobKey{other.Namespace, other.Spec.Job}]++
 			total++
@@ -532,6 +536,32 @@ func (j *JobRunReconciler) slotFor(ctx context.Context, run *v1.JobRun) (string,
 	return fmt.Sprintf("the node's %d free slots of job.maxRunning %d go to older runs first", j.cfg.MaxRunning-total, j.cfg.MaxRunning), nil
 }
 
+// ownRuns lists the runs of the namespaces this process runs: those that a worker node runs take none of its slots, and
+// its boot and its sweep leave them alone.
+func (j *JobRunReconciler) ownRuns(ctx context.Context) ([]*v1.JobRun, error) {
+	l, err := j.r.store.List(ctx, v1.KindJobRun.GVK(), store.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*v1.JobRun, 0, len(l.Items))
+	elsewhere := map[v1.NamespaceName]bool{}
+	for _, o := range l.Items {
+		run, ok := o.(*v1.JobRun)
+		if !ok {
+			continue
+		}
+		skip, seen := elsewhere[run.Namespace]
+		if !seen {
+			skip = j.cfg.Skip(run.Namespace)
+			elsewhere[run.Namespace] = skip
+		}
+		if !skip {
+			out = append(out, run)
+		}
+	}
+	return out, nil
+}
+
 // inputOff is how run's input breaks the input schema of the revision it pins, "" when it does not (ADR-0347 Decision
 // 4). The Job's status.contract is its current revision's; a pin of another revision reads that one's.
 func (j *JobRunReconciler) inputOff(ctx context.Context, run *v1.JobRun, job *v1.Job, rev *v1.Revision) (string, error) {
@@ -578,19 +608,16 @@ func (j *JobRunReconciler) inputOff(ctx context.Context, run *v1.JobRun, job *v1
 // no handler is called twice, and no run's apply starts again on its own.
 func (j *JobRunReconciler) Boot(ctx context.Context) error {
 	const op = "function.BootJobRuns"
-	l, err := j.r.store.List(ctx, v1.KindJobRun.GVK(), store.ListOptions{})
+	runs, err := j.ownRuns(ctx)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "list the runs")
 	}
 	now := v1.NewTimestamp(j.r.clock.Now())
-	for _, o := range l.Items {
-		run, ok := o.(*v1.JobRun)
-		switch {
-		case !ok:
-			continue
-		case run.Status.Phase == v1.JobRunRunning:
+	for _, run := range runs {
+		switch run.Status.Phase {
+		case v1.JobRunRunning:
 			run.Status.End(v1.JobRunFailed, v1.JobRunInterrupted, interruptedMessage, now)
-		case run.Status.Phase == v1.JobRunPreviewing:
+		case v1.JobRunPreviewing:
 			repreview(run)
 		default:
 			continue
@@ -609,14 +636,13 @@ func (j *JobRunReconciler) SweepExpired(ctx context.Context) (int, error) {
 	if j.cfg.Retention <= 0 || j.cfg.Hold.Held() {
 		return 0, nil
 	}
-	l, err := j.r.store.List(ctx, v1.KindJobRun.GVK(), store.ListOptions{})
+	runs, err := j.ownRuns(ctx)
 	if err != nil {
 		return 0, fault.Wrapf(err, fault.KindOf(err), op, "list the runs")
 	}
 	cutoff, n := j.r.clock.Now().Add(-j.cfg.Retention), 0
-	for _, o := range l.Items {
-		run, ok := o.(*v1.JobRun)
-		if !ok || !run.Status.Phase.Ended() || run.Status.EndedAt.IsZero() || time.Time(run.Status.EndedAt).After(cutoff) ||
+	for _, run := range runs {
+		if !run.Status.Phase.Ended() || run.Status.EndedAt.IsZero() || time.Time(run.Status.EndedAt).After(cutoff) ||
 			j.cfg.NamespaceHold.HeldIn(run.Namespace) {
 			continue
 		}

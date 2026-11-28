@@ -1,0 +1,80 @@
+---
+# A worker node's liveness (ADR-0367, FEAT-0002 F245). A joined node polls the control plane every tick while it runs,
+# until it stops for good. The control plane keeps the node's last poll in memory, and a sync each tick writes the
+# WorkerNode's phase: Ready while that poll is under READY_FOR ticks old, Degraded once it is not. A control plane that
+# restarts loses what it kept, and takes a node whose WorkerNode reads Ready as polled at its start. Time passes in
+# ticks; every action is atomic. Environment: a node's request and the record of its poll are one step (Admit); a sync
+# reads the clock and writes the phase in one step (writeNodeStatus retries a conflict); the statuses are synced at
+# least once per tick (livenessTick).
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 8
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant no-assume: NoDegradedWhilePolling
+# mutant no-window: NoReadyLongAfterTheLastPoll
+# mutant assume-degraded: NoReadyLongAfterTheLastPoll
+
+# no-assume: a control plane that restarts takes no poll of any node. no-window: a sync reads Ready from any poll, however
+# old. assume-degraded: a control plane that restarts takes a poll of a node that read Degraded too.
+MUTANT = ""
+
+READY_FOR = 2
+T_END = 3
+
+action Init:
+    clock = 0
+    running = True
+    lastPoll = 0
+    contact = 0
+    phase = "Ready"
+    synced = True
+    restarted = False
+    startedAt = -1
+    readyAtStart = False
+
+atomic fair action Tick:
+    require clock < T_END and synced
+    if running:
+        require lastPoll == clock
+    clock += 1
+    synced = False
+
+atomic fair action Poll:
+    require running and lastPoll < clock
+    lastPoll = clock
+    contact = clock
+
+atomic action Stop:
+    require running
+    running = False
+
+atomic fair action Sync:
+    require not synced
+    if contact >= 0 and (clock - contact < READY_FOR or MUTANT == "no-window"):
+        phase = "Ready"
+    else:
+        phase = "Degraded"
+    synced = True
+
+atomic action Restart:
+    require not restarted
+    restarted = True
+    startedAt = clock
+    readyAtStart = phase == "Ready"
+    contact = -1
+    if MUTANT != "no-assume" and (phase == "Ready" or MUTANT == "assume-degraded"):
+        contact = clock
+    synced = False
+
+always assertion NoDegradedWhilePolling:
+    return not (running and phase == "Degraded")
+
+always assertion NoReadyLongAfterTheLastPoll:
+    if phase != "Ready":
+        return True
+    if clock - lastPoll <= READY_FOR:
+        return True
+    return readyAtStart and clock - startedAt <= READY_FOR

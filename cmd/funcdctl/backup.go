@@ -33,14 +33,8 @@ func (a *cli) backupCmd() *cobra.Command {
 }
 
 func (a *cli) backupStatusCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Print the platform backup status as YAML: restore points, rpoRisk, failures (admin only)",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return printStatus(cmd.Context(), a, "funcdctl backup status", "encode the status", (*sdk.Client).PlatformBackup)
-		},
-	}
+	return statusCmd(a, "funcdctl backup status", "Print the platform backup status as YAML: restore points, rpoRisk, "+
+		"failures (admin only)", "encode the status", (*sdk.Client).PlatformBackup)
 }
 
 func (a *cli) backupVerifyCmd() *cobra.Command {

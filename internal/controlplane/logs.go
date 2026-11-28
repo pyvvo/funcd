@@ -49,6 +49,7 @@ func logFilterCases() []ErrorCase {
 		problem(fault.Invalid, "The severity parameter is none of trace, debug, info, warn, error and fatal.",
 			"Send one of those levels, or leave severity out."),
 		blank(http.StatusUnprocessableEntity, "The limit parameter is not an integer.", "Send limit as a whole number."),
+		nodeAway(),
 	}
 }
 

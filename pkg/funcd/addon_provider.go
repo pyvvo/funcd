@@ -25,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/health"
 	"github.com/pyvvo/funcd/internal/lifecycle"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/sensor"
 	addonsvc "github.com/pyvvo/funcd/internal/services/addon"
@@ -42,10 +43,10 @@ type addonProvider struct {
 	reserved   []string            // the path segments funcd serves, which no add-on's plural may be
 	files      workload.AddonFiles // the engines' files, when the runtime reaches them; nil otherwise
 	engines    provider.Runtime    // the runtime of the objects' engines
-	// calls are the checks of a Function's call of an engine, and master the root of the proxy's tokens (ADR-0338
-	// Decisions 2 and 3).
-	calls  *addonsvc.Calls
-	master []byte
+	// calls are the checks of a Function's call of an engine, and masterOf the root of a namespace's proxy tokens
+	// (ADR-0338 Decisions 2 and 3, ADR-0371).
+	calls    *addonsvc.Calls
+	masterOf nsmaster.Source
 	// proxyHost is where the add-on proxy listens, the address workers reach funcd's gateways at. listen binds it at its
 	// first use, as a Lake's proxy binds at its Lake's pass (ADR-0162): the bridge address may come up only with the
 	// first container. proxy is the bound listener, and serve, once Run started, serves one.
@@ -75,6 +76,9 @@ type addonDeps struct {
 	indexEngines func(ctx context.Context) error
 	authz        auth.Authorizer // asks addon::call (ADR-0338 Decision 5)
 	master       []byte          // the add-on proxy's tokens come from it, with a key of their own
+	masters      nsmaster.Source // a worker node's master of each namespace, which its tokens come from instead
+	// follows is a worker node, which copies the Addons' revisions from its control plane and stamps none.
+	follows bool
 	// engineLine keeps a line that a runtime reading its engines' output itself hands over (ADR-0342 Decision 5).
 	engineLine func(spec provider.ProviderSpec, stream, line string)
 	// collect runs the owner collector over a namespace once an App's last engineless part goes (ADR-0345 Decision 8).
@@ -124,7 +128,7 @@ func (s *addonProvider) proxyFor() function.AddonProxy {
 	if s.calls == nil {
 		return function.AddonProxy{}
 	}
-	master := s.master
+	masterOf := s.masterOf
 	return function.AddonProxy{
 		Address: func() (string, error) {
 			ln, err := s.listen()
@@ -133,8 +137,12 @@ func (s *addonProvider) proxyFor() function.AddonProxy {
 			}
 			return ln.Addr().String(), nil
 		},
-		Token: func(ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) string {
-			return addonsvc.Token(master, ns, kind, name)
+		Token: func(ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) (string, error) {
+			master, err := masterOf(ns)
+			if err != nil {
+				return "", err
+			}
+			return addonsvc.Token(master, ns, kind, name), nil
 		},
 	}
 }
@@ -167,10 +175,9 @@ func (s *addonProvider) Run(ctx context.Context) {
 		return
 	}
 	logger := s.cfg.logger.With("component", "services.addon.proxy")
-	master := s.master
 	srv := &http.Server{
 		Handler: local.NewAddonProxy(s.calls, func(token string) (local.Ref, bool) {
-			return addonsvc.TokenCaller(master, token)
+			return addonsvc.TokenCaller(s.masterOf, token)
 		}, s.limits(), logger),
 		ReadHeaderTimeout: addonProxyHeaderTimeout,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
@@ -215,8 +222,9 @@ func (s *addonProvider) Reclaim(ctx context.Context) error {
 // build builds the engine runtime, which runs the engines' images on a containerd server and none on a process server,
 // or takes the runtime WithAddonRuntime gives, which runs them (ADR-0344 Decision 9), the reconciler, which watches the
 // Addons, the Secrets its objects bind, the Restores that load them and the AppRevisions that move an App's parts, and
-// the Addon's reconciler, which stamps its revisions (ADR-0339). A runtime that is also workload.AddonFiles and
-// provider.Volumes reaches the engines' files and storage (ADR-0333).
+// the Addon's reconciler, which stamps its revisions (ADR-0339), or on a worker node the reconciler of the revisions it
+// copies. A runtime that is also workload.AddonFiles and provider.Volumes reaches the engines' files and storage
+// (ADR-0333).
 func (s *addonProvider) build(d addonDeps) error {
 	const op = "funcd.New"
 	c := s.cfg
@@ -248,14 +256,19 @@ func (s *addonProvider) build(d addonDeps) error {
 	s.reconciler = rec
 	s.reserved = controlplane.ReservedPlurals()
 	if d.master != nil {
-		s.calls, s.master = addonsvc.NewCalls(c.store, d.authz, c.nsGate().HeldIn), d.master
+		s.calls = addonsvc.NewCalls(c.store, d.authz, c.nsGate().HeldIn)
+		s.masterOf = func(ns v1.NamespaceName) ([]byte, error) { return d.masters.Of(d.master, ns) }
 		s.proxyHost = cmp.Or(c.bridgeAddress, "127.0.0.1")
 		if _, err := s.listen(); err != nil {
 			c.logger.Info("the add-on proxy binds at its first use", "address", s.proxyHost, "error", err)
 		}
 	}
 	d.ctrl.Register(v1.KindAddonObject.GVK(), rec)
-	d.ctrl.Register(v1.KindAddon.GVK(), rec.Revisions())
+	if d.follows {
+		d.ctrl.Register(v1.KindAddonRevision.GVK(), rec.Followed())
+	} else {
+		d.ctrl.Register(v1.KindAddon.GVK(), rec.Revisions())
+	}
 	d.ctrl.Watches(v1.KindAddon.GVK(), rec.MapAddon)
 	d.ctrl.Watches(v1.KindAddonRevision.GVK(), rec.MapAddonRevision)
 	d.ctrl.Watches(v1.KindAppRevision.GVK(), rec.MapAppRevision)

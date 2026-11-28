@@ -1,0 +1,11 @@
+{
+  "title": "WorkerNode",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete",
+    "mint-join-token"
+  ]
+}

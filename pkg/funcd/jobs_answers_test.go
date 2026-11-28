@@ -87,7 +87,8 @@ func TestJobAnswersMatrix(t *testing.T) {
 	root, err := os.MkdirTemp("", "funcd")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	vol := newAnswerEnv(t, funcd.WithFunctionVolumes(volume.Options{Root: root, CapacityBytes: 64 << 20}, true))
+	vol := newAnswerEnv(t, asCluster(t), funcd.WithFunctionVolumes(volume.Options{Root: root, CapacityBytes: 64 << 20}, true))
+	placeOnOfflineNode(t, vol)
 	tight := namespace("tight")
 	tight.Spec.VolumeBudget = "1Mi"
 	create(t, vol.c, vol.api, tight)
@@ -99,6 +100,7 @@ func TestJobAnswersMatrix(t *testing.T) {
 	run.broken = strings.Replace(run.json, `,"resourceGroup":"rg1"`, "", 1)
 	const jobs = "/apis/funcd.io/v1alpha1/namespaces/default/jobs"
 	const runs = "/apis/funcd.io/v1alpha1/namespaces/default/jobruns"
+	const awayJobs = "/apis/funcd.io/v1alpha1/namespaces/e1/jobs"
 	jobLinking := func(name, target v1.ObjectName) string {
 		j := job(name)
 		j.Spec.Bindings.Links = []v1.FunctionLink{{Alias: "l", Target: target}}
@@ -109,11 +111,13 @@ func TestJobAnswersMatrix(t *testing.T) {
 		j.Spec.Bindings.KV = []v1.FunctionKV{{Alias: "b", Store: "ghost", Table: "t"}}
 		return jsonOf(t, j)
 	}
-	applied := func(j *v1.Job) func(*testing.T, *answerEnv) {
-		return func(t *testing.T, e *answerEnv) { create(t, e.c, e.api, j) }
+	applied := func(obj v1.Object) func(*testing.T, *answerEnv) {
+		return func(t *testing.T, e *answerEnv) { create(t, e.c, e.api, obj) }
 	}
-	inTight := func(j *v1.Job) *v1.Job {
-		j.Namespace = "tight"
+	awayRun := jobRun("run", "hello", "")
+	awayRun.Namespace = "e1"
+	in := func(ns v1.NamespaceName, j *v1.Job) *v1.Job {
+		j.Namespace = ns
 		return j
 	}
 	big := `"` + strings.Repeat("x", 300<<10) + `"`
@@ -145,7 +149,7 @@ func TestJobAnswersMatrix(t *testing.T) {
 				detail: "volumes.capacityBytes"}),
 			row("createJob", "spec.volumeBudget", vol, ask{what: "a volume over the budget", method: http.MethodPost,
 				path: "/apis/funcd.io/v1alpha1/namespaces/tight/jobs", token: answersAdmin,
-				body: jsonOf(t, inTight(jobWithVolumes(job("spender"), 2<<20))), detail: "volumeBudgetBytes"}),
+				body: jsonOf(t, in("tight", jobWithVolumes(job("spender"), 2<<20))), detail: "volumeBudgetBytes"}),
 
 			row("replaceJob", "names a Function that does not exist", e, ask{what: "a link to a missing Function",
 				method: http.MethodPut, path: jobs + "/hello", token: answersDev, body: jobLinking("hello", "ghost"),
@@ -163,10 +167,15 @@ func TestJobAnswersMatrix(t *testing.T) {
 				ask: ask{what: "a volume over the capacity", method: http.MethodPut, path: jobs + "/widener", token: answersDev,
 					body: jsonOf(t, jobWithVolumes(job("widener"), 1<<20, 128<<20)), detail: "volumes.capacityBytes"}},
 			{op: "replaceJob", when: "spec.volumeBudget", on: vol,
-				setup: applied(inTight(jobWithVolumes(job("saver"), 512<<10))),
+				setup: applied(in("tight", jobWithVolumes(job("saver"), 512<<10))),
 				ask: ask{what: "a volume over the budget", method: http.MethodPut,
 					path: "/apis/funcd.io/v1alpha1/namespaces/tight/jobs/saver", token: answersAdmin,
-					body: jsonOf(t, inTight(jobWithVolumes(job("saver"), 512<<10, 1<<20))), detail: "volumeBudgetBytes"}},
+					body: jsonOf(t, in("tight", jobWithVolumes(job("saver"), 512<<10, 1<<20))), detail: "volumeBudgetBytes"}},
+
+			offlineRow("createJob", vol, nil, ask{what: "a Job with a volume whose worker node is offline", method: http.MethodPost,
+				path: awayJobs, body: jsonOf(t, in("e1", jobWithVolumes(job("booked"), 1<<20)))}),
+			offlineRow("replaceJob", vol, applied(in("e1", job("grows"))), ask{what: "a replace that adds a volume while the worker node is offline",
+				method: http.MethodPut, path: awayJobs + "/grows", body: jsonOf(t, in("e1", jobWithVolumes(job("grows"), 1<<20)))}),
 
 			row("createJobRun", "larger than job.payloadLimit", e, ask{what: "an input over the payload limit",
 				method: http.MethodPost, path: runs, token: answersDev, body: jsonOf(t, jobRun("huge", "hello", big)),
@@ -180,6 +189,8 @@ func TestJobAnswersMatrix(t *testing.T) {
 
 			row("getJobRunLogs", "", e, ask{what: "the logs", method: http.MethodGet, path: runs + "/run/logs", token: answersDev,
 				detail: `"items"`}),
+			offlineRow("getJobRunLogs", vol, applied(awayRun), ask{what: "a run whose worker node is offline",
+				method: http.MethodGet, path: "/apis/funcd.io/v1alpha1/namespaces/e1/jobruns/run/logs"}),
 			row("getJobRunLogs", "carries no bearer token", e, ask{what: "no credential", method: http.MethodGet,
 				path: runs + "/run/logs", detail: "missing bearer token"}),
 			row("getJobRunLogs", "do not allow it", e, ask{what: "another namespace's developer", method: http.MethodGet,

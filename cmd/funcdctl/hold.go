@@ -18,18 +18,13 @@ func (a *cli) holdCmd() *cobra.Command {
 }
 
 func (a *cli) holdStatusCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Show the hold: marker, restore report, counts, paused runs, dead letters, pending blob keys, orphan data, namespace markers",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return printStatus(cmd.Context(), a, "funcdctl hold status", "encode", (*sdk.Client).HoldStatus)
-		},
-	}
+	return statusCmd(a, "funcdctl hold status", "Show the hold: marker, restore report, counts, paused runs, dead letters, "+
+		"pending blob keys, orphan data, namespace markers", "encode", (*sdk.Client).HoldStatus)
 }
 
 func (a *cli) holdReleaseCmd() *cobra.Command {
 	var advance, namespaces []string
+	var node string
 	cmd := &cobra.Command{
 		Use:   "release",
 		Short: "Lift the hold: timers, blob sources, Sensors, runs, rollouts, backups and sweeps act again",
@@ -42,7 +37,7 @@ func (a *cli) holdReleaseCmd() *cobra.Command {
 			if len(namespaces) > 0 {
 				err = c.ReleaseNamespaceHold(cmd.Context(), namespaces)
 			} else {
-				err = c.ReleaseHold(cmd.Context(), advance)
+				err = c.ReleaseHold(cmd.Context(), advance, onNode(node)...)
 			}
 			if err != nil {
 				return err
@@ -54,6 +49,8 @@ func (a *cli) holdReleaseCmd() *cobra.Command {
 		"a blob EventSource <namespace>/<name> whose listed objects are marked seen instead of fired (repeatable)")
 	cmd.Flags().StringArrayVar(&namespaces, "namespace", nil,
 		"a namespace whose hold a restore left (restore run's data, an ended in-place Restore's load) is released instead of the platform's hold (repeatable)")
+	nodeFlag(cmd, &node)
 	cmd.MarkFlagsMutuallyExclusive("advance", "namespace")
+	cmd.MarkFlagsMutuallyExclusive("node", "namespace")
 	return cmd
 }

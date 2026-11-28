@@ -1,0 +1,78 @@
+---
+# A namespace's master on its node (ADR-0371, FEAT-0002 F249). The node keeps the master of each namespace it runs in a
+# file of its own. A namespace that leaves the node goes in steps: its objects and its local Namespace, then its
+# master's file; the node saves its cursor after the record that took the namespace away. The node may stop at any
+# step, STOPS times at most; its store, its files and its cursor survive, and it follows again from the cursor. At its
+# start it reads the namespaces it runs from its local Namespaces, and drops the master of every other one. A record
+# that takes away a namespace the node does not run changes nothing. Every action is atomic. Environment: the node's
+# disk, which keeps what was written before a stop; the control plane's Key, which answers a node only for a namespace
+# placed on it (ADR-0371 Decision 1), so a node that asks again for a master it dropped gets none.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 6
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant no-sweep: NoMasterWithoutItsNamespace
+# mutant no-drop: NoMasterWithoutItsNamespace
+
+# no-sweep: a node that starts keeps every master it finds on its disk. no-drop: a namespace that leaves the node keeps
+# its master's file.
+MUTANT = ""
+
+STOPS = 1
+
+action Init:
+    placed = True
+    local = True
+    key = True
+    running = True
+    phase = "follow"
+    applied = False
+    stops = 0
+
+atomic action Leave:
+    require placed
+    placed = False
+
+atomic fair action Apply:
+    require running and phase == "follow" and not placed and not applied
+    if local:
+        phase = "removing"
+    else:
+        applied = True
+
+atomic fair action RemoveNamespace:
+    require running and phase == "removing"
+    local = False
+    phase = "dropping"
+
+atomic fair action DropKey:
+    require running and phase == "dropping"
+    if MUTANT != "no-drop":
+        key = False
+    phase = "saving"
+
+atomic fair action SaveCursor:
+    require running and phase == "saving"
+    applied = True
+    phase = "follow"
+
+atomic action Stop:
+    require running and stops < STOPS
+    running = False
+    stops += 1
+
+atomic fair action Start:
+    require not running
+    if MUTANT != "no-sweep" and not local:
+        key = False
+    running = True
+    phase = "follow"
+
+always assertion NoMasterWithoutItsNamespace:
+    return not (running and phase == "follow" and key and not local)
+
+eventually always assertion TheMasterOfANamespaceThatLeftGoes:
+    return placed or not key

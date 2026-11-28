@@ -126,7 +126,8 @@ func TestAddonAnswersMatrix(t *testing.T) {
 // The answers of the operations of an add-on's objects, one row per case of each, at the plural of rauthy's kind.
 func TestAddonObjectAnswersMatrix(t *testing.T) {
 	t.Parallel()
-	e := newAnswerEnv(t, funcd.WithAddonRegistries("ghcr.io"))
+	e := newAnswerEnv(t, funcd.WithAddonRegistries("ghcr.io"), asCluster(t))
+	placeOnOfflineNode(t, e)
 	capped := newAnswerEnv(t, funcd.WithAddonRegistries("ghcr.io"), funcd.WithAddonObjectQuota(1))
 	for _, env := range []*answerEnv{e, capped} {
 		registerAddons(t, env, addonFixture("rauthy", "IdentityProvider"), addonFixture("echo", "EchoService"))
@@ -161,6 +162,9 @@ func TestAddonObjectAnswersMatrix(t *testing.T) {
 		a.token = answersDev
 		return answerRow{op: op, when: when, on: on, ask: a}
 	}
+	shared = append(shared, hostRows(t, e, "AddonObject", "identityproviders", "login", func(name v1.ObjectName, host string) string {
+		return as(name, func(o *v1.AddonObject) { o.Spec.Ingress = &v1.Ingress{Host: host} })
+	})...)
 	runMatrix(t, append(shared,
 		row("listAddonObjects", "No Addon registers the kind, and", e, ask{what: "a plural no Addon registers",
 			method: http.MethodGet, path: unregistered, detail: `of the plural "nothings"`}),

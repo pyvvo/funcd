@@ -65,7 +65,7 @@ func newRootCmdOf(a *cli) *cobra.Command {
 	a.conn.String("server", "", "control-plane base URL ($FUNCD_SERVER, else "+defaultServer+")")
 	a.conn.String("token", "", "bearer token for the authenticated control plane ($FUNCD_TOKEN)")
 	root.AddCommand(
-		a.getCmd(), a.describeCmd(), a.applyCmd(), a.deleteCmd(), a.logsCmd(), a.workflowCmd(), a.jobCmd(), a.kvstoreCmd(), a.eventingCmd(), a.appCmd(), a.backupCmd(), a.holdCmd(), a.quarantineCmd(), a.volumeCmd(), // control-plane verbs (need the SDK client)
+		a.getCmd(), a.describeCmd(), a.applyCmd(), a.deleteCmd(), a.logsCmd(), a.workflowCmd(), a.jobCmd(), a.kvstoreCmd(), a.eventingCmd(), a.appCmd(), a.backupCmd(), a.holdCmd(), a.quarantineCmd(), a.volumeCmd(), a.nodeCmd(), a.apiTokenCmd(), // control-plane verbs (need the SDK client)
 		a.pushCmd(), a.indexCmd(), a.pullCmd(), a.inspectCmd(), a.loginCmd(), a.logoutCmd(), a.typesCmd(), // artifact verbs (internal/artifact; no server) + contract-file type codegen (ADR-0247)
 		a.benchCmd(), // data-plane load/latency probe (ADR-0053; stdlib internal/testkit/loadgen, no SDK)
 		a.devCmd(),   // ADR-0125: run a function locally from source (real under -tags dev; a rebuild-hint stub otherwise)
@@ -506,22 +506,45 @@ func checkOutput(op, output string, formats ...string) error {
 // the sanctioned printf form (ADR-0002 §3 / forbidigo exclusion).
 func (a *cli) writef(format string, args ...any) error { return fprintf(a.out, format, args...) }
 
-// printStatus fetches a status through the SDK and writes it as YAML (`funcdctl backup status`, `funcdctl hold
-// status`); encode prefixes the encode error.
-func printStatus[T runner.Status | hold.Evidence](ctx context.Context, a *cli, op, encode string, fetch func(*sdk.Client, context.Context) (T, error)) error {
-	c, err := a.sdkClient()
-	if err != nil {
-		return err
+// statusCmd is a `status` command that prints what fetch reads as YAML, of the funcd at --server or of --node's; encode
+// prefixes the encode error.
+func statusCmd[T runner.Status | hold.Evidence](a *cli, op, short, encode string,
+	fetch func(*sdk.Client, context.Context, ...sdk.NodeOption) (T, error)) *cobra.Command {
+	var node string
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c, err := a.sdkClient()
+			if err != nil {
+				return err
+			}
+			st, err := fetch(c, cmd.Context(), onNode(node)...)
+			if err != nil {
+				return err
+			}
+			out, err := yaml.Marshal(st)
+			if err != nil {
+				return fault.Internalf(op, "%s: %v", encode, err)
+			}
+			return a.writef("%s", out)
+		},
 	}
-	st, err := fetch(c, ctx)
-	if err != nil {
-		return err
+	nodeFlag(cmd, &node)
+	return cmd
+}
+
+// nodeFlag adds --node, the worker node a command is about.
+func nodeFlag(cmd *cobra.Command, node *string) {
+	cmd.Flags().StringVar(node, "node", "", "a worker node, instead of the funcd at --server")
+}
+
+func onNode(node string) []sdk.NodeOption {
+	if node == "" {
+		return nil
 	}
-	out, err := yaml.Marshal(st)
-	if err != nil {
-		return fault.Internalf(op, "%s: %v", encode, err)
-	}
-	return a.writef("%s", out)
+	return []sdk.NodeOption{sdk.OnNode(v1.ObjectName(node))}
 }
 
 func fprintf(w io.Writer, format string, args ...any) error {

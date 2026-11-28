@@ -75,6 +75,7 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `storage.quarantineRetention` | 168h | config |
 | `telemetry.endpoint` | "" ⇒ telemetry disabled | config |
 | `telemetry.insecure` | false | config |
+| `joinTimeout` | 1m | `cmd/funcd/cluster.go` |
 | `maxTokenFileBytes` | 4096 | `cmd/funcd/credentials.go` |
 | `maxStopGrace` | 10s | `cmd/funcd/main.go` |
 | `minAppUpgradeTimeout` | 5m | `cmd/funcd/main.go` |

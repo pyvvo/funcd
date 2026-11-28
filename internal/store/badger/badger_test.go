@@ -45,6 +45,14 @@ func TestScenarioBadgerEnginePassesStoreContract(t *testing.T) {
 	storecontract.RunContract(t, newBadgerStore)
 }
 
+// scenario: scan-from (Badger engine) — a scan from a key reads that key and those after it, in order.
+func TestScenarioScanFromReadsAfterAKey(t *testing.T) {
+	e, err := bstore.Open(t.TempDir(), bstore.WithSyncWrites(false), bstore.WithValueLogGCInterval(0))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = e.Close() })
+	storecontract.RunScanFrom(t, e)
+}
+
 // scenario: snapshot-is-one-read (metastore, Badger engine) — the snapshot contract: a writer commits a=i, then
 // b=i, while 200 snapshots run, and none holds b above a; the snapshot loads back into an empty engine.
 func TestScenarioSnapshotIsOneRead(t *testing.T) {

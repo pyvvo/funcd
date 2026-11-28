@@ -3,6 +3,7 @@
   "icon": "Gauge",
   "pages": [
     "namespace",
-    "resourcegroup"
+    "resourcegroup",
+    "workernode"
   ]
 }

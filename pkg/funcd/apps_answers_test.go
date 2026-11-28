@@ -69,7 +69,8 @@ func TestAppAnswersMatrix(t *testing.T) {
 	t.Parallel()
 	hd, err := hold.Open(t.TempDir())
 	require.NoError(t, err)
-	e := newAnswerEnv(t, funcd.WithHold(hd))
+	e := newAnswerEnv(t, funcd.WithHold(hd), asCluster(t))
+	placeOnOfflineNode(t, e)
 	require.NoError(t, hd.HoldNamespace("held", hold.Marker{Reason: hold.ReasonData, Since: v1.NewTimestamp(time.Now())}))
 	image := "file://" + filepath.Join(artifact(t, ""), "handler.mjs")
 	e.workers.serve(t, "migrate", func(w http.ResponseWriter, _ *http.Request) {
@@ -225,6 +226,7 @@ func TestAppAnswersMatrix(t *testing.T) {
 			{op: "retryApp", when: "is held", on: e, ask: ask{what: "a held namespace", method: http.MethodPost,
 				path: strings.Replace(apps, "/default/", "/held/", 1) + "/any/retry", token: answersAdmin,
 				detail: "funcd is held: app any calls no hook"}},
+			awayRow("retryApp", e, http.MethodPost, "apps/any/retry"),
 		},
 	)
 	runMatrix(t, rows)
@@ -242,7 +244,8 @@ func siteObject(name v1.ObjectName) *v1.Site {
 // The answers of the Site feature's operations, one row per case of each.
 func TestSiteAnswersMatrix(t *testing.T) {
 	t.Parallel()
-	e := newAnswerEnv(t)
+	e := newAnswerEnv(t, asCluster(t))
+	placeOnOfflineNode(t, e)
 	for _, s := range []*v1.Site{siteObject("plain"), siteObject("fixed")} {
 		create(t, e.c, e.api, s)
 	}
@@ -255,6 +258,11 @@ func TestSiteAnswersMatrix(t *testing.T) {
 		[]answerRow{{op: "replaceSite", when: "spec.bindings.blob[0].prefix", on: e, ask: ask{what: "another prefix",
 			method: http.MethodPut, path: "/apis/funcd.io/v1alpha1/namespaces/default/sites/fixed", token: answersDev,
 			body: jsonOf(t, moved), detail: "spec.bindings.blob[0].prefix is immutable"}}},
+		hostRows(t, e, "Site", "sites", "plain", func(name v1.ObjectName, host string) string {
+			s := siteObject(name)
+			s.Spec.Ingress.Host = host
+			return jsonOf(t, s)
+		}),
 	)
 	runMatrix(t, rows)
 }

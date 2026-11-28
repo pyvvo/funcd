@@ -18,7 +18,7 @@ func baseOrDefault(base string) string {
 	if base == "" {
 		return defaultBaseDomain
 	}
-	return canonicalHost(base)
+	return CanonicalHost(base)
 }
 
 // NamespaceHost is the host a namespace's host-less entries answer on: "<ns>.<base>", or "" for default
@@ -30,11 +30,11 @@ func NamespaceHost(ns v1.NamespaceName, base string) string {
 	return string(ns) + "." + baseOrDefault(base)
 }
 
-// NamespaceOfHost is the namespace a host under base names (ADR-0240 Decision 6), compared in canonicalHost's
+// NamespaceOfHost is the namespace a host under base names (ADR-0240 Decision 6), compared in CanonicalHost's
 // spelling: the label just before the base domain. It is empty for the base domain itself, for a host outside it,
 // for default and for a label that is not a valid NamespaceName. A baseDomain of "" means "localhost".
 func NamespaceOfHost(host, base string) v1.NamespaceName {
-	rest, ok := strings.CutSuffix(canonicalHost(host), "."+baseOrDefault(base))
+	rest, ok := strings.CutSuffix(CanonicalHost(host), "."+baseOrDefault(base))
 	if !ok || rest == "" {
 		return ""
 	}

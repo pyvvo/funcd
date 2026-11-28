@@ -586,6 +586,7 @@ func addonObjectOperations() restOperations {
 			"newer revision of the Addon."),
 		problem(fault.Invalid, "The body's kind is not the kind whose plural the path names.",
 			"Send the object to its own kind's plural."),
+		hostElsewhere("spec.ingress.host"),
 	}
 	ops.list = Describe(ops.list, "List the objects of an add-on's kind in a namespace", slices.Concat(v.list(),
 		[]ErrorCase{problem(fault.NotFound, "No Addon registers the kind, and the namespace holds no object of it.",

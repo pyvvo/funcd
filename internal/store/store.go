@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,10 +35,11 @@ const (
 	watchChanBuf   = 64
 )
 
-// The meta records' snapshot keys, bucket+NUL+key as every Engine emits them.
+// The meta records' snapshot keys, bucket+NUL+key as every Engine emits them, and the start of the change log's.
 const (
-	revisionRecordKey = metaBucket + "\x00" + revisionKey
-	timelineRecordKey = metaBucket + "\x00" + timelineKey
+	revisionRecordKey  = metaBucket + "\x00" + revisionKey
+	timelineRecordKey  = metaBucket + "\x00" + timelineKey
+	changeRecordPrefix = changeBucket + "\x00"
 )
 
 // Store is the metastore port: generic CRUD + List + in-process Watch over
@@ -110,7 +112,8 @@ type Encryptor interface {
 type Option func(*config) error
 
 type config struct {
-	enc map[v1.Kind]Encryptor
+	enc          map[v1.Kind]Encryptor
+	changeRetain int
 }
 
 // WithEncryptor applies at-rest encryption to stored values of the named kinds
@@ -167,6 +170,9 @@ type Txn interface {
 	Put(bucket, key string, val []byte) error
 	Delete(bucket, key string) error
 	Scan(bucket string, fn func(key string, val []byte) error) error
+	// ScanFrom is Scan of the keys that sort at or after from, in key order, so a reader of a log keyed by its revision
+	// reads only what follows the revision it asks for. An error of fn ends it and is its own.
+	ScanFrom(bucket, from string, fn func(key string, val []byte) error) error
 }
 
 // store is the wrapper holding the semantics over an Engine.
@@ -184,6 +190,10 @@ type store struct {
 	nextSubID int
 	ring      []recordedEvent
 	ringCap   int
+
+	changeRetain int // the change log's window (WithChangeLog); 0 ⇒ no change log
+	changeMu     sync.Mutex
+	changeCh     chan struct{}
 }
 
 // New wraps an Engine with the store semantics. Options configure at-rest
@@ -197,6 +207,7 @@ func New(e Engine, opts ...Option) Store {
 			return s
 		}
 	}
+	s.changeRetain = c.changeRetain
 	if err := s.loadMeta(context.Background()); err != nil {
 		s.initErr = err
 	}
@@ -241,19 +252,22 @@ func (s *store) loadMeta(ctx context.Context) error {
 // version formats revision n as a resourceVersion of this store's timeline.
 func (s *store) version(n uint64) string { return Version{Timeline: s.timeline, N: n}.String() }
 
-// Snapshot emits the engine's records but the timeline record, from one read, and
-// returns "<timeline>-<revision>" of that read (ADR-0202 Decision 1).
+// Snapshot emits the engine's records but the timeline record and the change log, from one
+// read, and returns "<timeline>-<revision>" of that read (ADR-0202 Decision 1). A store loaded
+// from it has a new timeline, so no node could follow the change log it was cut with.
 func (s *store) Snapshot(ctx context.Context, emit func(snapshot.Record) error) (string, error) {
 	if s.initErr != nil {
 		return "", s.initErr
 	}
 	var v Version
 	if _, err := s.eng.Snapshot(ctx, func(r snapshot.Record) error {
-		switch string(r.Key) {
-		case timelineRecordKey:
+		switch key := string(r.Key); {
+		case key == timelineRecordKey:
 			v.Timeline = string(r.Value)
 			return nil
-		case revisionRecordKey:
+		case strings.HasPrefix(key, changeRecordPrefix):
+			return nil
+		case key == revisionRecordKey:
 			n, err := parseRevision(r.Value)
 			if err != nil {
 				return err
@@ -343,7 +357,7 @@ func (s *store) Create(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	if s.initErr != nil {
 		return nil, s.initErr
 	}
-	if obj.GetObjectMeta().GenerateName == "" {
+	if obj.GetObjectMeta().GenerateName == "" || copied(ctx, obj.GetObjectMeta()) {
 		return s.createOnce(ctx, obj) // normal path: Name required, single attempt
 	}
 	// generateName path: work on a clone (the caller's input stays read-only) and regenerate the name on
@@ -395,7 +409,10 @@ func (s *store) createOnce(ctx context.Context, obj v1.Object) (v1.Object, error
 	if err != nil {
 		return nil, err
 	}
-	var rev uint64
+	var (
+		rev    uint64
+		logged bool
+	)
 	err = s.eng.Update(ctx, func(tx Txn) error {
 		if _, found, gerr := tx.Get(bucket, key); gerr != nil {
 			return gerr
@@ -407,18 +424,26 @@ func (s *store) createOnce(ctx context.Context, obj v1.Object) (v1.Object, error
 			return nerr
 		}
 		rev = r
-		meta.UID = uid
-		meta.Generation = 1
+		if !copied(ctx, meta) {
+			meta.UID, meta.Generation, meta.CreationTime = uid, 1, v1.NewTimestamp(time.Now())
+		}
 		meta.ResourceVersion = s.version(rev)
-		meta.CreationTime = v1.NewTimestamp(time.Now())
 		val, eerr := s.encode(ctx, gvk.Kind, obj)
 		if eerr != nil {
 			return eerr
 		}
-		return tx.Put(bucket, key, val)
+		if perr := tx.Put(bucket, key, val); perr != nil {
+			return perr
+		}
+		var lerr error
+		logged, lerr = s.putChange(ctx, tx, rev, Added, obj)
+		return lerr
 	})
 	if err != nil {
 		return nil, err
+	}
+	if logged {
+		s.afterChange(ctx, rev)
 	}
 	// Return the stamped work object to the caller and publish an INDEPENDENT clone to
 	// watchers, so a caller mutating the returned value cannot corrupt the watch stream
@@ -460,7 +485,7 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	// other ObjectMeta/spec/status field comes from the caller (last-writer-wins under
 	// the RV precondition).
 	var rev uint64
-	var noop bool
+	var noop, logged bool
 	err = s.eng.Update(ctx, func(tx Txn) error {
 		raw, found, gerr := tx.Get(bucket, key)
 		if gerr != nil {
@@ -485,9 +510,9 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if changed {
 			gen++
 		}
-		meta.UID = curMeta.UID
-		meta.Generation = gen
-		meta.CreationTime = curMeta.CreationTime
+		if !copied(ctx, meta) {
+			meta.UID, meta.Generation, meta.CreationTime = curMeta.UID, gen, curMeta.CreationTime
+		}
 		// No-op coalescing (ADR-0047): align the incoming RV to the stored one, then compare.
 		// A byte-identical Update changes nothing — skip the revision bump, the Put, and the
 		// watch event, so a reconcile that observed no change does not self-trigger another
@@ -512,10 +537,18 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if eerr != nil {
 			return eerr
 		}
-		return tx.Put(bucket, key, val)
+		if perr := tx.Put(bucket, key, val); perr != nil {
+			return perr
+		}
+		var lerr error
+		logged, lerr = s.putChange(ctx, tx, rev, Modified, obj)
+		return lerr
 	})
 	if err != nil {
 		return nil, err
+	}
+	if logged {
+		s.afterChange(ctx, rev)
 	}
 	if noop {
 		// Nothing changed: no revision advance, no Modified event. `obj` already carries the
@@ -561,6 +594,7 @@ func (s *store) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Names
 	var (
 		rev     uint64
 		deleted v1.Object
+		logged  bool
 	)
 	err := s.eng.Update(ctx, func(tx Txn) error {
 		raw, found, gerr := tx.Get(bucket, key)
@@ -583,10 +617,19 @@ func (s *store) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Names
 		}
 		rev = r
 		deleted = cur
-		return tx.Delete(bucket, key)
+		if derr := tx.Delete(bucket, key); derr != nil {
+			return derr
+		}
+		cur.GetObjectMeta().ResourceVersion = s.version(rev)
+		var lerr error
+		logged, lerr = s.putChange(ctx, tx, rev, Deleted, cur)
+		return lerr
 	})
 	if err != nil {
 		return err
+	}
+	if logged {
+		s.afterChange(ctx, rev)
 	}
 	// The event is the change at rev, and an event's resourceVersion is the watch cursor (ADR-0006 §2).
 	deleted.GetObjectMeta().ResourceVersion = s.version(rev)

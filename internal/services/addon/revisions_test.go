@@ -3,6 +3,7 @@ package addon_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -267,4 +268,49 @@ func TestScenarioAddonRevisionRetired(t *testing.T) {
 	require.False(t, g.revisionExists(t, "rauthy-1"))
 	require.True(t, g.revisionExists(t, "rauthy-3"), "the current revision is never removed")
 	require.Zero(t, res.RequeueAfter, "only the current one is left")
+}
+
+// On a worker node a revision that its control plane retired is a copy marked deleted: it stays while an object of the
+// node pins it or an AppRevision of the node records it, so a pin that the control plane had not seen yet keeps its
+// revision, and it goes after (FEAT-0002).
+func TestARetiredRevisionsCopyStaysWhileTheNodeUsesIt(t *testing.T) {
+	t.Parallel()
+	g := newRevRig(t)
+	g.part(t)
+	g.appRevision(t, 1, "rauthy-1", v1.ConditionTrue)
+	g.pass(t) // pins rauthy-1
+	for _, h := range []v1.ObjectName{"holder-1", "holder-2"} {
+		require.NoError(t, g.st.Delete(g.ctx, v1.KindAppRevision.GVK(), "default", h, ""))
+	}
+	follow := func(name v1.ObjectName) controller.Result {
+		res, err := g.r.Followed().Reconcile(g.ctx, controller.Request{GVK: v1.KindAddonRevision.GVK(), Name: name})
+		require.NoError(t, err)
+		return res
+	}
+	retire := func(name v1.ObjectName) {
+		obj, err := g.st.Get(g.ctx, v1.KindAddonRevision.GVK(), "", name)
+		require.NoError(t, err)
+		rev := obj.(*v1.AddonRevision)
+		now := v1.NewTimestamp(time.Now())
+		rev.DeletionTime = &now
+		_, err = g.st.Update(g.ctx, rev)
+		require.NoError(t, err)
+	}
+	follow("rauthy-2")
+	require.True(t, g.revisionExists(t, "rauthy-2"), "the control plane still holds it")
+	retire("rauthy-2")
+	follow("rauthy-2")
+	require.False(t, g.revisionExists(t, "rauthy-2"), "retired, and nothing on the node uses it")
+
+	retire("rauthy-1")
+	require.NotZero(t, follow("rauthy-1").RequeueAfter)
+	require.True(t, g.revisionExists(t, "rauthy-1"), "the part pins it")
+	_, _, gen := g.pass(t)
+	require.Empty(t, gen, "its engine keeps rauthy-1's spec")
+	require.NoError(t, g.st.Delete(g.ctx, v1.KindAddonObject.GVK(), "default", "web-auth-login", ""))
+	require.NotZero(t, follow("rauthy-1").RequeueAfter, "web-auth-1 records it")
+	require.NoError(t, g.st.Delete(g.ctx, v1.KindAppRevision.GVK(), "default", "web-auth-1", ""))
+	follow("rauthy-1")
+	require.False(t, g.revisionExists(t, "rauthy-1"))
+	follow("rauthy-1")
 }

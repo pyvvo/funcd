@@ -100,3 +100,53 @@ func TestDryRunWaitsForTheLockAndPlansAfter(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Equal(t, &v1.AppPlan{Revision: "todo-1"}, got.Status.Plan)
 }
+
+// namespaceUpdateReader marks a Namespace's update as reading the namespace it names, as namespace-node does (ADR-0368).
+type namespaceUpdateReader struct{}
+
+func (namespaceUpdateReader) Name() string           { return "namespace-update-reader" }
+func (namespaceUpdateReader) Phase() admission.Phase { return admission.Validating }
+func (namespaceUpdateReader) ReadsNamespace() bool   { return true }
+func (namespaceUpdateReader) Handles(gvk v1.GroupVersionKind, op admission.Operation) bool {
+	return gvk.Kind == v1.KindNamespace && op == admission.Update
+}
+func (namespaceUpdateReader) Admit(_ context.Context, r admission.Request) (v1.Object, error) {
+	return r.Object, nil
+}
+
+// ADR-0368 Decision 2: a change of a Namespace waits for the lock of the namespace it names, which every create in it
+// takes on a multi-node control plane, so no object lands in a namespace as it moves.
+func TestANamespacesUpdateTakesTheLockOfTheNamespaceItNames(t *testing.T) {
+	st := store.New(memory.New())
+	t.Cleanup(func() { _ = st.Close() })
+	ns := &v1.Namespace{TypeMeta: v1.TypeMeta{APIVersion: v1.KindNamespace.GVK().APIVersion(), Kind: v1.KindNamespace}}
+	ns.Name = "team-a"
+	created, err := st.Create(context.Background(), ns)
+	require.NoError(t, err)
+	h := NewStoreHandlers(st, grantAll{}, admission.NewPipeline(namespaceUpdateReader{}), nil, nil).(*storeHandlers)
+	r := chi.NewRouter()
+	r.Use(middleware.Authn(middleware.NewStaticCredentials(map[string]auth.Identity{"t": {Subject: "admin"}})))
+	NewAPI(r, h)
+	unlock, err := h.locks.lock(context.Background(), "team-a")
+	require.NoError(t, err)
+	body, err := json.Marshal(created)
+	require.NoError(t, err)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPut, "/apis/funcd.io/v1alpha1/namespaces/team-a", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer t")
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		done <- rec
+	}()
+	require.True(t, poll.Never(func() bool { return len(done) > 0 }, 200*time.Millisecond, 10*time.Millisecond),
+		"the update waits for the lock of the namespace it names")
+	unlock()
+	select {
+	case rec := <-done:
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	case <-time.After(5 * time.Second):
+		t.Fatal("the update did not finish once the lock was free")
+	}
+}

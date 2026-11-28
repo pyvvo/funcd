@@ -58,13 +58,19 @@ func runUpgrade(ctx context.Context, out io.Writer, f upgradeFlags, newBinary, s
 	if err != nil {
 		return err
 	}
+	node := hasJoined(cfg)
+	if node { // its pre-upgrade generation goes under its own prefix, where funcd node writes its backups (FEAT-0002 F251)
+		if cfg, err = roleNode.nodeBackups(cfg); err != nil {
+			return err
+		}
+	}
 	if f.unit != "" {
 		if err := requireLinuxRoot("funcd upgrade --unit", false); err != nil {
 			return err
 		}
 	}
 	_, err = upgrade.Run(ctx, upgrade.Options{Config: cfg, NewBinary: newBinary, Self: self, Unit: f.unit,
-		NoSnapshot: f.noSnapshot, Systemctl: systemctl, Out: out})
+		NoSnapshot: f.noSnapshot, Node: node, Systemctl: systemctl, Out: out})
 	return err
 }
 

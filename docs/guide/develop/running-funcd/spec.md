@@ -74,7 +74,7 @@ description: "Every key of funcdconfig.yaml with its type, default, limits and v
 | `kvstore.cdc.enabled` | boolean | `false` | When true, funcd publishes each write and delete of the KV data, in order, to the subject kvstore.cdc.sink of its own message bus, and a restart loses no change. Nothing in funcd reads that subject, and the bus takes no outside connection. It needs kvstore.cdc.sink; under storage.mode memory funcd runs no feed and logs a warning, and elsewhere it also needs kvstore.engine badger. Variable: `FUNCD_KVSTORE_CDC_ENABLED`. |
 | `kvstore.cdc.sink` | string |  | The subject of funcd's message bus that the KV change feed publishes to; kvstore.cdc.enabled needs it. Variable: `FUNCD_KVSTORE_CDC_SINK`. |
 | `kvstore.cdc.retention` | string |  | How long the message bus keeps each change of the KV change feed, as a positive duration. Empty means 24h. Variable: `FUNCD_KVSTORE_CDC_RETENTION`. |
-| `backup.target` | string |  | Where the platform backup writes its generations: s3://&lt;bucket&gt;?region=&lt;region&gt; for an S3-compatible store, with endpoint and prefix parameters when needed, or file:///&lt;absolute dir&gt;. Empty, or with storage.mode memory, no platform backup runs. Blob's mirror goes here too while blob.target is empty, and so does the KV backup when kvstore.backup.enabled is true and kvstore.backup.target is empty. A target in the blob store's own bucket, or a directory in or around blob.dir, refuses the start. funcd deletes nothing on a target: it logs at start the lifecycle rules to set there. Variable: `FUNCD_BACKUP_TARGET`. |
+| `backup.target` | string |  | Where the platform backup writes its generations: s3://&lt;bucket&gt;?region=&lt;region&gt; for an S3-compatible store, with endpoint and prefix parameters when needed, or file:///&lt;absolute dir&gt;. Empty, or with storage.mode memory, no platform backup runs. Blob's mirror goes here too while blob.target is empty, and so does the KV backup when kvstore.backup.enabled is true and kvstore.backup.target is empty. A target in the blob store's own bucket, or a directory in or around blob.dir, refuses the start. funcd deletes nothing on a target: it logs at start the lifecycle rules to set there. A worker node (funcd node) writes under nodes/&lt;name&gt;/ of it, and so does its KV backup. Variable: `FUNCD_BACKUP_TARGET`. |
 | `backup.credentialsFile` | string |  | The AWS shared credentials file whose [default] profile signs every request to an s3:// backup.target, from each backup that writes there. A file:// target refuses it. Empty, the default AWS credential chain signs them. Keep the file at mode 0600 or 0400, owned by funcd's user or root: funcd warns at start when group or others can open it, or when another user owns it. Variable: `FUNCD_BACKUP_CREDENTIALS_FILE`. |
 | `backup.singleWriter` | boolean | `false` | When true, funcd writes on a target that ignores or refuses a create-if-absent put (If-None-Match: \*), on the promise that no other funcd writes there, and warns. When false, every write to such a target fails, since nothing would fence a second writer. Variable: `FUNCD_BACKUP_SINGLE_WRITER`. |
 | `backup.retention.hourly` | integer | `48` | How many hours the lifecycle rule that funcd logs at start keeps an hourly generation, one that is neither daily nor weekly; the rule rounds it up to whole days. It must be at least 1. Variable: `FUNCD_BACKUP_RETENTION_HOURLY`. |
@@ -105,7 +105,7 @@ description: "Every key of funcdconfig.yaml with its type, default, limits and v
 | `auth.credentials[].tokenFile` | string, required |  | The file that holds this credential's token, read at start: one token of visible ASCII characters, at most 4096 bytes. It must be a regular file that funcd's user or root owns, with no access for group or others, such as mode 0600 or 0400. The built-in dev token, or a token that another entry holds, refuses the start. |
 | `auth.credentials[].role` | string, one of `admin`, `developer` or `viewer` |  | What the credential may do: an admin acts on every kind everywhere, a developer acts on the namespaced kinds of its namespaces, and a viewer only reads them, never a Secret. |
 | `auth.credentials[].namespaces` | list of strings |  | The namespaces in which a developer or viewer acts. Absent means default. An empty list or entry refuses the start, and so does this key on an admin, which spans every namespace. |
-| `secrets.encryptionKeyFile` | string |  | The file of the key that encrypts Secret values at rest: exactly 32 raw bytes, an AES-256 key. Empty, the metastore holds Secret values unencrypted, and with storage.mode file funcd warns at start. funcd refuses to start when the key does not match how the stored Secrets were written. Keep the file at mode 0600 or 0400, owned by funcd's user or root: funcd warns at start when group or others can open it, or when another user owns it. Variable: `FUNCD_SECRETS_ENCRYPTION_KEY_FILE`. |
+| `secrets.encryptionKeyFile` | string |  | The file of the key that encrypts Secret values at rest: exactly 32 raw bytes, an AES-256 key. Empty, the metastore holds Secret values unencrypted, and with storage.mode file funcd warns at start; on a worker node (funcd node), empty means a key funcd makes under cluster.dataDir. funcd refuses to start when the key does not match how the stored Secrets were written. Keep the file at mode 0600 or 0400, owned by funcd's user or root: funcd warns at start when group or others can open it, or when another user owns it. Variable: `FUNCD_SECRETS_ENCRYPTION_KEY_FILE`. |
 | `runtime.mode` | string, one of `process` or `containerd` | `process` | Where workers run: process, as child processes of funcd under its own OS user with no isolation, for development and tests; or containerd, in containers, on Linux only. Function volumes need containerd. The systemd unit that funcd install writes sets containerd through the variable, which wins over the file. Variable: `FUNCD_RUNTIME`. |
 | `runtime.bootBackoffInitial` | string | `10s` | The first wait before funcd creates again a worker that crashed while booting: one that failed to start, ended before it listened or did not listen within runtime.bootTimeout. Each further crash in a row doubles the wait, up to runtime.bootBackoffMax. It is a positive duration, at most a set runtime.bootBackoffMax. Variable: `FUNCD_RUNTIME_BOOT_BACKOFF_INITIAL`. |
 | `runtime.bootBackoffMax` | string |  | The longest wait before funcd creates again a worker that keeps crashing while booting: the doubling from runtime.bootBackoffInitial stops there. Empty means 5m, or runtime.bootBackoffInitial when that is longer; a set value must be at least runtime.bootBackoffInitial. Variable: `FUNCD_RUNTIME_BOOT_BACKOFF_MAX`. |
@@ -197,6 +197,10 @@ description: "Every key of funcdconfig.yaml with its type, default, limits and v
 | `app.revisionHistory` | integer, 1 to 100 | `10` | How many AppRevisions an App keeps besides its current one; funcd deletes the older ones. Variable: `FUNCD_APP_REVISION_HISTORY`. |
 | `health.storageProbeInterval` | string | `10s` | How often funcd reads one key of the KV engine and one of the blob store to check that each answers; with an S3 blob.target, each blob read is one request. While a read fails or runs late, every KVStore, or every Bucket, is Degraded with the reason StorageUnreachable. It is a positive duration, more than health.storageProbeTimeout. Variable: `FUNCD_HEALTH_STORAGE_PROBE_INTERVAL`. |
 | `health.storageProbeTimeout` | string | `2s` | How long one storage read may take before it counts as failed; one late read is enough to make the stores Degraded. It is a positive duration, less than health.storageProbeInterval. Variable: `FUNCD_HEALTH_STORAGE_PROBE_TIMEOUT`. |
+| `cluster.listenAddr` | string |  | The address that the node API listens on, where worker nodes join with a one-time token and then follow their namespaces over mTLS. Empty means no node can join funcd; funcd server listens on 0.0.0.0:7443 then. A worker node does not read it. Variable: `FUNCD_CLUSTER_LISTEN_ADDR`. |
+| `cluster.driver` | string, one of `https` or `nats` |  | The node API's driver on a control plane: https, a long poll over HTTPS, or nats, core NATS on a server funcd embeds, with no JetStream. Empty means https. A worker node takes its driver from the scheme of the URL it joined, https:// or nats://, and does not read it. Variable: `FUNCD_CLUSTER_DRIVER`. |
+| `cluster.hosts` | list of strings |  | The host names and addresses that the node API's certificate covers, besides localhost and loopback: the ones the worker nodes dial. Variable: `FUNCD_CLUSTER_HOSTS=a,b`. |
+| `cluster.dataDir` | string |  | The directory of the cluster CA on a control plane, or of the identity that funcd node join writes on a worker node. Empty means &lt;storage.dataDir&gt;/cluster. Variable: `FUNCD_CLUSTER_DATA_DIR`. |
 
 ## `funcd`
 
@@ -375,6 +379,31 @@ install lays down crun + the private containerd and writes + enables ONE funcd.s
 | --- | --- | --- | --- |
 | `--print` | bool | `false` | dry-run: print the version-stamped funcd.service unit and exit, touching nothing |
 
+## `funcd node`
+
+```text
+funcd node
+
+Run a worker node: it follows the namespaces placed on it from the control plane it joined with funcd node join, runs their workers, edge and stores, and writes their status back. Its own API answers reads only.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--config` | string |  | path to funcdconfig.yaml (else $FUNCD_CONFIG, ./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml) |
+
+## `funcd node join`
+
+```text
+funcd node join [flags]
+
+Join a control plane with a one-time token from funcdctl node token. funcd first checks that the control plane at --server presents the CA the token names, then swaps the token for this node's certificate, kept under cluster.dataDir. The token works once.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--server` | string |  | the control plane's node API, such as https://cp.example.net:7443, or nats://cp.example.net:7443 when its cluster.driver is nats |
+| `--token` | string |  | the one-time join token (else $FUNCD_JOIN_TOKEN) |
+
 ## `funcd restore`
 
 ```text
@@ -496,6 +525,18 @@ Clear the unclean-start count after safe mode stopped funcd; the next start is h
 | Flag | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--config` | string |  | path to funcdconfig.yaml (as the daemon locates it) |
+
+## `funcd server`
+
+```text
+funcd server [flags]
+
+Run the control plane alone: the API, the metastore and the node API that worker nodes join, on cluster.listenAddr (0.0.0.0:7443 when unset). It runs no namespace itself, so it needs no container runtime and opens no data plane: each namespace runs on the worker node its spec.node names.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--config` | string |  | path to funcdconfig.yaml (else $FUNCD_CONFIG, ./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml) |
 
 ## `funcd uninstall`
 

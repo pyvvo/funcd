@@ -90,6 +90,72 @@ func testSnapshotOmitsTimeline(t *testing.T, s store.Store) {
 	}
 }
 
+// RunScanFrom checks the empty engine eng's ScanFrom: the keys of one bucket that sort at or after a key, in key order,
+// with the writes of its own transaction, none of a bucket whose name starts with the bucket's, and fn's error as its own.
+func RunScanFrom(t *testing.T, eng store.Engine) {
+	t.Helper()
+	ctx := context.Background()
+	scan := func(tx store.Txn, from string) []string {
+		var keys []string
+		if err := tx.ScanFrom("b", from, func(key string, val []byte) error {
+			if string(val) != key {
+				t.Errorf("ScanFrom: %s holds %q", key, val)
+			}
+			keys = append(keys, key)
+			return nil
+		}); err != nil {
+			t.Fatalf("ScanFrom: %v", err)
+		}
+		return keys
+	}
+	want := func(got []string, want ...string) {
+		t.Helper()
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("ScanFrom: got %v, want %v", got, want)
+		}
+	}
+	if err := eng.Update(ctx, func(tx store.Txn) error {
+		for _, k := range []string{"k3", "k1", "k4", "k2"} {
+			if err := tx.Put("b", k, []byte(k)); err != nil {
+				return err
+			}
+		}
+		return tx.Put("bb", "k2", []byte("k2"))
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := eng.View(ctx, func(tx store.Txn) error {
+		want(scan(tx, "k2"), "k2", "k3", "k4")
+		want(scan(tx, ""), "k1", "k2", "k3", "k4")
+		want(scan(tx, "k9"))
+		return nil
+	}); err != nil {
+		t.Fatalf("View: %v", err)
+	}
+	if err := eng.Update(ctx, func(tx store.Txn) error {
+		if err := tx.Delete("b", "k3"); err != nil {
+			return err
+		}
+		if err := tx.Put("b", "k5", []byte("k5")); err != nil {
+			return err
+		}
+		want(scan(tx, "k2"), "k2", "k4", "k5")
+		stop := fmt.Errorf("stop")
+		var seen []string
+		err := tx.ScanFrom("b", "k2", func(key string, _ []byte) error {
+			seen = append(seen, key)
+			return stop
+		})
+		if err != stop { //nolint:errorlint // fn's own error comes back as it is
+			t.Fatalf("ScanFrom: got %v, want fn's error", err)
+		}
+		want(seen, "k2")
+		return nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+}
+
 // Restore loads src's snapshot into the empty engine dst and opens it: a store restored from src.
 func Restore(t *testing.T, src store.Store, dst store.Engine) store.Store {
 	t.Helper()

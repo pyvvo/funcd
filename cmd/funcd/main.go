@@ -134,6 +134,8 @@ func newRootCmd(out io.Writer) *cobra.Command {
 			return err
 		},
 	})
+	root.AddCommand(newServerCmd(out))
+	root.AddCommand(newNodeCmd(out))
 	root.AddCommand(newRestoreCmd(out))
 	root.AddCommand(newBenchCmd(out))
 	root.AddCommand(newInstallCmd(out))
@@ -147,7 +149,22 @@ func newRootCmd(out io.Writer) *cobra.Command {
 // default), assembles the platform from it, and runs until a signal arrives. memoryFlag is the
 // --memory flag value (nil ⇒ the flag was not set; the config/default decides the substrate). The
 // logger writes to out; once it exists, serve logs its own failure and returns it as a loggedError.
-func serve(parent context.Context, configPath string, memoryFlag *bool, out io.Writer) (err error) {
+func serve(parent context.Context, configPath string, memoryFlag *bool, out io.Writer) error {
+	return serveAs(parent, configPath, memoryFlag, out, roleAll)
+}
+
+// serveAs is serve for role r: the all-in-one, the control plane alone (funcd server) or a worker node (funcd node). A
+// worker node whose control plane was restored from a backup serves again, on the restored state.
+func serveAs(parent context.Context, configPath string, memoryFlag *bool, out io.Writer, r role) error {
+	for {
+		err := serveOnce(parent, configPath, memoryFlag, out, r)
+		if parent.Err() != nil || !errors.Is(err, funcd.ErrControlPlaneRestored) {
+			return err
+		}
+	}
+}
+
+func serveOnce(parent context.Context, configPath string, memoryFlag *bool, out io.Writer, r role) (err error) {
 	// Locate + load funcdconfig.yaml into the effective config (file + env + default, validated; ADR-0062).
 	path, err := config.Locate(configPath)
 	if err != nil {
@@ -155,6 +172,16 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 	}
 	cfg, err := config.Load(path, config.Flags{MemoryOnly: memoryFlag})
 	if err != nil {
+		return err
+	}
+	cfg = r.prepare(cfg)
+	if cfg, err = r.secretsKey(cfg); err != nil {
+		return err
+	}
+	if cfg, err = r.nodeBackups(cfg); err != nil {
+		return err
+	}
+	if err := r.makeTargets(cfg); err != nil {
 		return err
 	}
 	// ADR-0314 Decision 3: a config mistake, refused before the data directory, so it never counts as a start (ADR-0207).
@@ -178,7 +205,10 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 	}
 	root := logger.Root()
 	defer func() {
-		if err != nil {
+		switch {
+		case errors.Is(err, funcd.ErrControlPlaneRestored):
+			root.WarnContext(parent, "funcd", "restart", err)
+		case err != nil:
 			root.ErrorContext(parent, "funcd", "error", err)
 			err = loggedError{err}
 		}
@@ -202,7 +232,7 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 		return nil
 	}
 	defer func() {
-		if err != nil {
+		if err != nil && !errors.Is(err, funcd.ErrControlPlaneRestored) {
 			if ferr := start.Failed(err); ferr != nil {
 				root.Warn("funcd: safe mode: record the failed start", "error", ferr)
 			}
@@ -216,7 +246,7 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 	// store locked (ADR-0297 Decision 2).
 	closeExec, startLoops, substrate, platform := noopClose, func(context.Context) {}, "", (*funcd.Platform)(nil)
 	err = space.run(parent, func() error {
-		opts, ce, sl, sub, berr := buildOptions(parent, cfg, root, held)
+		opts, ce, sl, sub, berr := buildOptionsAs(parent, cfg, root, held, r)
 		if berr != nil {
 			return berr
 		}
@@ -255,6 +285,9 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 	})
 	runErr := platform.Run(ctx)
 	stable.Stop()
+	if errors.Is(runErr, funcd.ErrControlPlaneRestored) {
+		return errors.Join(runErr, start.Clean())
+	}
 	if runErr != nil {
 		return fmt.Errorf("run: %w", runErr)
 	}
@@ -319,7 +352,12 @@ func safeModeConfig(cfg config.Config) (safemode.Config, error) {
 // never held), which the platform, the backup runner and the blob mirror ask. It returns the options, the
 // execution closer the caller must defer, the start of the KV export and blob mirror loops, and the substrate label.
 // The platform owns the drivers; a failed call closes the ones it already opened (issue #437).
-func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, held *hold.Hold) (_ []funcd.Option, _ func() error, _ func(context.Context), _ string, err error) {
+func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, held *hold.Hold) ([]funcd.Option, func() error, func(context.Context), string, error) {
+	return buildOptionsAs(ctx, cfg, root, held, roleAll)
+}
+
+// buildOptionsAs is buildOptions for role r, which adds the node API of a control plane or the agent of a worker node.
+func buildOptionsAs(ctx context.Context, cfg config.Config, root *slog.Logger, held *hold.Hold, r role) (_ []funcd.Option, _ func() error, _ func(context.Context), _ string, err error) {
 	// Credentials first: a bad token file or entry refuses startup before anything opens (ADR-0171 Decision 3).
 	credOpt, err := credentialOption(cfg, root)
 	if err != nil {
@@ -332,7 +370,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		return nil, noopClose, nil, "", err
 	}
 	logBackupFindings(cfg, root)
-	sealer, err := envelope.FromConfig(cfg, master, root)
+	sealer, err := r.sealer(cfg, master, root)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
@@ -346,7 +384,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		}
 	}()
 
-	st, err := buildStore(cfg, root)
+	st, err := buildStoreWith(cfg, root, r.servesNodes(cfg))
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
@@ -432,6 +470,9 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		funcd.WithLogger(root),
 		funcd.WithBlobStoreURL(blobStoreURL(cfg)), // ADR-0222: a BackupSchedule's target is compared with it
 	)
+	if opt := r.option(cfg); opt != nil { // FEAT-0002: the node API of a control plane, or the agent of a worker node
+		opts = append(opts, opt)
+	}
 	if tel != nil {
 		opts = append(opts, funcd.WithTelemetry(tel))
 	}
@@ -469,7 +510,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 	// Egress network isolation (ADR-0115, FEAT-0007/F80): opt-in worker-egress default-deny + redirect to
 	// the egress gateway (F81). Linux/containerd only (network.New is a no-op elsewhere). The subnet comes
 	// from the containerd runtime; the gateway port / resolver / internal allowlist from config.
-	if n := cfg.Server.Network; n.Egress {
+	if n := cfg.Server.Network; n.Egress && r.runsWorkers() {
 		subnet, err := netip.ParsePrefix(cfg.Runtime.Containerd.SubnetCIDR)
 		if err != nil {
 			return nil, noopClose, nil, "", fmt.Errorf("egress isolation: parse worker subnet %q: %w", cfg.Runtime.Containerd.SubnetCIDR, err)
@@ -520,7 +561,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 	if perr != nil {
 		return nil, noopClose, nil, "", perr
 	}
-	if cfg.S3Gateway.Enabled {
+	if cfg.S3Gateway.Enabled && r.runsWorkers() {
 		opts = append(opts, funcd.WithS3Gateway(
 			cfg.S3Gateway.ListenAddr, s3Endpoint(cfg), cfg.S3Gateway.MaxUploadBytes,
 			cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir), funcd.WithS3KeyRotation(period))
@@ -528,7 +569,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 
 	// The lake proxies and the SQL change feed bind and publish the bridge address, where a worker or an engine in
 	// its own netns reaches them (ADR-0238); without one (the process runtime) they keep the shared loopback.
-	if bridge, ok := bridgeAddress(cfg); ok {
+	if bridge, ok := bridgeAddress(cfg); ok && r.runsWorkers() {
 		opts = append(opts, funcd.WithBridgeAddress(bridge))
 	}
 
@@ -569,7 +610,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
-	if cfg.S3Gateway.Enabled {
+	if cfg.S3Gateway.Enabled && r.runsWorkers() {
 		if err := renewalFits(period, pace); err != nil {
 			return nil, noopClose, nil, "", err
 		}
@@ -676,7 +717,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		opts = append(opts, funcd.WithoutFunclogTraces())
 	}
 
-	execOpts, closeExec, err := executionOptions(ctx, cfg, root)
+	execOpts, closeExec, err := r.executionOptions(ctx, cfg, root)
 	if err != nil {
 		return nil, noopClose, nil, "", fmt.Errorf("wire execution: %w", err)
 	}
@@ -1140,6 +1181,11 @@ func limitsConfig(cfg config.Config) limit.Config {
 // when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
 // unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
 func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
+	return buildStoreWith(cfg, log, false)
+}
+
+// buildStoreWith is buildStore whose store keeps the change log worker nodes follow, when changeLog is set (FEAT-0002).
+func buildStoreWith(cfg config.Config, log *slog.Logger, changeLog bool) (store.Store, error) {
 	enc, err := secretEncryptor(cfg)
 	if err != nil {
 		return nil, err
@@ -1149,6 +1195,9 @@ func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
 		opts = append(opts, store.WithEncryptor([]v1.Kind{v1.KindSecret}, enc))
 	} else if cfg.Storage.Mode != "memory" {
 		log.Warn("funcd: no secrets.encryptionKeyFile — Secret values are NOT encrypted in the durable-store lane (set a 32-byte key file)")
+	}
+	if changeLog {
+		opts = append(opts, store.WithChangeLog(0))
 	}
 	// memory = ephemeral (ADR-0043); file = durable pure-Go Badger metastore at Storage.MetastoreDir
 	// (default <dataDir>/store, ADR-0065) — its own dedicated instance.

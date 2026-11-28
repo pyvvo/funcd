@@ -1,0 +1,163 @@
+---
+# A worker node follows its namespace from the control plane's change log (ADR-0365, FEAT-0002 F243). A write of an
+# object and its change-log record are one transaction. The log keeps the last RETAIN records; a compaction raises its
+# floor, and a feed asked for a revision below the floor is refused, so the node takes a snapshot. A snapshot reads the
+# log's head, then lists the objects, so a write between the two is both in the list and in the feed after the head.
+# The node applies what it gets to its own store, which survives a crash, and then saves its cursor to disk; applying
+# a record is an upsert of the control plane's object, so applying it twice changes nothing. A batch the node fails to
+# write (a full disk, a write race lost every time) saves no cursor, and the node takes a snapshot; a snapshot that fails
+# to write an object saves no cursor either, and is taken again. One write fails at most. The node may crash at any
+# step, once; its store and its cursor survive, and it starts again from the cursor. Every action is atomic.
+# Environment: the store's transaction and its revision order; the node's disk, which keeps what was written before a
+# crash; the feed's wait, which ends at its deadline, so a missed wake only delays a read (not modeled).
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 16
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant save-before-apply: TheCursorNeverPassesWhatTheNodeApplied
+# mutant no-floor-check: TheCursorNeverPassesWhatTheNodeApplied
+# mutant list-before-head: TheCursorNeverPassesWhatTheNodeApplied
+# mutant no-reapply: TheCursorNeverPassesWhatTheNodeApplied
+# mutant no-resync: liveness
+# mutant skip-failed-apply: TheCursorNeverPassesWhatTheNodeApplied
+# mutant snapshot-saves-past-a-failed-write: TheCursorNeverPassesWhatTheNodeApplied
+
+# save-before-apply: the node saves the cursor of a batch before it applies the batch. no-floor-check: a feed below the
+# floor answers from the floor on. list-before-head: a snapshot lists the objects, then reads the head. no-reapply: a
+# node that starts again skips the batch it had got but not applied. no-resync: a node refused below the floor keeps
+# asking the feed and takes no snapshot. skip-failed-apply: a node that failed to write a batch saves its cursor past it.
+# snapshot-saves-past-a-failed-write: a snapshot that failed to write an object saves its cursor all the same.
+MUTANT = ""
+
+NAMES = 2
+WRITES = 2
+RETAIN = 1
+FAILS = 1
+
+action Init:
+    cp = {0: 0, 1: 0}
+    log = []
+    head = 0
+    floor = 0
+    copy = {0: 0, 1: 0}
+    cursor = 0
+    phase = "snapshot"
+    snapHead = 0
+    snapList = {}
+    batch = []
+    batchEnd = 0
+    crashes = 0
+    fails = 0
+    writes = 0
+
+atomic action Write:
+    require writes < WRITES
+    n = oneof range(NAMES)
+    cp[n] = cp[n] + 1
+    head += 1
+    log.append((head, n, cp[n]))
+    writes += 1
+
+atomic action Compact:
+    require head - floor > RETAIN
+    floor = head - RETAIN
+
+atomic fair action SnapshotHead:
+    require phase == "snapshot"
+    if MUTANT == "list-before-head":
+        snapList = dict(cp)
+        phase = "snapshot-listed"
+    else:
+        snapHead = head
+        phase = "snapshot-head"
+
+atomic fair action SnapshotList:
+    require phase in ["snapshot-head", "snapshot-listed"]
+    if MUTANT == "list-before-head":
+        snapHead = head
+    else:
+        snapList = dict(cp)
+    lost = -1
+    if fails < FAILS:
+        lost = any [-1] + list(range(NAMES))
+    for n in range(NAMES):
+        if n != lost:
+            copy[n] = snapList[n]
+    if lost >= 0:
+        fails += 1
+        if MUTANT != "snapshot-saves-past-a-failed-write":
+            phase = "snapshot"
+            return
+    cursor = snapHead
+    phase = "follow"
+
+atomic fair action Feed:
+    require phase == "follow"
+    first = cursor
+    if cursor < floor:
+        if MUTANT == "no-resync":
+            return
+        if MUTANT != "no-floor-check":
+            phase = "snapshot"
+            return
+        first = floor
+    got = [r for r in log if r[0] > first]
+    require len(got) > 0
+    batch = got[:2]
+    batchEnd = batch[-1][0]
+    if MUTANT == "save-before-apply":
+        cursor = batchEnd
+    phase = "apply"
+
+atomic fair action Apply:
+    require phase == "apply"
+    failed = False
+    if fails < FAILS:
+        failed = any [False, True]
+    if failed:
+        fails += 1
+        if MUTANT == "skip-failed-apply":
+            cursor = batchEnd
+            phase = "follow"
+        else:
+            phase = "snapshot"
+        batch = []
+        return
+    for r in batch:
+        copy[r[1]] = r[2]
+    phase = "save"
+
+atomic fair action Save:
+    require phase == "save"
+    cursor = batchEnd
+    batch = []
+    phase = "follow"
+
+atomic action Crash:
+    require crashes < 1
+    require phase in ["apply", "save", "snapshot-head", "snapshot-listed"]
+    crashes += 1
+    if MUTANT == "no-reapply" and phase == "apply":
+        cursor = batchEnd
+    batch = []
+    if phase in ["snapshot-head", "snapshot-listed"]:
+        phase = "snapshot"
+    else:
+        phase = "follow"
+
+always assertion TheCursorNeverPassesWhatTheNodeApplied:
+    for r in log:
+        if r[0] <= cursor and copy[r[1]] < r[2]:
+            return False
+    return True
+
+eventually always assertion TheNodeConverges:
+    if writes < WRITES:
+        return True
+    for n in range(NAMES):
+        if copy[n] != cp[n]:
+            return False
+    return phase == "follow"

@@ -50,18 +50,18 @@ var Features = []Feature{
 	{"services/addons", []v1.Kind{v1.KindAddon, v1.KindAddonObject, v1.KindAddonRevision}},
 	{"services/secrets", []v1.Kind{v1.KindSecret}},
 	{"services/events", []v1.Kind{v1.KindEventSource, v1.KindSensor}},
-	{"security-and-networking/security", []v1.Kind{v1.KindIdentity, v1.KindRole, v1.KindRolesAssignment, v1.KindPolicy}},
+	{"security-and-networking/security", []v1.Kind{v1.KindIdentity, v1.KindRole, v1.KindRolesAssignment, v1.KindPolicy, v1.KindAPIToken}},
 	{"security-and-networking/sign-in", []v1.Kind{v1.KindOIDCProvider}},
 	{"security-and-networking/networking", []v1.Kind{v1.KindRoute, v1.KindEgressPolicy}},
-	{"tenancy-and-limits/namespaces", []v1.Kind{v1.KindNamespace, v1.KindResourceGroup}},
+	{"tenancy-and-limits/namespaces", []v1.Kind{v1.KindNamespace, v1.KindResourceGroup, v1.KindWorkerNode}},
 	{"disaster-recovery", []v1.Kind{v1.KindBackup, v1.KindBackupSchedule, v1.KindRestore}},
 }
 
-// Omitted kinds get no Spec: pyvvo/funcd#1438 removes the first four, and RuntimeClass gets its fields and its first
+// Omitted kinds get no Spec: pyvvo/funcd#1438 removes the first three, and RuntimeClass gets its fields and its first
 // reader with FEAT-0012 F139.
 //
 //nolint:gochecknoglobals // an immutable lookup table, the ADR's contract
-var Omitted = []v1.Kind{v1.KindService, v1.KindGrant, v1.KindGateway, v1.KindWorkerNode, v1.KindRuntimeClass}
+var Omitted = []v1.Kind{v1.KindService, v1.KindGrant, v1.KindGateway, v1.KindRuntimeClass}
 
 // Marker is the first front-matter line of every page Render writes; specgen deletes a page that carries it and that
 // Render no longer returns.

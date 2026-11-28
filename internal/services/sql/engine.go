@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 )
 
 // EnginePassword derives a database's engine password from the node master (ADR-0232 Decision 5): HMAC-SHA256 over
@@ -18,6 +19,15 @@ func EnginePassword(master []byte, ns v1.NamespaceName, name v1.ObjectName) stri
 	mac := hmac.New(sha256.New, master)
 	mac.Write([]byte("funcd-sql-engine/" + string(ns) + "/" + string(name)))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// enginePasswordOf is EnginePassword over the master of ns (ADR-0371).
+func enginePasswordOf(master []byte, masters nsmaster.Source, ns v1.NamespaceName, name v1.ObjectName) (string, error) {
+	m, err := masters.Of(master, ns)
+	if err != nil {
+		return "", err
+	}
+	return EnginePassword(m, ns, name), nil
 }
 
 // Engines is the in-process registry of Ready engines' addresses (ADR-0232 Decision 6), filled by the reconciler

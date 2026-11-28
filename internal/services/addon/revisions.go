@@ -224,6 +224,50 @@ func (r addonRevisions) usedRevisions(ctx context.Context, kind string) (map[v1.
 	return used, nil
 }
 
+// Followed is the controller.Reconciler of AddonRevision on a worker node, which copies the revisions that its control
+// plane stamps and stamps none (FEAT-0002). A copy whose revision the control plane retired is marked deleted, and goes
+// as a retired revision does: once no object of the node pins it and no AppRevision of the node records it. So a pin that
+// the control plane had not seen yet keeps its revision.
+func (r *Reconciler) Followed() controller.Reconciler { return followedRevisions{addonRevisions{r}} }
+
+type followedRevisions struct{ addonRevisions }
+
+// Reconcile removes a marked copy that nothing on the node uses, and looks again after the supervision period while
+// something does.
+func (r followedRevisions) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
+	const op = "services.addon.Followed"
+	obj, err := r.store.Get(ctx, v1.KindAddonRevision.GVK(), "", req.Name)
+	if fault.KindOf(err) == fault.NotFound {
+		return controller.Result{}, nil
+	}
+	if err != nil {
+		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "get AddonRevision %s", req.Name)
+	}
+	rev, ok := obj.(*v1.AddonRevision)
+	if !ok {
+		return controller.Result{}, fault.Internalf(op, "object %s is not an AddonRevision", req.Name)
+	}
+	if rev.DeletionTime == nil {
+		return controller.Result{}, nil
+	}
+	used, err := r.usedRevisions(ctx, rev.Spec.Spec.Kind())
+	if err != nil {
+		return controller.Result{}, err
+	}
+	if used[rev.Name] {
+		return controller.Result{RequeueAfter: r.period}, nil
+	}
+	switch err := r.store.Delete(ctx, v1.KindAddonRevision.GVK(), "", rev.Name, rev.ResourceVersion); fault.KindOf(err) {
+	case "", fault.NotFound:
+		r.logger.InfoContext(ctx, "removed a retired revision", "addon", string(rev.Spec.Addon), "revision", string(rev.Name))
+		return controller.Result{}, nil
+	case fault.Conflict:
+		return controller.Result{}, nil // the copy changed: its event brings the next pass
+	default:
+		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "remove AddonRevision %s", rev.Name)
+	}
+}
+
 // pinHold is why an object runs no engine for want of a revision.
 type pinHold struct{ reason, message string }
 

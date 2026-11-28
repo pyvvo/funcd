@@ -28,25 +28,29 @@ type platformBackupOutput struct {
 // RegisterPlatformBackup registers GET /apis/funcd.io/v1alpha1/platformbackup. It authorizes get on the
 // cluster-scoped WorkerNode, so only an admin reads it; a failed listing of the target is 503. A nil s (no backup
 // stream on) reads enabled: false.
-func RegisterPlatformBackup(api huma.API, s BackupStatuser, authz auth.Authorizer) {
+func RegisterPlatformBackup(api huma.API, s BackupStatuser, nodes Nodes, authz auth.Authorizer) {
 	huma.Register(api, Describe(huma.Operation{
 		OperationID: "getPlatformBackup",
 		Method:      http.MethodGet,
 		Path:        "/apis/funcd.io/v1alpha1/platformbackup",
 		Tags:        []string{"PlatformBackup"},
-	}, "Read the status of the platform backup", unauthorized(),
+	}, "Read the status of the platform backup", append([]ErrorCase{unauthorized(),
 		drForbidden("read the status of the platform backup"),
 		problem(fault.Unavailable, "funcd could not list backup.target, where the platform backup writes: the bucket "+
 			"does not exist, the URL is wrong, or the target fails.", "Check backup.target and the key of "+
-			"backup.credentialsFile, then read the status again."),
-	), func(ctx context.Context, _ *struct{}) (*platformBackupOutput, error) {
+			"backup.credentialsFile, then read the status again.")}, nodeQueryCases()...)...,
+	), func(ctx context.Context, in *NodeQuery) (*platformBackupOutput, error) {
 		if err := authorizePlatformBackup(ctx, authz); err != nil {
 			return nil, wrapFaultError(err)
 		}
-		if s == nil {
-			return &platformBackupOutput{}, nil
+		var st runner.Status
+		var err error
+		switch {
+		case in.Node != "":
+			st, err = nodes.BackupStatus(ctx, in.Node)
+		case s != nil:
+			st, err = s.Status(ctx)
 		}
-		st, err := s.Status(ctx)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -72,5 +76,5 @@ func authorizePlatformBackup(ctx context.Context, authz auth.Authorizer) error {
 
 // RegisterStubPlatformBackup registers the platform backup route for spec generation.
 func RegisterStubPlatformBackup(api huma.API) {
-	RegisterPlatformBackup(api, nil, stubLogAuthorizer{})
+	RegisterPlatformBackup(api, nil, noNodes{}, stubLogAuthorizer{})
 }

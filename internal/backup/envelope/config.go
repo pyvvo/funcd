@@ -49,3 +49,17 @@ func FromConfig(cfg config.Config, master []byte, log *slog.Logger) (*Sealer, er
 		Logger:     log,
 	})
 }
+
+// FromNodeConfig is FromConfig for a worker node (FEAT-0002 F251), whose backup names no key: its metastore copy goes
+// without Secrets, and its credentials derive from the masters of its namespaces, all of which the control plane holds.
+func FromNodeConfig(cfg config.Config, log *slog.Logger) (*Sealer, error) {
+	if cfg.Backup.Target == "" {
+		return nil, nil
+	}
+	return New(Config{
+		Recipients: cfg.Backup.Encryption.Recipients,
+		None:       cfg.Backup.Encryption.None,
+		NoSecrets:  true,
+		Logger:     log,
+	})
+}

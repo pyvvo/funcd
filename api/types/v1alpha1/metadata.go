@@ -32,10 +32,12 @@ const (
 	KindInvocation    Kind = "Invocation"
 	KindRuntimeClass  Kind = "RuntimeClass"
 	KindWorkerNode    Kind = "WorkerNode"
-	KindGateway       Kind = "Gateway"
-	KindKVStore       Kind = "KVStore"
-	KindBucket        Kind = "Bucket"
-	KindLake          Kind = "Lake"
+	// KindAPIToken is an API token kept as a hash (FEAT-0002 F248).
+	KindAPIToken Kind = "APIToken"
+	KindGateway  Kind = "Gateway"
+	KindKVStore  Kind = "KVStore"
+	KindBucket   Kind = "Bucket"
+	KindLake     Kind = "Lake"
 	// KindSQLDatabase is a SQL database served by its own rqlite engine (ADR-0232).
 	KindSQLDatabase Kind = "SQLDatabase"
 	KindPolicy      Kind = "Policy"
@@ -104,7 +106,7 @@ func (k Kind) Validate() error {
 		KindLake, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
 		KindIdentity, KindRole, KindRolesAssignment, KindSite, KindApp, KindAppRevision,
 		KindBackupSchedule, KindBackup, KindRestore, KindSQLDatabase, KindAddon, KindAddonObject, KindAddonRevision,
-		KindOIDCProvider, KindJob, KindJobRun:
+		KindOIDCProvider, KindJob, KindJobRun, KindAPIToken:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -112,10 +114,10 @@ func (k Kind) Validate() error {
 }
 
 // Namespaced reports whether this kind is namespaced. Cluster-scoped kinds:
-// Namespace, RuntimeClass, WorkerNode, Gateway, Addon, AddonRevision.
+// Namespace, RuntimeClass, WorkerNode, APIToken, Gateway, Addon, AddonRevision.
 func (k Kind) Namespaced() bool {
 	switch k {
-	case KindNamespace, KindRuntimeClass, KindWorkerNode, KindGateway, KindAddon, KindAddonRevision:
+	case KindNamespace, KindRuntimeClass, KindWorkerNode, KindAPIToken, KindGateway, KindAddon, KindAddonRevision:
 		return false
 	default:
 		return true
@@ -374,6 +376,10 @@ func NewObject(k Kind) (Object, bool) {
 		w := &WorkerNode{}
 		w.TypeMeta = typeMetaFor(k)
 		return w, true
+	case KindAPIToken:
+		t := &APIToken{}
+		t.TypeMeta = typeMetaFor(k)
+		return t, true
 	case KindGateway:
 		gw := &Gateway{}
 		gw.TypeMeta = typeMetaFor(k)
@@ -492,6 +498,7 @@ func AllKinds() []Kind {
 		KindInvocation,
 		KindRuntimeClass,
 		KindWorkerNode,
+		KindAPIToken,
 		KindGateway,
 		KindKVStore,
 		KindBucket,

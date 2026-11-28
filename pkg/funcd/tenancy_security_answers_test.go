@@ -17,6 +17,7 @@ type clusterFixture struct {
 	kind, kinds, path    string // such as Namespace, Namespaces and namespaces
 	name                 v1.ObjectName
 	json, broken, detail string
+	noSpec               bool // only a create of broken breaks a rule
 }
 
 // sharedRows are the rows of the cases that each verb of a described cluster-scoped kind shares with every other kind's
@@ -55,6 +56,11 @@ func (k clusterFixture) sharedRows(e *answerEnv) []answerRow {
 			row(op, "The body breaks the schema", ask{what: "a field the schema does not know", method: method,
 				path: path, body: unknown, detail: "unexpected property"}),
 		}
+	}
+	var replaceRule []answerRow
+	if !k.noSpec {
+		replaceRule = []answerRow{row(replace, "breaks a rule that the schema cannot hold", ask{what: "a broken rule",
+			method: http.MethodPut, path: item, body: k.broken, detail: k.detail})}
 	}
 	return slices.Concat(
 		[]answerRow{row(list, "", ask{what: "the list", method: http.MethodGet, path: coll, detail: named})},
@@ -96,13 +102,12 @@ func (k clusterFixture) sharedRows(e *answerEnv) []answerRow {
 				path: item + "?dryRun=maybe", body: s, detail: "invalid boolean"}),
 			row(replace, "The If-Match header is not one strong", ask{what: "a weak If-Match", method: http.MethodPut,
 				path: item, header: weak, body: s, detail: "is a weak entity-tag"}),
-			row(replace, "breaks a rule that the schema cannot hold", ask{what: "a broken rule", method: http.MethodPut,
-				path: item, body: k.broken, detail: k.detail}),
 			row(replace, "has changed since", ask{what: "a stale If-Match", method: http.MethodPut, path: item,
 				header: stale, body: s, detail: "has changed since resourceVersion"}),
 			row(replace, "is not the path's", ask{what: "a body of another name", method: http.MethodPut, path: item,
 				body: renamed(s, "x"), detail: `body name "x" does not match path`}),
 		},
+		replaceRule,
 		refused(replace, http.MethodPut, item, s),
 		bodies(replace, http.MethodPut, item),
 
@@ -124,6 +129,36 @@ func (k clusterFixture) sharedRows(e *answerEnv) []answerRow {
 		},
 		refused(remove, http.MethodDelete, item, ""),
 	)
+}
+
+// tokenRows are the rows of the route that mints the token of object name of a cluster-scoped kind, whose ttl is a duration
+// in bounds.
+func tokenRows(e *answerEnv, kind, path, name, bounds string) []answerRow {
+	op := "mint" + kind
+	if kind == "WorkerNode" {
+		op = "mintWorkerNodeJoinToken"
+	}
+	coll := "/apis/funcd.io/v1alpha1/" + path
+	item := coll + "/" + name + "/token"
+	row := func(when, what, path, body, detail string) answerRow {
+		return answerRow{op: op, when: when, on: e, ask: ask{what: what, method: http.MethodPost, path: path, token: answersAdmin,
+			body: body, detail: detail}}
+	}
+	noToken := row("carries no bearer token", "no credential", item, `{}`, "missing bearer token")
+	noToken.ask.token = ""
+	developer := row("does not allow it", "a developer", item, `{}`, "may not act on cluster-scoped kind")
+	developer.ask.token = answersDev
+	text := row("The Content-Type of the body", "a body that is not JSON by its Content-Type", item, `{}`, "unknown content type")
+	text.ask.header = []string{"Content-Type", "text/plain"}
+	return []answerRow{row("", "a token", item, `{"ttl":"10m"}`, `"token":`), noToken, developer, text,
+		row("of that name exists", "a missing object", coll+"/nope/token", `{}`, "nope"),
+		row("in the path is not", "a name that is no DNS-1123 label", coll+"/Not_A_Label/token", `{}`, "path.name"),
+		row("The query holds a parameter", "an unknown query parameter", item+"?force=true", `{}`, "unknown query parameter"),
+		row("is not a duration "+bounds, "a ttl that is no duration", item, `{"ttl":"forever"}`, "is not a duration"),
+		row("The body is missing or is not JSON", "a body that is not JSON", item, "{", "unexpected end of JSON input"),
+		row("larger than 1 MiB", "a body over 1 MiB", item, tooLarge(), "request body is too large limit=1048576 bytes"),
+		row("The body breaks the schema", "a field the schema does not know", item, `{"bogus":1}`, "unexpected property"),
+	}
 }
 
 // postFixture creates k's object with the admin's token, at its kind's collection in default.
@@ -153,7 +188,9 @@ func inGroup(group v1.ResourceGroupName, fn *v1.Function) *v1.Function {
 // The answers of the Namespaces feature's operations, one row per case of each: Namespace and ResourceGroup.
 func TestNamespacesAnswersMatrix(t *testing.T) {
 	t.Parallel()
-	e := newAnswerEnv(t)
+	e := newAnswerEnv(t, asCluster(t))
+	placeOnOfflineNode(t, e)
+	create(t, e.c, e.api, inNamespace("e1", function("held")))
 	// busy has a member; kept has one that its own rules keep, a Function that a Function outside the group links to.
 	for _, obj := range []v1.Object{namespace("tenant"), resourceGroup("team"), resourceGroup("busy"),
 		resourceGroup("kept"), inGroup("busy", function("member")), inGroup("kept", function("anchor")),
@@ -173,12 +210,27 @@ func TestNamespacesAnswersMatrix(t *testing.T) {
 	}
 	const rgs = "/apis/funcd.io/v1alpha1/namespaces/default/resourcegroups"
 
+	moved := namespace("e1")
+	wn := &v1.WorkerNode{TypeMeta: v1.TypeMeta{APIVersion: v1.KindWorkerNode.GVK().APIVersion(), Kind: v1.KindWorkerNode}}
+	wn.Name = "vm1"
+	node := clusterFixture{kind: "WorkerNode", kinds: "WorkerNodes", path: "workernodes", name: "vm1", json: jsonOf(t, wn),
+		noSpec: true, detail: "namespace must be empty"}
+	node.broken = strings.Replace(node.json, `"name":"vm1"`, `"name":"vm1","namespace":"default"`, 1)
+
 	rows := slices.Concat(
 		clusterFixture{kind: "Namespace", kinds: "Namespaces", path: "namespaces", name: "tenant",
 			json: jsonOf(t, namespace("tenant")), broken: jsonOf(t, budgets),
 			detail: "spec.volumeBudget and spec.volumeBudgetBytes are both set"}.sharedRows(e),
+		node.sharedRows(e),
+		tokenRows(e, "WorkerNode", "workernodes", "vm1", "from 1s to 24h"),
 		groups,
 		[]answerRow{
+			{op: "replaceNamespace", when: "changes spec.node", on: e, ask: ask{what: "another node for a namespace that holds objects",
+				method: http.MethodPut, path: "/apis/funcd.io/v1alpha1/namespaces/e1", token: answersAdmin, body: jsonOf(t, moved),
+				detail: "namespace e1 holds objects, so its spec.node cannot change"}},
+			{op: "deleteWorkerNode", when: "spec.node names the WorkerNode", on: e, ask: ask{what: "a node that runs a namespace",
+				method: http.MethodDelete, path: "/apis/funcd.io/v1alpha1/workernodes/vm1", token: answersAdmin,
+				detail: "still runs namespaces [e1]"}},
 			{op: "deleteResourceGroup", when: "still has members", on: e, ask: ask{what: "a group with a member",
 				method: http.MethodDelete, path: rgs + "/busy", token: answersDev,
 				detail: `ResourceGroup "busy" still has 1 member(s): Function/member`}},
@@ -249,6 +301,19 @@ func TestSecurityAnswersMatrix(t *testing.T) {
 		rows = append(rows, k.sharedRows(e)...)
 	}
 
+	token := func(spec v1.APITokenSpec) string {
+		tk := &v1.APIToken{TypeMeta: v1.TypeMeta{APIVersion: v1.KindAPIToken.GVK().APIVersion(), Kind: v1.KindAPIToken}, Spec: spec}
+		tk.Name = "ci"
+		return jsonOf(t, tk)
+	}
+	ci := clusterFixture{kind: "APIToken", kinds: "APITokens", path: "apitokens", name: "ci",
+		json: token(v1.APITokenSpec{Role: "viewer", Namespaces: []v1.NamespaceName{"default"}}), broken: token(v1.APITokenSpec{Role: "viewer"}),
+		detail: "a viewer acts in at least one namespace"}
+	ask{what: "the API token", method: http.MethodPost, path: "/apis/funcd.io/v1alpha1/apitokens", token: answersAdmin,
+		body: ci.json, status: http.StatusOK}.run(t, e.c, e.api)
+	rows = append(rows, ci.sharedRows(e)...)
+	rows = append(rows, tokenRows(e, "APIToken", "apitokens", "ci", "from 1s to 8760h")...)
+
 	const policies = "/apis/funcd.io/v1alpha1/namespaces/default/policies"
 	for _, c := range []struct{ when, what, cedar, detail string }{
 		{"does not parse as Cedar", "text that does not parse", "permit(", "cedar policy does not parse"},
@@ -287,7 +352,8 @@ func route(name v1.ObjectName, path string) *v1.Route {
 // The answers of the Networking feature's operations, one row per case of each: Route and EgressPolicy.
 func TestNetworkingAnswersMatrix(t *testing.T) {
 	t.Parallel()
-	e := newAnswerEnv(t)
+	e := newAnswerEnv(t, asCluster(t))
+	placeOnOfflineNode(t, e)
 	https := v1.EgressRule{To: v1.EgressTo{Domains: []string{"*.example.com"}}, Ports: []int{443}}
 	fixtures := []kindFixture{
 		{kind: "Route", kinds: "Routes", path: "routes", name: "devices", json: jsonOf(t, route("devices", "/")),
@@ -301,6 +367,11 @@ func TestNetworkingAnswersMatrix(t *testing.T) {
 		postFixture(t, e, k)
 		rows = append(rows, k.sharedRows(e)...)
 	}
+	rows = append(rows, hostRows(t, e, "Route", "routes", "devices", func(name v1.ObjectName, host string) string {
+		r := route(name, "/")
+		r.Spec.Host = host
+		return jsonOf(t, r)
+	})...)
 	runMatrix(t, rows)
 }
 

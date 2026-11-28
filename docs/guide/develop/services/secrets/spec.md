@@ -67,11 +67,13 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `put` | 404 | `urn:funcd:problem:not-found` | A Secret that the Function binds does not exist. | Create the Secret, or remove it from the Function's spec.bindings.secret. |
 | `put` | 409 | `urn:funcd:problem:conflict` | The Secret changed under each attempt to write it, as when other writes of it run at the same time. | Retry the write. |
 | `put` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `put` | 503 | `urn:funcd:problem:unavailable` | The Function's worker node does not reach its control plane, which holds the Secret and makes the write. | Retry the write; reads go on meanwhile. |
 | `del` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.secret does not list the Secret. | Add the Secret to spec.bindings.secret, or write a Secret that the Function binds. |
 | `del` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the Secret, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the Secret's owner, or grant the Function secret::write with a RolesAssignment, such as the Secret Data Writer role. |
 | `del` | 404 | `urn:funcd:problem:not-found` | The calling Function no longer exists, so it binds no Secret. | Call from a Function that exists; a deleted Function's worker stops. |
 | `del` | 404 | `urn:funcd:problem:not-found` | A Secret that the Function binds does not exist. | Create the Secret, or remove it from the Function's spec.bindings.secret. |
 | `del` | 409 | `urn:funcd:problem:conflict` | The Secret changed under each attempt to write it, as when other writes of it run at the same time. | Retry the write. |
+| `del` | 503 | `urn:funcd:problem:unavailable` | The Function's worker node does not reach its control plane, which holds the Secret and makes the write. | Retry the write; reads go on meanwhile. |
 
 #### Python
 
@@ -105,11 +107,13 @@ When funcd refuses a call, the method fails with an error that holds funcd's sta
 | `put` | 404 | `urn:funcd:problem:not-found` | A Secret that the Function binds does not exist. | Create the Secret, or remove it from the Function's spec.bindings.secret. |
 | `put` | 409 | `urn:funcd:problem:conflict` | The Secret changed under each attempt to write it, as when other writes of it run at the same time. | Retry the write. |
 | `put` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `put` | 503 | `urn:funcd:problem:unavailable` | The Function's worker node does not reach its control plane, which holds the Secret and makes the write. | Retry the write; reads go on meanwhile. |
 | `delete` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.secret does not list the Secret. | Add the Secret to spec.bindings.secret, or write a Secret that the Function binds. |
 | `delete` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the Secret, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the Secret's owner, or grant the Function secret::write with a RolesAssignment, such as the Secret Data Writer role. |
 | `delete` | 404 | `urn:funcd:problem:not-found` | The calling Function no longer exists, so it binds no Secret. | Call from a Function that exists; a deleted Function's worker stops. |
 | `delete` | 404 | `urn:funcd:problem:not-found` | A Secret that the Function binds does not exist. | Create the Secret, or remove it from the Function's spec.bindings.secret. |
 | `delete` | 409 | `urn:funcd:problem:conflict` | The Secret changed under each attempt to write it, as when other writes of it run at the same time. | Retry the write. |
+| `delete` | 503 | `urn:funcd:problem:unavailable` | The Function's worker node does not reach its control plane, which holds the Secret and makes the write. | Retry the write; reads go on meanwhile. |
 
 ## HTTP API
 

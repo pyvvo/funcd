@@ -931,7 +931,8 @@ func TestFunctionAnswersMatrix(t *testing.T) {
 	t.Parallel()
 	hd, err := hold.Open(t.TempDir())
 	require.NoError(t, err)
-	sh := newAnswerEnv(t, funcd.WithHold(hd))
+	sh := newAnswerEnv(t, funcd.WithHold(hd), asCluster(t))
+	placeOnOfflineNode(t, sh)
 	sh.workers.serve(t, "echo", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
 	callable(t, sh.c, sh.api, "echo", "", nil)
 	for _, obj := range []v1.Object{function("plain"), function("target"), linking("linker", "target"),
@@ -1236,5 +1237,19 @@ func TestFunctionAnswersMatrix(t *testing.T) {
 					body: `{}`, detail: "activator stopped before default/cold became ready"}},
 		},
 	)
+	const awayFns = "/apis/funcd.io/v1alpha1/namespaces/e1/functions"
+	rows = append(rows, hostRows(t, sh, "Function", "functions", "plain", func(name v1.ObjectName, host string) string {
+		fn := function(name)
+		fn.Spec.Ingress = &v1.Ingress{Host: host}
+		return jsonOf(t, fn)
+	})...)
+	rows = append(rows,
+		awayRow("getFunctionLogs", sh, http.MethodGet, "functions/echo/logs"),
+		awayRow("deleteVolume", sh, http.MethodDelete, "volumes/echo/state"),
+		offlineRow("createFunction", sh, nil, ask{what: "a Function with a volume whose worker node is offline",
+			method: http.MethodPost, path: awayFns, body: jsonOf(t, withVolume(inNamespace("e1", function("booked"))))}),
+		offlineRow("replaceFunction", sh, func(t *testing.T, e *answerEnv) { create(t, e.c, e.api, inNamespace("e1", function("grows"))) },
+			ask{what: "a replace that adds a volume while the worker node is offline", method: http.MethodPut,
+				path: awayFns + "/grows", body: jsonOf(t, withVolume(inNamespace("e1", function("grows"))))}))
 	runMatrix(t, rows)
 }

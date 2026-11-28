@@ -40,6 +40,7 @@ type RunReconciler struct {
 	waitRequeue time.Duration
 	hold        hold.Gate
 	nsHold      hold.NamespaceGate
+	skip        func(v1.NamespaceName) bool
 }
 
 // NewRunReconciler builds the run reconciler. traces is the shared funclog trace sink (ADR-0103): when
@@ -53,7 +54,8 @@ func NewRunReconciler(s store.Store, e *Engine, traces funclog.TraceSink, log *s
 	if referentPollInterval <= 0 {
 		referentPollInterval = waitRequeue
 	}
-	return &RunReconciler{store: s, engine: e, traces: traces, log: log.With("component", "workflow.run"), waitRequeue: referentPollInterval, hold: hold.Never, nsHold: hold.NeverNamespace}
+	return &RunReconciler{store: s, engine: e, traces: traces, log: log.With("component", "workflow.run"), waitRequeue: referentPollInterval, hold: hold.Never, nsHold: hold.NeverNamespace,
+		skip: func(v1.NamespaceName) bool { return false }}
 }
 
 // SetHold installs the platform hold before the controller runs (ADR-0206 Decision 6).
@@ -61,6 +63,9 @@ func (r *RunReconciler) SetHold(g hold.Gate) { r.hold = g }
 
 // SetNamespaceHold installs the per-namespace hold before the controller runs (ADR-0222 Decision 8).
 func (r *RunReconciler) SetNamespaceHold(g hold.NamespaceGate) { r.nsHold = g }
+
+// SetSkip leaves the runs of a namespace that a worker node runs to that node's sweep (FEAT-0002).
+func (r *RunReconciler) SetSkip(skip func(v1.NamespaceName) bool) { r.skip = skip }
 
 // buildRunSpan builds the run-root Resource + INTERNAL Span for a terminal run (ADR-0103; shared by the
 // reconciler for top-level runs and the engine for inline sub-workflow child runs, ADR-0104). SpanID is the
@@ -820,7 +825,7 @@ func (r *RunReconciler) recordClosedRuns(ctx context.Context) error {
 	now := r.engine.clock.Now().UnixNano()
 	for _, obj := range list.Items {
 		run := obj.(*v1.WorkflowRun)
-		if !isRunTerminal(run.Status.Phase) {
+		if !isRunTerminal(run.Status.Phase) || r.skip(run.Namespace) {
 			continue
 		}
 		_, gerr := r.engine.runs.Get(ctx, run.Namespace, run.Name)

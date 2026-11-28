@@ -96,7 +96,8 @@ func TestEventsAnswersMatrix(t *testing.T) {
 	t.Parallel()
 	hd, err := hold.Open(t.TempDir())
 	require.NoError(t, err)
-	e := newAnswerEnv(t, funcd.WithHold(hd), funcd.WithDeadLetterQueue("", 1, 0, 0))
+	e := newAnswerEnv(t, funcd.WithHold(hd), funcd.WithDeadLetterQueue("", 1, 0, 0), asCluster(t))
+	placeOnOfflineNode(t, e)
 	holding, release := make(chan struct{}, 1), make(chan struct{})
 	e.workers.serve(t, "late", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
 	e.workers.serve(t, "sticky", func(_ http.ResponseWriter, r *http.Request) {
@@ -252,6 +253,10 @@ func TestEventsAnswersMatrix(t *testing.T) {
 			row("replayDeadLetter", "The query holds a parameter", ask{what: "an unknown query parameter",
 				method: http.MethodPost, path: absent + "/replay?force=true", token: answersDev,
 				detail: "unknown query parameter"}),
+			awayRow("listDeadLetters", e, http.MethodGet, "deadletters"),
+			awayRow("getDeadLetter", e, http.MethodGet, "deadletters/01ABSENT"),
+			awayRow("discardDeadLetter", e, http.MethodDelete, "deadletters/01ABSENT"),
+			awayRow("replayDeadLetter", e, http.MethodPost, "deadletters/01ABSENT/replay"),
 		},
 	)
 	runMatrix(t, rows)
@@ -269,7 +274,8 @@ func (typedContract) Contract(context.Context, string) (v1.WorkflowContract, str
 // run.
 func TestWorkflowAnswersMatrix(t *testing.T) {
 	t.Parallel()
-	e := newAnswerEnv(t, funcd.WithWorkflowContractResolver(typedContract{}))
+	e := newAnswerEnv(t, funcd.WithWorkflowContractResolver(typedContract{}), asCluster(t))
+	placeOnOfflineNode(t, e)
 	typed := workflow("typed")
 	typed.Spec.Steps = []v1.WorkflowStep{{Name: "s", Function: &v1.FunctionStep{Ref: "typedfn"}}}
 	run := workflowRun("run", "wf", "")
@@ -356,6 +362,7 @@ func TestWorkflowAnswersMatrix(t *testing.T) {
 				method: http.MethodGet, path: runs + "/Not_A_Label/logs", token: answersDev, detail: "path.name"}),
 			row("getWorkflowRunLogs", "The limit parameter", ask{what: "a limit that is no integer",
 				method: http.MethodGet, path: logs + "?limit=many", token: answersDev, detail: "query.limit"}),
+			awayRow("getWorkflowRunLogs", e, http.MethodGet, "workflowruns/run/logs"),
 		},
 	)
 	runMatrix(t, rows)

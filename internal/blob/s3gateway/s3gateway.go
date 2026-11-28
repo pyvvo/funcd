@@ -22,6 +22,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/platform/durable"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 )
 
 // defaultMaxUpload is the fail-closed buffer cap on a single buffered object when a
@@ -52,6 +53,8 @@ type Deps struct {
 	PDP authz.Authorizer
 	// Master is the node master secret keypairs are derived from (ADR-0085). Required.
 	Master []byte
+	// NamespaceMasters, when set, gives each namespace's own master (ADR-0371); nil derives from Master.
+	NamespaceMasters nsmaster.Source
 	// KeyPeriod and KeySalt make derived pairs rotate (ADR-0270); a zero KeyPeriod keeps the fixed pair. KeyNow is
 	// the clock (nil: time.Now).
 	KeyPeriod time.Duration
@@ -82,7 +85,7 @@ type Deps struct {
 
 // Deriver is the key-pair deriver the gateway checks with; the injection of worker pairs uses the same (ADR-0270).
 func (d Deps) Deriver() Deriver {
-	return Deriver{Master: d.Master, Salt: d.KeySalt, Period: d.KeyPeriod, Now: d.KeyNow}
+	return Deriver{Master: d.Master, NamespaceMasters: d.NamespaceMasters, Salt: d.KeySalt, Period: d.KeyPeriod, Now: d.KeyNow}
 }
 
 // Server is the funcd S3 gateway: a versitygw s3api.New server over the funcd backend

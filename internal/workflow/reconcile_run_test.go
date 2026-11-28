@@ -1228,6 +1228,39 @@ func TestIssue67_SweepDeletesExpiredWorkflowRuns(t *testing.T) {
 	}
 }
 
+// FEAT-0002: the sweep of a control plane records and deletes no WorkflowRun of a namespace that a worker node runs.
+func TestSweepLeavesTheRunsOfAnotherNodesNamespace(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	for name, ns := range map[v1.ObjectName]v1.NamespaceName{"here": "default", "away": "e1"} {
+		run := &v1.WorkflowRun{TypeMeta: v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun}}
+		run.Name, run.Namespace, run.ResourceGroup, run.Spec.Workflow, run.Status.Phase = name, ns, "rg1", "wf", runSucceeded
+		if _, err := s.Create(ctx, run); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	for _, now := range []time.Time{base, base.Add(48 * time.Hour)} {
+		eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(now)})
+		r := NewRunReconciler(s, eng, nil, nil, 0)
+		r.SetSkip(func(ns v1.NamespaceName) bool { return ns == "e1" })
+		if _, err := r.SweepExpired(ctx, 24*time.Hour); err != nil {
+			t.Fatalf("SweepExpired: %v", err)
+		}
+	}
+	if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "here"); fault.KindOf(err) != fault.NotFound {
+		t.Fatalf("this process's expired run must be deleted, got %v", err)
+	}
+	if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "e1", "away"); err != nil {
+		t.Fatalf("the other node's run must be kept: %v", err)
+	}
+	if _, err := rstate.Get(ctx, "e1", "away"); fault.KindOf(err) != fault.NotFound {
+		t.Fatalf("no record of the other node's run, got %v", err)
+	}
+}
+
 // Issue #346: a WorkflowRun that closed without an engine record (cancelled before its first drive, a
 // rejected replay seed, or one whose record an earlier sweep deleted alone) is swept at retention too.
 func TestIssue346_SweepReclaimsRunsWithoutRecord(t *testing.T) {

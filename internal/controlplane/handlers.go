@@ -57,6 +57,15 @@ func (h *storeHandlers) lockFor(ctx context.Context, kind v1.Kind, op admission.
 	return h.locks.lock(ctx, ns)
 }
 
+// lockNamespace is the namespace whose admission lock an update takes: a Namespace's own, so a change of its spec.node
+// waits for the creates in it (ADR-0368 Decision 2); the object's namespace otherwise.
+func lockNamespace(kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) v1.NamespaceName {
+	if kind == v1.KindNamespace {
+		return v1.NamespaceName(name)
+	}
+	return ns
+}
+
 // --- the six shared helpers (one authz + admission + store path) ---
 
 func (h *storeHandlers) authorize(ctx context.Context, verb auth.Verb, kind v1.Kind, ns v1.NamespaceName) error {
@@ -175,6 +184,8 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.WorkerNode:
 		o.TypeMeta = tm
+	case *v1.APIToken:
+		o.TypeMeta = tm
 	case *v1.Gateway:
 		o.TypeMeta = tm
 	case *v1.KVStore:
@@ -257,7 +268,7 @@ func (h *storeHandlers) replaceObjWith(ctx context.Context, kind v1.Kind, ns v1.
 	}
 	stampTypeMeta(obj, kind) // route's kind owns TypeMeta (see createObj)
 	want := meta.ResourceVersion
-	unlock, err := h.lockFor(ctx, kind, admission.Update, ns)
+	unlock, err := h.lockFor(ctx, kind, admission.Update, lockNamespace(kind, ns, name))
 	if err != nil {
 		return nil, err
 	}
@@ -884,7 +895,7 @@ type crudKind interface {
 	v1.Function | v1.Revision | v1.Service | v1.EventSource | v1.ConfigMap | v1.Secret | v1.Grant | v1.Identity |
 		v1.OIDCProvider | v1.Namespace | v1.ResourceGroup | v1.Route |
 		v1.Role | v1.RolesAssignment | v1.KVStore | v1.Bucket | v1.Lake | v1.SQLDatabase | v1.Policy |
-		v1.EgressPolicy | v1.Invocation | v1.RuntimeClass | v1.WorkerNode | v1.Gateway | v1.Workflow | v1.WorkflowRun |
+		v1.EgressPolicy | v1.Invocation | v1.RuntimeClass | v1.WorkerNode | v1.APIToken | v1.Gateway | v1.Workflow | v1.WorkflowRun |
 		v1.Sensor | v1.Site | v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore |
 		v1.Addon | v1.AddonObject | v1.AddonRevision | v1.Job | v1.JobRun
 }
@@ -1305,6 +1316,28 @@ func (h *storeHandlers) ReplaceWorkerNode(ctx context.Context, name v1.ObjectNam
 
 func (h *storeHandlers) DeleteWorkerNode(ctx context.Context, name v1.ObjectName, rv string) error {
 	return h.deleteObjIf(ctx, v1.KindWorkerNode, "", name, rv)
+}
+
+// --- APIToken (cluster-scoped) ---
+
+func (h *storeHandlers) GetAPIToken(ctx context.Context, name v1.ObjectName) (v1.APIToken, error) {
+	return typedObj[v1.APIToken](h.getObj(ctx, v1.KindAPIToken, "", name))
+}
+
+func (h *storeHandlers) CreateAPIToken(ctx context.Context, t v1.APIToken) (v1.APIToken, error) {
+	return typedObj[v1.APIToken](h.createObj(ctx, v1.KindAPIToken, &t))
+}
+
+func (h *storeHandlers) ListAPITokens(ctx context.Context) ([]v1.APIToken, error) {
+	return typedObjs[v1.APIToken](h.listObj(ctx, v1.KindAPIToken, ""))
+}
+
+func (h *storeHandlers) ReplaceAPIToken(ctx context.Context, name v1.ObjectName, t v1.APIToken) (v1.APIToken, error) {
+	return typedObj[v1.APIToken](h.replaceObj(ctx, v1.KindAPIToken, "", name, &t))
+}
+
+func (h *storeHandlers) DeleteAPIToken(ctx context.Context, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindAPIToken, "", name, rv)
 }
 
 // --- Gateway (cluster-scoped) ---

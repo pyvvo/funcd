@@ -35,7 +35,7 @@ func RegisterVolumes(api huma.API, d VolumeDeleter, authz auth.Authorizer) {
 	}, "Delete a retained volume of a Function", unauthorized(), forbidden("delete Functions in the namespace"),
 		problem(fault.NotFound, "No volume of that name exists for the Function in the namespace.",
 			"Check the namespace, the Function's name and the volume's name."),
-		badPath("namespace, the function or the name"), badQuery(),
+		badPath("namespace, the function or the name"), badQuery(), nodeAway(),
 		problem(fault.Conflict, "The Function still exists and declares the volume.",
 			"Delete the Function, or remove the volume from its spec, then retry."),
 	), func(ctx context.Context, in *volumeDeleteInput) (*struct{}, error) {

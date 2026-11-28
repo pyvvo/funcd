@@ -28,7 +28,9 @@ import (
 	"github.com/pyvvo/funcd/internal/kvstore"
 	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/lifecycle"
+	"github.com/pyvvo/funcd/internal/multinode/agent"
 	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/secrets"
@@ -221,8 +223,10 @@ type blobDeps struct {
 	authz  auth.Authorizer
 	quota  quota.Checker
 	master []byte // the gateway derives every key pair from it (ADR-0085)
-	prober *health.Prober
-	ctrl   *controller.Controller
+	// masters gives each namespace's own master on a worker node (ADR-0371); nil ⇒ master
+	masters nsmaster.Source
+	prober  *health.Prober
+	ctrl    *controller.Controller
 }
 
 func (s *blobProvider) Name() string { return "blob" }
@@ -314,14 +318,15 @@ func (s *blobProvider) buildGateway(d blobDeps) error {
 		}
 	}
 	gwDeps := s3gateway.Deps{
-		BucketFor:      s3BucketFor(c.blob, c.store, d.quota),
-		Buckets:        s3Buckets(c.store),
-		PDP:            d.authz,
-		Master:         d.master,
-		KeyPeriod:      c.s3gwKeyPeriod,
-		KeySalt:        salt,
-		Listen:         c.s3gwListenAddr,
-		MaxUploadBytes: c.s3gwMaxUploadBytes,
+		BucketFor:        s3BucketFor(c.blob, c.store, d.quota),
+		Buckets:          s3Buckets(c.store),
+		PDP:              d.authz,
+		Master:           d.master,
+		NamespaceMasters: d.masters,
+		KeyPeriod:        c.s3gwKeyPeriod,
+		KeySalt:          salt,
+		Listen:           c.s3gwListenAddr,
+		MaxUploadBytes:   c.s3gwMaxUploadBytes,
 		Catalogs: func(ns v1.NamespaceName) blob.Bucket {
 			// no quota caps a catalog; the view asks the free-space floor (ADR-0296 Decision 4)
 			return blob.Quoted(blob.Prefixed(c.blob, lakeCatalogPrefix(ns)), d.quota, quota.Subject{}, func(string) bool { return false })
@@ -343,9 +348,9 @@ func (s *blobProvider) buildGateway(d blobDeps) error {
 		Enabled:    true,
 		ListenAddr: c.s3gwListenAddr,
 		Endpoint:   c.s3gwEndpoint,
-		Derive: func(kind v1.Kind, ns, name string) (string, string) {
-			kp := keys.Keypair(kind, ns, name)
-			return kp.AccessKey, kp.SecretKey
+		Derive: func(kind v1.Kind, ns, name string) (string, string, error) {
+			kp, err := keys.KeypairOf(kind, ns, name)
+			return kp.AccessKey, kp.SecretKey, err
 		},
 		Period:     keys.Period,
 		RenewalAge: keys.RenewalAge,
@@ -410,12 +415,13 @@ var (
 
 // sqlDeps are the Platform's parts the SQL provider is built over.
 type sqlDeps struct {
-	authz  auth.Authorizer
-	quota  quota.Checker
-	master []byte // the engines' passwords come from it, as the S3 keys and the lake tokens do (ADR-0232)
-	ctrl   *controller.Controller
-	fanout *eventing.Fanout
-	events *eventstore.Store // holds the feed's watermarks
+	authz   auth.Authorizer
+	quota   quota.Checker
+	master  []byte // the engines' passwords come from it, as the S3 keys and the lake tokens do (ADR-0232)
+	masters nsmaster.Source
+	ctrl    *controller.Controller
+	fanout  *eventing.Fanout
+	events  *eventstore.Store // holds the feed's watermarks
 	// engineLine keeps a line that a runtime reading its engines' output itself hands over (ADR-0343).
 	engineLine func(spec provider.ProviderSpec, stream, line string)
 }
@@ -470,8 +476,9 @@ func (s *sqlProvider) build(d sqlDeps) error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build SQL binding resolver")
 	}
 	if s.facade, err = sqlsvc.NewFacade(sqlsvc.FacadeDeps{
-		Resolver: resolver, Authorizer: d.authz, Engines: engines, Master: d.master, CallTimeout: c.sqlCallTimeout,
-		Quota: d.quota, Logger: c.logger,
+		Resolver: resolver, Authorizer: d.authz, Engines: engines, Master: d.master, NamespaceMasters: d.masters,
+		CallTimeout: c.sqlCallTimeout,
+		Quota:       d.quota, Logger: c.logger,
 	}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build SQL facade")
 	}
@@ -487,7 +494,7 @@ func (s *sqlProvider) build(d sqlDeps) error {
 	followDevLines(engineRuntime, v1.KindSQLDatabase, d.engineLine)
 	watermarks := d.events.ChangeWatermarks()
 	if s.feed, err = sqlsvc.NewFeed(sqlsvc.FeedDeps{Store: c.store, Publisher: d.fanout, Watermarks: watermarks, Master: d.master,
-		Hold: c.gate(), NamespaceHold: c.nsGate(), Logger: c.logger}); err != nil {
+		NamespaceMasters: d.masters, Hold: c.gate(), NamespaceHold: c.nsGate(), Logger: c.logger}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build the SQL change feed")
 	}
 	s.fanout = d.fanout
@@ -507,8 +514,9 @@ func (s *sqlProvider) build(d sqlDeps) error {
 	}
 	s.feedPort = cmp.Or(s.feedPort, 7075)
 	if s.reconciler, err = sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{
-		Store: c.store, Provider: engineRuntime, Engines: engines, Master: d.master, ImageFor: c.imageFor,
-		Hold: c.gate(), Logger: c.logger, SupervisionPeriod: c.pacing.SupervisionPeriod,
+		Store: c.store, Provider: engineRuntime, Engines: engines, Master: d.master, NamespaceMasters: d.masters,
+		ImageFor: c.imageFor,
+		Hold:     c.gate(), Logger: c.logger, SupervisionPeriod: c.pacing.SupervisionPeriod,
 		DurableStorage: c.providerStorage != "" && !c.providerStorageEphemeral,
 		ChangeFeedURL:  s.feed.URL(s.feedHost, s.feedPort), Watermarks: watermarks,
 		QuarantinePeriod: c.quarantinePeriodOrDefault(),
@@ -611,6 +619,7 @@ var (
 type lakeDeps struct {
 	authz   auth.Authorizer
 	master  []byte // the proxies derive and check the per-function lake tokens with it (ADR-0137)
+	masters nsmaster.Source
 	floor   *quota.Floor
 	secrets lakesvc.SecretResolver
 	routes  *router.Aggregator // the opt-in external edge entry to a proxy (ADR-0138)
@@ -640,7 +649,7 @@ func (s *lakeProvider) Descriptors() []provider.Descriptor {
 func (s *lakeProvider) build(d lakeDeps) error {
 	const op = "funcd.New"
 	c := s.cfg
-	s.proxy = lakegw.NewManager(cmp.Or(c.bridgeAddress, "127.0.0.1"), lakegw.NewLakeKeys(d.master, c.store), d.authz, c.logger)
+	s.proxy = lakegw.NewManager(cmp.Or(c.bridgeAddress, "127.0.0.1"), lakegw.NewNamespaceLakeKeys(d.master, d.masters, c.store), d.authz, c.logger)
 	engineRuntime := c.lakeProvider
 	if engineRuntime == nil {
 		var floor provider.Floor
@@ -831,16 +840,20 @@ func (s *secretsProvider) Descriptors() []provider.Descriptor {
 }
 
 // build builds the resolver over authz, which sends a workload's secret::read to the PDP and a coarse read to the
-// control plane's authorizer (ADR-0321 Decision 3), then the facade over it. New builds it once the PDP exists, before
-// every other provider.
-func (s *secretsProvider) build(authz auth.Authorizer) error {
+// control plane's authorizer (ADR-0321 Decision 3), then the facade over it, whose writes a worker node's agent, node,
+// makes on its control plane (FEAT-0002). New builds it once the PDP exists, before every other provider.
+func (s *secretsProvider) build(authz auth.Authorizer, node *agent.Agent) error {
 	const op = "funcd.New"
 	c := s.cfg
 	var err error
 	if s.resolver, err = secrets.NewResolver(secrets.Deps{Store: c.store, Authorizer: authz, Logger: c.logger}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build secrets resolver")
 	}
-	if s.facade, err = secretsvc.NewFacade(secretsvc.Deps{Store: c.store, Resolver: s.resolver}); err != nil {
+	deps := secretsvc.Deps{Store: c.store, Resolver: s.resolver}
+	if node != nil {
+		deps.Forward = node.WriteSecret
+	}
+	if s.facade, err = secretsvc.NewFacade(deps); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build secret facade")
 	}
 	return nil

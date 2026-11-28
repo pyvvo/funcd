@@ -28,16 +28,23 @@ type Resolver interface {
 // starts the attempt over, and the last one answers 409 (ADR-0327 Decision 4).
 const writeAttempts = 5
 
+// Forward writes key of Secret binding as fn on the control plane, or removes it when value is nil (FEAT-0002).
+type Forward func(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string, value *string) error
+
 // Deps carries what the Facade needs.
 type Deps struct {
 	Store    store.Store
 	Resolver Resolver
+	// Forward is a worker node's, whose Secrets are copies of the control plane's: a write passes the checks here, then
+	// goes to the control plane, which makes them again. nil ⇒ the write is Store's.
+	Forward Forward
 }
 
 // Facade implements local.Secrets.
 type Facade struct {
 	store    store.Store
 	resolver Resolver
+	forward  Forward
 }
 
 // NewFacade builds the Facade; both deps are required.
@@ -46,7 +53,7 @@ func NewFacade(d Deps) (*Facade, error) {
 	if d.Store == nil || d.Resolver == nil {
 		return nil, fault.Invalidf(op, "a store and a resolver are required")
 	}
-	return &Facade{store: d.Store, resolver: d.Resolver}, nil
+	return &Facade{store: d.Store, resolver: d.Resolver, forward: d.Forward}, nil
 }
 
 // List returns the sorted keys of the Secrets fn binds, an empty list when none (never nil, so the route answers
@@ -97,28 +104,19 @@ func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.Workl
 
 // Put sets key to value in Secret binding, which fn binds and may write (ADR-0327 Decision 4).
 func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key, value string) error {
-	return f.write(ctx, ns, fn, binding, func(data map[string][]byte) error {
-		if k, p := secrets.EnvDataProblem(map[string][]byte{key: []byte(value)}); p != "" {
-			return secrets.ErrValueNotText.Errorf("secret.Put", "secret %q key %q %s", binding, k, p)
-		}
-		data[key] = []byte(value)
-		return nil
-	})
+	return f.write(ctx, ns, fn, binding, key, &value)
 }
 
 // Delete removes key from Secret binding, which fn binds and may write; a key the Secret lacks is no error.
 func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string) error {
-	return f.write(ctx, ns, fn, binding, func(data map[string][]byte) error {
-		delete(data, key)
-		return nil
-	})
+	return f.write(ctx, ns, fn, binding, key, nil)
 }
 
-// write changes one key of Secret binding as fn (ADR-0327 Decision 4). Each attempt reads the Secret, then asks
-// secret::write, whose decision reads the stored owner after that read, and updates on the read's resourceVersion: a
-// write lands only at a version the decision saw (docs/design/secret/key-write.fizz). A Conflict starts over, writeAttempts
-// in all; the store's Update checks the keys as the API does.
-func (f *Facade) write(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding string, change func(map[string][]byte) error) error {
+// write sets key of Secret binding to value as fn, or removes it when value is nil (ADR-0327 Decision 4). Each attempt
+// reads the Secret, then asks secret::write, whose decision reads the stored owner after that read, and updates on the
+// read's resourceVersion: a write lands only at a version the decision saw (docs/design/secret/key-write.fizz). A Conflict
+// starts over, writeAttempts in all; the store's Update checks the keys as the API does.
+func (f *Facade) write(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadRef, binding, key string, value *string) error {
 	const op = "secret.write"
 	bindings, err := f.bindings(ctx, ns, fn)
 	if err != nil {
@@ -146,8 +144,15 @@ func (f *Facade) write(ctx context.Context, ns v1.NamespaceName, fn v1.WorkloadR
 		if sec.Spec.Data == nil {
 			sec.Spec.Data = map[string][]byte{}
 		}
-		if err := change(sec.Spec.Data); err != nil {
-			return err
+		if value == nil {
+			delete(sec.Spec.Data, key)
+		} else if k, p := secrets.EnvDataProblem(map[string][]byte{key: []byte(*value)}); p != "" {
+			return secrets.ErrValueNotText.Errorf("secret.Put", "secret %q key %q %s", binding, k, p)
+		} else {
+			sec.Spec.Data[key] = []byte(*value)
+		}
+		if f.forward != nil {
+			return f.forward(ctx, ns, fn, binding, key, value)
 		}
 		_, err = f.store.Update(ctx, sec)
 		switch fault.KindOf(err) {

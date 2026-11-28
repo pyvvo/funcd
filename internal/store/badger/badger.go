@@ -202,12 +202,16 @@ func (t *txn) Delete(bucket, key string) error {
 }
 
 func (t *txn) Scan(bucket string, fn func(key string, val []byte) error) error {
+	return t.ScanFrom(bucket, "", fn)
+}
+
+func (t *txn) ScanFrom(bucket, from string, fn func(key string, val []byte) error) error {
 	prefix := []byte(bucket + sep)
 	opts := badger.DefaultIteratorOptions
 	opts.Prefix = prefix
 	it := t.bt.NewIterator(opts)
 	defer it.Close()
-	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+	for it.Seek(append(bytes.Clone(prefix), from...)); it.ValidForPrefix(prefix); it.Next() {
 		item := it.Item()
 		v, err := item.ValueCopy(nil)
 		if err != nil {

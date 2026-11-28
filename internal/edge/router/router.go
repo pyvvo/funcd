@@ -174,7 +174,7 @@ func (t *table) Program(_ context.Context, entries []Entry, reserved []string) e
 	})
 	res := make(map[string]bool, len(reserved))
 	for _, h := range reserved {
-		res[canonicalHost(h)] = true
+		res[CanonicalHost(h)] = true
 	}
 	t.mu.Lock()
 	t.rows, t.reserved = rows, res
@@ -183,7 +183,7 @@ func (t *table) Program(_ context.Context, entries []Entry, reserved []string) e
 }
 
 func (t *table) Resolve(host, path, method string) (Match, bool) {
-	host = canonicalHost(host)
+	host = CanonicalHost(host)
 	t.mu.RLock()
 	rows, reserved := t.rows, t.reserved
 	t.mu.RUnlock()
@@ -238,10 +238,10 @@ func ruleStance(e Entry, r CompiledRule) (v1.AuthMode, *OIDCAuth) {
 	return auth, oidc
 }
 
-// canonicalHost is the one spelling a host is claimed and matched by: lowercase, without a port, IPv6 brackets or
+// CanonicalHost is the one spelling a host is claimed and matched by: lowercase, without a port, IPv6 brackets or
 // a trailing dot. The Aggregator claims Entry hosts in it and Resolve matches the Host header in it, so a respelled
 // host is the same claim (ADR-0110 Decision 3) and a Host header carrying a port still matches.
-func canonicalHost(h string) string {
+func CanonicalHost(h string) string {
 	if host, _, err := net.SplitHostPort(h); err == nil {
 		h = host
 	}

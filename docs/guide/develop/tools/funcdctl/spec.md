@@ -17,6 +17,26 @@ funcd control-plane CLI (kubectl-style)
 | `--server` | string |  | control-plane base URL ($FUNCD_SERVER, else http://localhost:8080) |
 | `--token` | string |  | bearer token for the authenticated control plane ($FUNCD_TOKEN) |
 
+## `funcdctl apitoken`
+
+```text
+funcdctl apitoken
+
+Manage the API tokens kept in the metastore
+```
+
+## `funcdctl apitoken mint`
+
+```text
+funcdctl apitoken mint <name> [flags]
+
+Mint the token of a declared APIToken, for the role and the namespaces its spec names. It prints the token alone, so a script can capture it; funcd keeps only its hash, and the token minted before stops working. An admin action.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--ttl` | string |  | how long the token works, from 1s to 8760h, such as 720h (default 720h) |
+
 ## `funcdctl app`
 
 ```text
@@ -198,10 +218,14 @@ Print the backup settings recovery objectives give, as an example: --rpo (the mo
 ## `funcdctl backup status`
 
 ```text
-funcdctl backup status
+funcdctl backup status [flags]
 
 Print the platform backup status as YAML: restore points, rpoRisk, failures (admin only)
 ```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--node` | string |  | a worker node, instead of the funcd at --server |
 
 ## `funcdctl backup verify`
 
@@ -515,14 +539,19 @@ Lift the hold: timers, blob sources, Sensors, runs, rollouts, backups and sweeps
 | --- | --- | --- | --- |
 | `--advance` | stringArray | `[]` | a blob EventSource &lt;namespace&gt;/&lt;name&gt; whose listed objects are marked seen instead of fired (repeatable) |
 | `--namespace` | stringArray | `[]` | a namespace whose hold a restore left (restore run's data, an ended in-place Restore's load) is released instead of the platform's hold (repeatable) |
+| `--node` | string |  | a worker node, instead of the funcd at --server |
 
 ## `funcdctl hold status`
 
 ```text
-funcdctl hold status
+funcdctl hold status [flags]
 
 Show the hold: marker, restore report, counts, paused runs, dead letters, pending blob keys, orphan data, namespace markers
 ```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--node` | string |  | a worker node, instead of the funcd at --server |
 
 ## `funcdctl index`
 
@@ -701,6 +730,26 @@ Print the logs of a Function or of an object's engine (tenant-scoped to your ide
 | `-o`, `--output` | string |  | output format: wide (append source/inv/attrs inline) \| json |
 | `--severity` | string |  | minimum level: trace\|debug\|info\|warn\|error\|fatal |
 | `--since` | string |  | only logs since a duration ago (15m, 1h30m) or an RFC3339 time (2026-10-07T22:00:00Z) |
+
+## `funcdctl node`
+
+```text
+funcdctl node
+
+Manage worker nodes
+```
+
+## `funcdctl node token`
+
+```text
+funcdctl node token <name> [flags]
+
+Mint a one-time join token for a declared WorkerNode, which funcd node join swaps for the node's certificate. It prints the token alone, so a script can capture it; funcd keeps only its hash, and an earlier unused token of the node stops working. An admin action.
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--ttl` | string |  | how long the token works, from 1s to 24h, such as 30m (default 1h) |
 
 ## `funcdctl plugin`
 

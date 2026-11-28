@@ -71,10 +71,11 @@ func (r *Reconciler) workloadHooks() []workloadHook {
 }
 
 // AddonProxy is where a worker reaches the add-on proxy, and the token it derives per Function (ADR-0338 Decision 3).
-// Address binds the proxy at its first use and returns its host and port; nil when funcd runs no proxy.
+// Address binds the proxy at its first use and returns its host and port; nil when funcd runs no proxy. Token fails only
+// on a worker node that lacks the namespace's master.
 type AddonProxy struct {
 	Address func() (string, error)
-	Token   func(ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) string
+	Token   func(ns v1.NamespaceName, kind v1.Kind, name v1.ObjectName) (string, error)
 }
 
 // addonHook gives a Function that binds add-on objects, for each alias, the proxy's base URL for it, shared, and the
@@ -105,7 +106,10 @@ func (h addonHook) own(w workload) (map[string]string, func() map[string]string,
 	if len(w.spec.Bindings.Addon) == 0 || p.Address == nil || p.Token == nil {
 		return nil, nil, nil
 	}
-	token := p.Token(w.meta().Namespace, w.kind(), w.meta().Name)
+	token, err := p.Token(w.meta().Namespace, w.kind(), w.meta().Name)
+	if err != nil {
+		return nil, nil, h.r.namespaceKeyMissing(err)
+	}
 	env := make(map[string]string, len(w.spec.Bindings.Addon))
 	for _, b := range w.spec.Bindings.Addon {
 		env["FUNCD_ADDON_"+strings.ToUpper(b.Alias)+"_TOKEN"] = token
@@ -261,8 +265,14 @@ func (h s3Hook) own(w workload) (map[string]string, func() map[string]string, *g
 		return nil, nil, nil
 	}
 	kind, ns, name := w.kind(), string(w.meta().Namespace), string(w.meta().Name)
+	if _, _, err := h.r.s3Gateway.Derive(kind, ns, name); err != nil {
+		return nil, nil, h.r.namespaceKeyMissing(err)
+	}
 	return nil, func() map[string]string {
-		access, secret := h.r.s3Gateway.Derive(kind, ns, name)
+		access, secret, err := h.r.s3Gateway.Derive(kind, ns, name)
+		if err != nil {
+			return nil // the namespace's master left between the gate and the start: the worker gets no pair
+		}
 		return map[string]string{"AWS_ACCESS_KEY_ID": access, "AWS_SECRET_ACCESS_KEY": secret}
 	}, nil
 }
@@ -297,7 +307,11 @@ func (h lakeHook) own(w workload) (map[string]string, func() map[string]string, 
 		return nil, nil, nil
 	}
 	ns, name := w.meta().Namespace, w.meta().Name
-	token, err := lakegw.DeriveLakeToken(h.r.lakeMaster, ns, w.kind(), name)
+	master, err := h.r.namespaceMasters.Of(h.r.lakeMaster, ns)
+	if err != nil {
+		return nil, nil, h.r.namespaceKeyMissing(err)
+	}
+	token, err := lakegw.DeriveLakeToken(master, ns, w.kind(), name)
 	if err != nil {
 		return nil, nil, lakeResolveFailed(fault.Wrapf(err, fault.KindOf(err), "function.lakeHook.own", "derive lake token for %s/%s", ns, name))
 	}
@@ -306,6 +320,14 @@ func (h lakeHook) own(w workload) (map[string]string, func() map[string]string, 
 		env["FUNCD_LAKE_"+strings.ToUpper(c.Alias)+"_TOKEN"] = token
 	}
 	return env, nil, nil
+}
+
+// reasonNamespaceKeyMissing holds a Function while its worker node lacks its namespace's master (ADR-0371):
+// its S3 pair, lake token and add-on proxy token come from that master, which the control plane sends to the node.
+const reasonNamespaceKeyMissing = "NamespaceKeyMissing"
+
+func (r *Reconciler) namespaceKeyMissing(err error) *gateFailure {
+	return &gateFailure{reason: reasonNamespaceKeyMissing, message: err.Error(), readyMessage: err.Error(), phase: v1.PhasePending, requeue: r.referentPoll}
 }
 
 // lakeResolveFailed fails fn closed on a Lake binding that cannot be resolved.

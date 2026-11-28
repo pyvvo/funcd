@@ -10,15 +10,19 @@ import (
 	"time"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/nsmaster"
 )
 
 // Deriver derives and checks in-platform key pairs (ADR-0270). A positive Period gives a pair that holds the time
 // window it was derived in and a per-start Salt; a zero Period gives the fixed pair of DeriveKeypair (funcdctl dev).
 type Deriver struct {
 	Master []byte
-	Salt   []byte
-	Period time.Duration
-	Now    func() time.Time // nil: time.Now
+	// NamespaceMasters, when set, gives each namespace's own master (ADR-0371, on a worker node); nil
+	// derives every namespace's pairs from Master.
+	NamespaceMasters nsmaster.Source
+	Salt             []byte
+	Period           time.Duration
+	Now              func() time.Time // nil: time.Now
 }
 
 func (d Deriver) now() time.Time {
@@ -30,20 +34,30 @@ func (d Deriver) now() time.Time {
 
 func (d Deriver) window(t time.Time) int64 { return t.UnixNano() / int64(d.Period) }
 
-// Keypair is the identity's pair for the current window.
+// Keypair is the identity's pair for the current window; the zero pair when the namespace has no master here.
 func (d Deriver) Keypair(kind v1.Kind, ns, name string) Keypair {
+	kp, _ := d.KeypairOf(kind, ns, name)
+	return kp
+}
+
+// KeypairOf is Keypair, with the error of a namespace this process holds no master for.
+func (d Deriver) KeypairOf(kind v1.Kind, ns, name string) (Keypair, error) {
+	master, err := d.NamespaceMasters.Of(d.Master, v1.NamespaceName(ns))
+	if err != nil {
+		return Keypair{}, err
+	}
 	if d.Period <= 0 {
-		return DeriveKeypair(d.Master, kind, ns, name)
+		return DeriveKeypair(master, kind, ns, name), nil
 	}
 	w := d.window(d.now())
 	access := accessKeyPrefix + accessEncoding.EncodeToString(
 		[]byte(kindCode(kind)+refSeparator+ns+refSeparator+name+refSeparator+strconv.FormatInt(w, 10)))
-	return Keypair{AccessKey: access, SecretKey: d.secret(kind, ns, name, w)}
+	return Keypair{AccessKey: access, SecretKey: secretOf(master, d.Salt, kind, ns, name, w)}, nil
 }
 
-func (d Deriver) secret(kind v1.Kind, ns, name string, w int64) string {
-	mac := hmac.New(sha256.New, d.Master)
-	_, _ = mac.Write([]byte("s3:" + string(kind) + ":" + ns + "/" + name + ":" + strconv.FormatInt(w, 10) + ":" + hex.EncodeToString(d.Salt)))
+func secretOf(master, salt []byte, kind v1.Kind, ns, name string, w int64) string {
+	mac := hmac.New(sha256.New, master)
+	_, _ = mac.Write([]byte("s3:" + string(kind) + ":" + ns + "/" + name + ":" + strconv.FormatInt(w, 10) + ":" + hex.EncodeToString(salt)))
 	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
 }
 
@@ -54,11 +68,15 @@ func (d Deriver) Secret(access string) (kind v1.Kind, ns, name, secret string, o
 	if !ok {
 		return "", "", "", "", false
 	}
+	master, err := d.NamespaceMasters.Of(d.Master, v1.NamespaceName(ns))
+	if err != nil {
+		return "", "", "", "", false
+	}
 	if d.Period <= 0 {
 		if win != "" {
 			return "", "", "", "", false
 		}
-		return kind, ns, name, DeriveKeypair(d.Master, kind, ns, name).SecretKey, true
+		return kind, ns, name, DeriveKeypair(master, kind, ns, name).SecretKey, true
 	}
 	w, err := strconv.ParseInt(win, 10, 64)
 	if err != nil || w < 0 || strconv.FormatInt(w, 10) != win {
@@ -67,7 +85,7 @@ func (d Deriver) Secret(access string) (kind v1.Kind, ns, name, secret string, o
 	if cur := d.window(d.now()); w != cur && w != cur-1 {
 		return "", "", "", "", false
 	}
-	return kind, ns, name, d.secret(kind, ns, name, w), true
+	return kind, ns, name, secretOf(master, d.Salt, kind, ns, name, w), true
 }
 
 // RenewalAge is the worker age, between 80% and 90% of Period, at which the identity's worker is replaced; 0 with a

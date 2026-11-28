@@ -1,0 +1,186 @@
+---
+# The restores of a node and of its control plane (ADR-0373, FEAT-0002 F251). A node runs one WorkflowRun it made, and
+# holds a child its reconcilers made (a Revision), which the control plane holds too and no backup of a node holds. Each
+# side keeps the run's spec (paused, at a generation) and its status (ended or not). The node writes the status back, and
+# the spec's pause when its generation is the later one; the feed brings the control plane's spec. On both sides, a side
+# keeps an end that it recorded (keepEnd) and a pause of the later generation (KeepPause). A node's store may be lost
+# and restored from the node's backup, once: the restore holds the run as it was at the backup, not ended, and pauses it
+# at a later generation (ADR-0206 Decision 7). The control plane may be restored, once, from a backup from before the
+# run: it is held, then released; a node's requests are refused while it is held. A node that starts with a new or
+# restored store, or that saw its control plane restored, prepares before its loops run: it sends the runs it made
+# since (after a control plane's restore), takes back its children (with a new store), then takes its namespaces whole.
+# Every action is atomic. Environment: the store's transactions; a timeline per control plane store, which a restore
+# changes; the node's cursor, which names the timeline it follows and its own store's.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 12
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant no-adopt-children: NothingRunsBeforeTheTakeWhole
+# mutant loops-before-prepare: NothingRunsBeforeTheTakeWhole
+# mutant follow-while-held: NoNodeRunsOnAHeldState
+# mutant no-keep-end: AnEndedRunStaysEnded
+# mutant no-keep-pause-on-node: ThePauseStaysOnTheNode
+# mutant no-keep-pause-on-cp: liveness
+# mutant no-push-made: liveness
+
+# no-adopt-children: a node with a new store takes no child back. loops-before-prepare: a node's loops run before it
+# prepares. follow-while-held: a node takes its control plane's restored state while it is held. no-keep-end: a side
+# takes the other's status over an end it recorded. no-keep-pause-on-node: the node takes the control plane's spec
+# over its own pause of the later generation. no-keep-pause-on-cp: the control plane takes no pause from a node.
+# no-push-made: a node that saw its control plane restored sends no run it made.
+MUTANT = ""
+
+RESTORES = 1
+
+action Init:
+    cpTimeline = 0
+    held = False
+    cpHas = True
+    cpEnded = False
+    cpPaused = False
+    cpGen = 1
+    cpChild = True
+    phase = "running"
+    storeNew = False
+    restoredMark = False
+    following = 0
+    nEnded = False
+    nPaused = False
+    nGen = 1
+    nChild = True
+    nodeRestores = 0
+    cpRestores = 0
+    endRecorded = False
+    restorePaused = False
+    pauseShown = False
+    personResumed = False
+    bothRestored = False
+
+atomic action RunEnds:
+    require phase == "running" and not nEnded and not nPaused
+    nEnded = True
+
+atomic fair action PushStatus:
+    require phase == "running" and not held and following == cpTimeline and cpHas
+    require nEnded != cpEnded or (nPaused and nGen > cpGen)
+    if not (cpEnded and MUTANT != "no-keep-end"):
+        cpEnded = nEnded
+    if nPaused and nGen > cpGen and not cpEnded and MUTANT != "no-keep-pause-on-cp":
+        cpPaused = True
+        cpGen = nGen
+    if cpEnded:
+        endRecorded = True
+    if cpPaused and restorePaused:
+        pauseShown = True
+
+atomic fair action Feed:
+    require phase == "running" and not held and following == cpTimeline and cpHas
+    require cpGen > nGen or (cpEnded and not nEnded) or (cpPaused != nPaused and not (nPaused and nGen > cpGen))
+    keep = nPaused and nGen > cpGen and not nEnded and MUTANT != "no-keep-pause-on-node"
+    if not keep:
+        nPaused = cpPaused
+        nGen = cpGen
+    if cpEnded and MUTANT != "no-keep-end":
+        nEnded = True
+
+atomic action PersonResumes:
+    require cpPaused and not cpEnded
+    cpPaused = False
+    cpGen += 1
+    personResumed = True
+
+atomic action NodeRestore:
+    require nodeRestores < RESTORES
+    nodeRestores += 1
+    if cpRestores > 0 and following != cpTimeline:
+        bothRestored = True
+    phase = "stopped"
+    storeNew = True
+    nChild = False
+    nEnded = False
+    nPaused = True
+    nGen = 2
+    restorePaused = True
+    pauseShown = False
+
+atomic action ControlPlaneRestore:
+    require cpRestores < RESTORES
+    cpRestores += 1
+    if storeNew:
+        bothRestored = True
+    cpTimeline += 1
+    held = True
+    cpHas = False
+    cpEnded = False
+    cpPaused = False
+    cpGen = 1
+    endRecorded = False
+    pauseShown = False
+
+atomic fair action Release:
+    require held
+    held = False
+
+atomic fair action SeeRestored:
+    require phase == "running" and following != cpTimeline
+    if MUTANT == "follow-while-held":
+        following = cpTimeline
+        return
+    require not held
+    restoredMark = True
+    phase = "stopped"
+
+atomic fair action Start:
+    require phase == "stopped"
+    if MUTANT == "loops-before-prepare" or not (storeNew or restoredMark):
+        phase = "running"
+    else:
+        phase = "preparing"
+
+atomic fair action Prepare:
+    require phase in ["preparing", "running"] and (storeNew or restoredMark) and not held
+    if restoredMark and MUTANT != "no-push-made":
+        cpHas = True
+        if not (cpEnded and MUTANT != "no-keep-end"):
+            cpEnded = nEnded
+        if nPaused and nGen > cpGen and not cpEnded and MUTANT != "no-keep-pause-on-cp":
+            cpPaused = True
+            cpGen = nGen
+    if storeNew and MUTANT != "no-adopt-children":
+        nChild = cpChild
+    if cpHas:
+        keep = nPaused and nGen > cpGen and not nEnded and MUTANT != "no-keep-pause-on-node"
+        if not keep:
+            nPaused = cpPaused
+            nGen = cpGen
+        if cpEnded and MUTANT != "no-keep-end":
+            nEnded = True
+    following = cpTimeline
+    storeNew = False
+    restoredMark = False
+    phase = "running"
+    if cpEnded:
+        endRecorded = True
+    if cpPaused and restorePaused:
+        pauseShown = True
+
+always assertion NothingRunsBeforeTheTakeWhole:
+    return not (phase == "running" and (storeNew or restoredMark or (cpChild and not nChild)))
+
+always assertion NoNodeRunsOnAHeldState:
+    return not (phase == "running" and held and following == cpTimeline)
+
+always assertion AnEndedRunStaysEnded:
+    return not (endRecorded and not cpEnded)
+
+always assertion ThePauseStaysOnTheNode:
+    return not (restorePaused and not nPaused and not nEnded and not personResumed and not bothRestored)
+
+eventually always assertion TheControlPlaneHoldsTheNodesRun:
+    return cpHas or bothRestored
+
+eventually always assertion ThePauseShows:
+    return not restorePaused or pauseShown or personResumed or cpEnded or nEnded or bothRestored

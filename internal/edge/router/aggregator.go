@@ -31,7 +31,7 @@ type Verdict struct {
 	Owner   Owner
 	Reason  string
 	Message string
-	// Host is the host the entry claims, in canonicalHost's spelling; "" is any host but reserved ones (ADR-0240).
+	// Host is the host the entry claims, in CanonicalHost's spelling; "" is any host but reserved ones (ADR-0240).
 	Host string
 }
 
@@ -145,7 +145,7 @@ func (a *Aggregator) Set(ctx context.Context, source string, entries []Entry) ([
 			return nil, fault.Invalidf(op, "source %q entry %d: %s", source, i, err)
 		}
 		// ADR-0240 Decision 3: a host-less entry of a non-default namespace claims its namespace host.
-		if e.Host = canonicalHost(e.Host); e.Host == "" {
+		if e.Host = CanonicalHost(e.Host); e.Host == "" {
 			e.Host = NamespaceHost(e.Namespace, a.base)
 		}
 		stored[i] = e
